@@ -116,6 +116,43 @@ internal interface IWalShardGrain : IGrainWithStringKey
     ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Filtered counterpart of <see cref="ReadAsync"/> for a reader that owns
+    /// <paramref name="filter"/> and discards every key-scoped record outside it
+    /// - the leaf replay read path (issue #3565). Examines at most
+    /// <paramref name="maxEntries"/> entries of the window
+    /// <c>[<paramref name="fromSequence"/>, <paramref name="toSequenceInclusive"/>]</c>
+    /// - clamped, like <see cref="ReadAsync"/>, to the durable gap-free prefix -
+    /// and returns the entries the reader needs under the rule
+    /// <see cref="IWalStorageProvider.ReadFilteredAsync"/> documents: every
+    /// entry the filter does not exclude in full, no excluded entry, and the
+    /// last entry examined routing-only when it is excluded. So
+    /// <see cref="WalShardPage.NextSequence"/> still moves past everything the
+    /// filter dropped, and an empty page still means the window holds nothing.
+    /// <para>
+    /// The rule is applied here whatever the configured
+    /// <see cref="IWalStorageProvider"/> did, so no excluded payload crosses this
+    /// grain's boundary even from a provider that decodes in full.
+    /// </para>
+    /// </summary>
+    /// <param name="fromSequence">Inclusive starting sequence number.</param>
+    /// <param name="toSequenceInclusive">Inclusive upper bound of the window; no entry above it is examined.</param>
+    /// <param name="maxEntries">Maximum number of entries to examine; must be at least 1.</param>
+    /// <param name="filter">The reader's ownership. An unbounded filter excludes nothing.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the
+    /// same reason as <see cref="ReadAsync"/>: a replay read must not
+    /// head-of-line-block foreground appends.
+    /// </remarks>
+    [AlwaysInterleave]
+    ValueTask<WalShardPage> ReadFilteredAsync(
+        long fromSequence,
+        long toSequenceInclusive,
+        int maxEntries,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Bytes-shaped counterpart to <see cref="ReadAsync"/>. Returns the
     /// same per-shard window of entries strictly greater than or equal
     /// to <paramref name="fromSequence"/>, ascending, up to

@@ -308,10 +308,15 @@ $logPath = Join-Path $runRoot "$logStem.log"
 # Derive the per-cohort values from the per-silo rung.
 $VehicleCount = $VehiclesPerSilo * $SiloCount
 $FlushConcurrency = $FlushConcurrencyPerSilo * $SiloCount
+# The point modes fan each flush slot out into this many concurrent calls. It
+# is deliberately the PER-SILO bound, not the cohort bound: slots already
+# scale with N, so a cohort-sized fan-out would make the in-flight call count
+# (FlushConcurrencyPerSilo x N)^2 and per-silo demand would grow with N.
+$PointFanOut = $FlushConcurrencyPerSilo
 $ClientCount = [Math]::Min(64, $ClientsPerSilo * $SiloCount)
 
 Write-Host "[cohort] n=$SiloCount workload=$WorkloadMode duration=${DurationSec}s tree=$TreeId" -ForegroundColor Cyan
-Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleCount * $TickHz) keys/s) shards=$ShardCount flushConcurrency=$FlushConcurrency clients=$ClientCount" -ForegroundColor DarkGray
+Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleCount * $TickHz) keys/s) shards=$ShardCount flushConcurrency=$FlushConcurrency pointFanOut=$PointFanOut clients=$ClientCount" -ForegroundColor DarkGray
 
 if ($ResetStorage) {
 	# Parking first is what makes the delete safe: no live silo may hold a
@@ -338,6 +343,7 @@ $siloEnv = @(
 	"BENCH_BATCH_SIZE=$BatchSize",
 	"BENCH_FLUSH_MS=$FlushMs",
 	"BENCH_FLUSH_CONCURRENCY=$FlushConcurrency",
+	"BENCH_POINT_FANOUT=$PointFanOut",
 	"BENCH_WAL_PARTITIONS=$WalPartitions",
 	"BENCH_VEHICLE_COUNT=$VehicleCount",
 	# Silo-side too: the inner hops (LatticeGrain -> shard -> leaf -> WAL)
@@ -432,6 +438,7 @@ try {
 		"BENCH_BATCH_SIZE=$BatchSize",
 		"BENCH_FLUSH_MS=$FlushMs",
 		"BENCH_FLUSH_CONCURRENCY=$FlushConcurrency",
+		"BENCH_POINT_FANOUT=$PointFanOut",
 		"BENCH_WAL_PARTITIONS=$WalPartitions",
 		"BENCH_SHARD_COUNT=$ShardCount",
 		"BENCH_CLIENT_COUNT=$ClientCount",

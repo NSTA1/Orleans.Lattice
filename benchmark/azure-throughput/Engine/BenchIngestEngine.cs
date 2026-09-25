@@ -764,7 +764,7 @@ internal sealed class BenchIngestEngine(
                     lattice,
                     batch,
                     settings.AtomicBatchSize,
-                    settings.FlushConcurrency,
+                    settings.EffectivePointFanOut,
                     ct,
                     grainFactory,
                     settings.TreeId).ConfigureAwait(false);

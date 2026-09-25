@@ -393,6 +393,9 @@ the join.
   each mirroring the Behaviour example already on its page. `stage.ps1` renders
   the SVG and inserts it into the staged page only, so the tracked markdown is
   untouched. `main.js` animates it from the routes written onto its tokens.
+  Its labels are drawn by `<use>` from a label sheet staged beside the site
+  (`figures/<id>-<width>.svg`), and its buttons name themselves from CSS, so
+  the page's text carries the figure's title and description, not its labels.
 - **Layouts**: a *diamond* (the bottom state, two incomparable writes, and the
   join) for most primitives; a *chain* with a middle node for registers over a
   total order, where the join is the higher write itself and the writer that

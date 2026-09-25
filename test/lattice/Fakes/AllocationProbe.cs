@@ -45,6 +45,9 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// </summary>
 internal static class AllocationProbe
 {
+    // Both sinks are written only by callers, and a test project that links
+    // this file may use neither; without this that project reports CS0649.
+#pragma warning disable CS0649
     /// <summary>
     /// Escape hatch for the battery tests that prove this harness can actually
     /// fail. Storing a reference here is a <b>definite escape at every JIT
@@ -66,6 +69,7 @@ internal static class AllocationProbe
     /// simply always report growth.
     /// </summary>
     internal static long ScalarSink;
+#pragma warning restore CS0649
 
     /// <summary>
     /// Measures how much the allocation of <paramref name="measure"/> grows

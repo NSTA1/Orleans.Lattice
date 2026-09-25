@@ -17,16 +17,31 @@
 #      episode from docs-site/media and leaving unpublished ones out;
 #   6. stages the site's own authored pages (docs-site/pages: the home page)
 #      AFTER step 3, so a broken link in them is never rewritten away and fails
-#      the zero-warning link gate instead.
+#      the zero-warning link gate instead;
+#   7. splits any page too large to read in a few fetches - the API and
+#      configuration references, the metrics catalogue, the release history -
+#      into an index and a page per section (lib/split.ps1);
+#   8. gives every page a source link to the file it came from, and the site a
+#      visible version: what it documents, from which ref, and when it was built;
+#   9. writes the site's machine-readable surface for agents and LLM tooling: a
+#      markdown alternate of every page (lib/agent.ps1), llms.txt generated from
+#      the same catalogue as the documentation map, and llms-full.txt.
 #
 # Runs on Windows and Linux; keep it free of platform-specific path literals.
 
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
-    [string]$Staging  = (Join-Path $PSScriptRoot 'src')
+    [string]$Staging  = (Join-Path $PSScriptRoot 'src'),
+    # Build intermediates that are not DocFX input: the markdown alternates,
+    # which build.ps1 copies beside the rendered pages, and the footer metadata.
+    [string]$Intermediate = (Join-Path $PSScriptRoot 'obj')
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'lib/markdown.ps1')
+. (Join-Path $PSScriptRoot 'lib/split.ps1')
+. (Join-Path $PSScriptRoot 'lib/agent.ps1')
 
 $separators = [char[]]@('\', '/')
 function ConvertTo-SiteRelative([string]$FullPath, [string]$Root) {
@@ -35,6 +50,136 @@ function ConvertTo-SiteRelative([string]$FullPath, [string]$Root) {
 
 if (Test-Path $Staging) { Remove-Item $Staging -Recurse -Force }
 New-Item -ItemType Directory -Path $Staging -Force | Out-Null
+if (Test-Path $Intermediate) { Remove-Item $Intermediate -Recurse -Force }
+New-Item -ItemType Directory -Path $Intermediate -Force | Out-Null
+
+# --- What this build documents ---
+# The site is published from a release line, and a reader - or an agent - has no
+# other way to tell which release a page describes, so the build records it once
+# here: the ref and commit it was built from, the release that ref belongs to,
+# and when. Source links point at the same ref, so a page's source is the text
+# that was published, not whatever main holds now.
+#
+# In CI the ref comes from the event: a lattice-v<X.Y.Z> tag push, a dispatch on
+# release/<X.Y>, or a pull request's head branch. Anywhere else it is the
+# checkout's own branch or tag. Tags are read from origin because the CI
+# checkout is shallow, and from the local clone when origin is unreachable.
+function Invoke-GitText([string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $prompt = $env:GIT_TERMINAL_PROMPT
+    $env:GIT_TERMINAL_PROMPT = '0'
+    try {
+        $output = & git -C $RepoRoot @Arguments 2>$null
+        if ($LASTEXITCODE -ne 0) { return @() }
+        return @($output | Where-Object { $_ })
+    }
+    catch { return @() }
+    finally {
+        $ErrorActionPreference = $previous
+        $env:GIT_TERMINAL_PROMPT = $prompt
+    }
+}
+
+$docfxConfig = Get-Content (Join-Path $PSScriptRoot 'docfx.json') -Raw | ConvertFrom-Json
+$siteUrl = [string]$docfxConfig.build.sitemap.baseUrl
+if (-not $siteUrl) { throw 'docfx.json has no build.sitemap.baseUrl; it is the published site URL, and llms.txt and the markdown alternates link from it.' }
+if (-not $siteUrl.EndsWith('/')) { $siteUrl += '/' }
+$repositoryUrl = 'https://github.com/NSTA1/Orleans.Lattice'
+
+$commit = Invoke-GitText @('rev-parse', 'HEAD') | Select-Object -First 1
+$ref = $null
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    if ($env:GITHUB_HEAD_REF) { $ref = $env:GITHUB_HEAD_REF }
+    elseif ($env:GITHUB_REF_NAME) { $ref = $env:GITHUB_REF_NAME }
+}
+if (-not $ref) { $ref = Invoke-GitText @('symbolic-ref', '--short', '-q', 'HEAD') | Select-Object -First 1 }
+if (-not $ref) { $ref = Invoke-GitText @('describe', '--tags', '--exact-match', 'HEAD') | Select-Object -First 1 }
+if (-not $ref) { $ref = if ($commit) { $commit } else { 'main' } }
+
+$tagNames = @(Invoke-GitText @('-c', 'credential.helper=', '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=20', 'ls-remote', '--tags', '--refs', 'origin') |
+    ForEach-Object { ($_ -split "`t")[-1] -replace '^refs/tags/', '' })
+if ($tagNames.Count -eq 0) { $tagNames = @(Invoke-GitText @('tag', '--list')) }
+
+# The newest published version of each package, keyed by its tag stem
+# ("lattice.replication" for Orleans.Lattice.Replication). Every per-package tag
+# push publishes that version to NuGet (docs/RELEASING.md), so this is what the
+# NuGet badges on PACKAGES.md show, written as text.
+$packageVersions = @{}
+foreach ($name in $tagNames) {
+    if ($name -notmatch '^(?<stem>[a-z0-9.]+)-v(?<version>\d+\.\d+\.\d+)$') { continue }
+    $version = [version]$Matches.version
+    if (-not $packageVersions.ContainsKey($Matches.stem) -or $packageVersions[$Matches.stem] -lt $version) {
+        $packageVersions[$Matches.stem] = $version
+    }
+}
+function Get-PackageVersion([string]$PackageId) {
+    $stem = ($PackageId -replace '^Orleans\.', '').ToLowerInvariant()
+    if ($packageVersions.ContainsKey($stem)) { return [string]$packageVersions[$stem] }
+    return $null
+}
+
+$releaseLine = $null
+$release = $null
+if ($ref -match '^lattice-v(?<line>\d+\.\d+)\.\d+$') {
+    $releaseLine = $Matches.line
+    $release = $ref.Substring('lattice-v'.Length)
+}
+elseif ($ref -match '^release/(?<line>\d+\.\d+)$') {
+    $releaseLine = $Matches.line
+    $newest = $tagNames |
+        Where-Object { $_ -match "^lattice-v$([regex]::Escape($releaseLine))\.\d+$" } |
+        ForEach-Object { [version]($_.Substring('lattice-v'.Length)) } |
+        Sort-Object -Descending | Select-Object -First 1
+    if ($newest) { $release = [string]$newest }
+}
+$built = [DateTime]::UtcNow
+$site = [pscustomobject]@{
+    Url         = $siteUrl
+    Repository  = $repositoryUrl
+    Ref         = $ref
+    Commit      = $commit
+    ShortCommit = if ($commit) { $commit.Substring(0, [Math]::Min(9, $commit.Length)) } else { $null }
+    Line        = $releaseLine
+    Release     = $release
+    Built       = $built
+    BuiltDate   = $built.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    # What a reader is told the site documents, in one phrase.
+    Label       = if ($release) { "Orleans.Lattice $release (release line $releaseLine)" }
+                  elseif ($releaseLine) { "the Orleans.Lattice $releaseLine release line" }
+                  else { "unreleased work on $ref" }
+}
+Write-Host "Documenting $($site.Label), from $($site.Ref) at $($site.ShortCommit), built $($site.BuiltDate)"
+
+# Links into the repository point at the ref the site was built from.
+function Get-SourceUrl([string]$RepoPath, [int]$FromLine = 0, [int]$ToLine = 0) {
+    $url = "$repositoryUrl/blob/$($site.Ref)/$RepoPath"
+    if ($FromLine -gt 0) { $url += "?plain=1#L$FromLine" + $(if ($ToLine -gt $FromLine) { "-L$ToLine" } else { '' }) }
+    return $url
+}
+function Get-TreeUrl([string]$RepoPath) { return "$repositoryUrl/tree/$($site.Ref)/$RepoPath" }
+
+# Where each staged page came from, keyed by its site-relative path: the URL of
+# its source, written onto the page as DocFX's docurl at the end. DocFX would
+# otherwise derive it from the staged copy's own path, docs-site/src/..., which
+# is not a file in the repository.
+$origins = @{}
+
+# Text that a reader of the page's source sees and a sighted reader does not.
+# The generated lists set each label in its own box - a name above its count,
+# a title beside its description - so the layout separates them; take the boxes
+# away, as any tool that reads a page as text does, and they run together
+# ("BuildWriting code", "50 documentsThe core"). A visually hidden separator
+# keeps them apart without moving a pixel: it is out of flow, so a flex or grid
+# container gives it no cell and no gap.
+function Get-Separator([string]$Text) { return "<span class=`"visually-hidden`">$Text</span>" }
+
+# A status pill ("unreleased", "in progress"), which reads as a parenthesis.
+# Built by concatenation: a parenthesis inside a quoted argument of a $( )
+# subexpression ends the subexpression early when it sits inside a string.
+function Get-StatusBadge([string]$Status) {
+    return '<span class="lt-status">' + (Get-Separator ' (') + $Status + (Get-Separator ')') + '</span>'
+}
 
 # Root pages, kept at the site root so the corpus's up-links resolve unchanged.
 #
@@ -62,10 +207,40 @@ function Set-PageTitle([string]$Text, [string]$Title) {
 foreach ($page in $rootPageTitles.Keys) {
     $text = Set-PageTitle (Get-Content (Join-Path $RepoRoot $page) -Raw) $rootPageTitles[$page]
     Set-Content -Path (Join-Path $Staging $page) -Value $text -NoNewline -Encoding utf8
+    $origins[$page] = Get-SourceUrl $page
 }
+
+# --- Package versions as text ---
+# PACKAGES.md (and the README's header) show each published package's version as
+# a shields.io badge whose only text is its alt, "NuGet", so a reader that does
+# not render images - a screen reader, a text browser, an agent - learns nothing
+# from it. The staged copy's alt text carries the version the badge draws, read
+# from the package's newest tag (see $packageVersions above). A badge whose
+# package has no tag is left as it is. The text is fixed when the site is built
+# while the image stays live, so the two differ only after a wave that pushes no
+# core tag, which does not redeploy the site (docs/RELEASING.md).
+$badgePattern = [regex]'\[!\[NuGet\]\((?<image>https://img\.shields\.io/nuget/v/(?<id>[A-Za-z0-9.]+))\)\]\((?<link>https://www\.nuget\.org/packages/\k<id>/?)\)'
+$badgesVersioned = 0
+foreach ($page in @('README.md', 'PACKAGES.md')) {
+    $file = Join-Path $Staging $page
+    $text = Get-Content $file -Raw
+    $text = $badgePattern.Replace($text, {
+        param($match)
+        $version = Get-PackageVersion $match.Groups['id'].Value
+        if (-not $version) { return $match.Value }
+        $script:badgesVersioned++
+        return "[![NuGet $version]($($match.Groups['image'].Value))]($($match.Groups['link'].Value))"
+    })
+    Set-Content -Path $file -Value $text -NoNewline -Encoding utf8
+}
+Write-Host "Wrote the version onto $badgesVersioned NuGet badge(s)"
 
 # The docs corpus, preserving the docs/<package>/ layout.
 Copy-Item (Join-Path $RepoRoot 'docs') (Join-Path $Staging 'docs') -Recurse
+Get-ChildItem (Join-Path $Staging 'docs') -Recurse -Filter *.md | ForEach-Object {
+    $relative = ConvertTo-SiteRelative $_.FullName $Staging
+    $origins[$relative] = Get-SourceUrl $relative
+}
 
 # Directories the corpus links into that carry their own markdown. Sample and
 # spec READMEs are real documentation and belong in the site.
@@ -77,14 +252,19 @@ foreach ($extra in @('samples', 'benchmark', 'spec', 'reference-architecture')) 
         $destination = Join-Path $target (ConvertTo-SiteRelative $_.FullName $source)
         New-Item -ItemType Directory -Path (Split-Path $destination) -Force | Out-Null
         Copy-Item $_.FullName $destination
+        $relative = "$extra/$(ConvertTo-SiteRelative $_.FullName $source)"
+        $origins[$relative] = Get-SourceUrl $relative
     }
 }
 
-# Standalone root files the corpus links to.
-foreach ($file in @('LICENSE', 'llms.txt')) {
+# Standalone root files the corpus links to. The repository's llms.txt is not
+# among them: the site writes its own, generated from the documentation map at
+# the end of this script, and links to llms.txt resolve to that.
+foreach ($file in @('LICENSE')) {
     $source = Join-Path $RepoRoot $file
     if (Test-Path $source) { Copy-Item $source (Join-Path $Staging $file) }
 }
+$siteGenerated = @('llms.txt', 'llms-full.txt')
 
 # --- Release history, released entries only ---
 # The site describes what has shipped. CHANGELOG.md's rolling "## Unreleased"
@@ -117,6 +297,7 @@ if (Test-Path $changelog) {
     }
 
     Set-Content -Path (Join-Path $Staging 'CHANGELOG.md') -Value (Set-PageTitle $released 'Changelog') -NoNewline -Encoding utf8
+    $origins['CHANGELOG.md'] = Get-SourceUrl 'CHANGELOG.md'
 }
 
 # Site branding - the mark, favicon, fonts, and theme - lives in the DocFX
@@ -255,7 +436,11 @@ if (Test-Path $videosStaged) {
         }
 
         $base = "../../media/$slug-$cut"
-        $facts = "<span><time datetime=`"$(ConvertTo-IsoDuration $length)`">$length</time></span><span>English captions</span><span><a href=`"$base.mp4`">Download the MP4</a> ($($episode.Size))</span>"
+        $facts = @(
+            "<span><time datetime=`"$(ConvertTo-IsoDuration $length)`">$length</time></span>",
+            '<span>English captions</span>',
+            "<span><a href=`"$base.mp4`">Download the MP4</a> ($($episode.Size))</span>"
+        ) -join (Get-Separator ', ')
         $player = Get-VideoPlayer $episode '../../media' $facts
         $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
         $block = $blocks[0]
@@ -270,9 +455,10 @@ Write-Host "Staged $($episodes.Count) published video episode(s)"
 # Resolution-based rather than pattern-based: any relative target absent from the
 # staged tree has no site counterpart (source code, spec files, agent
 # instructions), as does a link to a directory or to a staged non-markdown file.
-# Anything that does resolve to a page is left untouched.
-$blobBase = 'https://github.com/NSTA1/Orleans.Lattice/blob/main'
-$treeBase = 'https://github.com/NSTA1/Orleans.Lattice/tree/main'
+# Anything that does resolve to a page is left untouched. A repository link points
+# at the ref the site is built from, so it shows the source this page documents.
+$blobBase = "$repositoryUrl/blob/$($site.Ref)"
+$treeBase = "$repositoryUrl/tree/$($site.Ref)"
 $rewritten = 0
 
 Get-ChildItem $Staging -Recurse -Filter *.md | ForEach-Object {
@@ -289,6 +475,12 @@ Get-ChildItem $Staging -Recurse -Filter *.md | ForEach-Object {
         if ($target -match '^([a-z][a-z0-9+.-]*:|//)') { return $match.Value }
 
         $resolved = Join-Path $file.DirectoryName $target
+
+        # The site writes its own llms.txt and llms-full.txt after this pass, so
+        # a link to them stays on the site rather than going to the repository.
+        $full = [System.IO.Path]::GetFullPath($resolved)
+        if ($full.StartsWith($Staging) -and $siteGenerated -contains (ConvertTo-SiteRelative $full $Staging)) { return $match.Value }
+
         if (Test-Path -LiteralPath $resolved) {
             $item = Get-Item -LiteralPath $resolved
             if ($item.PSIsContainer) {
@@ -299,7 +491,7 @@ Get-ChildItem $Staging -Recurse -Filter *.md | ForEach-Object {
                 }
             }
             elseif ($item.Extension -ne '.md') {
-                # A staged non-markdown file (LICENSE, llms.txt) has no page either.
+                # A staged non-markdown file (LICENSE) has no page either.
                 $script:rewritten++
                 return "]($blobBase/$(ConvertTo-SiteRelative $item.FullName $Staging)$anchor)"
             }
@@ -421,12 +613,22 @@ function ConvertTo-Slug([string]$Heading) {
 # it from the routes written onto its tokens here, so the script knows nothing
 # about any one CRDT.
 #
+# A figure's labels are drawn, not written: each <text> lives in a label sheet
+# staged beside the site (figures/<id>-<width>.svg) and is drawn in place by a
+# <use> that carries its class, so it inherits the label's type and ink exactly
+# as the <text> would. The page itself holds none of their words, so a reader
+# that takes the page as text - an agent, a text browser - gets the figure's
+# title and prose description instead of its labels run together ("merge
+# Bmerge AA=3, B=5join"). The buttons, which only work with script, name
+# themselves the same way, from CSS (see main.css).
+#
 # Each scenario mirrors the Behaviour example on its page, and the figure is
 # inserted at the top of that section of the STAGED page only. The tracked
 # document is untouched, so it still renders on github.com exactly as before.
 $figureSource = Join-Path $PSScriptRoot 'figures/join-figures.json'
 if (-not (Test-Path $figureSource)) { throw "Missing $figureSource, which the home page and the CRDT explainers draw from." }
 $figureSpecs = @((Get-Content $figureSource -Raw | ConvertFrom-Json).figures)
+$figureSheets = Join-Path $Staging 'figures'
 
 function Get-EncodedHtml([string]$Text) {
     return [System.Net.WebUtility]::HtmlEncode($Text)
@@ -441,11 +643,14 @@ function Get-EncodedHtml([string]$Text) {
 #   chain    without one: a write that changes nothing (a remove that observed
 #            nothing), where 'noop' names the writer that stays at the bottom
 #            until the merge lifts it.
+# $SitePrefix is the path from the page up to the site root, where the label
+# sheets are staged.
 function Get-JoinFigure {
     param(
         [Parameter(Mandatory = $true)] $Spec,
         [int]$Width = 560,
         [string]$CaptionHtml,
+        [string]$SitePrefix = '',
         [switch]$Inline
     )
 
@@ -456,11 +661,16 @@ function Get-JoinFigure {
     $svg = New-Object System.Collections.Generic.List[string]
     $segments = New-Object System.Collections.Generic.List[object]
     $routes = @{}
+    $sheetName = "$id-$Width"
+    $sheet = New-Object System.Collections.Generic.List[string]
 
+    # The label goes into the figure's sheet, and a <use> draws it here.
     function Add-Text([string]$Class, [int]$X, [int]$Y, [string]$Value, [string]$Anchor) {
         if (-not $Value) { return }
         $anchorAttribute = if ($Anchor -and $Anchor -ne 'start') { " text-anchor=`"$Anchor`"" } else { '' }
-        $svg.Add("<text class=`"$Class`" x=`"$X`" y=`"$Y`"$anchorAttribute>$(Get-EncodedHtml $Value)</text>")
+        $labelId = "$sheetName-$($sheet.Count + 1)"
+        $sheet.Add("<text id=`"$labelId`" x=`"$X`" y=`"$Y`"$anchorAttribute>$(Get-EncodedHtml $Value)</text>")
+        $svg.Add("<use class=`"$Class`" href=`"${SitePrefix}figures/$sheetName.svg#$labelId`"/>")
     }
 
     # State lines 18 units apart, then the note 20 below the last of them.
@@ -618,19 +828,30 @@ function Get-JoinFigure {
     $html = New-Object System.Collections.Generic.List[string]
     $html.Add("<figure class=`"$figureClass`" data-lt-join $data>")
     $html.Add("<svg class=`"lt-join-svg`" viewBox=`"0 0 $Width 420`" role=`"img`" aria-labelledby=`"lt-join-title-$id lt-join-desc-$id`">")
-    $html.Add("<title id=`"lt-join-title-$id`">$(Get-EncodedHtml $Spec.title)</title>")
+    # The title ends as a sentence, so a reader that takes the page as text does
+    # not run it into the description that follows it.
+    $figureTitle = [string]$Spec.title
+    if ($figureTitle -notmatch '[.!?]$') { $figureTitle += '.' }
+    $html.Add("<title id=`"lt-join-title-$id`">$(Get-EncodedHtml $figureTitle)</title>")
     $html.Add("<desc id=`"lt-join-desc-$id`">$(Get-EncodedHtml $Spec.description)</desc>")
     foreach ($line in $svg) { $html.Add($line) }
     $html.Add('</svg>')
     $html.Add('<figcaption class="lt-join-caption">')
     $html.Add("<p class=`"lt-join-status`" data-lt-join-status aria-live=`"polite`">$(Get-EncodedHtml $Spec.settled)</p>")
     $html.Add('<div class="lt-join-controls">')
-    $html.Add('<button type="button" class="lt-button" data-lt-join-replay>Replay the merge</button>')
-    $html.Add("<button type=`"button`" class=`"lt-button lt-button-quiet`" data-lt-join-redeliver>$(Get-EncodedHtml $redeliver.label)</button>")
+    $html.Add('<button type="button" class="lt-button" data-lt-join-replay aria-label="Replay the merge" data-lt-label="Replay the merge"></button>')
+    $redeliverLabel = Get-EncodedHtml $redeliver.label
+    $html.Add("<button type=`"button`" class=`"lt-button lt-button-quiet`" data-lt-join-redeliver aria-label=`"$redeliverLabel`" data-lt-label=`"$redeliverLabel`"></button>")
     $html.Add('</div>')
     $html.Add("<p class=`"lt-join-source`">$caption</p>")
     $html.Add('</figcaption>')
     $html.Add('</figure>')
+
+    # The sheet the <use> elements draw from. A figure drawn twice at the same
+    # width (the G-Counter's, on the home page and its explainer) shares it.
+    New-Item -ItemType Directory -Path $figureSheets -Force | Out-Null
+    $sheetXml = @('<svg xmlns="http://www.w3.org/2000/svg">') + @($sheet) + @('</svg>')
+    [System.IO.File]::WriteAllText((Join-Path $figureSheets "$sheetName.svg"), ($sheetXml -join "`n") + "`n", (New-Object System.Text.UTF8Encoding $false))
     return ($html -join "`n")
 }
 
@@ -650,12 +871,121 @@ foreach ($spec in $figureSpecs) {
         throw "Join figure '$($spec.id)' goes at the top of the '## Behaviour' section of $($spec.page), which has $found such headings."
     }
     $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
-    $figure = (Get-JoinFigure -Spec $spec -Inline) -replace "`n", $newline
+    $depth = ([string]$spec.page).Split('/').Count - 1
+    $figure = (Get-JoinFigure -Spec $spec -Inline -SitePrefix ('../' * $depth)) -replace "`n", $newline
     $text = $heading.Replace($text, { param($match) $match.Value + $newline + $newline + $figure }, 1)
     Set-Content -LiteralPath $page -Value $text -NoNewline -Encoding utf8
     $placedFigures++
 }
 Write-Host "Placed $placedFigures join figure(s) on CRDT explainer pages"
+
+# --- Pages too large to read: split into an index and a page per section ---
+# A reader - above all an agent, which fetches a page in slices of a few tens of
+# thousands of characters - should not have to read the whole API reference to
+# reach one type. Any staged page larger than $pageBudget becomes an index (its
+# introduction, its short sections, and a list of the rest) and one page per
+# level-2 section, in a folder named after it; a section larger than
+# $sectionBudget is split again at its level-3 headings (see lib/split.ps1).
+#
+# The release history is split by release whatever its size, because a release
+# is what a reader looks one up by: every "## [YYYY-MM-DD]" section becomes
+# changelog/<date>.md.
+#
+# Every heading keeps its id, and every link to a heading that moved - from this
+# page or any other - is pointed at its new page once everything is staged, so
+# the zero-warning link gate proves the split lost nothing.
+$pageBudget = 100000
+$sectionBudget = 60000
+$splits = @{}
+
+# The difference between a line's number in the staged page's body and in its
+# source: zero for a copied page, and not zero where staging added front matter
+# or, in the changelog, removed the Unreleased section above $Anchor.
+function Get-SourceLineOffset([string]$Page, [string]$SourcePath, [string]$Anchor) {
+    $body = @((Split-FrontMatter ([System.IO.File]::ReadAllText((Join-Path $Staging $Page)))).Body -split '\r?\n')
+    $source = @([System.IO.File]::ReadAllLines($SourcePath))
+    if (-not $Anchor) { $Anchor = $body | Where-Object { $_.Trim() } | Select-Object -First 1 }
+    $inBody = [array]::IndexOf($body, $Anchor)
+    $inSource = [array]::IndexOf($source, $Anchor)
+    if ($inBody -lt 0 -or $inSource -lt 0) { return $null }
+    return $inSource - $inBody
+}
+
+# Splits one staged page and records where each new page came from: its lines
+# in the source file where there is one, the page's own origin where it was
+# generated.
+function Invoke-PageSplit([string]$Page, [hashtable]$Options) {
+    $source = Join-Path $RepoRoot $Page
+    $offset = if (Test-Path -LiteralPath $source) { Get-SourceLineOffset $Page $source $Options['Anchor'] } else { $null }
+    $Options.Remove('Anchor')
+    $result = Split-LargePage -Staging $Staging -Page $Page -SectionBudget $sectionBudget @Options
+    if (-not $result) { return }
+    $splits[$Page] = $result
+    foreach ($entry in $result.Pages) {
+        $origins[$entry.Path] = if ($null -ne $offset) { Get-SourceUrl $Page ($entry.Start + 1 + $offset) ($entry.End + $offset) } else { $origins[$Page] }
+    }
+    Write-Host "Split $Page into $($result.Pages.Count) page(s)"
+}
+
+foreach ($file in @(Get-ChildItem $Staging -Recurse -Filter *.md)) {
+    $relative = ConvertTo-SiteRelative $file.FullName $Staging
+    if ($relative -eq 'CHANGELOG.md' -or $file.Length -le $pageBudget) { continue }
+    Invoke-PageSplit $relative @{ InlineBelow = 5000 }
+}
+
+if (Test-Path (Join-Path $Staging 'CHANGELOG.md')) {
+    $firstRelease = Get-Content (Join-Path $Staging 'CHANGELOG.md') | Where-Object { $_ -match '^## \[' } | Select-Object -First 1
+    Invoke-PageSplit 'CHANGELOG.md' @{
+        Anchor          = $firstRelease
+        Directory       = 'changelog'
+        Title           = { param($plain) 'Release ' + $plain.Trim('[', ']') }
+        Keep            = @('Older releases')
+        Drop            = @('Released')
+        ContentsHeading = 'Releases'
+        ContentsLede    = 'One page per release, newest first. Each opens with the package versions that release shipped.'
+        PartOf          = 'Part of the [changelog]({0}).'
+        PreviousLabel   = 'Newer release'
+        NextLabel       = 'Older release'
+    }
+    $result = $splits['CHANGELOG.md']
+    if ($result) {
+        # The releases get a sidebar of their own, newest first.
+        $changelogToc = New-Object System.Collections.Generic.List[string]
+        $changelogToc.Add('- name: All releases')
+        $changelogToc.Add('  href: ../CHANGELOG.md')
+        foreach ($entry in $result.Children) {
+            $changelogToc.Add("- name: $(ConvertTo-YamlString $entry.TocName)")
+            $changelogToc.Add("  href: $([System.IO.Path]::GetFileName($entry.Path))")
+            if ($entry.Children.Count -gt 0) {
+                $changelogToc.Add('  items:')
+                foreach ($child in $entry.Children) {
+                    $changelogToc.Add("  - name: $(ConvertTo-YamlString $child.TocName)")
+                    $changelogToc.Add("    href: $([System.IO.Path]::GetFileName($child.Path))")
+                }
+            }
+        }
+        Set-Content -Path (Join-Path $Staging 'changelog/toc.yml') -Value $changelogToc -Encoding utf8
+    }
+}
+
+# The TOC entries a split page's sections add beneath it, with hrefs relative to
+# the directory of the TOC that lists them.
+function Add-SplitTocItems($Lines, [string]$Page, [string]$TocDirectory, [string]$Indent) {
+    $result = $splits[$Page]
+    if (-not $result) { return }
+    $Lines.Add("$Indent  items:")
+    foreach ($entry in $result.Children) {
+        $Lines.Add("$Indent  - name: $(ConvertTo-YamlString $entry.TocName)")
+        $Lines.Add("$Indent    href: $(Get-SiteRelativeLink $TocDirectory $entry.Path)")
+        if ($entry.Children.Count -gt 0) {
+            $Lines.Add("$Indent    items:")
+            foreach ($child in $entry.Children) {
+                $Lines.Add("$Indent    - name: $(ConvertTo-YamlString $child.TocName)")
+                $Lines.Add("$Indent      href: $(Get-SiteRelativeLink $TocDirectory $child.Path)")
+            }
+        }
+    }
+}
 
 # --- The package catalogue, parsed from PACKAGES.md ---
 # One entry per "## " section (Contents and Related excepted), each with its
@@ -794,7 +1124,10 @@ if ($dirInfo.Values | Where-Object { $_.Section -eq $fallbackSection }) { $secti
 
 # --- A TOC per package directory, driving that package's sidebar ---
 # Pages are titled from their own H1, not their file name, so "ttl.md" reads
-# "TTL" rather than "Ttl". README first, then alphabetical by that title.
+# "TTL" rather than "Ttl". README first, then alphabetical by that title. A page
+# split into sections lists them beneath it. The same entries, in the same
+# order, make each package's part of llms.txt.
+$packagePages = @{}
 foreach ($dir in $packageDirs) {
     $info = $dirInfo[$dir.Name]
     $entries = Get-ChildItem -LiteralPath $dir.FullName -Filter *.md | ForEach-Object {
@@ -803,11 +1136,13 @@ foreach ($dir in $packageDirs) {
         if (-not $title) { $title = (Get-Culture).TextInfo.ToTitleCase(($_.BaseName -replace '-', ' ')) }
         [pscustomobject]@{ Name = $_.Name; Title = $title; Order = if ($isReadme) { '0' } else { '1' + $title.ToLowerInvariant() } }
     } | Sort-Object Order
+    $packagePages[$dir.Name] = @($entries)
 
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($entry in $entries) {
         $lines.Add("- name: $(ConvertTo-YamlString $entry.Title)")
         $lines.Add("  href: $($entry.Name)")
+        Add-SplitTocItems $lines "docs/$($dir.Name)/$($entry.Name)" "docs/$($dir.Name)" ''
     }
     Set-Content -Path (Join-Path $dir.FullName 'toc.yml') -Value $lines -Encoding utf8
 }
@@ -871,16 +1206,17 @@ foreach ($section in $sectionOrder) {
     foreach ($dir in $members) {
         $info = $dirInfo[$dir.Name]
         $class = if ($info.Status) { ' class="lt-unreleased"' } else { '' }
-        $status = if ($info.Status) { "<span class=`"lt-status`">$($info.Status)</span>" } else { '' }
+        $status = if ($info.Status) { Get-StatusBadge $info.Status } else { '' }
         $count = if ($info.Count -eq 1) { '1 document' } else { "$($info.Count) documents" }
         $meta = if ($info.Id) { "<code>$($info.Id)</code> &middot; $count" } else { $count }
-        $desc = if ($info.Description) { "<span class=`"lt-map-desc`">$(ConvertTo-HtmlText $info.Description)</span>" } else { '' }
-        $index.Add("<li$class><span class=`"lt-map-name`"><a href=`"$($dir.Name)/$($info.Landing)`">$([System.Net.WebUtility]::HtmlEncode($info.Display))</a>$status</span><span class=`"lt-map-meta`">$meta</span>$desc</li>")
+        $desc = if ($info.Description) { (Get-Separator '. ') + "<span class=`"lt-map-desc`">$(ConvertTo-HtmlText $info.Description)</span>" } else { '' }
+        $index.Add("<li$class><span class=`"lt-map-name`"><a href=`"$($dir.Name)/$($info.Landing)`">$([System.Net.WebUtility]::HtmlEncode($info.Display))</a>$status</span>$(Get-Separator ': ')<span class=`"lt-map-meta`">$meta</span>$desc</li>")
     }
     $index.Add('</ul>')
     $index.Add('')
 }
 Set-Content -Path (Join-Path $docsRoot 'index.md') -Value $index -Encoding utf8
+$origins['docs/index.md'] = Get-SourceUrl 'PACKAGES.md'
 
 # --- Sample sources, rendered as pages ---
 # On github.com a sample folder is browsable, so Program.cs is one click from the
@@ -964,6 +1300,20 @@ foreach ($sample in $sampleDirs) {
     $target = Join-Path $samplesStaged $sample.Name
     New-Item -ItemType Directory -Path $target -Force | Out-Null
     Set-Content -Path (Join-Path $target 'source.md') -Value $page -Encoding utf8
+
+    # A listing too long to read at once becomes one page per file, each with
+    # its own source link.
+    $sourcePage = "samples/$($sample.Name)/source.md"
+    $origins[$sourcePage] = Get-TreeUrl "samples/$($sample.Name)"
+    if ((Get-Item (Join-Path $target 'source.md')).Length -gt $pageBudget) {
+        Invoke-PageSplit $sourcePage @{}
+        if ($splits.ContainsKey($sourcePage)) {
+            foreach ($entry in $splits[$sourcePage].Pages) {
+                $listed = "samples/$($sample.Name)/$($entry.Title)"
+                if (Test-Path -LiteralPath (Join-Path $RepoRoot $listed) -PathType Leaf) { $origins[$entry.Path] = Get-SourceUrl $listed }
+            }
+        }
+    }
 }
 
 # --- Samples index and TOC, grouped by concern from FEATURES.md ---
@@ -1013,6 +1363,7 @@ function Add-FallbackSection {
     return $SectionMap
 }
 
+$sampleEntries = New-Object System.Collections.Generic.List[object]
 if ($sampleDirs) {
     $sampleSections = Get-SectionMap `
         -Path (Join-Path $RepoRoot 'FEATURES.md') `
@@ -1053,13 +1404,17 @@ if ($sampleDirs) {
             if ($hasSource) {
                 $tocEntries.Add('    - name: Source')
                 $tocEntries.Add("      href: $($sample.Name)/source.md")
+                $sourceItems = New-Object System.Collections.Generic.List[string]
+                Add-SplitTocItems $sourceItems "samples/$($sample.Name)/source.md" 'samples' '    '
+                foreach ($item in $sourceItems) { $tocEntries.Add($item) }
             }
 
             $landing = if ($hasReadme) { "$($sample.Name)/README.md" } else { "$($sample.Name)/source.md" }
             $summary = if ($hasReadme) { Get-FirstSentence (Get-FirstParagraph (Join-Path $staged 'README.md')) } else { $null }
-            $desc = if ($summary) { "<span class=`"lt-map-desc`">$(ConvertTo-HtmlText $summary)</span>" } else { '' }
-            $source = if ($hasReadme -and $hasSource) { "<span class=`"lt-map-meta`"><a href=`"$($sample.Name)/source.md`">Source</a></span>" } else { '' }
+            $desc = if ($summary) { (Get-Separator ': ') + "<span class=`"lt-map-desc`">$(ConvertTo-HtmlText $summary)</span>" } else { '' }
+            $source = if ($hasReadme -and $hasSource) { (Get-Separator ' (') + "<span class=`"lt-map-meta`"><a href=`"$($sample.Name)/source.md`">Source</a></span>" + (Get-Separator ')') } else { '' }
             $indexEntries.Add("<li><span class=`"lt-map-name`"><a href=`"$landing`">$($sample.Name)</a></span>$source$desc</li>")
+            $sampleEntries.Add([pscustomobject]@{ Name = $sample.Name; Section = $section; Readme = $hasReadme; Source = $hasSource; Summary = $summary })
         }
         if ($tocEntries.Count -eq 0) { continue }
 
@@ -1077,6 +1432,7 @@ if ($sampleDirs) {
 
     Set-Content -Path (Join-Path $samplesStaged 'toc.yml') -Value $samplesToc -Encoding utf8
     Set-Content -Path (Join-Path $samplesStaged 'index.md') -Value $samplesIndex -Encoding utf8
+    $origins['samples/index.md'] = Get-SourceUrl 'FEATURES.md'
 }
 
 # --- Videos: the tab, its index, and the home page's introduction ---
@@ -1120,8 +1476,8 @@ if ($episodes.Count -gt 0) {
             # The poster is a second way to the same page, so it is kept out of
             # the tab order and the accessibility tree; the title is the link.
             $poster = "<a class=`"lt-episode-poster`" href=`"$($episode.Page)`" tabindex=`"-1`" aria-hidden=`"true`"><img src=`"../../media/$($episode.Slug)-$($episode.Cut).jpg`" alt=`"`" width=`"1920`" height=`"1080`" loading=`"lazy`"></a>"
-            $idea = if ($episode.Idea) { "<span class=`"lt-episode-idea`">$(ConvertTo-HtmlText $episode.Idea)</span>" } else { '' }
-            $length = "<span class=`"lt-episode-length`"><time datetime=`"$(ConvertTo-IsoDuration $episode.Length)`">$($episode.Length)</time></span>"
+            $idea = if ($episode.Idea) { (Get-Separator ': ') + "<span class=`"lt-episode-idea`">$(ConvertTo-HtmlText $episode.Idea)</span>" } else { '' }
+            $length = (Get-Separator ' (') + "<span class=`"lt-episode-length`"><time datetime=`"$(ConvertTo-IsoDuration $episode.Length)`">$($episode.Length)</time></span>" + (Get-Separator ')')
             $videosIndex.Add("<li>$poster<div class=`"lt-episode-body`"><a class=`"lt-episode-title`" href=`"$($episode.Page)`">$(Get-EncodedHtml $episode.Title)</a>$idea$length</div></li>")
         }
         $videosIndex.Add('</ol>')
@@ -1130,6 +1486,7 @@ if ($episodes.Count -gt 0) {
 
     Set-Content -Path (Join-Path $videosStaged 'toc.yml') -Value $videosToc -Encoding utf8
     Set-Content -Path (Join-Path $videosStaged 'index.md') -Value $videosIndex -Encoding utf8
+    $origins['docs/videos/index.md'] = Get-TreeUrl 'docs/videos'
 }
 elseif (Test-Path $videosStaged) {
     Remove-Item $videosStaged -Recurse -Force
@@ -1220,11 +1577,26 @@ function Get-SeamSummary {
         $shown = ($names | Select-Object -First 4) -join ', '
         if ($names.Count -gt 4) { $shown += ", and $($names.Count - 4) more" }
         $count = if ($names.Count -eq 1) { '1 package' } else { "$($names.Count) packages" }
-        $status = if ($section.InProgress) { '<span class="lt-status">in progress</span>' } else { '' }
-        $html.Add("<li><a class=`"lt-seam-name`" href=`"docs/index.md#$(ConvertTo-Slug $section.Name)`">$([System.Net.WebUtility]::HtmlEncode($section.Name))</a>$status<span class=`"lt-seam-count`">$count</span><span class=`"lt-seam-members`">$([System.Net.WebUtility]::HtmlEncode($shown))</span></li>")
+        $status = if ($section.InProgress) { Get-StatusBadge 'in progress' } else { '' }
+        $html.Add("<li><a class=`"lt-seam-name`" href=`"docs/index.md#$(ConvertTo-Slug $section.Name)`">$([System.Net.WebUtility]::HtmlEncode($section.Name))</a>$status$(Get-Separator ': ')<span class=`"lt-seam-count`">$count</span>$(Get-Separator ' - ')<span class=`"lt-seam-members`">$([System.Net.WebUtility]::HtmlEncode($shown))</span></li>")
     }
     $html.Add('</ul>')
     return $html -join "`n"
+}
+
+# The authored home page's own labels get the same separators as the generated
+# lists. Applied to the staged copy only: docs-site/pages/index.md keeps the
+# exact markup the video series reads it by (videos/tools/lib/home.js).
+function Add-HomeSeparators([string]$Text) {
+    $Text = [regex]::Replace($Text, '<span class="lt-way-name">(?<name>[^<]*)</span><span class="lt-way-for">(?<for>.*?)</span></a>', {
+        param($match)
+        "<span class=`"lt-way-name`">$($match.Groups['name'].Value)</span>$(Get-Separator ': ')<span class=`"lt-way-for`">$($match.Groups['for'].Value)</span>$(Get-Separator '.')</a>"
+    })
+    $Text = [regex]::Replace($Text, '(?<label><span class="lt-invariant-label">[^<]*</span>)(?<gap1>\s*)(?<code><code>[^<]*</code>)(?<gap2>\s*)(?=<span class="lt-invariant-note">)', {
+        param($match)
+        $match.Groups['label'].Value + (Get-Separator ': ') + $match.Groups['gap1'].Value + $match.Groups['code'].Value + (Get-Separator ', ') + $match.Groups['gap2'].Value
+    })
+    return [regex]::Replace($Text, '<span class="lt-status">(?<status>[^<]*)</span>', { param($match) Get-StatusBadge $match.Groups['status'].Value })
 }
 
 $pagesSource = Join-Path $PSScriptRoot 'pages'
@@ -1239,7 +1611,8 @@ if (Test-Path $pagesSource) {
         'introduction' = (Get-IntroductionSection)
     }
     Get-ChildItem $pagesSource -Recurse -File | ForEach-Object {
-        $destination = Join-Path $Staging (ConvertTo-SiteRelative $_.FullName $pagesSource)
+        $relative = ConvertTo-SiteRelative $_.FullName $pagesSource
+        $destination = Join-Path $Staging $relative
         New-Item -ItemType Directory -Path (Split-Path $destination) -Force | Out-Null
         if ($_.Extension -ne '.md') { Copy-Item $_.FullName $destination; return }
         $text = Get-Content $_.FullName -Raw
@@ -1249,9 +1622,267 @@ if (Test-Path $pagesSource) {
         if ($text -match '<!-- lattice:([a-z-]+) -->') {
             throw "$($_.Name) asks for a generated section 'lattice:$($Matches[1])' that stage.ps1 does not produce."
         }
+        $text = Add-HomeSeparators $text
         Set-Content -Path $destination -Value $text -NoNewline -Encoding utf8
+        $origins[$relative] = Get-SourceUrl "docs-site/pages/$relative"
     }
 }
+
+# --- Links to the headings of split pages, from every page ---
+# Only a page that names a split page and an anchor can need this, which is
+# checked cheaply first.
+$splitTargets = @($splits.Keys | ForEach-Object { [System.IO.Path]::GetFileName($_) + '#' } | Sort-Object -Unique)
+$retargeted = 0
+foreach ($file in @(Get-ChildItem $Staging -Recurse -Filter *.md)) {
+    $text = [System.IO.File]::ReadAllText($file.FullName)
+    if (-not ($splitTargets | Where-Object { $text.Contains($_) } | Select-Object -First 1)) { continue }
+    Update-SplitPageLinks $Staging (ConvertTo-SiteRelative $file.FullName $Staging) $splits
+    if ([System.IO.File]::ReadAllText($file.FullName) -ne $text) { $retargeted++ }
+}
+Write-Host "Pointed links on $retargeted page(s) at the pages split sections moved to"
+
+# --- Every page's source link ---
+# DocFX writes docurl from the front matter when a page sets it, and from the
+# staged file's own path otherwise, which is docs-site/src/... and 404s. A page
+# staged without a recorded origin fails the build here, rather than shipping
+# that broken link.
+$stagedPages = @(Get-ChildItem $Staging -Recurse -Filter *.md | ForEach-Object { ConvertTo-SiteRelative $_.FullName $Staging } | Sort-Object)
+$utf8 = New-Object System.Text.UTF8Encoding $false
+foreach ($relative in $stagedPages) {
+    $url = $origins[$relative]
+    if (-not $url) { throw "stage.ps1 staged $relative without recording its source. Set `$origins['$relative'] where the page is staged, so its source link names a file in the repository." }
+    $file = Join-Path $Staging $relative
+    $text = [System.IO.File]::ReadAllText($file)
+    [System.IO.File]::WriteAllText($file, (Set-FrontMatterValues $text ([ordered]@{ docurl = $url })), $utf8)
+}
+
+# --- The markdown alternates ---
+# Beside every rendered page the site publishes its markdown, so a reader that
+# simplifies HTML - and drops a table, a list, or a link as it does - can read
+# the page itself instead (build.ps1 copies these into the site and links each
+# page to its alternate). The page's own markdown is kept as it is; the HTML the
+# site adds is turned back into markdown (lib/agent.ps1); and a header says what
+# the page is, where its source is, and which release it documents.
+$agentRoot = Join-Path $Intermediate 'agent'
+$pageInfo = @{}
+foreach ($relative in $stagedPages) {
+    $text = [System.IO.File]::ReadAllText((Join-Path $Staging $relative))
+    $front = Split-FrontMatter $text
+    $title = Get-FrontMatterValue $front.Lines 'title'
+    if (-not $title) {
+        # Assigned before it is filtered: the function returns its list as one
+        # object, so piping its output would filter the list, not its headings.
+        $headings = Get-MarkdownHeadings @($front.Body -split '\r?\n')
+        $h1 = $headings | Where-Object { $_.Level -eq 1 } | Select-Object -First 1
+        $title = if ($h1) { Get-HeadingPlainText $h1.Text } else { [System.IO.Path]::GetFileNameWithoutExtension($relative) }
+    }
+    $body = ConvertTo-AgentMarkdown $front.Body
+    $header = @(
+        '---',
+        "title: $(ConvertTo-QuotedYaml $title)",
+        "url: $(ConvertTo-QuotedYaml ($site.Url + [System.IO.Path]::ChangeExtension($relative, '.html')))",
+        "source: $(ConvertTo-QuotedYaml $origins[$relative])",
+        "documents: $(ConvertTo-QuotedYaml $site.Label)",
+        "built: $(ConvertTo-QuotedYaml $site.BuiltDate)",
+        '---',
+        ''
+    ) -join "`n"
+    $target = Join-Path $agentRoot $relative
+    New-Item -ItemType Directory -Path (Split-Path $target) -Force | Out-Null
+    [System.IO.File]::WriteAllText($target, $header + $body, $utf8)
+    $pageInfo[$relative] = [pscustomobject]@{ Title = $title; Body = $body }
+}
+Write-Host "Wrote $($stagedPages.Count) markdown alternate(s) under $agentRoot"
+
+# --- llms.txt: the site's entry point for agents and LLM tooling ---
+# Generated from the same catalogue as the documentation map and the sidebar
+# (PACKAGES.md, each package's pages, FEATURES.md's samples), so it cannot
+# drift from them. It follows https://llmstxt.org: a title, a summary, then
+# sections of links to each page's markdown alternate, grouped the way the site
+# groups them, with the history and the contributor material under "Optional".
+# Every documentation page is listed, by title; a package's landing page also
+# carries the package's description from PACKAGES.md. A page that is part of
+# another - a release, a sample's source, a section of a split page outside
+# docs/ - is reached from the page it belongs to, which is listed.
+function Get-PageDescription([string]$Relative, [int]$Max = 110) {
+    $file = Join-Path $Staging $Relative
+    if (-not (Test-Path -LiteralPath $file)) { return $null }
+    $body = @((Split-FrontMatter ([System.IO.File]::ReadAllText($file))).Body -split '\r?\n')
+    $h1 = [array]::FindIndex($body, [Predicate[string]]{ param($l) $l -match '^#\s' })
+    return Get-RangeDescription $body ($h1 + 1) $body.Count $Max
+}
+
+$llms = New-Object System.Collections.Generic.List[string]
+$listed = New-Object 'System.Collections.Generic.HashSet[string]'
+function Add-LlmsLink([string]$Relative, [string]$Name, [string]$Description) {
+    if (-not $pageInfo.ContainsKey($Relative) -or -not $listed.Add($Relative)) { return }
+    $item = "- [$Name]($($site.Url)$Relative)"
+    if ($Description) { $item += ": $Description" }
+    $llms.Add($item)
+}
+function Add-LlmsSplit([string]$Relative, [string]$Prefix) {
+    if (-not $splits.ContainsKey($Relative)) { return }
+    foreach ($entry in $splits[$Relative].Pages) { Add-LlmsLink $entry.Path "${Prefix}: $($entry.Title)" $null }
+}
+
+# The README's opening paragraphs are the platform's own summary.
+$readmeLines = @(Get-Content (Join-Path $RepoRoot 'README.md'))
+$summary = New-Object System.Collections.Generic.List[string]
+$paragraph = New-Object System.Collections.Generic.List[string]
+foreach ($readmeLine in ($readmeLines | Select-Object -Skip 1)) {
+    if ($readmeLine -match '^\s*(#|\||!\[|\[!\[)') { if ($summary.Count) { break }; continue }
+    if ($readmeLine.Trim() -eq '') {
+        if ($paragraph.Count) { $summary.Add(($paragraph -join ' ')); $paragraph.Clear() }
+        if ($summary.Count -ge 2) { break }
+        continue
+    }
+    $paragraph.Add($readmeLine.Trim())
+}
+
+$llms.Add('# Orleans.Lattice')
+$llms.Add('')
+$llms.Add("> $($summary -join ' ')")
+$llms.Add('')
+$commitNote = if ($site.ShortCommit) { ' at commit `' + $site.ShortCommit + '`' } else { '' }
+$llms.Add("This index lists every page of the documentation site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``$commitNote. It is generated from the same catalogue as the site's [documentation map]($($site.Url)docs/index.md), so it lists every package and every page. Each link is to a page's markdown; the rendered page is at the same address ending in ``.html``. [llms-full.txt]($($site.Url)llms-full.txt) holds every documentation page in one file, and [sitemap.xml]($($site.Url)sitemap.xml) lists every rendered page.")
+$llms.Add('')
+
+$llms.Add('## Start here')
+$llms.Add('')
+Add-LlmsLink 'index.md' 'Home' 'The platform in one page, the three reading paths (Build, Evaluate, Operate), and the deployment journey from one machine to many regions.'
+Add-LlmsLink 'README.md' 'Overview' (Get-PageDescription 'README.md')
+Add-LlmsLink 'FEATURES.md' 'Features' 'Every capability, grouped by concern, with its documentation and a runnable sample where one exists.'
+Add-LlmsLink 'PACKAGES.md' 'Packages' 'Every package, grouped by the seam it fills, with its published version and its documentation.'
+Add-LlmsLink 'docs/index.md' 'Documentation map' 'Every package''s documentation, grouped by seam, with its status and page count.'
+Add-LlmsLink 'samples/index.md' 'Samples' 'Runnable projects exercising the platform, grouped by concern.'
+Add-LlmsLink 'reference-architecture.md' 'Reference architecture' (Get-PageDescription 'reference-architecture.md')
+$llms.Add('')
+
+# The home page's three reading paths, in their own order.
+$homeSource = Join-Path $PSScriptRoot 'pages/index.md'
+if (Test-Path $homeSource) {
+    $homeText = Get-Content $homeSource -Raw
+    foreach ($path in [regex]::Matches($homeText, '(?s)<div class="lt-path" id="(?<id>[a-z-]+)">\s*<h3>(?<name>[^<]+)</h3>\s*<p class="lt-path-for">(?<for>.*?)</p>(?<list>.*?)</div>')) {
+        $llms.Add("## Reading path: $($path.Groups['name'].Value)")
+        $llms.Add('')
+        foreach ($step in [regex]::Matches($path.Groups['list'].Value, '(?m)^\d+\.\s+\[(?<text>[^\]]+)\]\((?<href>[^)#]+)(?<anchor>#[^)]*)?\)\s*(?<note>.*?)\s*$')) {
+            # A step's note, less its cross-reference to the other path ("Also on Operate").
+            $note = [regex]::Replace([regex]::Replace($step.Groups['note'].Value, '<span class="lt-shared">[^<]*</span>', ''), '<[^>]+>', '').Trim()
+            $llms.Add("- [$($step.Groups['text'].Value)]($($site.Url)$($step.Groups['href'].Value)$($step.Groups['anchor'].Value)): $note")
+        }
+        $llms.Add('')
+    }
+}
+
+# Every package's pages, grouped as the documentation map groups them.
+foreach ($section in $sectionOrder) {
+    $members = @($packageDirs | Where-Object { $dirInfo[$_.Name].Section -eq $section })
+    if ($members.Count -eq 0) { continue }
+    $llms.Add("## $section")
+    $llms.Add('')
+    foreach ($dir in $members) {
+        $info = $dirInfo[$dir.Name]
+        $name = if ($info.Status) { "$($info.Display) ($($info.Status))" } else { $info.Display }
+        if ($info.Landing) {
+            $landing = "docs/$($dir.Name)/$($info.Landing)"
+            $lead = if ($info.Id) { "``$($info.Id)``. " } else { '' }
+            Add-LlmsLink $landing $name ($lead + $(if ($info.Description) { Get-ShortDescription $info.Description 200 } else { '' })).Trim()
+            Add-LlmsSplit $landing $name
+        }
+        foreach ($entry in $packagePages[$dir.Name]) {
+            $relative = "docs/$($dir.Name)/$($entry.Name)"
+            Add-LlmsLink $relative "${name}: $($entry.Title)" $null
+            Add-LlmsSplit $relative "${name}: $($entry.Title)"
+        }
+    }
+    $llms.Add('')
+}
+
+if ($sampleEntries.Count -gt 0) {
+    $llms.Add('## Samples')
+    $llms.Add('')
+    foreach ($sample in $sampleEntries) {
+        $sampleDescription = if ($sample.Summary) { Get-ShortDescription $sample.Summary 160 } else { $null }
+        if ($sample.Readme) { Add-LlmsLink "samples/$($sample.Name)/README.md" $sample.Name $sampleDescription }
+        else { Add-LlmsLink "samples/$($sample.Name)/source.md" "$($sample.Name): source" $sampleDescription }
+    }
+    $llms.Add('')
+}
+
+if ($episodes.Count -gt 0) {
+    $llms.Add('## Videos')
+    $llms.Add('')
+    Add-LlmsLink 'docs/videos/index.md' 'Videos' 'Every published episode, grouped by reading path.'
+    foreach ($episode in ($episodes | Sort-Object Path, Order)) {
+        Add-LlmsLink "docs/videos/$($episode.Page)" $episode.Title "$($episode.Idea) Transcript and on-screen code, $($episode.Length)."
+    }
+    $llms.Add('')
+}
+
+$llms.Add('## Optional')
+$llms.Add('')
+Add-LlmsLink 'CHANGELOG.md' 'Changelog' 'Release history for the package family, newest first, with one page per release.'
+Add-LlmsLink 'docs/RELEASING.md' 'Releasing' (Get-PageDescription 'docs/RELEASING.md')
+# Anything else on the site - the benchmark and specification pages the
+# documentation links into - so that nothing is left out.
+$partOfListed = @{}
+foreach ($result in $splits.Values) { foreach ($entry in $result.Pages) { $partOfListed[$entry.Path] = $result.Page } }
+foreach ($sample in $sampleEntries) {
+    if (-not $sample.Readme) { continue }
+    $partOfListed["samples/$($sample.Name)/source.md"] = "samples/$($sample.Name)/README.md"
+}
+foreach ($key in @($partOfListed.Keys)) {
+    # A sample source file's page belongs to the sample, through its listing.
+    $owner = $partOfListed[$key]
+    if ($partOfListed.ContainsKey($owner)) { $partOfListed[$key] = $partOfListed[$owner] }
+}
+foreach ($relative in $stagedPages) {
+    if ($listed.Contains($relative) -or $partOfListed.ContainsKey($relative)) { continue }
+    Add-LlmsLink $relative $pageInfo[$relative].Title $null
+}
+$llms.Add("- [AGENTS.md]($repositoryUrl/blob/$($site.Ref)/AGENTS.md): Build and test commands, conventions, and hygiene gates for agents changing the repository.")
+$llms.Add("- [Repository conventions]($repositoryUrl/blob/$($site.Ref)/.github/copilot-instructions.md): Naming, serialization, branching, and pull-request rules for contributors.")
+
+# Every page is listed, or belongs to a page that is.
+$missing = @($stagedPages | Where-Object { -not $listed.Contains($_) -and -not ($partOfListed.ContainsKey($_) -and $listed.Contains($partOfListed[$_])) })
+if ($missing.Count -gt 0) { throw "llms.txt leaves out $($missing.Count) page(s) the site publishes: $($missing -join ', ')" }
+[System.IO.File]::WriteAllText((Join-Path $Staging 'llms.txt'), ($llms -join "`n") + "`n", $utf8)
+
+# llms-full.txt: every documentation page's markdown, in llms.txt's order. The
+# release history and the samples' source listings are left out - they are the
+# bulk of the site and are one link away in llms.txt.
+$full = New-Object System.Text.StringBuilder
+[void]$full.Append("# Orleans.Lattice documentation, in full`n`n")
+[void]$full.Append("Every documentation page of the site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``. Each page is preceded by its address; the index of every page, including the release history and the samples' source, is $($site.Url)llms.txt.`n")
+$fullPages = 0
+$included = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($line in $llms) {
+    if ($line -notmatch '^- \[[^\]]*\]\((?<url>[^)]+)\)') { continue }
+    $url = $Matches.url
+    if (-not $url.StartsWith($site.Url)) { continue }
+    $relative = ($url.Substring($site.Url.Length) -split '#')[0]
+    if ($relative -like 'changelog/*' -or $relative -eq 'CHANGELOG.md' -or $relative -match '^samples/[^/]+/source(/|\.md$)') { continue }
+    if (-not $pageInfo.ContainsKey($relative) -or -not $included.Add($relative)) { continue }
+    [void]$full.Append("`n--------------------------------------------------------------------------------`n`n")
+    [void]$full.Append("URL: $($site.Url)$relative`n`n")
+    [void]$full.Append($pageInfo[$relative].Body)
+    $fullPages++
+}
+[System.IO.File]::WriteAllText((Join-Path $Staging 'llms-full.txt'), $full.ToString(), $utf8)
+Write-Host ("Wrote llms.txt ({0} pages, {1:N0} KB) and llms-full.txt ({2} pages, {3:N1} MB)" -f $listed.Count, ((Get-Item (Join-Path $Staging 'llms.txt')).Length / 1KB), $fullPages, ($full.Length / 1MB))
+
+# --- The footer's version line ---
+# docfx.json's footer carries a marker where this goes, and the rendered footer
+# comes from this file: DocFX gives globalMetadataFiles precedence over the
+# globalMetadata written inline, and build.ps1 checks the line reached the page.
+$footer = [string]$docfxConfig.build.globalMetadata._appFooter
+$marker = '<!-- lattice:docs-version -->'
+if (-not $footer.Contains($marker)) { throw "docfx.json's _appFooter has no $marker, which is where the docs version is written." }
+$refHtml = "<a href=`"$repositoryUrl/tree/$($site.Ref)`">$(Get-EncodedHtml $site.Ref)</a>"
+$commitHtml = if ($site.Commit) { " at commit <a href=`"$repositoryUrl/commit/$($site.Commit)`">$($site.ShortCommit)</a>" } else { '' }
+$versionHtml = "<span class=`"lt-footer-version`">Documents $(Get-EncodedHtml $site.Label). Built <time datetime=`"$($site.Built.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture))`">$($site.BuiltDate)</time> from $refHtml$commitHtml.</span>"
+$metadata = [ordered]@{ _appFooter = $footer.Replace($marker, $versionHtml) }
+[System.IO.File]::WriteAllText((Join-Path $Intermediate 'site-metadata.json'), ($metadata | ConvertTo-Json -Depth 3), $utf8)
 
 $mdCount = (Get-ChildItem $Staging -Recurse -Filter *.md | Measure-Object).Count
 $tocCount = (Get-ChildItem $Staging -Recurse -Filter toc.yml | Measure-Object).Count

@@ -274,6 +274,9 @@ var tcpPort     = ReadInt("BENCH_TCP_PORT", 7000);
 var batchSize   = ReadInt("BENCH_BATCH_SIZE", 4096);
 var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
+// BENCH_POINT_FANOUT: per-slot fan-out for the point modes; unset falls back to
+// BENCH_FLUSH_CONCURRENCY (in-flight = that bound squared). See IngestSettings.
+var pointFanOut = ReadIntAllowZero("BENCH_POINT_FANOUT", 0);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
 var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
@@ -534,9 +537,10 @@ if (clusteringMode == "azuretable"
 // both the configured value and the effective fire-or-not state so a
 // glance at the silo log line answers "did the seed actually run?"
 // unambiguously.
-var preseedWillFire = preseedKeyCount > 0
-    && (workloadMode == BenchWorkloadMode.GetPoint
-        || workloadMode == BenchWorkloadMode.GetMany);
+// In cluster ingest mode the silo never seeds: the Layer 3 producer does
+// (see Producer/Program.cs), so the silo banner reports false there.
+var preseedWillFire = BenchPreseed.IsRequired(workloadMode, preseedKeyCount)
+    && ingestMode != "cluster";
 // Banner descriptor for the phase-2 commit deadline: "default(3s)" when the
 // operator left it unset (library DefaultPhaseTwoCommitTimeout applies),
 // "off" when explicitly disabled (supplied 0), or the supplied second-count.
@@ -614,7 +618,7 @@ builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.Pha
 builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode) { PointFanOut = pointFanOut });
 // (#3348) Hold warm-up until this silo's cluster manifest lists the cohort's
 // full silo count, so the hot grains it activates are placed across the whole
 // cluster rather than the first silos to join. 0 (the default) disables it.
@@ -1044,7 +1048,7 @@ internal sealed class TcpIngestService(
         var asm = typeof(TcpIngestService).Assembly;
         var asmLoc = asm.Location;
         var builtAtUtc = string.IsNullOrEmpty(asmLoc) ? "unknown" : File.GetLastWriteTimeUtc(asmLoc).ToString("yyyy-MM-ddTHH:mm:ssZ");
-        Console.WriteLine($"[silo:ingest] settings.BatchSize={settings.BatchSize} settings.FlushConcurrency={settings.FlushConcurrency} settings.FlushInterval={settings.FlushInterval.TotalMilliseconds:F0}ms settings.ShardCountOverride={settings.ShardCountOverride} treeId={settings.TreeId} asm={Path.GetFileName(asmLoc)} builtAtUtc={builtAtUtc}");
+        Console.WriteLine($"[silo:ingest] settings.BatchSize={settings.BatchSize} settings.FlushConcurrency={settings.FlushConcurrency} settings.EffectivePointFanOut={settings.EffectivePointFanOut} settings.FlushInterval={settings.FlushInterval.TotalMilliseconds:F0}ms settings.ShardCountOverride={settings.ShardCountOverride} treeId={settings.TreeId} asm={Path.GetFileName(asmLoc)} builtAtUtc={builtAtUtc}");
 
         var lattice = grainFactory.GetGrain<ILattice>(settings.TreeId);
 
@@ -1403,32 +1407,15 @@ internal sealed class TcpIngestService(
         // cache population) happens for every mode via the
         // `lattice.WarmUpAsync` call earlier in startup; only the
         // tree-content pre-seed is gated on the read modes.
-        var preseedEnabled = settings.PreseedKeyCount > 0
-            && (settings.WorkloadMode == BenchWorkloadMode.GetPoint
-                || settings.WorkloadMode == BenchWorkloadMode.GetMany);
+        var preseedEnabled = BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount);
         if (preseedEnabled)
         {
             var preseedSw = System.Diagnostics.Stopwatch.StartNew();
-            const int PreseedPayloadBytes = 245;
-            var seedEntries = new List<KeyValuePair<string, byte[]>>(settings.PreseedKeyCount);
-            Span<byte> idBytes = stackalloc byte[16];
-            for (var i = 0; i < settings.PreseedKeyCount; i++)
-            {
-                // Mirror Producer/Program.cs vehicle-id construction.
-                BitConverter.TryWriteBytes(idBytes[..4], i);
-                BitConverter.TryWriteBytes(idBytes.Slice(4, 4), 0xC0FFEE);
-                BitConverter.TryWriteBytes(idBytes.Slice(8, 4), unchecked((int)0xDEADBEEF));
-                BitConverter.TryWriteBytes(idBytes.Slice(12, 4), unchecked((int)0xCAFEBABE));
-                var vehicleId = new Guid(idBytes).ToString("N");
-                // Deterministic 245-byte payload so two re-runs over the
-                // same keyspace produce bit-identical rows in the WAL
-                // (cleanest cross-run diff). i mod 256 fill is enough to
-                // tell the rows apart on a hex-dump if anything is ever
-                // off.
-                var payload = new byte[PreseedPayloadBytes];
-                for (var b = 0; b < PreseedPayloadBytes; b++) payload[b] = (byte)((i + b) & 0xFF);
-                seedEntries.Add(new KeyValuePair<string, byte[]>(vehicleId, payload));
-            }
+            const int PreseedPayloadBytes = BenchPreseed.PayloadBytes;
+            // Keys mirror the producer's vehicle-id construction; the payload
+            // is deterministic so re-runs write bit-identical rows. Shared
+            // with the Layer 3 producer's cluster-mode pre-seed.
+            var seedEntries = BenchPreseed.BuildEntries(settings.PreseedKeyCount);
             try
             {
                 // Use SetManyAsync (not BulkLoadAsync) for the pre-seed:

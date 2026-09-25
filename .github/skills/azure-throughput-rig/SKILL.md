@@ -173,7 +173,7 @@ offers the same load per silo.
 | `-VehiclesPerSilo <N>` | `1200` | Per-silo fleet size; the cohort offers `VehiclesPerSilo x SiloCount` keys. |
 | `-TickHz <N>` | `5` | Samples/sec/vehicle. |
 | `-BatchSize <N>` / `-FlushMs <N>` | `4096` / `50` | As `BENCH_BATCH_SIZE` / `BENCH_FLUSH_MS`. |
-| `-FlushConcurrencyPerSilo <N>` | `8` | Multiplied by `SiloCount` into `BENCH_FLUSH_CONCURRENCY`. |
+| `-FlushConcurrencyPerSilo <N>` | `8` | Multiplied by `SiloCount` into `BENCH_FLUSH_CONCURRENCY`, and passed unmultiplied as `BENCH_POINT_FANOUT`, so the point modes hold `FlushConcurrencyPerSilo^2 x SiloCount` calls in flight (constant per-silo demand). |
 | `-ShardCount <N>` | `64` | Fixed across the sweep (not per silo), so the fan-out width stays constant. |
 | `-WalPartitions <N>` | `16` | Sets `BENCH_WAL_PARTITIONS`. |
 | `-ClientsPerSilo <N>` | `4` | Sets `BENCH_CLIENT_COUNT` to `min(64, ClientsPerSilo x SiloCount)`. |
@@ -210,7 +210,7 @@ kebab- or concatenated form. Unset/unknown => `set-many`.
 | `cross-tree-atomic-64` | Cross-tree atomic saga of 64 keys (32 per tree). |
 | `set-point` | One `ILattice.SetAsync` per key - fan-out point writes. |
 | `set-point-mv` | Identical write path to `set-point`, but the silo also attaches an asynchronous materialised view (key-preserving passthrough) over the tree via `AddLatticeViews`. The A/B partner of `set-point` for measuring whether maintaining a view perturbs the source tree's point-write path. |
-| `get-point` | One `ILattice.GetAsync` per key - fan-out point reads. Keyspace is pre-seeded at startup via `ILattice.BulkLoadAsync` (size = `BENCH_VEHICLE_COUNT`). |
+| `get-point` | One `ILattice.GetAsync` per key - fan-out point reads. Keyspace of `BENCH_VEHICLE_COUNT` keys is pre-seeded via `ILattice.SetManyAsync` before the measured window: by the silo at startup on the single-VM rig, and by the producer after warm-up in Layer 3 cluster mode (the silo returns early there). The producer logs `[producer] preseed treeId=.. entries=N`, and `performance-report.ps1` refuses a Layer 3 read cohort whose log lacks it, because an unseeded cohort measures only the miss path (#3474). |
 | `get-many` | `ILattice.GetManyAsync` - batched reads. Keyspace pre-seeded as for `get-point`. |
 
 > The `set-point-mv` workload and the multi-account knobs below only exist on a checkout
@@ -258,6 +258,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
 | `BENCH_FLUSH_MS` | 50 | Max flush latency (ms) before a partial batch is sent. |
 | `BENCH_FLUSH_CONCURRENCY` | 8 | Max in-flight `SetManyAsync` calls. Pairs with `BENCH_WAL_PARTITIONS` so parallel flushes fan out across distinct WAL grains. Drop to 1 to isolate per-leaf-turn RTT from mailbox queueing. |
+| `BENCH_POINT_FANOUT` | `BENCH_FLUSH_CONCURRENCY` | Concurrent calls each flush slot fans out into for the point modes (`set-point`, `set-point-mv`, `get-point`), so their in-flight count is `BENCH_FLUSH_CONCURRENCY x BENCH_POINT_FANOUT`. Unset falls back to `BENCH_FLUSH_CONCURRENCY` (the single-VM rig behaviour). `run-cohort-aca.ps1` sets it to `-FlushConcurrencyPerSilo` so the count grows linearly with the silo count rather than quadratically (#3474). |
 
 ### WAL fan-out and pipeline
 

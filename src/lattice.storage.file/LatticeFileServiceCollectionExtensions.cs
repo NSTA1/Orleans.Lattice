@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Serialization;
+using Orleans.Serialization.Session;
 
 namespace Orleans.Lattice.Storage.File;
 
@@ -51,7 +52,10 @@ public static class LatticeFileServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<FileWalStorageOptions>, FileWalStorageOptionsValidator>());
         builder.AddWalStorage(static sp => new FileWalStorageProvider(
             sp.GetRequiredService<IOptions<FileWalStorageOptions>>(),
-            sp.GetRequiredService<Serializer<WalRecord>>()));
+            sp.GetRequiredService<Serializer<WalRecord>>(),
+            GcWalReadPressureGovernor.Instance,
+            PhysicalFileWalFileSystem.Instance,
+            new WalRecordRoutingReader(sp.GetRequiredService<SerializerSessionPool>())));
 
         builder.AddWalCursorRegistry();
         builder.AddLatticeWalGc();

@@ -26,7 +26,8 @@ data.
 See [README.md](README.md) for the platform overview and the Local -> Team ->
 Global deployment journey, [FEATURES.md](FEATURES.md) for the capability
 catalogue, [PACKAGES.md](PACKAGES.md) for the package inventory, and
-[llms.txt](llms.txt) for a documentation index.
+[llms.txt](llms.txt) for a documentation index (it points at the complete one the
+documentation site generates, where every page is also published as markdown).
 
 ## Finding things in the repo
 

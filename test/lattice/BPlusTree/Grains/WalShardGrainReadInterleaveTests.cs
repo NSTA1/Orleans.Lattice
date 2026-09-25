@@ -56,15 +56,19 @@ public class WalShardGrainReadInterleaveTests
         // interface so a future edit cannot silently drop it.
         var readMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadAsync));
         var shipMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadShippingAsync));
+        var filteredMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadFilteredAsync));
 
         Assert.Multiple(() =>
         {
             Assert.That(readMethod, Is.Not.Null);
             Assert.That(shipMethod, Is.Not.Null);
+            Assert.That(filteredMethod, Is.Not.Null, "ReadFilteredAsync was renamed; update this guard test.");
             Assert.That(readMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
                 "ReadAsync must be [AlwaysInterleave] so catch-up reads do not block foreground appends.");
             Assert.That(shipMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
                 "ReadShippingAsync must be [AlwaysInterleave] so shipper drains do not block foreground appends.");
+            Assert.That(filteredMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
+                "ReadFilteredAsync must be [AlwaysInterleave] so leaf replay reads do not block foreground appends.");
         });
     }
 
