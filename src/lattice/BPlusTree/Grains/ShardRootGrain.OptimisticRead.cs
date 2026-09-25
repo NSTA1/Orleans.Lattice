@@ -178,13 +178,13 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return OptimisticReadResult.SerialRetry;
+                return SerialRetry(LatticeMetrics.OutcomeOptimisticReadDisabledTag);
             }
         }
 
         if (!options.OptimisticShardRootPointReads)
         {
-            return OptimisticReadResult.SerialRetry;
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadDisabledTag);
         }
 
         // Snapshot block: everything from here to the leaf call runs in one
@@ -196,15 +196,20 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         // that a concurrent split / fold had already superseded, misrouting
         // subsequent WRITES into a leaf that no longer owns the key (lost writes,
         // not just a false-null read). A cache miss defers to the serial path.
-        if (!CanServeOptimisticRead() || !IsOptimisticReadGateOpen(key))
+        if (!CanServeOptimisticRead())
         {
-            return OptimisticReadResult.SerialRetry;
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadBusyTag);
+        }
+
+        if (!IsOptimisticReadGateOpen(key))
+        {
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadGateClosedTag);
         }
 
         var epoch = _routingEpoch;
         if (!TryResolveReadLeafFromCache(key, out var leafId))
         {
-            return OptimisticReadResult.SerialRetry;
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadRoutingCacheMissTag);
         }
 
         // The optimistic read goes to the PRIMARY leaf, never through the
@@ -219,13 +224,17 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         byte[]? value;
         try
         {
-            value = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetAsync(key);
+            // Resolved through the per-activation reference cache: a bare
+            // GetGrain per read re-resolves the interface type and rebuilds the
+            // proxy (reflection-built copiers included) on every call, which is
+            // a measurable share of the point-read CPU cost.
+            value = await ResolveLeafGrain(leafId).GetAsync(key);
         }
         catch when (_routingEpoch != epoch)
         {
             // A fault raised while routing moved under the read is not attributable
             // to the key; the serial path re-evaluates it against settled state.
-            return OptimisticReadResult.SerialRetry;
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadEpochChangedTag);
         }
 
         // Validation: any routing mutation that started (or finished) after the
@@ -235,7 +244,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         // double-count it.
         if (_routingEpoch != epoch)
         {
-            return OptimisticReadResult.SerialRetry;
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadEpochChangedTag);
         }
 
         // An absent result is never validated optimistically. The primary leaf
@@ -247,12 +256,54 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         // to reads of absent keys.
         if (value is null)
         {
-            return OptimisticReadResult.SerialRetry;
+            return SerialRetry(LatticeMetrics.OutcomeOptimisticReadAbsentTag);
         }
 
         RecordRead();
         RecordLeafAccess(leafId);
+        RecordOptimisticReadOutcome(1, LatticeMetrics.OutcomeOptimisticReadValidatedTag);
         return OptimisticReadResult.FromValue(value);
+    }
+
+    private OptimisticReadResult SerialRetry(KeyValuePair<string, object?> outcome)
+    {
+        RecordOptimisticReadOutcome(1, outcome);
+        return OptimisticReadResult.SerialRetry;
+    }
+
+    private KeyValuePair<string, object?> _optimisticReadTreeTag;
+    private KeyValuePair<string, object?> _optimisticReadTenantTag;
+    private bool _optimisticReadTagsResolved;
+
+    /// <summary>
+    /// Records one optimistic-read outcome. The tree and tenant tags are resolved
+    /// once per activation because this runs on every point read.
+    /// </summary>
+    private void RecordOptimisticReadOutcome(long delta, KeyValuePair<string, object?> outcome)
+    {
+        if (!_optimisticReadTagsResolved)
+        {
+            _optimisticReadTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+            _optimisticReadTenantTag = LatticeTenantLabel.ForTree(TreeId);
+            _optimisticReadTagsResolved = true;
+        }
+
+        LatticeMetrics.ShardRootOptimisticReadOutcomes.Add(delta, _optimisticReadTreeTag, outcome, _optimisticReadTenantTag);
+    }
+
+    /// <summary>
+    /// Publishes every optimistic-read outcome arm at zero from activation, so an
+    /// absent arm reads as a measured zero rather than an unwired instrument.
+    /// </summary>
+    private void PrimeOptimisticReadOutcomes()
+    {
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadValidatedTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadDisabledTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadBusyTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadGateClosedTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadRoutingCacheMissTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadEpochChangedTag);
+        RecordOptimisticReadOutcome(0, LatticeMetrics.OutcomeOptimisticReadAbsentTag);
     }
 
     /// <summary>

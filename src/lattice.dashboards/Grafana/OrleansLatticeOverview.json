@@ -1715,6 +1715,18 @@
       ]
     },
     {
+      "id": 78,
+      "title": "Shard-root optimistic point reads by outcome (reads/s) - issue #3474",
+      "description": "Whether GetAsync point reads are served by the interleaved optimistic shard-root read or handed back to the serial, non-interleaved IShardRootGrain.GetAsync (orleans_lattice_shard_root_optimistic_read_outcomes, issue #3474). validated is the only arm served optimistically. Every other arm is a read that then also paid for the serial path, which holds the shard root's turn for a full leaf round trip, so on a hot shard those reads queue behind each other and the GetAsync stage breakdown shows the cost only as shard-stage latency. busy = a routing mutation (including any concurrent write) or pending prepare / split / graft work overlapped the read; gate_closed = tree rejecting, retained redirect, deleted, or the key's slot moved away; routing_cache_miss = the leaf was not resolvable from the cached routing tables; epoch_changed = routing moved while the leaf read was in flight; absent = the key has no value, which is never validated optimistically, so a miss-heavy workload runs entirely on the serial path; disabled = OptimisticShardRootPointReads is off. Every arm is primed at zero on activation, so a zero is a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1049 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_shard_root_optimistic_read_outcomes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}/s" }
+      ]
+    },
+    {
       "id": 74,
       "title": "Deployed build (version / commit)",
       "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",

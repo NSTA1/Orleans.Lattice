@@ -8614,6 +8614,72 @@ public static class LatticeMetrics
         new(TagOutcome, "served");
 
     /// <summary>
+    /// Count of shard-root optimistic point reads
+    /// (<c>IShardRootGrain.TryGetOptimisticAsync</c>, issue #3474) by outcome.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
+    /// <para>
+    /// <c>validated</c> is the only arm the caller serves directly. Every other
+    /// arm names why the read was handed back to the serial, non-interleaved
+    /// <c>IShardRootGrain.GetAsync</c>, which holds the shard root's turn for a
+    /// full leaf round trip. A high non-<c>validated</c> share therefore predicts
+    /// per-shard-root read queueing, which is invisible on the get latency
+    /// histograms because both attempts land inside one <c>shard</c> stage
+    /// sample. The <c>absent</c> arm in particular is by design: an absent key is
+    /// never validated optimistically, so a miss-heavy workload runs entirely on
+    /// the serial path.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootOptimisticReadOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.optimistic_read.outcomes", unit: "{read}",
+            description: "Count of shard-root optimistic point reads by outcome: validated, or the reason the read was handed back to the serial path.");
+
+    /// <summary><see cref="TagOutcome"/> = <c>validated</c> (served without the serial path).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadValidatedTag =
+        new(TagOutcome, "validated");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>disabled</c> (the per-tree option is off, or
+    /// the options could not be resolved).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadDisabledTag =
+        new(TagOutcome, "disabled");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>busy</c> (a routing mutation was in flight,
+    /// or the shard root owed prepare / split / graft work).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadBusyTag =
+        new(TagOutcome, "busy");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>gate_closed</c> (tree rejecting, retained
+    /// redirect, deleted, or the key's slot moved away).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadGateClosedTag =
+        new(TagOutcome, "gate_closed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>routing_cache_miss</c> (the leaf could not be
+    /// resolved from the cached routing tables).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadRoutingCacheMissTag =
+        new(TagOutcome, "routing_cache_miss");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>epoch_changed</c> (routing moved while the
+    /// leaf read was in flight, including a leaf fault raised while it moved).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadEpochChangedTag =
+        new(TagOutcome, "epoch_changed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>absent</c> (the leaf returned no value; an
+    /// absent key is always adjudicated by the serial path).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadAbsentTag =
+        new(TagOutcome, "absent");
+
+    /// <summary>
     /// Count of shard-root page-fill ceiling fires that made <b>zero</b>
     /// progress - no leaf completed - tagged with whether the leaf they named
     /// is merely slow this once or has now missed the ceiling on enough
