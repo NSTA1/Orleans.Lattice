@@ -5254,6 +5254,50 @@ public static class LatticeMetrics
         new(TagReason, "recheck_checkpoint_stalled");
 
     /// <summary>
+    /// <see cref="TagReason"/> value for a starvation drive the coverage-lag
+    /// timer requested for a leaf it routed on
+    /// <see cref="DriverDeclineRecheckNoDurableCheckpoint"/> or
+    /// <see cref="DriverDeclineRecheckCheckpointStalled"/>, and that the per-silo
+    /// WAL replay gate refused admission before it replayed anything
+    /// (issue #3575).
+    /// <para>
+    /// A <b>qualifier of those two arms, not a peer of them</b>: it is recorded
+    /// on the same tick as one of them, so the reasons on this instrument do not
+    /// partition ticks. The routing arm still says the leaf needed the drive;
+    /// this one says the drive did not run. The timer's drives never take the
+    /// last free slot of the gate's GC share, which is kept for the WAL GC sweep,
+    /// and while that share is a single slot they yield it to a refused sweep
+    /// drive. A sustained rate here therefore measures contention for the share -
+    /// more leaves needing a drive than the timer's part of it can serve, or the
+    /// sweep's floor-clearing drives being given priority - and says nothing new
+    /// about the leaf, whose risk is carried by its routing arm.
+    /// </para>
+    /// <para>
+    /// Before this arm the refusal escaped the timer callback as an unhandled
+    /// <see cref="LatticeSaturatedException"/>, logged twice by the runtime and
+    /// counted nowhere. A refused leaf now backs off, and each opportunity it
+    /// skips is counted on <see cref="DriverDeclineRecheckDriveDeferred"/>.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckDriveRefused =
+        new(TagReason, "recheck_drive_refused");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a coverage-lag timer starvation drive
+    /// that was not requested because the leaf is backing off after
+    /// <see cref="DriverDeclineRecheckDriveRefused"/> (issue #3575).
+    /// <para>
+    /// A qualifier of the two routing arms in the same way that arm is. The
+    /// backoff grows with consecutive refusals and is jittered per leaf, so a
+    /// sustained rate here beside a falling refusal rate is the backoff working:
+    /// refused leaves are spreading their retries rather than returning at the
+    /// next stall threshold together. A drive that is admitted ends it.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckDriveDeferred =
+        new(TagReason, "recheck_drive_deferred");
+
+    /// <summary>
     /// Counter of leaf snapshot capture DRIVERS that declined to drive a capture,
     /// tagged <see cref="TagTree"/> and <see cref="TagReason"/> (issue #3185).
     /// <para>
@@ -5752,7 +5796,7 @@ public static class LatticeMetrics
     /// tagged by tree and outcome
     /// (<c>attempted</c>/<c>healed</c>/<c>abandoned</c>).
     /// <para>
-    /// All ten outcomes share one instrument so that a zero on
+    /// All the outcomes share one instrument so that a zero on
     /// <c>healed</c> is a published series rather than an absent one. That
     /// distinction is load-bearing here: a sweep that reactivates a leaf and
     /// moves on cannot tell "the pin lifted" from "the capture failed again",
@@ -5816,9 +5860,19 @@ public static class LatticeMetrics
     /// quiet. Only a fixture that drives the scheduler into the outcome and
     /// observes the arm advance separates them. That is what
     /// <c>ExecuteAsync_records_each_terminal_outcome_on_its_own_arm_and_no_other</c>
-    /// does for all four terminal arms, as a 4x4 identity matrix: each arm is
-    /// shown to advance on its own outcome and to stay at zero on the other
-    /// three, so every zero it reports is an earned one.
+    /// does for every terminal arm, as an identity matrix over them: each arm is
+    /// shown to advance on its own outcome and to stay at zero on every other,
+    /// so every zero it reports is an earned one.
+    /// </para>
+    /// <para>
+    /// <c>admission_refused</c> (issue #3575) is the one terminal arm that
+    /// costs the consumer nothing. The leaf's silo refused the drive admission
+    /// to its WAL replay gate before anything was replayed, which says nothing
+    /// about the leaf, so the touch is neither charged nor refunded: it cannot
+    /// lead to <c>abandoned</c>, and the consumer is retried after a short
+    /// jittered delay rather than the full cooldown. Before it existed the
+    /// refusal was counted as <c>faulted</c>, and a consumer the sweep had never
+    /// managed to drive was abandoned with advice about its snapshot capture.
     /// </para>
     /// <para>
     /// The <b>drive verdict</b> arms (issue #2692 Half B) are held to both
@@ -5830,7 +5884,7 @@ public static class LatticeMetrics
     /// <c>DriveOutcomeTag_arms_every_declared_starvation_drive_verdict</c>.
     /// Reachability is established by
     /// <c>ExecuteAsync_records_each_drive_verdict_on_its_own_arm_and_no_other</c>
-    /// as a 6x6 identity matrix on the same principle as the 4x4 above.
+    /// as an identity matrix over the drive verdicts, on the same principle.
     /// </para>
     /// <para>
     /// The check is deliberately one-directional - every terminal outcome must
@@ -5858,7 +5912,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. All sixteen are zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale/admission_refused) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode, and admission_refused (issue #3575) is a drive the leaf's silo refused admission to its WAL replay gate before replaying anything, which is not charged against the consumer's attempt budget. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. Every arm is zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -6853,6 +6907,37 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationLatchedStale =
         new(TagOutcome, "latched_stale");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on
+    /// <see cref="WalGcBlockedLeafReactivations"/> for a touch whose drive was
+    /// refused admission to the WAL replay gate of the silo hosting the leaf
+    /// (issue #3575), so nothing was replayed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Recorded when the touch fails with a <see cref="LatticeSaturatedException"/>
+    /// whose source is <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>:
+    /// the drive found the gate's non-queueing GC share full, or the leaf's
+    /// activation was refused a place in the permit queue. The refusal is raised
+    /// before any work is done and says nothing about the leaf, so the touch is
+    /// <b>neither charged nor refunded</b> against the consumer's attempt budget
+    /// and can never lead to <see cref="BlockedLeafReactivationAbandoned"/>. The
+    /// consumer is retried after a short jittered delay that doubles with each
+    /// consecutive refusal up to the ordinary retry cooldown.
+    /// </para>
+    /// <para>
+    /// Before this arm the refusal was counted as
+    /// <see cref="BlockedLeafReactivationFaulted"/>, logged with a stack, refunded
+    /// only up to the cap and then abandoned with advice to investigate the
+    /// leaf's snapshot capture, which had never been attempted. On one
+    /// deployment it was 89% of all touches, crowded out by the leaves' own
+    /// coverage-lag timer drives, which can no longer take the slot the sweep
+    /// needs.
+    /// </para>
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAdmissionRefused =
+        new(TagOutcome, "admission_refused");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on

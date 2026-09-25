@@ -495,6 +495,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Orleans does not run <c>OnDeactivateAsync</c> when <c>OnActivateAsync</c>
     /// throws, so a failure there may not legally propagate.
     /// </para>
+    /// <para>
+    /// <b>A refusal is not a failure of the leaf.</b> Drives never queue for a
+    /// replay permit, so a drive that finds the per-silo GC share of the replay
+    /// gate full is refused before it replays anything, with a
+    /// <see cref="LatticeSaturatedException"/> whose
+    /// <see cref="LatticeSaturatedException.SaturationSource"/> is
+    /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> (issue #3480).
+    /// A call through this method is admitted as the WAL GC sweep's, which the
+    /// leaf's own coverage-lag timer drives cannot crowd out of the share
+    /// (issue #3575).
+    /// </para>
     /// </remarks>
     [AlwaysInterleave]
     Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync();

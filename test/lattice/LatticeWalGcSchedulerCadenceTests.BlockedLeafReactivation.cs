@@ -539,9 +539,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await scheduler.StopAsync(CancellationToken.None);
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ExecuteAsync_does_not_charge_the_attempt_budget_for_a_faulted_touch(bool replaySaturated)
+    [Test]
+    public async Task ExecuteAsync_does_not_charge_the_attempt_budget_for_a_faulted_touch()
     {
         // R4, the issue's own named defect. The attempt used to be stamped
         // before the call, so a touch that never reached the leaf - a busy
@@ -549,17 +548,18 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // not heal the leaf. That spends the evidence budget on a measurement
         // nobody took. The cooldown is stamped up front and still rate-limits
         // the retry, which is what makes the refund safe.
+        //
+        // A replay-permit admission refusal used to be a variant of this
+        // fixture, filed as a fault. It is no longer one (issue #3575): it is
+        // excused outright and retried early, which the admission fixtures in
+        // ReactivationRefundClass pin instead.
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ =>
-        {
-            if (replaySaturated)
-                throw new LatticeSaturatedException("GC share occupied", StrandedTree, LatticeSaturationSource.ReplayPermitAdmission);
-            throw new TimeoutException("silo busy");
-        });
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(
+            _ => throw new TimeoutException("silo busy"));
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
         var scheduler = CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time);
@@ -581,26 +581,26 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         await scheduler.StopAsync(CancellationToken.None);
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ExecuteAsync_caps_the_faulted_touches_a_cycle_will_excuse(bool replaySaturated)
+    [Test]
+    public async Task ExecuteAsync_caps_the_faulted_touches_a_cycle_will_excuse()
     {
         // R4b, and the boundary that keeps R4 honest. Refunding a fault is
         // right; refunding without limit is not, because a leaf that faults
         // every time would then be touched once per cooldown for the life of
         // the process, never reaching abandonment and so never decaying onto
         // the escalating backoff. The cap makes the worst case finite.
+        //
+        // A replay-permit admission refusal is deliberately NOT capped this way
+        // any more (issue #3575): it never started the drive, so it is excused
+        // outright and can never reach abandonment. That is pinned by
+        // ExecuteAsync_never_charges_or_abandons_a_consumer_whose_drives_are_refused_admission.
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
         var time = new VirtualTimeProvider();
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
-        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(_ =>
-        {
-            if (replaySaturated)
-                throw new LatticeSaturatedException("GC share occupied", StrandedTree, LatticeSaturationSource.ReplayPermitAdmission);
-            throw new TimeoutException("silo busy");
-        });
+        leaf.DriveStarvedCheckpointAsync().Returns<Task<LeafStarvationDriveOutcome>>(
+            _ => throw new TimeoutException("silo busy"));
 
         using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
         var scheduler = CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time);
@@ -726,11 +726,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     // Four lifecycle arms, named individually because no enum
                     // backs them.
                     "attempted", "healed", "abandoned", "rearmed",
-                    // Six terminal arms, primed by walking ReactivationOutcome
-                    // (issue #2938, extended for 'orphaned' by issue #3101 and
-                    // for 'latched_stale' by issue #3478).
+                    // Seven terminal arms, primed by walking ReactivationOutcome
+                    // (issue #2938, extended for 'orphaned' by issue #3101, for
+                    // 'latched_stale' by issue #3478 and for 'admission_refused'
+                    // by issue #3575).
                     "completed", "unresolvable", "faulted", "undelivered", "orphaned",
-                    "latched_stale",
+                    "latched_stale", "admission_refused",
                     // Six drive verdicts, primed by walking
                     // LeafStarvationDriveOutcome (issue #2692).
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",
