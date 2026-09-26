@@ -35,7 +35,7 @@ pluggable: a credential is mapped to a principal by one or more scheme-selected
 and a built-in **JWT authenticator** registered per trusted issuer; a host can
 register its own. Resolution is cached with a configurable TTL.
 
-Two optional companions integrate a corporate identity provider:
+Three optional companions integrate a corporate identity provider:
 
 - [`Orleans.Lattice.Membership.Entra`](../lattice.membership.entra/README.md) -
   a Microsoft Entra ID (Azure AD) credential authenticator. Its
@@ -44,6 +44,11 @@ Two optional companions integrate a corporate identity provider:
 - [`Orleans.Lattice.Membership.Entra.Graph`](../lattice.membership.entra.graph/README.md) -
   a Microsoft Graph-backed resolver for subjects whose group claims overflow the
   token.
+- [`Orleans.Lattice.Membership.Oidc`](../lattice.membership.oidc/README.md) -
+  a generic OpenID Connect credential authenticator for any conformant provider
+  (Okta, Auth0, Keycloak, Ping, Google), configured from the provider's
+  discovery document. It is an additive sibling to the Entra authenticator:
+  neither package depends on the other, and a silo can register both.
 
 Membership on its own adds identity resolution and the directory; it enforces
 nothing until the authorization package is also registered.
@@ -86,9 +91,10 @@ subject may read.
 
 ## External surfaces
 
-Three transport-agnostic facades, each with a code-first gRPC binding, extend the
-cluster to callers that do not embed the Orleans client. All of them inherit the
-core gate rather than re-implementing authorization:
+Transport-agnostic facades, each with a code-first gRPC binding, extend the
+cluster to callers that do not embed the Orleans client, and every one of them
+authorizes through the core gate rather than re-implementing authorization.
+Three of them are this layer's own surfaces:
 
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) and its
   [gRPC binding](../lattice.api.auth.grpc/README.md) - the **control plane**:
@@ -104,11 +110,20 @@ core gate rather than re-implementing authorization:
 - [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) - the read-only
   state-query surface, which honours the same read visibility.
 
+The other facades - tree administration, backup, replication, schema, tenant
+administration, and telemetry - authorize their operations through the same
+gate, and the Model Context Protocol endpoint projects those facades as agent
+tools. The full set is listed in [PACKAGES.md](../../PACKAGES.md).
+
 The [Explorer](../lattice.explorer/connecting-to-an-auth-enabled-state-api.md)
 runs an extensible login challenge against an auth-enabled State API endpoint,
 and its sign-in mechanisms are a
 [provider model](../lattice.explorer/adding-a-custom-auth-method.md) a host can
-extend.
+extend. Microsoft Entra ID sign-in ships as two such providers:
+[`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) for
+desktop and CLI hosts, and
+[`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)
+for the hosted web console.
 
 ## Cross-cluster convergence
 
@@ -125,9 +140,11 @@ discussed in that document.
 
 Every authorization decision, its latency, and the compiled-snapshot epoch and
 age are published on a single meter, and an optional durable audit sink records a
-decision trail. The full instrument catalogue, the audit-sink seam, and the
-reserved subject-resolution-cache counters are documented in
-[Authorization observability](../lattice.auth/observability.md).
+decision trail. The full instrument catalogue and the audit-sink seam are
+documented in [Authorization observability](../lattice.auth/observability.md).
+The subject-resolution cache belongs to the membership package, so its hit and
+miss counters live on the membership meter and are documented in
+[Membership observability](../lattice.membership/observability.md).
 
 ## Security posture and cost
 

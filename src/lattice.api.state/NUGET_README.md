@@ -4,11 +4,13 @@ Optional read-only **cluster state API** add-on for [`Orleans.Lattice`](https://
 
 ## What it gives you
 
-- **Discovery** - a deterministic, paged catalog of every registered tree and materialised view, with optional per-view stats.
+- **Discovery** - deterministic, paged catalogs of every registered tree, materialised view, and tag index, with optional per-view stats and tag-index browsing.
 - **Structure** - walk a tree's shard-root node graph: per-shard roots, child fan-out, depth, and live-key subtree counts, bounded by depth/node limits.
 - **Entry inspection** - key-ordered entry scans, snapshot-isolated by default or through a cheaper live cursor (forward or reverse, predicate-filtered, value-preview-budgeted), and single-key record fetch.
+- **Change history** - a single key's continuation-paged revision timeline, bounded by the tree's durable-history retention.
 - **Change observation** - a server-streamed feed of a tree's live mutations (sets, deletes, range deletes).
 - **Metrics observation** - a one-shot per-tree snapshot or a delta-coalesced live feed of live keys, shard count, shard hotness, and view lag.
+- **Dead letters and cluster info** - read-only strict-mode dead-letter counts and pages, and the connected cluster's identity.
 - **Read-only by construction** - no write, delete, split, or reconfigure verb exists anywhere on the surface.
 - **Low ambient cost** - zero cost when unregistered, negligible when idle; concurrent subscribers to the same request share one sampling loop.
 

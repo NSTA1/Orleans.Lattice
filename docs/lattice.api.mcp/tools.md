@@ -16,7 +16,7 @@ services.AddReplicationTools(enableControl: true);
 services.AddTreeAdminTools(enableSchemaControl: true, enableLifecycle: true);
 ```
 
-Each module registration is idempotent, and within a module the destructive verbs stay hidden unless the host opts them in:
+Each module registration is idempotent except `AddDataTools`, which is meant to be called once (a second call registers a second data tool group rather than replacing the first), and within a module the destructive verbs stay hidden unless the host opts them in:
 
 | Module | Extension | Read/inspect verbs | Destructive verbs (opt-in flag) |
 |---|---|---|---|
@@ -33,14 +33,14 @@ Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint
 
 ## Discovery
 
-The `lattice_capabilities` meta-tool reports which groups are enabled on the server and, for the authenticated caller, which tools its effective permissions unlock. Discovery is permission-scoped: a tool the caller may not use is never listed, so an agent's tool list is exactly the set it can invoke.
+The `lattice_capabilities` meta-tool reports, for the authenticated caller, its resolved subject id, the connected cluster's cluster and service ids, and one entry per facade group saying whether the group is available - its tool module is registered on this server **and** the caller's effective permissions grant an operation the group covers - plus, on a remote head, the endpoint the group is served from. It reports groups, not individual tools; the session's tool list is the per-tool view. Discovery is permission-scoped at the group level: a group's tools are listed only to a caller holding an Allow grant for an operation the group covers (and only the tools the registered authorizer permits by name), so a caller never sees a group it holds no grant for. The filter is deliberately coarse - one grant lists the whole group - and the facade's access gate still authorizes every call per tree and per verb, so a listed tool can be refused for a tree, a verb, or a Deny rule the caller's grants do not cover. `lattice_capabilities` is offered to every authenticated caller and is the one tool the coarse authorizer does not gate; an unauthenticated session is offered no tools at all.
 
 ## Region targeting
 
 A single MCP server can front more than one region (the current cluster plus configured, reachable peers - see [Remote host](remote.md)). Two additive surfaces expose this:
 
-- **`lattice_list_regions`** - a read-only meta-tool that lists the regions the server can route a call to, current region first, each with its region id, cluster id, and per-group endpoint availability. A region with no route or credentials for a group is reported unavailable for it, and a region with no route at all is omitted entirely (fail-closed discovery). The tool is projected from the shared `Orleans.Lattice.Api.Region.ILatticeRegionCatalog` contract, so a client reads the same region model the facade layer exposes.
-- **An optional `region` argument on every tool** - pass a listed region id to route that single call to the named region; omit it to target the current region. Omitting it is byte-for-byte identical to a region-unaware call. The result is annotated with the region it was served from (in the result's `_meta.region`) whenever a `region` was supplied.
+- **`lattice_list_regions`** - a read-only meta-tool that lists the regions the server can route a call to, current region first, each with its region id, cluster id, and per-group endpoint availability. Because it discloses peer topology, it is gated like a group tool rather than riding along with `lattice_capabilities`: it is advertised only to a caller holding at least one facade-group grant, and only when the registered authorizer permits it by name. A region with no route or credentials for a group is reported unavailable for it, and a region with no route at all is omitted entirely (fail-closed discovery). The tool is projected from the shared `Orleans.Lattice.Api.Region.ILatticeRegionCatalog` contract, so a client reads the same region model the facade layer exposes.
+- **An optional `region` argument on every facade-group tool** (the two meta-tools take none) - pass a listed region id to route that single call to the named region; omit it to target the current region. Omitting it is byte-for-byte identical to a region-unaware call. The result is annotated with the region it was served from (in the result's `_meta.region`) whenever a `region` was supplied.
 
 Region targeting is fail-closed at both ends. Targeting an unknown region, or a region that does not serve the tool's group, returns a clean typed fault that points the caller at `lattice_list_regions` - never a leaked exception. A cross-region call forwards the **same** caller credential to the target region, so the target authorizes it independently: a caller lacking rights in the target region is denied there. A region is never an authorization bypass.
 
@@ -61,9 +61,9 @@ The result carries the served region in its `_meta.region` field. Omit `region` 
 
 On a cluster running the tenancy add-on, what `lattice_list_regions` returns depends on whether the call asserts an active tenant (the `lattice-active-tenant` header - see [Security](security.md#3a-the-active-tenant-bridge)):
 
-- **No tenant asserted** (an operator, or any caller on a non-tenancy cluster) - the full routing topology, unannotated and byte-for-byte as before. The reserved `default` tenant is treated the same way.
+- **No tenant asserted** (an operator, or any caller on a non-tenancy cluster) - the full routing topology, unannotated and byte-for-byte as before. The reserved `default` tenant is treated the same way, and so is any call to a head that cannot resolve tenant standing: a non-tenancy cluster, or a remote head without the `TenantAdmin` endpoint (see [Remote hosting](remote.md#region-targeting-interacts-with-tenant-residency)).
 - **A non-default tenant asserted** - the current region plus only those peers in the tenant's **actionable set**: the regions its operator has authorized it into, plus the regions it is resident in. Each entry gains an additive `tenantScope` object reporting `tenantId`, `isAllowed`, `status`, and `isResident`. The current region is always listed (the caller is already talking to it) and is annotated truthfully, which may say the tenant is neither allowed into nor resident in it.
-- **A tenant asserted whose standing cannot be resolved** - the current region alone, fail-closed. It never falls back to the full topology.
+- **A tenant asserted whose standing the head's tenancy resolver cannot establish** - the current region alone, fail-closed. It never falls back to the full topology.
 
 A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`. See [the region sets](../lattice.tenancy/README.md#the-region-sets).
 
@@ -210,7 +210,7 @@ The MCP group holds the `ILatticeSchemaControl` facade and delegates to it verba
 
 The manage tools carry `destructiveHint = true` and `readOnlyHint = false`; the inspect tools carry `readOnlyHint = true`. `lattice_treeadmin_schema_set_version_config` takes the version config as scalar `schemaId` / `targetVersion` / `strictIngest` arguments; `lattice_treeadmin_schema_set_policy` and `lattice_treeadmin_schema_remediate` take the schema policy and value-transform model objects directly.
 
-This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeSchemaControl` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeSchemaControl` - a schema-API gRPC adapter - off the same endpoint as the tree-administration group (`RemoteOptions.TreeAdmin`, since the schema-API and tree-administration gRPC services are co-hosted on the same silo address). The remote host honours the same read-always / write-gated split: the read-only schema-inspection tools are served whenever the tree-administration endpoint is configured, and the mutating schema-management tools additionally require `RemoteOptions.EnableSchemaControl = true` (which maps onto `enableSchemaControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeSchemaControl` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires a schema-API gRPC adapter off the same endpoint as the tree-administration group (`LatticeApiMcpRemoteOptions.TreeAdmin`, since the schema-API and tree-administration gRPC services are co-hosted on the same silo address). The remote host honours the same read-always / write-gated split: the read-only schema-inspection tools are served whenever the tree-administration endpoint is configured, and the mutating schema-management tools additionally require `LatticeApiMcpRemoteOptions.EnableSchemaControl = true` (which maps onto `enableSchemaControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## TreeAdmin diagnostics tools (`lattice_treeadmin_*`)
 
@@ -227,7 +227,7 @@ Read-only administrative diagnostics and storage accounting over `ILatticeTreeAd
 
 Every tool carries `readOnlyHint = true` and `destructiveHint = false`. `lattice_treeadmin_shard_diagnostics` and `lattice_treeadmin_storage_usage` take an optional `deep` flag (default `false`, the cheap path); `lattice_treeadmin_projection_digest` takes a `treeId` and a non-negative `shardIndex`; the remaining per-tree tools take a `treeId`. `lattice_treeadmin_storage_usage` is cluster-wide and takes no tree id.
 
-This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` - a tree-administration-API gRPC adapter - off the `RemoteOptions.TreeAdmin` endpoint. Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires a tree-administration-API gRPC adapter off the `LatticeApiMcpRemoteOptions.TreeAdmin` endpoint. Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## TreeAdmin lifecycle and control tools (`lattice_treeadmin_*`)
 
@@ -247,10 +247,10 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree. |
 | `lattice_treeadmin_tree_create` | manage | Explicitly create or register a tree with optional initial sizing. |
 | `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. |
-| `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides. |
+| `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides - publish-events, projection-digest maintenance, durable-history retention, and the advisory WAL retained-byte ceiling - each written only when its `apply*` flag is set (a null value on an applied dimension clears that override). |
 | `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
 | `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |
-| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree. |
+| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. |
 | `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
 | `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. |
@@ -293,7 +293,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 
 The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`, except `lattice_treeadmin_compaction_trigger` and `lattice_treeadmin_retention_set`, which are mutating but non-destructive to readable state and so carry `readOnlyHint = false` and `destructiveHint = false`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map.
 
-This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` off the `RemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle/control tools additionally requiring `RemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires the same tree-administration-API gRPC adapter off the `LatticeApiMcpRemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle/control tools additionally requiring `LatticeApiMcpRemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## Tenant self-awareness tools (`lattice_tenant_current`, `lattice_tenant_list`, `lattice_tenant_get`)
 
@@ -307,7 +307,7 @@ Read-only tenant discovery over the tenant self-service facade, registered by `A
 
 Every tool carries `readOnlyHint = true` and `destructiveHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's leak-free, fail-closed per-tenant scoping, so an unauthorized caller sees only its own default context, an empty accessible list, and a fail-closed not-found on inspect.
 
-This module is served under both topologies. In-silo it delegates to the co-hosted self-service facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTenantSelfService` off the `RemoteOptions.TenantAdmin` endpoint (the self-service reads share the tenant-administration gRPC service address). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed per-tenant scoping.
+This module is served under both topologies. In-silo it delegates to the co-hosted self-service facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires a tenant self-service gRPC adapter off the `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint (the self-service reads share the tenant-administration gRPC service address). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed per-tenant scoping.
 
 ## Tenant-admin tools (`lattice_tenant_create`, `lattice_tenant_suspend`, `lattice_tenant_resume`, `lattice_tenant_delete`, `lattice_tenant_set_quotas`)
 
@@ -315,7 +315,7 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `lattice_tenant_create` | manage | Register a new tenant in the active status, seeding the admin subjects that may see it. Omit `adminSubjects` and the calling subject is seeded so the creator can see what it created; supply it and that set is used verbatim (the caller is not added on top). Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
+| `lattice_tenant_create` | manage | Register a new tenant in the active status, seeding the admin subjects that may see it. Omit `adminSubjects` (or pass an empty list) and the calling subject is seeded so the creator can see what it created; supply a non-empty list and that set is used verbatim (the caller is not added on top). Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
 | `lattice_tenant_suspend` | manage | Move a tenant to the suspended status. Idempotent; the reserved default tenant cannot be suspended. |
 | `lattice_tenant_resume` | manage | Return a suspended tenant to the active status. Idempotent; fails closed if the tenant does not exist. |
 | `lattice_tenant_delete` | manage | Delete a tenant, cascading a soft-delete to every tree the tenant owns before removing its registry record. The reserved default tenant cannot be deleted. |
@@ -323,7 +323,7 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 
 Every tool carries `destructiveHint = true` and `readOnlyHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's own fail-closed tenant-admin access gate, so an unauthorized caller is default-denied on every mutation.
 
-This module is served under both topologies. In-silo it delegates to the co-hosted tenant-administration facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTenantAdmin` off the `RemoteOptions.TenantAdmin` endpoint, with the mutating tools additionally requiring `RemoteOptions.EnableTenantControl = true` (which maps onto `enableControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+This module is served under both topologies. In-silo it delegates to the co-hosted tenant-administration facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires a tenant-administration gRPC adapter off the `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint, with the mutating tools additionally requiring `LatticeApiMcpRemoteOptions.EnableTenantControl = true` (which maps onto `enableControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## Tenant region residency (`lattice_tenant_authorize_regions`, `lattice_tenant_set_residency`, `lattice_tenant_region_status`)
 
@@ -355,7 +355,7 @@ The typical workflow is:
 3. The tenant admin calls `lattice_tenant_set_residency` to move into it; it reports `Provisioning`.
 4. Once it reaches `Online`, `lattice_list_regions` advertises it with `tenantScope.isResident: true` and a `region`-targeted call routed there succeeds.
 
-This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires `GrpcLatticeTenantRegionAdmin` off the same `RemoteOptions.TenantAdmin` endpoint.
+This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires a region-residency gRPC adapter off the same `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint.
 
 ## Error handling
 
@@ -369,7 +369,7 @@ Every facade-backed tool call is routed through a single translation seam, so a 
 
 The seam never forwards a raw server exception or stack trace across the gRPC boundary: the deliberately generic `Internal` wire message stays generic, and the translation only ever adds the gRPC status code and the detail the binding already chose to expose (see [Security](security.md)).
 
-Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. Those two statuses are what a remote head reports from the data gRPC binding; a co-hosted server surfaces the same fault as the facade's own exception type and message. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front, before any facade call, with a tool error that names the parameter ("The 'value' parameter must be base64-encoded; the supplied text is not valid base64.") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults.
+Every group tool (everything except the two meta-tools) binds its arguments strictly: an argument the tool does not declare - typically a misspelled parameter name - is rejected before any facade call, with a message naming the offending argument and listing the accepted ones, rather than being silently ignored. Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. Those two statuses are what a remote head reports from the data gRPC binding; a co-hosted server surfaces the same fault as the facade's own exception type and message. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front, before any facade call, with a tool error that names the parameter ("The 'value' parameter must be base64-encoded; the supplied text is not valid base64.") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults.
 
 ## Next
 

@@ -3,9 +3,12 @@ namespace Orleans.Lattice.Api.Replication;
 /// <summary>
 /// The transport-agnostic outcome of a
 /// <see cref="ILatticeReplicationControl.DisableReplicationAsync"/> call.
-/// Disabling pauses shipping for the tree; it never purges already-replicated
-/// peer data and keeps the tree's fixed merge mode in the config so a later
-/// re-enable is a fresh bootstrap.
+/// Disabling removes the tree's resolved runtime mode but does not tear down an
+/// already-active shipper; if it keeps shipping, peers that resolve no mode drop
+/// those entries while acknowledging the batch. It never purges already-replicated
+/// peer data and keeps the tree's fixed merge mode in the config. A later
+/// re-enable bootstraps only when a source cluster is supplied and the tree
+/// already holds data.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiReplicationTypeAliases.ReplicationDisableResult)]

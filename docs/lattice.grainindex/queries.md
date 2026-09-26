@@ -41,7 +41,8 @@ public static async Task RunAsync(
 Resolve the index through `IGrainIndexProvider.GetIndex<TGrain, TState>(name)`.
 Omitting the name resolves the sole index declared for that grain and state
 pair; an undeclared index throws `InvalidOperationException`, and so does
-omitting the name when the grain and state pair carries more than one index.
+omitting the name when the grain and state pair carries more than one index, or
+naming a declared index under a grain or state type it was not declared with.
 
 ## Planning happens once
 

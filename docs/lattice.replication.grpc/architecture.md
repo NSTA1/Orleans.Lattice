@@ -45,9 +45,9 @@ The transport is safe for concurrent sends to different peer and tree pairs. Ord
 1. **Endpoint mapping.** `MapLatticeReplicationGrpc` maps the receiver routes on an ASP.NET Core endpoint route builder.
 2. **Decode.** The inbound body is decoded with the replication batch encoder, preserving the same envelope shape used by other transports.
 3. **Apply.** The decoded records are passed to `IReplicationApplier`, which handles duplicate suppression, causal buffering, dead-letter quarantine, and CRDT merge dispatch.
-4. **Acknowledge.** The receiver returns `ReplicationAck` with accepted state, the highest applied HLC, and optional flow-control or compatibility hints.
+4. **Acknowledge.** The receiver returns `ReplicationAck` with accepted state, the highest applied HLC, and optional flow-control or compatibility hints. Every non-deferred outcome - applied, deduplicated, or refused as local-origin - is acknowledged `Accepted = true`. A batch the applier deferred because an in-flight coordinated restore holds the tree's inbound receive fence is acknowledged `Accepted = false` with a 500 ms `PauseForMs`, so the sender keeps its cursor and re-ships the batch once the fence lifts. An apply that throws fails the call with an `Internal` status instead of acknowledging.
 
-Receiver idempotency is essential: a retry may redeliver a batch after the receiver applied it but before the sender observed the ack. The apply path turns repeated `(origin, hlc)` records into no-ops.
+Receiver idempotency is essential: a retry may redeliver a batch after the receiver applied it but before the sender observed the ack. The apply path turns a repeated record - an exact `(origin, hlc, key, op)` match - into a no-op.
 
 ## Shared endpoint topology
 

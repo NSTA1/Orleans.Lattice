@@ -21,10 +21,10 @@
   </ItemGroup>
 
   <!--
-    The explorer's ONLY cluster dependency is the public read-only state API
-    gRPC client. It must never reference Orleans.Lattice core or any grain
-    interface - all cluster access flows through this client (see the
-    connection layer). This single ProjectReference is the enforcement point.
+    The explorer core's only direct cluster dependency is the public read-only
+    state API gRPC client. Do not add direct references to Orleans.Lattice core
+    or any grain interface here - cluster access in this layer should flow through
+    the client/abstraction packages so plugins and heads keep a transport seam.
   -->
   <ItemGroup>
     <ProjectReference Include="..\..\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />

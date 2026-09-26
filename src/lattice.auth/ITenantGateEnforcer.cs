@@ -7,8 +7,7 @@ namespace Orleans.Lattice.Auth;
 /// add-on: <c>Orleans.Lattice.Tenancy</c> references <c>Orleans.Lattice.Auth</c>
 /// (and the core), so the arrow can only point that way. The gate depends on
 /// this abstraction; the tenancy add-on supplies the active implementation and
-/// replaces the null default, exactly as the core tenant seams (for example
-/// <see cref="NullTenantContextResolver"/>) do.
+/// replaces the null default, exactly as the core tenant resolver seam does.
 /// </summary>
 /// <remarks>
 /// <para>

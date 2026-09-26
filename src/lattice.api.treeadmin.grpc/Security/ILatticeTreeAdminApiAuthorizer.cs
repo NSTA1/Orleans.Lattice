@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 /// Authorization seam for the tree-administration control-API gRPC surface. A
 /// host supplies an implementation to decide whether a given inbound call is
 /// permitted to drive tree administration. The control API is designed to expose
-/// sensitive and destructive whole-tree operations (the later releases add
+/// sensitive and destructive whole-tree operations (for example lifecycle and restore
 /// bulk-load, delete, resize, reshard), so the binding ships with a default-deny
 /// posture: unless a host opts in (either by registering
 /// <see cref="AllowAllTreeAdminApiAuthorizer"/> / a custom authorizer, or by

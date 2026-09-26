@@ -19,10 +19,9 @@ using Orleans.Lattice;
 // readable and writable throughout, with live mutations mirrored to the
 // destination (see the README for the trade-off).
 //
-// SnapshotAsync starts a crash-safe, timer-driven coordinator that copies one
-// shard per tick, so we poll IsSnapshotCompleteAsync until it finishes. A tree
-// defaults to 64 physical shards, so the copy takes a couple of minutes even
-// for a tiny dataset - snapshot cost scales with shard count, not key count.
+// SnapshotAsync starts a crash-safe, timer-driven coordinator, so we poll
+// IsSnapshotCompleteAsync until it finishes. Snapshot cost is driven by the shard
+// fan-out as well as the key count.
 // =============================================================================
 
 using var host = Host.CreateDefaultBuilder(args)

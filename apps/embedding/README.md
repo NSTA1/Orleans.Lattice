@@ -3,8 +3,9 @@
 A produced, embedding-only companion image for the Orleans.Lattice
 repository-context MCP host. It turns text into vectors over HTTP so the MCP
 container never embeds in-process and keeps its single, MCP-only listener. The
-default `IEmbeddingProvider` in `Orleans.Lattice.Api.Mcp.RepoContext`
-(`OnyxEmbeddingProvider`) is a thin client for the HTTP contract this image
+default `IEmbeddingProvider` in `Orleans.Lattice.Api.Mcp.RepoContext` -
+registered by `AddOnyxEmbeddingProvider` and configured through
+`OnyxEmbeddingOptions` - is a thin client for the HTTP contract this image
 defines.
 
 > **This is no longer the default companion image.** The repository-context
@@ -14,8 +15,9 @@ defines.
 > roughly a tenth the size, with no model download on first run. This image
 > remains supported and is still the reference implementation the ONNX one is
 > pinned against; select it with the sample's
-> `docker-compose.onyx.yml` override. `OnyxEmbeddingProvider` keeps its name
-> because it is a client for the contract, not for this particular image.
+> `docker-compose.onyx.yml` override. `AddOnyxEmbeddingProvider` and
+> `OnyxEmbeddingOptions` keep their names because they configure a client for
+> the contract, not for this particular image.
 
 One job: `text -> vector`.
 
@@ -47,8 +49,9 @@ stored chunks / `query` for search vectors, `provider_type: null` (local model).
 Response (`EmbedResponse`): `embeddings: float[][]`.
 
 This is Onyx's **internal, versioned** model-server API, not a stable public one.
-It is pinned to the image tag and wrapped behind `OnyxEmbeddingProvider`, so a
-schema change is a single-file update in that client.
+It is pinned to the image tag and wrapped behind the client
+`AddOnyxEmbeddingProvider` registers, so a schema change is a single-file update
+in that client.
 
 ## CPU by default
 

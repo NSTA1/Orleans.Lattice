@@ -85,8 +85,8 @@ around a *different* set of cluster centres, recall fell to 0.875.
 
 - An update counter since the last training pass (`DurableVectorIndex.UpdatesSinceTraining`)
   is the drift signal.
-- A retrain re-partitions the corpus in place. It re-reads nothing, because the
-  corpus is already resident.
+- A retrain re-partitions the resident corpus and commits it as a fresh
+  generation. It re-reads nothing, because the corpus is already resident.
 - Measured: 0.875 drifted, 1.000 after retraining.
 
 For a realistic churn workload - where a re-embed perturbs a document's vector

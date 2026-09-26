@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// </para>
 /// <para>
 /// An empty <see cref="Findings"/> with a non-zero <see cref="LeavesWalked"/> is a
-/// clean bill of health for the tree, and is then as useful an answer as a finding:
+/// clean bill of health for the tree only when <see cref="VerdictComplete"/> is true, and is then as useful an answer as a finding:
 /// it rules the orphaned-leaf defect out as the cause of an unbounded WAL. That
 /// reading needs <b>both</b> <see cref="IsComplete"/> and
 /// <see cref="VerdictComplete"/> to be <see langword="true"/>, because they answer

@@ -57,7 +57,7 @@
       * Symmetric replication. Each region's cluster id is "<baseName>-<regionCode>"
         and its peer endpoint is "https://<siloStateApiFqdn>". For every region the
         script builds the peer list from EVERY OTHER region, so enrollment is fully
-        reciprocal across all N regions (asymmetry dead-letters cross-region
+        reciprocal across all N regions (asymmetry makes shippers retry while holding the cursor for cross-region
         traffic). The wire-merge-mode map (-ReplicationTrees) is applied identically
         estate-wide. The replication key is byte-identical across regions (one Key
         Vault secret per region, same material) and is @secure end to end.
@@ -213,7 +213,7 @@ param(
     # The per-cluster replication key, matched across every region and required by
     # BOTH options (public authenticates replication over public ingress with it;
     # private layers it on the VNet transport as defense in depth). Stable across
-    # runs (a re-run with a different key rotates the secret and dead-letters
+    # runs (a re-run with a different key rotates the secret and makes shippers retry
     # in-flight cross-region traffic until every region converges).
     [securestring]$ReplicationKey,
 
@@ -828,7 +828,7 @@ try {
             dataApiEnabled             = $EnableDataApi
             internalEnvironment        = ($DeploymentOption -eq 'private')
             infrastructureSubnetId     = $subnetId
-            # Zone-redundant compute; honoured only when VNet-injected (private).
+            # Zone-redundant compute; honoured when the Container Apps environment is VNet-injected.
             zoneRedundant              = $ZoneRedundant
             # Activated seams.
             prometheusQueryEndpoint    = $prometheus

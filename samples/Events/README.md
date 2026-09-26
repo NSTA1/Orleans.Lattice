@@ -6,9 +6,10 @@ Orleans.Lattice publishes **metadata-only event notifications** on a per-tree
 Orleans stream, so caches, projections, audit pipelines, and dashboards can react
 to mutations without polling. This sample enables publication, subscribes to a
 tree's event stream, performs four writes (three sets and a delete), and prints
-each `LatticeTreeEvent` as it arrives. Events carry only the key name and
-operation kind - never the value bytes - so a subscriber that needs the new value
-issues its own `GetAsync`.
+each `LatticeTreeEvent` as it arrives. Events carry only metadata - the operation
+kind, tree id, key, originating shard (when shard-scoped), saga operation id (for an
+atomic write) and publish timestamp - never the value bytes, so a subscriber that
+needs the new value issues its own `GetAsync`.
 
 ## Run it
 

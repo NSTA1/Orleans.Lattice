@@ -8,20 +8,22 @@ Today the records are the **single wire contract** between the producer's commit
 
 Cross-cluster LWW-on-bytes silently drops one side's update under concurrent active-active mutations: two clusters concurrently adding to a set both write a full post-merge byte string, the bytes are then merged by HLC and the loser's add disappears. CRDTs converge precisely because they exchange *operations* (or operation-shaped deltas), not post-merge snapshots. The records in this package preserve that property end-to-end.
 
-For value types that are not a recognised CRDT primitive - schemaless `byte[]` payloads - the producer falls through to `LwwRegisterDelta`, which is structurally the same shape and simply documents the "won't converge under concurrent updates" caveat at the API surface.
+Values that are not a recognised CRDT primitive - schemaless `byte[]` payloads on an `LwwRegister` tree - ship as the opaque `WalRecord.Value`, not as a typed delta: no shipped producer authors an `LwwRegisterDelta`. The record stays on the public surface as the typed last-writer-wins shape for custom transports and appliers, and carries the same "won't converge under concurrent updates" caveat.
 
 ## Records
 
-Every record is a `readonly record struct`, marked `[GenerateSerializer]` and `[Immutable]`, with a stable Orleans alias declared on `TypeAliases` in the core `Orleans.Lattice` assembly. All records are public - they appear on the `IChangeFeed` consumer surface and on transport payloads, so custom transports and applier implementations can name them directly.
+Every record is a `readonly record struct` marked `[GenerateSerializer]`, with a stable Orleans alias defined in the core `Orleans.Lattice` assembly. Every record except `OrMapDelta<TKey, TValue>`, `OrMapDeltaEntry<TKey, TValue>`, and `MvRegisterEntry` is also marked `[Immutable]`; those three deliberately are not, because each carries a mutable payload (a CRDT value the receiver folds in place, or `byte[]` value bytes) that Orleans must copy on a same-silo grain call. All records are public - they appear on the `IChangeFeed` consumer surface and on transport payloads, so custom transports and applier implementations can name them directly.
 
 | Type | Alias | Purpose |
 |------|-------|---------|
-| `LwwRegisterDelta` | `ol.lwd` | Last-writer-wins register: value bytes (or tombstone) + HLC + origin + expiry. Also the opaque-bytes fallback. |
+| `LwwRegisterDelta` | `ol.lwd` | Last-writer-wins register: value bytes (or tombstone) + HLC + origin + expiry. Not authored by any shipped producer - last-writer-wins trees ship the opaque `WalRecord.Value`. |
 | `OrSetDelta` | `ol.osa` | Observed-remove set: lists of added and removed `(element, dot)` pairs. |
 | `OrSetDeltaDot` | `ol.osc` | A unique `(replicaId, counter)` dot attached to an element inside an `OrSetDelta`. |
+| `OrSetDot` | `ol.osd` | A bare `(replicaId, counter)` dot with no element - the enable, disable, and tombstone dots inside `OrFlagDelta` and `RwFlagDelta`. |
 | `PnCounterDelta` | `ol.pcd` | Positive-negative counter: per-replica cumulative increment and decrement components. |
 | `VersionVectorDelta` | `ol.vvd` | Version-vector advance: per-replica HLC entries that have advanced. |
 | `MvRegisterDelta` | `ol.mvg` | Multi-value register: dot-tagged `(replicaId, counter, value)` entries plus the producer's observed-dot context. |
+| `MvRegisterEntry` | `ol.mvd` | A single dot-tagged `(replicaId, counter, value)` entry inside an `MvRegisterDelta`. |
 | `OrMapDelta<TKey, TValue>` | `ol.omd` | Observed-remove map: typed adds (`OrMapDeltaEntry<TKey, TValue>`, alias `ol.omx`) plus removed-dot tombstones (`OrMapDeltaTombstone<TKey>`, alias `ol.omt`). Recurses through `ICrdt<TValue>.MergeFrom` to merge per-key values. |
 | `RgaDelta` | `ol.rgd` | Replicated Growable Array (RGA) sequence: dot-explicit inserted nodes (`RgaDeltaNode`, alias `ol.rgi`) plus tombstoned dots. Carries the structural intent `(dot, parentDot, value)` per insert so the receiver converges on an identical ordered traversal, not a post-merge snapshot. |
 | `RgaDeltaNode` | `ol.rgi` | A single inserted node inside an `RgaDelta`: the `(replicaId, counter)` dot, the parent dot it was linked under, and the value bytes. |
@@ -38,7 +40,7 @@ The typed CRDT delta records each expose a static `Empty` property that returns 
 
 | Delta | Receiver merges by |
 |-------|--------------------|
-| `LwwRegisterDelta` | LWW with origin tiebreaker: install the incoming delta when `(delta.Timestamp, delta.OriginClusterId)` compares strictly greater than `(existing.Timestamp, existing.OriginClusterId)` lexicographically. **Never** apply via `SetAsync` - that would stamp a fresh local HLC and lose the source causality. |
+| `LwwRegisterDelta` | Last-writer-wins, matching the merge the receiver applies to an `LwwRegister` entry's opaque `Value`: the higher HLC wins, and an exact HLC tie falls to the replica-invariant tombstone, expiry, and value-byte fields before the observer-relative origin id. **Never** apply via `SetAsync` - that would stamp a fresh local HLC and lose the source causality. |
 | `OrSetDelta` | Union `Adds` into the local element/dot map, then drop every `(element, dot)` pair in `Removes`. Order-independent, idempotent. |
 | `PnCounterDelta` | Pointwise-max each `(replica, value)` against the local positive and negative components. Never subtract - values are cumulative counts, not deltas. |
 | `VersionVectorDelta` | Pointwise-max each `(replica, clock)` against the local vector. Late or duplicate delivery is a no-op. |
@@ -86,6 +88,6 @@ Consumers that need content equality for those records must compare collection c
 
 ## Origin and HLC propagation
 
-`LwwRegisterDelta` carries `OriginClusterId` directly because the LWW register is the only delta whose convergence depends on the writer's identity (the lexicographic tiebreaker under equal HLCs). The other deltas encode origin implicitly through their per-replica indexed dots, components, or entries. Receivers do not need a separate origin field for those records - the per-replica row identifies the producer.
+`LwwRegisterDelta` carries `OriginClusterId` directly because a last-writer-wins value is attributed to its authoring cluster for cycle-break and dedupe; on an exact HLC tie the origin id is the last-ranked tie-break, after the replica-invariant tombstone, expiry, and value-byte fields. The other deltas encode origin implicitly through their per-replica indexed dots, components, or entries. Receivers do not need a separate origin field for those records - the per-replica row identifies the producer.
 
-The receiver-side per-origin high-water-mark table is keyed `(treeId, originClusterId)` and dedupes at the `WalRecord` envelope layer; it does not inspect delta internals.
+The receiver-side per-origin high-water-mark state is keyed `(treeId, originClusterId)` and filters at the `WalRecord` envelope layer through its snapshot-pinned causal floor; it does not inspect delta internals.

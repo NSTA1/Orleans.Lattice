@@ -3,8 +3,7 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <summary>
 /// Whether a tree-administration snapshot locks the source tree during the copy.
 /// Mirrors the core snapshot engine's own mode as a transport-agnostic value the
-/// tree-administration facade can accept without the abstractions package taking a
-/// dependency on the core library.
+/// tree-administration facade can accept and transport.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiTreeAdminTypeAliases.TreeSnapshotMode)]

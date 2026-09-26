@@ -27,9 +27,10 @@ costs nothing until it is registered.
 
 ## Security
 
-Every operation authorizes fail-closed through the same Lattice access gate the
-data plane uses, before touching engine state, requiring the dedicated
-`LatticeOperation.Replication` capability on the target tree. Once an
+Enable and disable authorize fail-closed through the same Lattice access gate
+the data plane uses, before touching engine state, requiring the dedicated
+`LatticeOperation.Replication` capability on the target tree; the config read
+applies the same check per tree to filter what it reports. Once an
 authorization add-on supplies the access gate, anonymous callers are denied by
 default; with only the core no-op gate registered, every call is allowed.
 

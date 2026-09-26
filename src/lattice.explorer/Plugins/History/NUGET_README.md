@@ -3,9 +3,11 @@
 The per-key revision-timeline per-selection surface for the Orleans.Lattice
 Explorer, shipped as a self-contained plugin: the retention-aware change history
 of the key the operator drilled into, with value diffs, CRDT member changes,
-retention-transition dividers, and a **forward-only live follow mode** that
-appends new revisions as they are emitted and silently upgrades them to durable
-rows once the history view records them.
+retention-transition dividers, and a **forward-only live follow**. Following
+starts on its own once the first page of history has loaded - there is no
+toggle - and appends new revisions as they are emitted; while only that first
+page is loaded, it silently upgrades them to durable rows once the history view
+records them.
 
 Register it on a head with:
 

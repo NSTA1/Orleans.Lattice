@@ -5,17 +5,15 @@ namespace Orleans.Lattice.Testing;
 
 /// <summary>
 /// Reusable, product-agnostic guard proving that every static grain-key
-/// composer in a package produces a key that is safe to use as an Orleans grain
-/// <b>primary key</b> on a keyed storage backend. The composed key becomes the
-/// grain identity, and Azure Table grain storage carries that identity into the
-/// Partition/Row key columns and the request URL, both of which reject the
-/// control characters <c>0x00-0x1F</c> and <c>0x7F-0x9F</c> and the characters
-/// <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c>. A composer that joins its parts
-/// with such a character (the historical defect was an ASCII Unit Separator,
-/// <c>0x1F</c>, in <c>LatticeCrossTreeReceiverGrain.ComputeKey</c>) yields a
-/// grain that cannot activate on that backend - an opaque HTTP 400 that no
-/// in-memory test storage reproduces, so the whole suite stays green while a
-/// real Azure deployment fails.
+/// composer in a package produces a key that is safe and unambiguous as an
+/// Orleans grain <b>primary key</b> on a keyed storage backend. The composed key
+/// becomes the grain identity, and Azure Table grain storage carries that identity
+/// into the Partition/Row key columns and the request URL. Control characters
+/// still fail outright, and punctuation Orleans sanitizes (for example <c>/</c>,
+/// <c>\</c>, <c>#</c> and <c>?</c>) can alias distinct logical keys onto one
+/// storage key. A composer that joins its parts with those characters therefore
+/// leaves a green in-memory test and a persistent-key collision or activation
+/// failure on a keyed backend.
 /// <para>
 /// Discovery is by reflection over a marker attribute (matched by name so this
 /// library needs no compile-time product reference, exactly as the serializable

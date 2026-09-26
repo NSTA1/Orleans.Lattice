@@ -17,8 +17,8 @@ namespace MultiSiteManufacturing.Host.Backup;
 /// replicated tree backed by that in-cluster sink. Registering this shared sink
 /// before <c>AddLatticeBackup</c> satisfies the guard.
 /// <para>
-/// Artifact ids and backup ids are content-addressed, so a re-write of identical
-/// content is idempotent. Ids are hex-encoded into filesystem-safe file names
+/// Backup ids are content-addressed and artifact ids are per-capture, so a
+/// re-write of identical content for the same id is idempotent. Ids are hex-encoded into filesystem-safe file names
 /// that round-trip exactly, so the list operations can recover the original ids.
 /// A write lands through a temp file plus atomic move so a concurrent reader on a
 /// peer cluster never observes a half-written artifact. Suitable for the sample's
@@ -94,7 +94,7 @@ public sealed class FileSystemBackupSink : ILatticeBackupSink
 
             // Atomic publish: a peer cluster reading the shared directory never sees
             // a partially written artifact. Overwrite is a no-op-equivalent for a
-            // content-addressed id (identical bytes), so a retried write converges.
+            // id (identical bytes for the same artifact), so a retried write converges.
             File.Move(temp, path, overwrite: true);
         }
         finally

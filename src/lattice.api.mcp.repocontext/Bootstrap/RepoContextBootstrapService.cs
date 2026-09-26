@@ -842,17 +842,13 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // back-fill re-embeds it from its current text on the next reconcile.
             // That needs no digest and no dirty-set.
             //
-            // RESIDUAL, stated rather than hidden: an entry that expires by its
-            // own TTL rather than through an explicit forget - a coordination
-            // handoff written with ttlSeconds, say - vanishes from the tree with
-            // no code path observing it, so its vector is never retired. That is
-            // fail-safe: the semantic path drops a hit that no longer hydrates
-            // via its !entry.Exists guard, so the cost is an inflated membership
-            // tally and an occasional wasted ranking slot, never a dead key
-            // returned to a caller. A prune IS possible - VectorMetadataRecord
-            // keeps each vector's SourceKey - but not free: memory source ids
-            // are not separable from file and symbol ids in the membership set,
-            // so it would take a full metadata scan on a path that otherwise
+            // Expired memory entries vanish without going through the store's explicit
+            // forget path, so retirement happens in the memory-ingest orphan sweep below:
+            // that pass already holds both the recorded embedded keys and the live keys,
+            // so it can retire (recorded - live) without a full metadata scan. Before that
+            // sweep lands, the semantic path still drops a hit that no longer hydrates via
+            // its !entry.Exists guard, so the temporary cost is an inflated membership tally
+            // and an occasional wasted ranking slot, never a dead key returned to a caller.
             // touches only what changed. Left for a deliberate sweep rather than
             // paid on every reconcile.
             try

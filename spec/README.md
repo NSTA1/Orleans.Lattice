@@ -74,7 +74,7 @@ Liveness / temporal properties:
 
 | Property | Meaning |
 |----------|---------|
-| `DecisionDurability` | Once terminal, the registry decision never flips to the other terminal, and its row is never retired while a participant still holds an undrained prepared bucket. |
+| `DecisionDurability` | Once terminal, the registry decision never flips to the other terminal, and its row is never retired while a written key has not yet applied its terminal (its prepared bucket is still undrained). |
 | `MonotonicVisibility` | Once a key is post-saga-visible it stays visible (even across a reshard). |
 | `RevisionMonotonic` | The registry revision counter never decreases. |
 | `Termination` | Every saga terminates (under weak fairness of saga progress). |
@@ -93,9 +93,11 @@ Liveness / temporal properties:
 **What the `k2` overlap does and does not buy.** The two sagas do share a key,
 so the state space genuinely interleaves two concurrent lifecycles over it. What
 the overlap does *not* do is exercise any *cross-saga* claim, because every
-property above is stated per-saga: each quantifies `\A t \in Txns` and then
-resolves that saga's keys against that saga's own `decision[t]`, `terminal[t]`
-and `pend[t]`. No property relates `t1`'s state to `t2`'s. Read the overlap as
+property above is stated per-saga - bar `TypeOK` and `RevisionMonotonic`, which
+constrain only the variables' domains and the shared revision counter: each
+quantifies `\A t \in Txns` and then resolves that saga's keys against that
+saga's own `decision[t]`, `terminal[t]` and `pend[t]`. No property relates
+`t1`'s state to `t2`'s. Read the overlap as
 extra schedule pressure on the per-saga properties, not as evidence that
 concurrent sagas contending for one key have been checked.
 
@@ -124,10 +126,11 @@ not a question this instance can ask, because `ObservedPrepared` returns a
 boolean rather than a value. A cross-saga *visibility* property needs a value
 domain, which is a larger change than the lock conjunct.
 
-To widen the instance, edit `TxWrites`, `Txns`, and `Keys` in
-`AtomicCommit.tla` and add the matching model-value constants to
-`AtomicCommit.cfg`. The state space stays small (a few thousand states) for
-2-3 sagas over 3-4 keys; larger instances grow quickly.
+To widen the instance, declare the new model values on the `CONSTANTS` line of
+`AtomicCommit.tla`, extend `TxWrites`, `Txns`, and `Keys` there, and add the
+matching model-value assignments to `AtomicCommit.cfg`. The state space stays
+small (a few thousand states) for 2-3 sagas over 3-4 keys; larger instances grow
+quickly.
 
 ## Claims in this directory that open issues own
 
@@ -172,6 +175,16 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit
 
 A clean run ends with `Model checking completed. No error has been found.`
 and reports zero invariant or temporal-property violations and no deadlock.
+
+### How the NUnit fixture finds the toolchain
+
+`TlcModelCheckTests` (see [CI decision](#ci-decision)) locates the same two
+pieces itself. It reads `tla2tools.jar` from the `TLA_TOOLS_JAR` environment
+variable (an absolute path), falling back to `tools/tla2tools.jar` at the
+repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
+falling back to the first `java` on `PATH`. The CI workflows download the pinned
+tla2tools v1.7.4 release to `tools/tla2tools.jar` and verify its SHA-256 digest
+before the tests run.
 
 ### Confirming the model is non-vacuous
 
@@ -226,7 +239,7 @@ mentions only in bare form is not caught.
 ## Last checked
 
 This specification was checked with **TLC 2.19** (tla2tools, rev 5a47802) on a
-Temurin 21 JRE:
+Temurin 21 JRE when it was added (#1597):
 
 ```
 Model checking completed. No error has been found.
@@ -234,7 +247,12 @@ Model checking completed. No error has been found.
 The depth of the complete state graph search is 17.
 ```
 
-All seven invariants and all five temporal properties held; no deadlock.
+All seven invariants and all five temporal properties held; no deadlock. That run
+predates #2612, which added the `forgotten` variable and the `ForgetDecision`
+action and strengthened `DecisionDurability`, so these counts describe the earlier
+model, not the current one. The current specification is model-checked in CI by
+`TlcModelCheckTests.The_base_specification_holds`, against the tla2tools v1.7.4
+release the workflows pin (see [CI decision](#ci-decision)).
 
 ## CI decision
 

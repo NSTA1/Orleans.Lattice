@@ -35,10 +35,11 @@ namespace Orleans.Lattice.Testing.Docs;
 ///   <item><description><c>ILattice tree</c></description></item>
 ///   <item><description><c>CancellationToken cancellationToken</c></description></item>
 /// </list>
-/// An ambient <c>record User(string Name, int Age)</c> is also declared so typed
-/// helper examples compile without ceremony. Method-body snippets additionally
-/// see an ambient <c>MyReplicationObserver</c> stub so DI-registration examples
-/// for <c>IMutationObserver</c> compile in isolation.
+/// Ambient <c>record User(string Name, int Age)</c> and
+/// <c>record Order(string Id, decimal Total)</c> declarations are also supplied so
+/// typed helper examples compile without ceremony. Method-body snippets additionally
+/// see ambient <c>MyReplicationObserver</c> and <c>MyRebindObserver</c> stubs so
+/// DI-registration examples for mutation and tree-alias observers compile in isolation.
 /// <para>
 /// The generated wrapper's <c>using</c> header is resilient: an optional product
 /// <c>using</c> (for example <c>using Orleans.Lattice.Replication;</c>) is only

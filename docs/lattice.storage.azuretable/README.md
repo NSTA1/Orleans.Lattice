@@ -7,19 +7,19 @@ Durable Azure Table Storage-backed WAL provider for [Orleans.Lattice](../../READ
 `Orleans.Lattice.Storage.AzureTable` is the optional production WAL backend for the core lattice and replication packages:
 
 - **Durable WAL storage.** `AzureTableWalStorageProvider` stores per-tree, per-shard WAL batches in Azure Table Storage and implements the public `IWalStorageProvider` contract.
-- **Atomic batch append.** Each append batch is made visible all-or-nothing and assigned dense, monotone offsets within its shard.
-- **Restart recovery.** Activation-time reconciliation completes or removes interrupted batches so the shard tail remains contiguous after a crash.
+- **Atomic batch append.** Each append batch is made visible all-or-nothing, and its caller-assigned offsets must be dense within the batch.
+- **Restart recovery.** Activation-time reconciliation completes an interrupted batch that contiguously extends the stored tail and removes any other, so a crash never leaves a half-committed batch behind and never lowers the tail.
 - **Azure SDK integration.** `AzureTableWalStorageOptions` controls authentication, table selection, retry tuning, stored-payload compression, phase-two commit behaviour, and WAL saturation-aware retries.
-- **Drop-in registration.** `AddAzureTableWalStorage` replaces the in-memory WAL backend installed by core lattice registration.
+- **Drop-in registration.** `AddAzureTableWalStorage` replaces the in-memory WAL backend installed by core lattice registration, and wires the durable-WAL garbage-collection stack (WAL cursor registry, leaf reporter, and WAL GC) alongside it.
 
 Core WAL semantics, provider selection, and placement are covered in [WAL Storage Providers](../lattice/wal-storage-providers.md). Replication WAL consumption is covered in [Replication WAL](../lattice.replication/wal.md).
 
 ## Core Properties
 
-- **Per-shard ordering.** Offsets are dense and monotone within each `(tree, shard)` stream.
+- **Per-shard ordering.** Offsets are stored verbatim and read back in ascending order within each `(tree, shard)` stream.
 - **Batch atomicity.** A successful append is visible as a complete batch; a rejected append leaves no visible partial batch.
 - **Crash recoverability.** Interrupted appends are reconciled before normal reads and writes rely on the stored tail.
-- **Bounded backend shape.** Append batches respect Azure Table transaction limits; tune replication batch sizing with [WAL tuning](../lattice/wal-tuning.md).
+- **Bounded backend shape.** The provider refuses a batch of more than 100 entries, the Azure Table transaction limit, and each entry must fit one 64 KiB binary property after compression: an entry is never split, so a larger one is rejected by the service and fails its whole batch. Tune WAL batching and pending depth with [WAL tuning](../lattice/wal-tuning.md).
 - **Operational back-pressure.** Optional saturation-aware retry short-circuiting cooperates with the core [WAL saturation signal](../lattice/wal-saturation-signal.md).
 
 ## Features
@@ -28,7 +28,7 @@ Core WAL semantics, provider selection, and placement are covered in [WAL Storag
 |---|---|---|
 | **Azure Table WAL provider** | Durable `IWalStorageProvider` implementation for production WAL retention and restart recovery. | [Architecture](architecture.md) |
 | **Authentication modes** | Connection string, service URI plus token credential, service URI plus shared key, or a pre-built `TableServiceClient`. | [Configuration](configuration.md) |
-| **Atomic append pipeline** | Entry rows become visible only after ordered commit metadata advances the shard tail. | [Architecture](architecture.md) |
+| **Atomic append pipeline** | Entry rows become readable only once their batch's commit metadata is written, in ascending offset order within each commit. | [Architecture](architecture.md) |
 | **Phase-two pipelining** | Overlaps commit completion with later appends while preserving ordering and recovery semantics. | [Configuration](configuration.md#pipelinephasetwocommits) |
 | **Hot-path commit reduction** | `EliminateCandidateRowOnHotPath` removes an extra write from the normal append path while keeping recovery safe. | [Configuration](configuration.md#eliminatecandidaterowonhotpath) |
 | **Retry telemetry and tuning** | Retry attempt tracking plus nullable Azure SDK retry knobs separate transient retry storms from exhausted retries. | [Configuration](configuration.md#retry-options) |

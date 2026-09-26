@@ -27,6 +27,11 @@ this host stays MCP-only and never embeds in-process.
   client registers repositories at runtime under the read-only workspace mounted at
   `LATTICE_WORKSPACE_ROOT` (default `/workspace`); a path escaping that root is
   refused.
+- The tree-administration tool group (`lattice_treeadmin_*`) on the same MCP
+  endpoint, registered with its mutating tree-lifecycle verbs enabled and its
+  mutating schema-control verbs disabled, so whole-tree operator verbs such as the
+  orphaned-leaf audit and repair are reachable in-process (issue #3287). See
+  [MCP tools](../../docs/lattice.api.mcp/tools.md).
 - A durability profile selected by `LATTICE_DURABILITY` (`local` SQLite + file WAL
   by default; `azure`/`postgres` for shared deployments).
 - Compaction on the churn trees, a readiness probe that reports `Draining` on

@@ -30,13 +30,14 @@ here are the ones they meet again later.
 | | | 17 | The upper edges draw as each merges the other's update; the join fills with the marker and pulses: A=3, B=5, value 8. |
 | | | 18 | B's delta travels to the join again, and nothing changes. |
 | | | 19 | "Commutative, associative and idempotent" and "No lock manager, no consensus round trip" under the heading. |
-| Everything else is a seam | `seams` | 20 | The site's core-plus-seams list, generated from `PACKAGES.md`: the core, then each section with its package count and first packages, on a spine. Released packages only, without the Explorer. |
-| | | 21 | A host registers Identity and Security, Replication and Storage: those stay filled in ink; the seams it leaves out empty and fade. |
-| Local to Global | `journey` | 22 | The site's journey on one ink chain; Local arrives with the marker on its node - you are here - and what it adds. |
-| | | 23 | Team arrives; Local's node fills as passed. |
-| | | 24 | Global arrives. |
-| | | 25 | The details give way and the invariant rises under the stage names: "Programming model ILattice unchanged at every stage"; the three lines of code that stay the same fade in beneath it, from the companion page. |
-| Three ways in | `ways` | 26 | "Three ways in": three nodes on a chain; beneath, the mark, the name and the site's address in link blue. |
-| | | 27 | Build, with the marker, and who it is for. |
-| | | 28 | Evaluate; Build fills as passed. |
-| | | 29 | Operate; the frame holds through the closing pause, then fades. |
+| | | 20 | The figure and its note hold; nothing new arrives. |
+| Everything else is a seam | `seams` | 21 | The site's core-plus-seams list, generated from `PACKAGES.md`: the core, then each section with its package count and first packages, on a spine. Released packages only, without the Explorer. |
+| | | 22 | A host registers Identity and Security, Replication and Storage: those stay filled in ink; the seams it leaves out empty and fade. |
+| Local to Global | `journey` | 23 | The site's journey on one ink chain; Local arrives with the marker on its node - you are here - and what it adds. |
+| | | 24 | Team arrives; Local's node fills as passed. |
+| | | 25 | Global arrives. |
+| | | 26 | The details give way and the invariant rises under the stage names: "Programming model ILattice unchanged at every stage"; the three lines of code that stay the same fade in beneath it, from the companion page. |
+| Three ways in | `ways` | 27 | "Three ways in": three nodes on a chain; beneath, the mark, the name and the site's address in link blue. |
+| | | 28 | Build, with the marker, and who it is for. |
+| | | 29 | Evaluate; Build fills as passed. |
+| | | 30 | Operate; the frame holds through the closing pause, then fades. |

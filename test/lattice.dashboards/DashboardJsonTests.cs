@@ -234,9 +234,9 @@ public sealed class DashboardJsonTests
 
         // KNOWN-INCOMPLETE RETENTION - see issue #3260.
         //
-        // The exporter does NOT append a unit segment for "ms" or "s" either: it
-        // records the unit in HELP text, exactly as it does for "By". Measured on
-        // a live scrape (440 families):
+        // The repo-context container's in-house Prometheus exposition does NOT
+        // append a unit segment for "ms" or "s" either: it records the unit in HELP
+        // text, exactly as it does for "By". Measured on that live scrape (440 families):
         //
         //   # HELP orleans_lattice_atomic_write_duration ... (unit: ms)
         //   # TYPE orleans_lattice_atomic_write_duration summary

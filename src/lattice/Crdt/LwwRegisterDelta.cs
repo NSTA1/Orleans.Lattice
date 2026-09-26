@@ -10,20 +10,15 @@ namespace Orleans.Lattice;
 /// <para>
 /// Whether the producer treats those bytes as an LWW register, a serialised
 /// CRDT primitive, or opaque payload is invisible to this record - the wire
-/// is always bytes. This same shape is therefore the opaque-bytes fallback
-/// used by the commit-time emission path for value types that are not a
-/// recognised CRDT primitive.
+/// is always bytes. The current replication path ships <see cref="WalRecord"/>
+/// payloads directly; this DTO remains the serializable LWW-delta shape for tests
+/// and compatibility.
 /// </para>
 /// <para>
-/// Apply semantics on the receiver: install when
-/// <c>(this.Timestamp, this.OriginClusterId)</c> compares strictly greater
-/// than <c>(existing.Timestamp, existing.OriginClusterId)</c> under the
-/// lexicographic ordering (HLC first, origin id second). The origin
-/// tiebreaker is needed because two clusters may concurrently produce
-/// equal HLCs; without it, convergence on a single value across all
-/// receivers is not guaranteed. Apply <em>never</em> goes through a fresh
-/// <c>SetAsync</c> - that would stamp a new local HLC and lose the source
-/// causality.
+/// Receiver-side conflict resolution is the normal <see cref="Primitives.LwwValue{T}"/>
+/// merge order: compare HLC first and use the origin id only as the equal-HLC
+/// tiebreaker. Apply <em>never</em> goes through a fresh <c>SetAsync</c> - that
+/// would stamp a new local HLC and lose the source causality.
 /// </para>
 /// </summary>
 [GenerateSerializer]

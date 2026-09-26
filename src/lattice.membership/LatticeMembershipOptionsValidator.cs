@@ -3,9 +3,9 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Membership;
 
 /// <summary>
-/// Validates <see cref="LatticeMembershipOptions"/> at silo start: rejects a
-/// negative resolution-cache lifetime, a non-positive history retention window,
-/// and an undefined history retention mode.
+/// Validates <see cref="LatticeMembershipOptions"/> when the named options value
+/// is resolved: rejects a negative resolution-cache lifetime, a non-positive
+/// history retention window, and undefined enum values.
 /// </summary>
 internal sealed class LatticeMembershipOptionsValidator : IValidateOptions<LatticeMembershipOptions>
 {

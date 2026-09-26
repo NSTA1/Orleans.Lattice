@@ -37,7 +37,7 @@ Follow these phases in order. Complete each phase fully before moving to the nex
    issue, or state plainly that there were none. Do not skip this because the
    issue looks small: the entries that save the most time are the ones you did
    not know to look for.
-1. Find the GitHub issue for the feature being requested. Feature planning lives on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`.
+1. Find the GitHub issue for the feature being requested. Feature planning lives on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), each issue carrying the package label of every package it concerns (one label per `src/<package>/` directory - see the `issue-labels` skill).
 2. Read `.github/copilot-instructions.md` and all files under `.github/instructions/` to internalize project conventions.
 3. Read `docs/lattice/api.md` and any other docs referenced by the feature to understand the current public API surface.
 4. **Pull the existing patterns with `context`, not a file crawl.** Call `repocontext_context` with the feature as the `task` and a stable `session` id - reuse that same id for every later `context` call in this session so you are never charged twice for source you already hold. It returns ranked, explained source under a hard token ceiling in one call, where a `search` + `view` crawl costs several round trips and whatever the files happen to weigh. Use `repocontext_related` to find a file's callers, dependents, and covering tests, and `repocontext_outline` to judge a file's shape before deciding to read it whole. `view` the files you are actually going to edit (the index does not contain your uncommitted edits).
@@ -93,7 +93,7 @@ Update documentation in the same change:
 1. **`docs/lattice/api.md`** - Add or update tables, signatures, and examples for any new or changed public API.
 2. **`.github/copilot-instructions.md`** - Update the namespace table, serializable types table, or any other section affected by the change.
 3. **`.github/instructions/*.instructions.md`** - Update grain key conventions, primitives tables, or testing instructions if affected.
-4. **`docs/lattice/*.md`** - Update any topic-specific doc that covers changed behavior. Add new docs to the `README.md` documentation table if applicable.
+4. **`docs/lattice/*.md`** - Update any topic-specific doc that covers changed behavior. Add new docs to the matching group of the `README.md` `## Documentation` list if applicable.
 
 ### Phase 6 - Verify
 
@@ -134,6 +134,8 @@ Every gate below is invoked through `tools/Invoke-RepositoryWideGates.ps1`, neve
    ```powershell
    pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture DocsSnippetCompilationTests -Project test/lattice
    ```
+
+   The `test/lattice` fixture compiles `docs/lattice/`, the repo-root `README.md`, and every `docs/<package>/` subtree no package fixture claims; each claiming package's own test project compiles its own `docs/<package>/` subtree (see the testing master), so a snippet there is verified only by running the same command with `-Project test/<package>`.
 
 4. **Em-dash hygiene.** Em-dash characters (U+2014) must not appear in any tracked text file - source, tests, docs, build scripts, samples, or configuration. The repo convention is plain ASCII hyphens. Word processors and editors auto-convert `--` to an em-dash on paste, so this leak is recurrent. `EmDashHygieneTests.No_em_dashes_in_tracked_files` enforces it:
 

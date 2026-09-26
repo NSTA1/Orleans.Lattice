@@ -8,10 +8,10 @@ Durable, cloud-free **local disk** WAL provider for [Orleans.Lattice](../../READ
 
 - **Durable WAL storage.** `FileWalStorageProvider` stores each per-tree, per-shard write-ahead log as a segmented, append-only file on the local filesystem and implements the public `IWalStorageProvider` contract.
 - **All-or-nothing batch append.** Each batch is framed as a run of data records sealed by a single commit trailer and made durable with one write plus fsync; a crash before the trailer is durable rolls the whole batch back on recovery.
-- **Restart recovery.** Activation-time reconciliation rolls every committed batch forward, discards a torn tail, and reclaims trimmed space, so the shard tail stays contiguous after a crash.
+- **Restart recovery.** Activation-time reconciliation rolls every committed batch forward, discards a torn tail, and reclaims trimmed space, so after a crash the log ends cleanly at its last committed batch; an honest offset gap left by a failed append is preserved, never renumbered.
 - **Drop-in registration.** `AddFileWalStorage` displaces the in-memory WAL backend installed by core lattice registration, and wires the durable-WAL garbage-collection stack alongside it.
 
-It matches the observable durability guarantees of the [Azure Table Storage provider](../lattice.storage.azuretable/README.md) without any cloud dependency, which makes it the enabler for a single-container, "codebase memory in a box" deployment (see the [RepoContext MCP](../lattice.api.mcp.repocontext/README.md) package and its [container sample](../../samples/RepoContextContainer/README.md)).
+As a WAL store it matches the observable durability guarantees of the [Azure Table Storage provider](../lattice.storage.azuretable/README.md) without any cloud dependency. Tree state - each leaf's state row and its snapshots - still lives in the grain storage provider `AddLattice` registers, so a durable deployment pairs it with a durable grain storage provider; that pairing makes it the enabler for a single-container, "codebase memory in a box" deployment (see the [RepoContext MCP](../lattice.api.mcp.repocontext/README.md) package and its [container sample](../../samples/RepoContextContainer/README.md), which uses Orleans ADO.NET grain storage over a single SQLite file).
 
 Core WAL semantics, the provider seam, and placement are covered in [WAL Storage Providers](../lattice/wal-storage-providers.md).
 
@@ -27,8 +27,8 @@ Core WAL semantics, the provider seam, and placement are covered in [WAL Storage
 
 | Type or member | Role |
 |---|---|
-| `FileWalStorageProvider` | Public `IWalStorageProvider` implementation that stores one `wal.log` per `(tree, shard)` stream under `FileWalStorageOptions.RootDirectory`. |
-| `FileWalStorageOptions` | Public options type for the root directory, flush policy, and compaction thresholds. |
+| `FileWalStorageProvider` | Public `IWalStorageProvider` implementation (also `IDisposable`) that stores one `wal.log` per `(tree, shard)` stream under `FileWalStorageOptions.RootDirectory`. Its public constructor, `FileWalStorageProvider(IOptions<FileWalStorageOptions>, Serializer<WalRecord>)`, builds a provider without the routing reader, so its filtered replay reads decode every record they examine; `AddFileWalStorage` is the registration that supplies one. |
+| `FileWalStorageOptions` | Public options type for the root directory, flush policy, compaction thresholds, and read-page byte ceiling, with public `Default*` constants for the compaction and read-page defaults. |
 | `LatticeFileServiceCollectionExtensions.AddFileWalStorage` | Registration extension that installs the file WAL provider and durable-WAL garbage-collection wiring on an `ISiloBuilder`. |
 
 ## Quick Start

@@ -60,7 +60,7 @@ The encoder consumes `IEnumerable<ILatticeCompressor>` and builds a `FrozenDicti
 
 `LatticeCompression.None` cannot be registered - it is the reserved verbatim-payload sentinel and the encoder rejects compressors that claim it.
 
-The core-reserved tag range `[0x00, 0x7F]` is enforced at registration time: only types declared in the core `Orleans.Lattice` assembly may claim a tag in that range. A compressor type from any other assembly whose `Algorithm` is in `[0x00, 0x7F]` is rejected with `ArgumentException` at silo startup. This closes two distinct hazards in one rule:
+The core-reserved tag range `[0x00, 0x7F]` is enforced when the encoder is built at silo startup: only types declared in the core `Orleans.Lattice` assembly may claim a tag in that range. A compressor type from any other assembly whose `Algorithm` is in `[0x00, 0x7F]` is rejected with `ArgumentException` at silo startup. This closes two distinct hazards in one rule:
 
 1. **Undefined core tags** (e.g. `0x42`) - a host claim would silently collide with whatever algorithm a future core release ships at that tag.
 2. **Defined core tags** (e.g. `Zstd`, `0x01`) - a host's own non-canonical implementation would silently squat on the wire identity of the canonical core algorithm, producing receiver-side decode failures or corrupted streams against any peer running the core implementation.
@@ -136,6 +136,8 @@ siloBuilder.AddLatticeReplication(o =>
 | `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the batch ships uncompressed. |
 | `FramingCompressionDictionaryId` | `uint` | `0` | Shared-dictionary id requested when the algorithm is `ZstdDictionary`. |
 | `MaxInboundDecompressedBytes` | `long` | `64 MiB` | Receiver ceiling on the decompressed size of an inbound framing batch. |
+| `DictionaryNegotiationEnabled` | `bool` | `false` | Per-peer negotiation of shared-dictionary support: a `ZstdDictionary` tree compresses with its dictionary only for a peer that advertised the id, and ships dictionary-less `Zstd` to any other (see [Scope](#scope)). |
+| `AutoSharedDictionaryEnabled` | `bool` | `false` | Ship-path switch for the self-distributing auto-dictionary; `AddLatticeAutoSharedDictionary` turns it on for every replicated tree (see [Self-distributing auto-dictionary](#self-distributing-auto-dictionary)). |
 
 These are `LatticeReplicationOptions` knobs; the per-option validation rules, the decompression-bomb bound on `MaxInboundDecompressedBytes`, and the pre-auth reachability note are the source-of-truth in [Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#efficiency-bundle-dedup-and-compression).
 
@@ -164,6 +166,8 @@ services.AddLatticeCompressionDictionaries(new Dictionary<uint, ReadOnlyMemory<b
 // 2. Register the dictionary-aware Zstandard compressor (wire tag 0x02).
 services.AddLatticeZstdDictionaryCompressor(compressionLevel: 3);
 ```
+
+`AddLatticeCompressionDictionaries` wraps the map in an `OperatorSuppliedCompressionDictionaryProvider`. A host that sources its dictionaries some other way registers its own `ILatticeCompressionDictionaryProvider` with `AddLatticeCompressionDictionaryProvider(provider)` instead. These provider registrations use `TryAddSingleton`, so the first provider registered wins: register a host provider before `AddLatticeReplication` for it to win over the default one that call registers. The one exception is the `AddLatticeAutoSharedDictionary` switch described below, which replaces whatever provider is registered.
 
 ```text
 siloBuilder.AddLatticeReplication(o =>
@@ -239,7 +243,7 @@ siloBuilder.AddLatticeAutoSharedDictionary(o =>
 });
 ```
 
-The helper registers the auto-training provider, the dictionary-aware Zstandard compressor, the sampling driver, and the training pump, and turns on `LatticeReplicationOptions.AutoSharedDictionaryEnabled`. Default build behaviour is unchanged - with the switch off there is no sampling, no training, no new RPC traffic, and the wire stays byte-identical. Four parts make the auto path work end to end:
+The helper registers the auto-training provider (as the active dictionary provider, replacing the default operator-supplied one), the dictionary-aware Zstandard compressor, and the training pump, and turns on `LatticeReplicationOptions.AutoSharedDictionaryEnabled` for every replicated tree; sampling needs no registration of its own, because the replication package's commit-time observer already samples through the provider. Default build behaviour is unchanged - with the switch off there is no sampling, no training, no new RPC traffic, and the wire stays byte-identical. Four parts make the auto path work end to end:
 
 - **Sampling.** `ReplicationMutationObserver` feeds outbound point-`Set` payloads into the provider's reservoir through the `ILatticeCompressionDictionarySampler` seam, so the reservoir fills from real ship traffic without host code. Deletes, range marks, and empty values are never sampled.
 - **Pumping.** The hosted `AutoSharedDictionaryTrainingService` calls `TryTrain()` on a turn-safe, rate-limited cadence (bounded by `MinTrainingInterval`), off the hot path.
@@ -278,7 +282,7 @@ The Zstd **compression level** (set on the registered `ZstdLatticeCompressor` - 
 
 When a row is compressed, its `Payload` column holds `[4-byte little-endian uncompressed length][compressed bytes]` and the row's `Compression` column carries the algorithm tag (stored as an `int` because Azure Table Storage has no single-byte EDM property type). On read the provider keys on the row's stored tag - **not** the reader's `Compression` option or level - so a reader configured with `Compression = None` still inflates compressed rows as long as the matching `ILatticeCompressor` is registered. Rows written before this column existed decode the absent property to `0` (`None`) and read back verbatim, so the change is backwards-compatible with no migration.
 
-Both encode paths compress (`AppendBatchAsync` and the shipper's pre-encoded `AppendEncodedBatchAsync` fast path) and both read paths inflate (`ReadAsync` and `ReadEncodedAsync`), so the shipper still observes verbatim encoded `WalRecord` bytes regardless of the on-disk tag.
+Both encode paths compress (`AppendBatchAsync` and the WAL's pre-encoded `AppendEncodedBatchAsync` fast path) and every read path inflates (`ReadAsync`, `ReadEncodedAsync`, and the filtered leaf-replay read `ReadFilteredAsync`, which inflates each row into a pooled buffer before classifying it), so a consumer of encoded pages - the replication shipper among them - still observes verbatim encoded `WalRecord` bytes regardless of the on-disk tag.
 
 **Inflation guard.** If compressing a payload does not actually shrink it - i.e. the compressed bytes plus the 4-byte length prefix are not smaller than the input, as happens for incompressible data such as already-compressed blobs or random bytes - the provider stores that row verbatim with tag `None` instead. Enabling compression therefore never grows a row beyond its uncompressed size, even for binary values; the only cost in that case is the compression attempt's CPU, which the `CompressionMinPayloadBytes` threshold already keeps off the smallest rows.
 
@@ -367,8 +371,10 @@ The public registration surface is pinned by:
 - `PublicApiContractTests.Compression` partial (core integration suite) - the supported public DI shape hosts depend on.
 - `CompressedFramingRoundtripTests` (replication tests) - byte-keyed dispatch round-trip including a host-reserved tag in the `[0x80, 0xFF]` range.
 - `LatticeReplicationOptionsValidatorTests` (replication tests) - host-reserved tags pass validation; core-range typos still fail.
-- `AzureTableWalStorageProviderTests.Compression` and `AzureTableWalStorageOptionsTests` (Azure Table tests) - white-box encode tagging, threshold behaviour, constructor guards, and option defaults/validation.
-- `CompressedAzureTableWalIntegrationTests` (Azure Table tests, emulator-gated) - end-to-end compress/decompress round-trip against Azurite, including raw-row tag verification and backwards-compatible reads of uncompressed rows.
+- `AzureTableWalStorageProviderTests.Compression` and `AzureTableWalStorageOptionsTests` (Azure Table tests) - white-box encode tagging, threshold behaviour, constructor guards, and option defaults/validation; the `AzureTableWalStorageProviderTests.CompressionMetrics` partial pins the compression-savings accounting.
+- `CompressedAzureTableWalIntegrationTests` (Azure Table tests, emulator-gated) - end-to-end compress/decompress round-trip against Azurite, including raw-row tag verification, backwards-compatible reads of uncompressed rows, and (in its `FilteredRead` partial) the filtered replay read over compressed rows.
+- `AutoTrainingCompressionDictionaryProviderTests`, `AutoTrainingCompressionDictionarySharedTests`, `CompressionDictionaryTrainingOptionsTests`, and `CompressionDictionaryTrainingReservoirTests` (core unit tests) - auto-training cadence and roll-over, the active-id and sampler seams, option defaults and validation, and the bounded reservoir.
+- `CompressionDictionaryConvergenceTests` and `CompressionDictionaryPullMessageTests` (replication tests) - the fingerprint-verified dictionary pull and its message pair.
 
 Run the relevant suites with:
 

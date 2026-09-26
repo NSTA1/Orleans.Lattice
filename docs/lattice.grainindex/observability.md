@@ -7,7 +7,9 @@ exposes an administrative surface, `IGrainIndexAdmin`, for status and control.
 
 The package adds no meter of its own: its instruments sit on `orleans.lattice`
 alongside the core's, so a host that already collects Lattice metrics picks these
-up with no configuration change.
+up with no configuration change. `GrainIndexMetrics.Meter` is that same core meter
+instance (`LatticeMetrics.Meter`), exposed so a listener or custom exporter can
+subscribe by reference.
 
 ### Tags
 
@@ -23,10 +25,12 @@ background crawl, and `outbox` is a deferred or retried index write.
 
 The two `grains_enrolled` series are not additive. Every enrolment is performed -
 and counted - by the grain's own activation path, the first time the grain
-crosses into the index; the `backfill` series additionally counts the
-enrolments the crawl caused. A crawl-driven grain therefore appears on both, so
-chart the series side by side rather than summing them. The outbox drain records
-no enrolments, only its `write_failures`.
+crosses into the index. The `backfill` series instead counts every grain whose
+activation the crawl drove to completion, so a crawl-driven grain normally
+appears on both - except a key whose grain has no persisted state, which projects
+nothing, is never enrolled, and so appears on `backfill` only. Chart the series
+side by side rather than summing them. The outbox drain records no enrolments,
+only its `write_failures`.
 
 Every series also carries the repository-wide derived `tenant` dimension, which
 is emitted on tenancy-on and tenancy-off clusters alike so an index telemetry
@@ -106,9 +110,18 @@ A Grafana dashboard covering these instruments ships in
 instrument's panel is listed in the
 [metrics-to-panel map](../lattice.dashboards/metrics-to-panel-map.md).
 
-Prometheus mangles the OTel names: dots become underscores and counters gain a
-`_total` suffix, so `orleans.lattice.grainindex.grains_enrolled` is scraped as
-`orleans_lattice_grainindex_grains_enrolled_total`.
+Prometheus mangles the OTel names. Under `.AddPrometheusExporter()`
+(`OpenTelemetry.Exporter.Prometheus.AspNetCore`) dots become underscores, a unit
+other than a `{...}` annotation is appended as a word unless the name already
+ends with it, and counters gain a `_total` suffix: so
+`orleans.lattice.grainindex.grains_enrolled` is scraped as
+`orleans_lattice_grainindex_grains_enrolled_total`, `projection.duration` (unit
+`ms`) as `orleans_lattice_grainindex_projection_duration_milliseconds_bucket`,
+`_sum` and `_count`, and `backfill.percent_complete` (unit `%`) as
+`orleans_lattice_grainindex_backfill_percent_complete_percent`. An exposition that
+appends no unit word, such as the repository-context container's, drops those
+unit segments; see
+[How an instrument name becomes a PromQL series name](../lattice.dashboards/metrics-to-panel-map.md#how-an-instrument-name-becomes-a-promql-series-name).
 
 ## `IGrainIndexAdmin`
 

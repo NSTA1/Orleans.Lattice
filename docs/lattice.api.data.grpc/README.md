@@ -57,7 +57,7 @@ builder.Services.AddLatticeDataApiGrpc(o =>
 });
 ```
 
-The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules. A call that cannot be attributed to a valid active tenant is refused by that fail-closed resolution and surfaces as a `PermissionDenied` `RpcException`. A call that resolves cleanly but *breaches the tenant's quota* is a different failure - a capacity outcome, not an authorization one - and surfaces as a `ResourceExhausted` `RpcException` carrying the breached dimension as a trailer (see [Quota refusals](#quota-refusals) below). Set the option to an empty string to disable header-based tenant selection entirely.
+The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, so the call resolves the default tenant and its tree names are used unchanged. An asserted tenant the caller may not act as (any assertion by an anonymous caller included) - or, under an asserted tenant, a `sys-` tree or a malformed `t/` id that belongs to no tenant - is refused by that fail-closed resolution and surfaces as a `PermissionDenied` `RpcException`. A call that resolves cleanly but *breaches the tenant's quota* is a different failure - a capacity outcome, not an authorization one - and surfaces as a `ResourceExhausted` `RpcException` carrying the breached dimension as a trailer (see [Quota refusals](#quota-refusals) below). Set the option to an empty string to disable header-based tenant selection entirely.
 
 See the [`Orleans.Lattice.Api.Data` overview](../lattice.api.data/README.md) for the full facade, its surfaces, and the shared authorization model.
 
@@ -91,7 +91,7 @@ The dimension is what decides the client's next move: `ops-per-second` is **tran
 | `LatticeDataApiOperation` | The operation behind each RPC: `SetPoint`, `DeletePoint`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `GetPoint`, `ReadRange`, `DeleteRange`, `SetMany`, `CrdtWrite`, `CrdtRead`, and `Unknown` for an unmapped method. |
 | `ILatticeDataApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context; the default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix. |
 | `ILatticeDataApiActiveTenantBridge` | Active-tenant seam (`TenantId? Resolve(ServerCallContext context)`) that lifts the caller's asserted tenant onto the ambient scope; the default reads `ActiveTenantHeaderName`. |
-| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the ten RPCs, with their stable aliases in `GrpcDataTypeAliases`. |
+| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the ten RPCs - including the `CrdtWriteOp` selector (the twenty typed-CRDT mutations) a `CrdtWriteRequest` carries, the `CrdtKind` selector (the thirteen CRDT types) a `CrdtReadRequest` carries, and the nested `CrdtMapField` / `CrdtVectorEntry` rows - with their stable aliases in `GrpcDataTypeAliases`. |
 | `AddLatticeDataApiGrpc` / `MapLatticeDataApiGrpc` | Registration and endpoint-routing extensions. |
 
 ## Reference

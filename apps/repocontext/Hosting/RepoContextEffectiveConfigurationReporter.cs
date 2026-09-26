@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <remarks>
 /// <para>
 /// <b>Why this exists (issue #2294).</b> The container's real settings arrive from an
-/// untracked compose override, so reading the repository does not tell you what the
+/// per-host .env and any machine-local compose override, so reading the repository does not tell you what the
 /// process runs. The one place that divergence was ever detectable was
 /// <c>RepoContextIndexingCadenceReporter</c>, which states its own subsystem's resolved
 /// cadence at startup and is the sole reason anybody noticed that a tracked five second

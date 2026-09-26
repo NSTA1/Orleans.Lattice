@@ -7,10 +7,9 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// and resolvable via <c>IOptions&lt;LatticeApiTreeAdminOptions&gt;</c>.
 /// </summary>
 /// <remarks>
-/// The facade currently has no tunable knobs; the type is reserved so later
-/// releases (which add the whole-tree lifecycle operations) can add bounding or
-/// audit-tuning options without changing the registration front door, mirroring the
-/// sibling control-API facades.
+/// The facade currently has no tunable knobs; the type is reserved so future
+/// bounding or audit-tuning options can be added without changing the registration
+/// front door, mirroring the sibling control-API facades.
 /// </remarks>
 public sealed class LatticeApiTreeAdminOptions
 {

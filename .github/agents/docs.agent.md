@@ -115,6 +115,8 @@ The two test gates are invoked through `tools/Invoke-RepositoryWideGates.ps1`, n
    pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture DocsSnippetCompilationTests -Project test/lattice
    ```
 
+   That `test/lattice` fixture compiles `docs/lattice/`, the repo-root `README.md`, and every `docs/<package>/` subtree no package fixture claims; each claiming package's own test project compiles its own `docs/<package>/` subtree, so a fence edited there is verified only by running the same command with `-Project test/<package>`.
+
 2. **Em-dash hygiene** - no `U+2014` in any tracked file:
 
    ```powershell

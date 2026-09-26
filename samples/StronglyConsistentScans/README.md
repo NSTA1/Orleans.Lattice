@@ -3,13 +3,15 @@
 ## What it shows
 
 Lattice's scan primitives - `CountAsync`, `ScanKeysAsync`, and
-`ScanEntriesAsync` - return the **exact live key set**, never a torn, partial,
-or double-counted view, even while foreground writes are landing concurrently.
-Every reading corresponds to a real committed state of the tree, so a stream of
-readings taken during concurrent writes is monotonic and every value is a count
-the tree genuinely held at some instant. This sample seeds a baseline, hammers
-the tree with concurrent writes while repeatedly counting, and confirms the
-settled state is exact and duplicate-free.
+`ScanEntriesAsync` - are **strongly consistent**: no key is missed or
+double-counted because a shard split or rebalanced underneath the call, and a
+concurrent `SetManyAtomicAsync` is observed all-or-nothing. Each shard is read at
+its own moment, so a reading taken while ordinary writes land is exact shard by
+shard rather than one instant's image of the whole tree. For an add-only stream of
+writes like this sample's, that still makes every reading a count the tree
+genuinely held at some instant, and successive readings never go backwards. This
+sample seeds a baseline, hammers the tree with concurrent writes while repeatedly
+counting, and confirms the settled state is exact and duplicate-free.
 
 ## Run it
 
@@ -45,16 +47,17 @@ Done: scans returned the exact live key set throughout concurrent writes.
   eventually consistent or best-effort.
 - Reconciliation and audit passes that must observe a consistent live key set
   while the tree keeps taking writes.
-- Any read path where a torn count (some shards seen before a write, others
-  after) would be a correctness bug.
+- Any read path where a key missed or double-counted because a shard split
+  mid-read, or an atomic batch seen half-applied, would be a correctness bug.
 
 ## When not to use
 
 - If you need a **stable, unchanging** view across a long multi-page scan while
   writes continue, use a snapshot cursor instead (see
-  [SnapshotCursors](../SnapshotCursors)). Strong consistency guarantees each
-  reading is exact at its own instant, not that two readings taken at different
-  times return the same set.
+  [SnapshotCursors](../SnapshotCursors)). Strong consistency guarantees that a
+  reading counts each key once, not that it is one instant's image of the whole
+  tree while ordinary writes land, nor that two readings taken at different times
+  return the same set.
 
 ## Feature doc
 

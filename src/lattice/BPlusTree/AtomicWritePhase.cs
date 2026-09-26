@@ -12,13 +12,13 @@ internal enum AtomicWritePhase
     /// <summary>Initial state - the saga has not yet started.</summary>
     NotStarted = 0,
 
-    /// <summary>Reading pre-saga values for each key so compensation can roll back.</summary>
+    /// <summary>Reading pre-saga values and staging prepare metadata for each key.</summary>
     Prepare = 1,
 
     /// <summary>Applying writes sequentially. <c>NextIndex</c> advances after each commit.</summary>
     Execute = 2,
 
-    /// <summary>A write failed; rolling back previously-committed keys with fresh HLC ticks.</summary>
+    /// <summary>The saga is aborting; it records the abort and broadcasts terminal cleanup.</summary>
     Compensate = 3,
 
     /// <summary>Saga finished - either all writes committed or compensation completed.</summary>

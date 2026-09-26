@@ -4,7 +4,7 @@ Lattice maintains an internal **tree registry** - a Lattice tree (`_lattice_tree
 
 ## How It Works
 
-The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, and optional per-tree runtime overrides of `LatticeOptions` settings.
+The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, and bookkeeping - the pinned WAL partition count and WAL placement, the next physical shard index adaptive splits allocate, the projection-digest permanent-disable latch, and, on a restore's shadow tree, the tree it was restored for.
 
 ### Automatic registration
 
@@ -27,6 +27,8 @@ Three tree-ID prefixes, and one literal tree ID, are reserved and cannot be crea
 | `sys-` | Dogfooded **system-data** trees owned by first-party add-ons: authorization (`sys-auth-*`), backup (`sys-backup-*`), membership (`sys-membership-*`), schema (`sys-schema-*`), tenancy (`sys-tenant-*`), and replication configuration (`sys-replication-config`). These are real, individually inspectable trees. | A user-origin **write** (create/mutate) to a `sys-`-prefixed tree throws. Reads are allowed, and first-party add-ons create and mutate their own `sys-` trees under an internal system-origin scope. |
 | `t/` | The structural tenant namespace: a tenant's trees are named `t/{tenantId}/{name}` and composed by the [tenancy](../lattice.tenancy/README.md) layer, never named by a user directly. | A user-origin **write** to a `t/`-prefixed tree throws unless it names a tree of the caller's active tenant (the id the tenancy layer composes); with no tenancy layer registered the namespace is wholly uncreatable. |
 | `*` (literal ID) | The all-trees authorization sentinel, which the authorization layer promotes to a cluster-wide grant tier. | A user-origin **write** to a tree named exactly `*` throws. |
+
+Materialised-view trees (`view-{name}`) are guarded separately and more tightly: a direct public write to a `view-` tree that does not come from the view maintainer, and a direct content read that does not come through an `ILatticeView` handle, both throw `InvalidOperationException`, because a view is derived state whose active generation a rebuild can swap underneath a raw bind. See [Materialised Views](materialised-views.md).
 
 The `sys-`, `t/`, and `*` guards are enforced only on the data-mutation surface (writes, deletes, CRDT apply, bulk load) and only outside a system-origin scope, so a user cannot accidentally seed a tree that collides with a first-party add-on's namespace, while operators can still read those trees (for example through the State API, which hides `sys-` trees from the default catalog listing but exposes them when `IncludeSystemTrees` is set).
 
@@ -72,9 +74,10 @@ bool exists = await tree.TreeExistsAsync();
 | `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`) |
 | `ResizeAsync` swap phase | Registry entry updated with new sizing + `PhysicalTreeId` alias set |
 | `ResizeAsync` cleanup phase | Old physical tree soft-deleted; removed from registry on purge |
-| `UndoResizeAsync` | Alias removed, old tree recovered, new tree deleted (removed from registry on purge) |
+| `UndoResizeAsync` | After the swap: alias removed, original entry restored, and the old tree recovered if the resize had already soft-deleted it. Either side of the swap, the new tree is deleted (removed from registry on purge) |
 | `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides) |
 | Adaptive shard split | Shard map rewritten under a fresh `Version`; the next physical shard index to allocate advanced |
+| Shard consolidation (automatic over-split healing) | Shard map rewritten under a fresh `Version`, reassigning the donor's slots to the survivor |
 | `ReshardAsync` | Shard map grown by the splits it drives; `ShardCount` pin updated when it completes (or at once on an empty tree) |
 | [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) | Tree registered with the supplied sizing pins (honoured only on first creation) |
 | Shadow-cutover restore (`ILatticeTreeAdmin.RestoreTreeAsync`) | Alias pointed at the restored shadow tree; a revert points it back |
@@ -109,7 +112,7 @@ Resize (and its undo), restore, and schema remediation drive the alias from insi
 
 A `TreeRegistryEntry` can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a large fixed virtual space (`LatticeConstants.DefaultVirtualShardCount`, fixed at 4096), and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards.
 
-When no shard map is persisted (the default state for newly created trees), the router materialises an identity map (`slot[i] = i % shardCount`) which preserves the legacy `XxHash32(key) % shardCount` routing bit-for-bit. Custom shard maps are written by topology-changing operations - adaptive shard splits (including those an online reshard drives), shard consolidation, and an empty-tree reshard's re-pin - and are cached by the router for the activation's lifetime, invalidated together with the physical-tree-ID cache when a shard signals a stale alias.
+When no shard map is persisted (the default state for newly created trees), the router materialises an identity map (`slot[i] = i % shardCount`) which preserves the legacy `XxHash32(key) % shardCount` routing bit-for-bit. Custom shard maps are written by topology-changing operations - adaptive shard splits (including those an online reshard drives), shard consolidation, and an empty-tree reshard's re-pin - and are cached by the router, which drops its copy when a shard reports stale shard routing (a split or consolidation has moved slots) and, together with the physical-tree-ID cache, when a shard signals a stale alias.
 
 ### API
 

@@ -6,7 +6,8 @@ Orleans sites against Azurite and uses the production Lattice registration,
 replication driver, shipper, WAL encoder, replication applier, cursor, and
 high-water-mark paths.
 
-The suite is categorized as `Integration` and `AzureStorageEmulator`. A single
+The suite, `DurableActiveActiveTests`, is categorized as `Integration` and
+`AzureStorageEmulator`. A single
 `DurableActiveActiveClusterFixture` is shared by all eight scenarios. Each
 scenario uses its own pre-minted LWW-register tree, so durable state can remain
 in place for the whole fixture without tests depending on execution order.
@@ -16,6 +17,11 @@ The project also holds two materialised-view topology fixtures, described under
 `MaterialisedViewTopologyTests`, which stands up its own instance of the same
 two-site fixture, and `MaterialisedViewTopologyStartupIntegrationTests`, which
 needs no Azurite.
+
+It also carries four per-project hygiene fixtures - `DeletionMandateHygieneTests`,
+`EmDashHygieneTests`, `IntegrationCategoryHygieneTests` and
+`MojibakeHygieneTests` - which are uncategorized, need no Azurite, and are not
+selected by the emulator filter under [Running locally](#running-locally).
 
 ## Topology
 
@@ -155,7 +161,10 @@ names a producer. It needs no Azurite, so the filter below does not select it.
 
 ## Running locally
 
-Start Azurite with its default development-storage endpoints, then run:
+Start Azurite with its default development-storage endpoints (ports
+10000-10002; the container command under
+[Starting Azurite](../../.github/instructions/testing.instructions.md#starting-azurite---and-why-a-green-run-without-it-is-a-false-green)
+in the testing instructions does this), then run:
 
 ```powershell
 dotnet test test\lattice.integration\Orleans.Lattice.Integration.Tests.csproj `
@@ -164,7 +173,9 @@ dotnet test test\lattice.integration\Orleans.Lattice.Integration.Tests.csproj `
 ```
 
 If Azurite is unreachable, the fixture reports the suite as inconclusive rather
-than substituting in-memory storage. Pull-request CI selects this project like
+than substituting in-memory storage. NUnit counts an inconclusive test as neither
+passed, failed nor skipped, so read the `Total` count rather than the banner.
+Pull-request CI selects this project like
 any other package, through the test-only package allow-list in
 `.github/workflows/select-test-packages.sh`, so a change to the suite or to a
 project it references plans it onto a test leg that runs an Azurite service. The

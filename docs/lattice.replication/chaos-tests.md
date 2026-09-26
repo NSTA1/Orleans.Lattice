@@ -15,10 +15,11 @@ gates but is excluded from the fast iterative loop:
 dotnet test --filter "TestCategory!=Chaos"
 ```
 
-These suites exercise the real `AddLatticeReplication` capture, ship, and apply
-code paths rather than test doubles of that logic, but they run in-process:
-in-process test clusters wired with a simulated, fault-injectable inter-site
-delivery layer stand in for networked silos.
+These suites exercise the real `AddLatticeReplication` capture and apply code
+paths - and, in the suites built on the production-shipper fixture, the real
+per-peer shipper - rather than test doubles of that logic, but they run
+in-process: in-process test clusters wired with a simulated, fault-injectable
+inter-site delivery layer stand in for networked silos.
 
 For durable restart and recovery coverage, see the
 [durable active-active integration suite](../../test/lattice.integration/README.md).
@@ -27,15 +28,23 @@ and shares one fixture across crash, partition, replay, and recovery scenarios.
 
 ## Cross-cluster suite (`test/lattice.replication/Chaos/`)
 
-A multi-site cluster fixture stands up three (or, for the smoke fixture, two)
-independent clusters and an inter-site delivery layer whose pumps can be paused
-to simulate a partition and resumed to heal it. Each suite drives a workload
-during the partition window, heals, drains to idle, and then asserts that every
-site has converged.
+Most suites stand up two or three independent single-silo clusters, each wired
+with `AddLattice` + `AddLatticeReplication`, over a fault-injectable inter-site
+delivery layer: either a delivery pump that ships each site's change feed to its
+peers and can be paused to simulate a partition and resumed to heal it, or - for
+the suites that need real shipper and WAL-cursor behaviour - the production
+per-peer shipper routed through an in-process loopback transport whose per-site
+edges can be isolated and healed. Each of these suites drives a workload during
+the partition window, heals, drains to idle, and then asserts that every site
+has converged. The coordinated-restore suites instead drive the real saga
+coordinator and participants through an in-process saga harness or a single-silo
+fixture, the derived-state suite runs on a single cluster, and the
+remediation-guard suite drives the production anti-entropy engines
+deterministically - see each suite's row.
 
 | Suite | What it proves |
 |---|---|
-| Cross-cluster saga atomic visibility | A multi-key atomic write authored on one site and shipped to two peers lands all-or-nothing on every receiver, even when the inter-site topology is partitioned and healed mid-workload. A continuous receiver-side reader only ever observes the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial batch. |
+| Cross-cluster saga atomic visibility | All three sites concurrently author multi-key atomic writes (six four-key sagas per site) while the inter-site topology is partitioned and healed mid-workload. After heal and drain, every saga is all-or-nothing on every site - never a partial key set - and, because no saga aborts, every saga's keys are present on every site. |
 | Last-writer-wins convergence | Three sites issue concurrent point writes against a single key under a mid-workload partition; after heal and drain, every site converges to the lexicographic `(HLC, originClusterId)` winner. |
 | OR-Set convergence | Three sites issue concurrent adds (and observed-removes) against one set-valued key under partition; after drain, every site observes exactly the union of authored adds minus the union of authored removes. |
 | PN-Counter convergence | Three sites issue concurrent increments and decrements against one counter under partition; after drain, every site reads the same algebraic sum. |
@@ -52,26 +61,27 @@ site has converged.
 | Cross-cluster cross-tree atomic visibility | A cross-tree atomic batch spanning two replicated trees ships to a remote cluster on independent per-tree feeds; the receiver routinely applies one tree's terminal before the other's, yet a reader must never observe one tree committed while a sibling is still pre-saga. The receiver holds every participating tree invisible until all of the batch's replicated terminals arrive, then flips them together. |
 | Cross-cluster CRDT-coupled atomic convergence | Two sites concurrently couple a same-key typed CRDT mutation (a PN-counter increment or an OR-Set add) into a cross-tree atomic write alongside a sibling last-writer-wins entry, under independent per-tree partition / heal cycles. The prepared / terminal path carries each staged typed delta to the receiver, which folds it on the saga's terminal commit, so the CRDT key converges by the per-replica delta union (PN-counter to the increment total, OR-Set to the membership union) on every site, while the coupled LWW sibling tree retains its cross-tree all-or-nothing visibility. The convergent-union counterpart to the cross-tree atomic visibility suite above. |
 | Cross-cluster cross-tree atomic visibility over coalesced batch delivery | The batch-path counterpart to the cross-tree atomic visibility suite above. Every other suite delivers replicated entries to the receiver one at a time through `ApplyAsync`, but the production shipper coalesces a saga's contiguous prepared writes and its `TxCommit` / `TxAbort` terminal into a single inbound batch applied through `ApplyBatchAsync`. This suite collects an authoring site's per-tree WAL backlog and hands each tree's whole run to the receiver as one multi-entry `ApplyBatchAsync` call, so every saga's terminal is coalesced behind its prepared writes. It proves the cross-tree all-or-nothing barrier still holds over that path (a saga's two trees share identical presence, both fully visible or both absent, and every saga ultimately converges on both trees) and pins the [#1525](https://github.com/NSTA1/Orleans.Lattice/issues/1525) regression: a terminal coalesced behind its prepared entries must route through the terminal seam rather than faulting the batch at point-apply, which pre-fix left the saga invisible on the peer forever. |
-| WAL trim under shipping | Producer-side WAL trim cannot prune entries the per-peer shipper has not yet acknowledged. Sustained writes run against an artificially low retention bound; every authored entry the shipper has not yet acked stays readable from the WAL after trim. |
+| WAL trim under shipping | Producer-side WAL trim cannot prune entries the per-peer shipper has not yet acknowledged. One site writes continuously while its WAL maintenance GC runs every second and its edge to the peer is partitioned and healed three times; the partitioned peer's stationary ship cursor holds the trim frontier, so after each heal the production shipper resumes from that cursor and the peer converges on every authored key through ordinary incremental shipping. |
 | Liveness probe and inbound error under partition | Two tests over the production shipper and receiver. The first isolates one site's outbound edge for several `LivenessProbeInterval` periods: the outbound `peer.last_contact_seconds` gauge climbs while the edge is isolated and resets within one probe interval of the heal, proving the empty-tick liveness probe fires as soon as acks resume. The second arms a deterministic receiver-side fault budget in two bursts; the receiver still converges (which entails every injected fault fired), the budget drains in full, and the receiver's inbound peer-stats row carries a populated last-contact reading with zero backlog and in-flight counts, which are outbound-only by design. |
 | Compaction and shipping | Sustained write+delete churn with explicit compaction passes between phases. Maintenance-tagged tombstone-reap records stay off the wire - per-cluster compaction is local structural cleanup with no defined cross-cluster semantics - so the observed wire stream carries zero tombstone entries while the workload still ships non-trivial traffic and the receiver converges on the live key set. |
 | Multi-site fixture smoke | Diagnostic smoke tests that pin the simpler invariants the convergence suites rely on (per-site WAL capture, per-site change-feed yield, end-to-end inter-site delivery). Not chaos tests themselves, but tagged alongside the suite they diagnose. |
 | Coordinated-restore convergence | A coordinated multi-cluster restore of a replicated tree converges all-or-nothing under fault. Randomized per-participant vote outcomes always resolve to either a full commit on every cluster or a full rollback on every cluster; a coordinator lost mid-saga auto-compensates every prepared cluster through the bounded fence timer; and a peer dropping between prepare and commit still converges to a full commit. |
 | Coordinated-restore no-torn-read | The core [#1169](https://github.com/NSTA1/Orleans.Lattice/issues/1169) guarantee: a continuous reader on a participating cluster never observes a torn or re-advanced tree at any point during a coordinated restore, including with a slow / laggard participant. The globally-gated shipping-resume holds per-saga cross-cluster atomic visibility across the cutover. |
 | Coordinated-restore reliability soak | A large-tree-onto-small-cluster restore under duress. A participant restarted mid-build resumes its shadow rather than restarting from zero; an unrecoverable participant ends in a clean all-or-nothing abort with no orphan-shadow leak; an infeasible target is refused at admission before any build starts; and the write fence engages only at the cutover, not during the prepare build. |
-| Cross-cluster shipping recovery across an identity swap | A logical source tree is repointed to a freshly minted physical tree (a restore-style cutover, possibly repeated) under its registry alias mid-workload while the inter-site edge is cycled through partition and heal. Each shipper pump tick re-resolves the logical source to its current physical id, and on a change clears its per-partition cursors and re-ships from the new physical WAL log start (idempotent by HLC). After drain every peer converges on the post-swap source key set: no peer is left tailing the orphaned pre-swap physical WAL, and keys authored only into the abandoned identity while the edge was partitioned never reach a receiver. The multi-peer case swaps while one peer is partitioned and another stays live; both converge. Complements the deterministic single-swap regression that landed with the shipper heal. |
+| Cross-cluster shipping recovery across an identity swap | A logical source tree is repointed to a freshly minted physical tree (a restore-style cutover, possibly repeated) under its registry alias mid-workload while the inter-site edge is cycled through partition and heal. The registry's alias-change notification rebinds each affected shipper, which clears its per-partition cursors and re-ships from the new physical WAL log start (idempotent by HLC); the suite sets the periodic re-resolve backstop far beyond the test window, so the notification is the only path that can heal it. After drain every peer converges on the post-swap source key set: no peer is left tailing the orphaned pre-swap physical WAL, and keys authored only into the abandoned identity while the edge was partitioned never reach a receiver. The multi-peer case swaps while one peer is partitioned and another stays live; both converge. Complements the deterministic single-swap regression that landed with the shipper heal. |
 | Derived-state recovery across an identity swap | A folded materialised view's source tree has its physical identity repointed under its logical registry alias (a restore-style cutover) repeatedly, under a sustained mutation workload with backlog accumulating between drains. On each drain the view maintainer re-resolves the logical source to its current physical id and, on a change, rebuilds against the new source and rebinds its tail. Proves the view converges to exactly the final identity's contents after a burst of swaps - dropped keys are retracted, changed values win, and post-swap mutations fold in - rather than silently tailing an orphaned old log. |
 | Anti-entropy multi-site drift | A real three-site cluster injects one controlled drift fault against one site while the other two stay healthy, asserts the drift is observable as real divergence in replicated key state, and - for the recoverable modes - that the production shipper closes the gap so the diverged site converges back. The three fault modes are skipped writes (the outbound edge is dropped), corrupted apply (the receiver throws on every inbound batch), and partition-then-heal (both edge directions cut, divergent writes on each side, then heal and last-writer-wins reconcile). |
-| Anti-entropy remediation guard | Deterministic coverage of the anti-entropy chain's behavioural guarantees, driven against the production localisation and repair engines and the real digest-probe grain. Pins the metric-level invariants: detection fires inside one probe cadence, the Merkle walk localises within the fan-out depth bound, the repair engines close the localised gap bounded by the configured entry budget, and both the opt-out master gate and the projection-digest-disabled latch short-circuit with zero remediation traffic while detection is still permitted to fire. |
+| Anti-entropy remediation guard | Deterministic coverage of the anti-entropy chain's behavioural guarantees, driven against the production localisation and repair engines and the real digest-probe grain. Pins the metric-level invariants: detection fires inside one probe cadence, the Merkle walk localises within the fan-out depth bound, the repair engines close the localised gap bounded by the configured entry budget, the opt-out master gate still detects and localises drift but emits zero remediation traffic (recording an `opt_out` skip), and the projection-digest-disabled latch skips the pass entirely - no digest read, no peer probe, no repair. |
 
 ### Runtime characteristics
 
-Every suite here shares the same shape: two or three in-process clusters over a
-fault-injectable inter-site delivery layer, a single-key or single-tree universe
-(the atomic-visibility suite uses ~72 keys across three sites), a chaos window of
-a few seconds with a site or edge partitioned mid-workload, and a bounded drain -
-up to ~30 s, or up to ~60 s for the saga-atomicity and coordinated-restore
-suites - before the convergence assertion. Per-suite cost scales with the
+The partition-and-heal suites share one shape: two or three in-process clusters
+over the fault-injectable inter-site delivery layer, a single-key or single-tree
+universe (the atomic-visibility suite uses ~72 keys across three sites), a chaos
+window of a few seconds with a site or edge partitioned mid-workload, and a
+bounded convergence wait of 30 to 60 seconds before the convergence assertion.
+The harness-driven suites (coordinated restore, derived state, and remediation
+guard) run without the delivery layer. Per-suite cost scales with the
 workload in each suite's row above rather than being fixed, so the catalog stays
 accurate as suites are added without a per-suite runtime table to maintain.
 
@@ -86,10 +96,11 @@ in-process:
   asserts that no shipped key is lost, with the receiver hosted on an in-memory
   ASP.NET Core test server. See
   [Orleans.Lattice.Replication.Grpc chaos tests](../lattice.replication.grpc/chaos-tests.md).
-- The Azure Table WAL chaos suite drives the durable provider under concurrent
-  append and read load against the local Azurite emulator, asserting append-batch
-  atomicity, monotone offset assignment, and trim correctness, and is skipped when
-  the emulator is unreachable. See
+- The Azure Table WAL chaos suite drives the durable provider with sustained
+  concurrent appends across many shards (one writer per shard) against the local
+  Azurite emulator, then asserts every shard's dense offset namespace - no gaps,
+  no duplicates, monotone offsets - and that the highest reported offset
+  converges; it reports inconclusive when the emulator is unreachable. See
   [Orleans.Lattice.Storage.AzureTable chaos tests](../lattice.storage.azuretable/chaos-tests.md).
 
 ## See also

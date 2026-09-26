@@ -24,13 +24,17 @@ spec:
   minReplicaCount: 2
   maxReplicaCount: 20
   pollingInterval: 15             # seconds; keep above SampleInterval
-  cooldownPeriod: 120             # seconds; scale-in cooldown on top of the gate
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 120   # scale-in pacing on top of the gate
   triggers:
     - type: metrics-api
       metadata:
         url: "http://lattice-silo.default.svc.cluster.local/lattice/scale"
         valueLocation: "scaleValue"
-        targetValue: "1"
+        targetValue: "0.5"
 ```
 
 - `url` targets the headless or ClusterIP service in front of the silo pods; KEDA
@@ -38,12 +42,18 @@ spec:
   are cluster aggregates (the WAL-dispatch dimension and the smoothing state are
   that pod's own - see
   [cluster-aggregate answering](architecture.md#cluster-aggregate-answering)).
-- `valueLocation: "scaleValue"` and `targetValue: "1"` behave exactly as in the
-  [ACA rule](keda-aca.md#the-custom-scale-rule): demand is in replica-units, so a
-  target of `1` means one pod per replica-unit.
+- `valueLocation: "scaleValue"` and `targetValue: "0.5"` behave exactly as in the
+  [ACA rule](keda-aca.md#the-custom-scale-rule): with the trigger's default
+  `AverageValue` metric type KEDA asks for `ceil(scaleValue / targetValue)` pods,
+  and because `scaleValue` never exceeds the current pod count (apart from the
+  `MinReplicas` floor), a `targetValue` of `1` could never add a pod.
 - `pollingInterval` should stay above `LatticeScalingSignalOptions.SampleInterval`
-  so KEDA never reads a stale sample; `cooldownPeriod` stacks on the signal's own
-  `ScaleInGateWindow`.
+  so KEDA never reads a stale sample. Scale-in between `minReplicaCount` and
+  `maxReplicaCount` is paced by the managed HPA's scale-down stabilization window
+  (`advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.stabilizationWindowSeconds`,
+  300 seconds when unset), which stacks on the signal's own `ScaleInGateWindow`.
+  KEDA's `cooldownPeriod` applies only to scaling to zero, so it has no effect
+  with a `minReplicaCount` of 2.
 
 KEDA creates and manages the underlying HPA for you.
 
@@ -73,7 +83,7 @@ spec:
           name: orleans_lattice_scaling_scale_value
         target:
           type: AverageValue
-          averageValue: "1"
+          averageValue: "0.5"
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 120
@@ -81,8 +91,9 @@ spec:
 
 Use an `External` metric, not a `Pods` one. The value is a cluster-wide demand
 in replica-units that every silo exports, so an `External` metric with an
-`AverageValue` target of `1` makes the HPA divide it by the current pod count
-and settle on `ceil(scaleValue)` replicas - the same arithmetic as the KEDA rule.
+`AverageValue` target of `0.5` makes the HPA divide it by the current pod count
+and settle on `ceil(scaleValue / 0.5)` replicas - the same arithmetic as the KEDA
+rule, including its inability to add a pod at a target of `1`.
 A `Pods` metric would instead average the near-identical per-pod values and
 multiply by the current pod count, overshooting by roughly that factor. For the
 same reason, have the adapter's external-metric query aggregate the per-pod

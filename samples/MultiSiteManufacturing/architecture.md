@@ -91,7 +91,7 @@ Three host ports are published:
 |---|---|---|
 | 5001 | `traefik-us:80` | US UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5001>. |
 | 5002 | `traefik-eu:80` | EU UI (sticky) + replication gRPC inbound (round-robin). Open <http://localhost:5002>. |
-| 3000 | `grafana:3000` | Cross-cluster Grafana - Prometheus-backed, multi-homed onto both cluster networks. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
+| 3000 | `grafana:3000` | Cross-cluster Grafana on `obs-net`, querying Prometheus - which is multi-homed onto both cluster networks (and `obs-net`) to scrape every silo. Open <http://localhost:3000> (anonymous Viewer; `admin`/`admin` for edit). |
 
 Silo HTTP (`:8080`), silo h2c gRPC (`:8081`), Orleans silo
 (`:11111`), gateway (`:30000`), and Prometheus (`:9090`) ports are
@@ -148,6 +148,8 @@ flowchart LR
             baseBE["Baseline backend<br/>(arrival-order grains)"]
             latBE["Lattice backend<br/>(HLC-ordered fold)"]
             broadcaster["DashboardBroadcaster<br/>(Channel&lt;T&gt; · cluster stream)"]
+            siteSvc["SiteActivityIndex<br/>(tag-index writer)"]
+            crdt["PartCrdtStore<br/>(labels / operator)"]
         end
 
         subgraph orleans["Orleans grains"]
@@ -188,9 +190,12 @@ flowchart LR
     chaosBase --> baseBE
     chaosLat --> latBE
     latBE --> facts
-    latBE --> siteIdx
-    latBE --> labels
-    latBE --> opReg
+    router -.->|"FactRouted"| siteSvc
+    siteSvc --> siteIdx
+    razor -->|"label / operator edits"| crdt
+    crdt --> labels
+    crdt --> opReg
+    crdt -.->|"PartChanged"| broadcaster
     router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
     broadcaster -.->|"publish Fact"| dashStream
     dashStream -.->|"subscribe → fan out to circuits"| broadcaster
@@ -239,16 +244,18 @@ flowchart TB
     router -->|"AdmitAsync"| siteG
     router -->|"IsPartitioned"| partG
     router -->|"GetConfig"| backG
+    router -->|"list / configure / presets"| siteReg
     router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
 
-    siteReg -->|"WatchSites · preset fan-out"| siteG
-    siteReg -.->|"SiteStateChanged"| broadcaster
+    siteReg -->|"list / configure / preset fan-out"| siteG
+    crdtStore -.->|"PartChanged"| broadcaster
 
     seeder -->|"HasSeeded?"| seedG
-    seeder -->|"snapshot / zero / restore"| siteReg
+    seeder -->|"snapshot / reset / restore site config"| router
     seeder -->|"emit seed facts"| router
 
     mirror -.->|"FactReplicated"| broadcaster
+    mirror -->|"raise PartChanged (labels)"| crdtStore
 
     healSvc -->|"IsPartitioned?"| partG
     healSvc -->|"promote shadows"| crdtStore
@@ -256,8 +263,11 @@ flowchart TB
 
 Key invariants:
 
-- On the fact path `FederationRouter` only **reads** chaos grains
-  (site admission, the partition filter, backend config). Chaos writes
+- On the fact path `FederationRouter` never changes chaos
+  configuration: it consults the chaos grains (the partition filter,
+  site admission - which also counts admitted facts and buffers held
+  or reordered ones in the site grain - and, through each
+  `ChaosFactBackend`, backend config). Chaos writes
   come from the UI / gRPC control surface through the router's
   `Configure*` / `ApplyPresetAsync` methods, which update the chaos
   grains (sites through `ISiteRegistryGrain`) and raise
@@ -320,6 +330,11 @@ The dashboard's per-part summary is no longer a sample-owned tree. It is the
 library-maintained folded view `mfg-compliance` over `mfg-facts` (registered via
 `AddLatticeViews`/`AddFoldedView`), joined at read time with each part's baseline
 compliance state. See the access patterns below.
+
+The seeding silo also creates two library-maintained durable change-history views
+at startup, `mfg-part-operator-history` and `mfg-part-labels-history`, over the two
+CRDT trees with full-value retention; see
+[Inspecting change history](./README.md#inspecting-change-history).
 
 Access patterns:
 
@@ -396,10 +411,10 @@ sequenceDiagram
         Apply-->>Ship: ack (peer cursor advanced)
     end
 
-    Note over Apply,Mirror: IReplicationApplier decorator (eu side)
-    Apply->>Mirror: ApplyAsync(entry)
-    Mirror->>PeerBase: decode + EmitAsync (mfg-facts only)
-    Mirror-->>Apply: forward to inner applier
+    Note over Apply,Mirror: IReplicationApplier decorator (eu side) wraps the applier
+    Mirror->>Apply: forward ApplyAsync(entry) to the inner applier
+    Apply-->>Mirror: ApplyResult (merged?)
+    Mirror->>PeerBase: decode + EmitAsync (mfg-facts only, once merged)
     Note over Mirror: DashboardBroadcaster pushes<br/>PartSummaryUpdate to Blazor subs
 ```
 

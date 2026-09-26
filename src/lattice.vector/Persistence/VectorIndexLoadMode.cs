@@ -13,8 +13,8 @@ public enum VectorIndexLoadMode
     Full = 0,
 
     /// <summary>
-    /// Load only the centroids, and fetch a partition the first time a query
-    /// actually probes it.
+    /// Load the key map and centroids up front, and fetch a partition the first
+    /// time a query actually probes it.
     /// <para>
     /// The centroid block is <c>partitions * dimensions</c> floats - a small
     /// fraction of the corpus - so a box can start answering almost immediately

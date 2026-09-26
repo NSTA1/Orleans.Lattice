@@ -34,7 +34,9 @@ Because the merge obeys those three rules, every replica that has seen the same
 set of updates ends up in **exactly the same state**, no matter what order the
 updates arrived in. This property is called *strong eventual convergence*, and
 it is what lets Orleans.Lattice replicate active-active across clusters without
-consensus.
+consensus. The three rules are necessary but not quite sufficient on their own:
+the replicas must also be merging the same inputs, which means every replica has
+to record a given update identically.
 
 The trade-off is that a CRDT resolves conflicts *by construction* rather than by
 asking you. A counter sums both sides; a set keeps both adds; a register may

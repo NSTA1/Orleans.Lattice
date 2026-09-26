@@ -90,12 +90,13 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILatticeWriteInterceptor>(
                 sp => sp.GetRequiredService<LatticeSchemaWriteInterceptor>()));
 
-        // The SchemaAdmin-gated control plane over the stores + provider cache.
+        // In-process control plane over the stores + provider cache. Authorization is
+        // applied by the facade / gRPC layer that exposes it, not by this admin itself.
         builder.Services.TryAddSingleton<ILatticeSchemaAdmin, LatticeSchemaAdmin>();
 
-        // The SchemaAdmin-gated background-remediation control plane. The durable
+        // In-process background-remediation control plane. The durable
         // per-tree LatticeSchemaRemediationGrain coordinator is auto-discovered by
-        // Orleans from this assembly; only the operator-facing admin needs wiring.
+        // Orleans from this assembly; only the admin object needs wiring here.
         builder.Services.TryAddSingleton<ILatticeSchemaRemediationAdmin, LatticeSchemaRemediationAdmin>();
 
         // The read-only compliance-audit control plane: scans a tree's values

@@ -18,9 +18,11 @@ namespace Orleans.Lattice.Replication;
 /// <b>Fail closed.</b> When the snapshot marks a tree's mode ambiguous
 /// (<see cref="ReplicationConfigProjection.Ambiguous"/> - the multi-value
 /// register surfaced more than one live mode after a concurrent divergent
-/// assignment), <see cref="Resolve"/> returns <see langword="null"/> so
-/// <see cref="ReplicationMutationObserver"/> short-circuits before the sink and
-/// shipping for that tree pauses. The resolver never silently picks one of the
+/// assignment), <see cref="Resolve"/> returns <see langword="null"/> so new
+/// commit-time observer doorbells short-circuit before the sink. Already-active
+/// shippers are not torn down and do not consult this resolver to decide whether
+/// to run, so a peer that also resolves no mode drops what they ship while the
+/// sender advances past it. The resolver never silently picks one of the
 /// divergent modes. Ambiguity wins even when the tree is also declared in the
 /// static seed map, because the runtime divergence is a deliberate operator
 /// state that must be resolved before egress resumes.
@@ -44,8 +46,8 @@ internal sealed class SnapshotLatticeMergeModeResolver(
 
         if (maintainer.Current.TryGetTree(treeId, out var projection))
         {
-            // Fail closed: a divergent (ambiguous) runtime mode pauses shipping
-            // for this tree until an operator reconciles it. Never fall through
+            // Fail closed: a divergent (ambiguous) runtime mode returns no mode
+            // until an operator reconciles it. Never fall through
             // to the static fallback, which would silently pick a mode.
             if (projection.Ambiguous)
             {

@@ -100,11 +100,12 @@ set); `GetTenantRegionStatus` reuses the existing `TenantAdminTenantRequest`. Th
 interceptor decodes the authorization target from each, so an audit record names the
 tenant the call acts on.
 
-`ILatticeTenantRegionAdmin` is an **optional** dependency of the service.
-`AddLatticeTenantAdminApi` registers it, so an ordinary silo serves the whole
-region-residency group; a host that composes the binding without it still serves every
-lifecycle and self-service RPC and answers each region RPC with `Unimplemented`,
-rather than failing container construction at startup.
+`ILatticeTenantRegionAdmin` is an **optional** dependency of the service, as are
+`ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, and
+`ILatticeTenantQuotaUsage`. `AddLatticeTenantAdminApi` registers all four, so an
+ordinary silo serves every group; a host that composes the binding without one of them
+still serves every lifecycle and self-service RPC and answers each RPC of the absent
+facade with `Unimplemented`, rather than failing container construction at startup.
 
 ### Status mapping
 
@@ -122,11 +123,12 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `TenantGrantNotFoundException` | `NotFound` | No such cross-tenant grant has been offered - reported identically when the granting tenant is not registered. Cross-tenant grants only. |
 | `TenantGrantTransitionException` | `FailedPrecondition` | The grant's lifecycle forbids the requested transition (for example approving a rejected or revoked grant). Cross-tenant grants only. |
 | `ReservedTenantOperationException` | `FailedPrecondition` | The operation targets the reserved `default` tenant (suspend, delete, set-quotas, an admin-subject add / remove, or a cross-tenant grant offer). |
-| `InvalidOperationException` | `FailedPrecondition` | A lifecycle or residency precondition the facade refuses on a well-formed request. |
+| `InvalidOperationException` | `FailedPrecondition` | A lifecycle or residency precondition the facade refuses on a well-formed request. Not mapped on the quota-usage and self-service RPCs, where it falls through to `Internal`. |
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller does not hold the required tier. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the caller's asserted active tenant. Deliberately not `Internal`, which a client would retry. |
 | `ArgumentException` | `InvalidArgument` | A malformed tenant id or region id. |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
+| (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, or quota-usage facade is absent from the host, so its RPCs are not served. |
 | anything else | `Internal` | The catch-all, logged server-side and returned without echoing the exception text. |
 
 Each arm is explicit and separately tested. `TenantRegionNotAllowedException` and
@@ -169,6 +171,29 @@ opaque `Internal`.
 | `ListAccessibleTenantsAsync` | `Task<IReadOnlyList<TenantDescriptor>> ListAccessibleTenantsAsync(CancellationToken cancellationToken = default)` |
 | `GetTenantAsync` | `Task<TenantStatusReport> GetTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 
+### Wire message records
+
+The request records this package defines are Orleans-serialized `[GenerateSerializer]`
+records whose stable aliases carry the `oitng.` prefix (the constants live in the public
+`GrpcTenantAdminTypeAliases` class). Responses are the facade result records from
+`Orleans.Lattice.Api.Abstractions`, whose aliases carry the `oitn.` prefix, except
+`ListAccessibleTenants`, which wraps its list in this package's `TenantSelfDescriptorList`.
+Properties marked `required` must be set by the caller.
+
+| Record | Members | Used by |
+|---|---|---|
+| `TenantAdminCreateRequest` | `required string TenantId`, `IReadOnlyList<string> AdminSubjects` | `CreateTenant` |
+| `TenantAdminTenantRequest` | `required string TenantId` | `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `GetTenant`, `GetTenantRegionStatus`, `GetTenantQuotaUsage`, `ListTenantAdminSubjects`, `ListCrossTenantGrants` |
+| `TenantAdminSetQuotasRequest` | `required string TenantId`, `TenantQuotasDescriptor Quotas` | `SetTenantQuotas` |
+| `TenantAdminRegionSetRequest` | `required string TenantId`, `IReadOnlyList<string> Regions` | `AuthorizeAllowedRegions`, `SetTenantResidency` |
+| `TenantAdminSubjectRequest` | `required string TenantId`, `required string SubjectId` | `AddTenantAdminSubject`, `RemoveTenantAdminSubject` |
+| `TenantAdminGrantOfferRequest` | `required string GranterTenantId`, `required string GranteeTenantId`, `required string Scope`, `TenantGrantAccess Operations` | `OfferCrossTenantGrant` |
+| `TenantAdminGrantRequest` | `required string GranterTenantId`, `required string GranteeTenantId`, `required string Scope` | `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant` |
+| `TenantSelfCurrentRequest` | (empty) | `GetCurrentTenant` |
+| `TenantSelfListRequest` | (empty) | `ListAccessibleTenants` |
+| `TenantSelfDescriptorList` | `IReadOnlyList<TenantDescriptor> Tenants` | The `ListAccessibleTenants` response. |
+| `AuthSchemeAdvertisementRequest` | (empty) | `GetAuthScheme` |
+
 ## Registration
 
 Server side (an ASP.NET Core host co-located with the silo):
@@ -193,7 +218,7 @@ Server side (an ASP.NET Core host co-located with the silo):
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces the registered `ILatticeTenantAdminApiAuthorizer` on every admin call. Left at its default with the default-deny authorizer in place, the binding refuses everything. Set to `false` only when an outer authentication boundary already guards the endpoint. |
-| `CredentialHeaderName` | `string` | `"authorization"` | The request header the caller credential is read from. Only consulted when `Orleans.Lattice.Auth` is registered; without it no header is read. |
+| `CredentialHeaderName` | `string` | `"authorization"` | The request header the caller credential is read from. The default bridge reads it on every call; without `Orleans.Lattice.Auth` registered the core no-op access gate ignores the bridged credential. |
 | `CredentialScheme` | `string` | `"Bearer"` | The scheme stamped on the bridged credential. A case-insensitive scheme prefix on the header value is stripped before the remainder is used as the token. |
 | `ActiveTenantHeaderName` | `string` | `"lattice-active-tenant"` (`LatticeActiveTenantAssertion.DefaultHeaderName`) | The request header carrying the tenant the caller is acting as. Set to an empty string to disable header-based tenant selection. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` (get-only, mutate in place) | empty | The credential schemes the unauthenticated `GetAuthScheme` RPC advertises, in preference order. Each descriptor must carry only public configuration - never a secret. |
@@ -214,7 +239,8 @@ the caller resolves the reserved `default` tenant. An assertion the caller may n
 use is refused, and every verb on this service - self-service, lifecycle, and region
 residency alike - surfaces that as a `PermissionDenied` `RpcException` rather than
 reporting a tenant the caller does not hold. Set the option to an empty string to disable header-based tenant selection
-entirely; with no tenancy add-on registered the header is never consulted.
+entirely. The facade itself requires the tenancy add-on, so a host serving this binding
+always has the resolver that validates the assertion.
 
 ## Authorization surface
 
@@ -225,7 +251,7 @@ The public seams a host implements or substitutes to open this surface up:
 | `ILatticeTenantAdminApiAuthorizer` | interface | The transport-level gate the interceptor consults on every admin RPC. Implement it to apply a host policy. |
 | `DenyTenantAdminApiAuthorizer` | class | The **registered default**: refuses every call, so the surface is closed until a host opts in. |
 | `AllowAllTenantAdminApiAuthorizer` | class | Admits every call, deferring entirely to the facade's own gate. For a host whose endpoint is already guarded by an outer boundary. |
-| `LatticeTenantAdminApiAuthorizationContext` | readonly struct | What the authorizer is handed: the `Operation`, the `TargetId` (the tenant the call acts on, `null` when not tenant-scoped), and the raw `ServerCallContext` for header / identity / peer inspection. |
+| `LatticeTenantAdminApiAuthorizationContext` | readonly struct | What the authorizer is handed: the `Operation`, the `TargetId` (the tenant id the request names - for every cross-tenant grant call, including the grantee-side approve and reject, the granting tenant - or `null` when not tenant-scoped), and the raw `ServerCallContext` for header / identity / peer inspection. |
 | `LatticeTenantAdminApiOperation` | enum | The per-operation discriminator. Tenant lifecycle and quota: `CreateTenant`, `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `SetTenantQuotas`, `GetTenantQuotaUsage`. Region residency: `AuthorizeAllowedRegions`, `SetTenantResidency`, `GetTenantRegionStatus`. Tenant-admin subjects: `ListTenantAdminSubjects`, `AddTenantAdminSubject`, `RemoveTenantAdminSubject`. Cross-tenant grants: `ListCrossTenantGrants`, `OfferCrossTenantGrant`, `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant`. An unrecognised method maps to `Unknown`, never to a permissive default - so a deny-by-default policy refuses an RPC it has never heard of rather than falling through. |
 | `ILatticeTenantAdminApiCredentialBridge` | interface | Lifts the inbound credential into the ambient Lattice credential for the duration of one call. The default reads the configured header; substitute it for a bespoke identity source such as a client certificate. |
 | `ILatticeTenantAdminApiAuthSchemeSource` | interface | Supplies what the unauthenticated `GetAuthScheme` RPC advertises. The default projects `LatticeTenantAdminApiGrpcOptions.AdvertisedAuthSchemes`. |

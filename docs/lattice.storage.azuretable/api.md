@@ -45,17 +45,18 @@ The helper also registers a default `ZstdLatticeCompressor` fallback at `Default
 
 | Contract area | Caller-visible behaviour |
 |---|---|
-| Append | Appends a batch for one `(tree, shard)` stream. Accepted offsets must be dense and start at the next expected offset. |
+| Append | Appends a batch of at most `MaxEntriesPerBatch` (100) entries for one `(tree, shard)` stream. Offsets must be non-negative and dense within the batch (`ArgumentException` otherwise). Each entry is stored in one binary property, so its stored payload - after compression - must fit the service's 64 KiB limit for a binary property; a larger entry is not split, and the service rejects the whole batch. Batches may arrive out of order, and the provider does not require a batch to start at the stored tail; one that overlaps an offset another batch already wrote is rejected with `InvalidOperationException` before anything is written. |
 | Encoded append | Stores already encoded WAL payload bytes without forcing a second encode. |
 | Read | Streams entries after a supplied offset, in offset order, up to the requested maximum. |
 | Encoded read | Returns encoded pages for efficient WAL consumers that do not need to materialize every mutation. |
-| Highest offset | Returns the current committed tail for a shard, or the empty-log sentinel defined by the core contract. |
+| Filtered read | Examines a bounded window of entries for a reader that owns a `WalKeyFilter` and yields only the entries the filter does not exclude, plus the last examined entry routing-only when it is excluded. When the provider is registered through `AddAzureTableWalStorage`, each row is classified from its payload's routing prefix, so an excluded row is never decoded in full. |
+| Highest offset | Returns the shard's stored tail, raised by the contiguous run of already-durable batches this instance's completion worker has accepted, or the empty-log sentinel defined by the core contract. |
 | Lowest offset | Returns the lowest retained offset for a shard after trim. |
 | Retained bytes | Reports retained payload size for capacity and trimming decisions. |
-| Trim | Removes retained entries below a trim watermark without moving the committed tail backward. |
+| Trim | Removes retained entries at or below the supplied offset without moving the committed tail backward. |
 | Reconcile | Repairs interrupted append state before normal operation relies on the stored tail. |
 | Flush | Drains the commit completions outstanding at the moment of the call, across every shard the instance has appended to, so already-appended batches become readable. Rethrows a failed completion instead of swallowing it, and leaves it observable to the next append. A no-op when commit completions are synchronous. |
-| Disposal | Releases provider-owned resources and observes pending background work according to configured fault handling. |
+| Disposal | `DisposeAsync` is idempotent: it awaits every outstanding pipelined commit completion and swallows its fault (a configured `PipelinedPhaseTwoFaultHandler` has already observed it), then stops each shard's completion worker, faulting any queued completion not yet written with `ObjectDisposedException`. |
 
 See [Architecture](architecture.md) for the storage and commit model, and [Core WAL](../lattice/wal.md) for how the core library uses the provider.
 

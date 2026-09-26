@@ -40,8 +40,9 @@ public sealed record ViewStateSummary
 
     /// <summary>
     /// <see langword="true"/> when the view is a change-history (accumulative)
-    /// view whose rows are serialized history blobs backing the History tab on
-    /// its source tree, rather than directly inspectable value / CRDT data.
+    /// view whose rows are serialized history blobs used by the per-key timeline
+    /// opened from a selected Data-tab row's History button, rather than directly
+    /// inspectable value / CRDT data.
     /// </summary>
     [Id(6)] public bool IsHistory { get; init; }
 

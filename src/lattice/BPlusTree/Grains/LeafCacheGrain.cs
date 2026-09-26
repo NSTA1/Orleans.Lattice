@@ -96,9 +96,8 @@ internal sealed class LeafCacheGrain(
     /// <summary>
     /// The most recent same-silo revision cookie this cache successfully
     /// observed and refreshed against. Used by <see cref="RefreshAsync"/>
-    /// to skip the cross-grain <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceAsync"/>
-    /// call when the primary leaf is on the same silo and has not
-    /// advanced since this cache last refreshed. <c>0</c> means "never
+    /// to skip the cross-grain cursor-delta call when the primary leaf is on the same silo and has not
+    /// advanced since this cache last refreshed, independent of the ordinary cache TTL. <c>0</c> means "never
     /// successfully refreshed" - must take the cross-grain refresh path.
     /// </summary>
     private long _lastSeenPrimaryRevision;
@@ -520,7 +519,7 @@ internal sealed class LeafCacheGrain(
             }
         }
 
-        // Capture the revision cookie BEFORE issuing GetDeltaSinceAsync.
+        // Capture the revision cookie BEFORE issuing GetDeltaSinceCursorAsync.
         // The cookie is monotonically increasing on every leaf state
         // change; recording it BEFORE the cross-grain RPC means
         // _lastSeenPrimaryRevision is a sound lower bound on the state

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// (<see cref="ILatticeAuthAdmin.EffectivePermissionsAsync"/>) to decide which
 /// facade groups a caller may use. It does <b>not</b> re-implement any
 /// authorization logic: it reads the authored rules in effect for the caller's
-/// subject and maps their granted operations onto the four facade groups through
+/// subject and maps their granted operations onto the fixed facade group set through
 /// <see cref="LatticeApiMcpGroupCapabilityMap"/>.
 /// </summary>
 /// <remarks>

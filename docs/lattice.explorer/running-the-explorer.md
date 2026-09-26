@@ -1,9 +1,13 @@
 # Running and hosting the Explorer
 
-The Orleans.Lattice Explorer is a read-only, auth-aware web console for a running
-cluster. It talks to a cluster only through the cluster's gRPC APIs (state, and
-the auth, backup, schema, tenant-administration, and telemetry bindings), so it
-never needs to be part of the cluster's Orleans membership. This page covers how
+The Orleans.Lattice Explorer is an auth-aware web console for a running cluster:
+a read-only browser of the cluster's trees and state, plus capability-gated
+administration areas that change the cluster through its control APIs -
+capturing, restoring, and deleting backups, editing access control, managing
+tenants, and, when a head surfaces it, managing schema. It talks to a cluster
+only through the cluster's gRPC APIs (state, and the auth, backup, schema,
+tenant-administration, and telemetry bindings), so it never needs to be part of
+the cluster's Orleans membership. This page covers how
 to run it: as a standalone head, or embedded in your own ASP.NET application, and
 how to deploy it without taxing your cluster's scaling behaviour.
 

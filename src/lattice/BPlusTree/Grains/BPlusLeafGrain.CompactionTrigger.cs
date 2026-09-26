@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Compaction-policy trigger evaluation for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.
-/// On every successful foreground commit (set, delete, range delete) the
+/// After successful foreground delete and range-delete commits the
 /// leaf evaluates the configured ratio and size thresholds against its
 /// current entry table. When a threshold is crossed the leaf asks its
 /// tree's <see cref="ITombstoneCompactionGrain"/> to schedule an

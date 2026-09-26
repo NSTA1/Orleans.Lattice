@@ -78,7 +78,10 @@ handler written as a class instead of a delegate pair, implement
 `IAtomicActionHandler` (`HandlerId`, `VersionTag`, `ForwardAsync`, `CompensateAsync`)
 and pass an instance to the `AddHandler(IAtomicActionHandler)` overload. Each effect
 receives an `IAtomicActionContext` carrying the `OperationId`, the step's `Args`, a
-`GrainFactory`, and a `CancellationToken`.
+`GrainFactory`, and a `CancellationToken`. A plan naming a handler id that is not
+registered on the silo is refused with `AtomicActionHandlerNotRegisteredException`
+before any effect runs, and the same exception parks a resume whose handler is no
+longer registered.
 
 ## Building and running a plan
 
@@ -112,7 +115,7 @@ The operation id (`"order-4711"`) is the **idempotency key**. Re-issuing the sam
 plan under the same id after the saga is terminal returns the memoized outcome
 without re-running any effect, so a client that retries after a timeout observes the
 original result rather than a duplicate action. Re-issuing a *different* plan under
-a used id is rejected.
+a used id is rejected with an `ArgumentException`.
 
 The operation id must be non-empty and must not contain `/`, which is reserved as
 the grain-key separator: a `TreeWrite` step dispatches to a per-tree saga keyed
@@ -137,8 +140,9 @@ if (outcome is { Status: AtomicActionStatus.Committed })
 ## The built-in tree-write step
 
 `.TreeWrite(treeId, ...)` performs an atomic multi-key write to **one** Lattice tree
-as a single saga step, with **library-synthesized** compensation - you supply no
-compensating effect. Before the write, the coordinator captures each affected key's
+as a single saga step (stage each key on the supplied `AtomicActionTreeWriteBuilder`
+with `Upsert(key, value)` or `Delete(key)`), with **library-synthesized**
+compensation - you supply no compensating effect. Before the write, the coordinator captures each affected key's
 pre-image with one batched read; if a *later* step faults, it restores those
 pre-images with a fresh atomic write through the same atomic-write machinery -
 re-writing each key that existed before the step and deleting each key that was
@@ -283,6 +287,11 @@ observes the memoized outcome while saga state does not leak forever.
 | `LatticeOptions.MaxAtomicActionSteps` | 64 | Maximum number of steps in one plan. |
 | `LatticeOptions.MaxAtomicActionArgsBytes` | 32 KiB | Maximum size of a custom step's args payload. |
 | `LatticeOptions.AtomicActionRetention` | 48h | How long a terminal saga's memoized outcome is retained before its state is cleared. |
+
+A plan with more steps than `MaxAtomicActionSteps` is rejected with an
+`ArgumentException`, and a custom step whose args payload exceeds
+`MaxAtomicActionArgsBytes` with an `ArgumentOutOfRangeException`, before any effect
+runs.
 
 ## Observability
 

@@ -43,8 +43,10 @@ public enum LatticeReplicationEnrollmentSource
 
     /// <summary>
     /// Both sources declare this tree and the runtime config entry is the one in
-    /// force, so the reported mode is the runtime-fixed mode. Disabling the tree
-    /// at runtime falls back to the static declaration rather than stopping
+    /// force. An unambiguous runtime entry reports its runtime-fixed mode; an
+    /// ambiguous runtime entry reports a null mode and receivers fail closed
+    /// rather than falling back to the static declaration. Disabling the tree at
+    /// runtime falls back to the static declaration rather than stopping
     /// replication.
     /// </summary>
     RuntimeAndStatic = 2,

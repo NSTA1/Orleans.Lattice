@@ -390,8 +390,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
 
         // Collect every artifact still referenced by another retained manifest so
-        // a shared artifact (a base backup an increment still depends on, or a
-        // content-addressed artifact reused across backups) is never deleted.
+        // a shared artifact (for example a base backup an increment still depends
+        // on) is never deleted.
         var stillReferenced = new HashSet<string>(StringComparer.Ordinal);
         await foreach (var other in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
         {

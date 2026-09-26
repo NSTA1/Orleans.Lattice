@@ -90,16 +90,22 @@ ID derived from the snapshot's unique operation ID, making retries idempotent.
 
 ## Sizing Overrides
 
-By default, the destination tree inherits the source tree's configured leaf and
-internal node sizes. You can override these with the `maxLeafKeys` and
-`maxInternalChildren` parameters. These overrides are stored in the tree
-registry as a `TreeRegistryEntry` and take priority over `IOptionsMonitor`
-configuration.
+Only the shard count is taken from the source tree. The destination's leaf and
+internal node sizes are **not** inherited: unless you pass the `maxLeafKeys` and
+`maxInternalChildren` parameters, the destination is registered with the library
+defaults (128 keys per leaf, 128 children per internal node), even when the
+source tree's own sizing differs. Whichever values apply
+are pinned in the destination tree's registry entry when the snapshot registers
+it. The registry entry is a tree's only source of structural sizing - there is no
+`LatticeOptions` sizing setting for it to take priority over - and the sizing can
+later be changed only with `ResizeAsync`.
 
 ## Tombstoned Keys
 
 Snapshots only copy **live** entries. Keys that have been deleted (tombstoned)
-in the source tree are excluded from the destination. The destination tree gets
+in the source tree are excluded from the destination. Each copied entry keeps
+its source HLC and any remaining time-to-live: an entry with a TTL reappears on
+the destination with the same absolute expiry, not a fresh one. The destination tree gets
 its own tombstone compaction reminder registered upon snapshot completion.
 
 ## Grain Interface

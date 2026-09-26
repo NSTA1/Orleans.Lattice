@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Schema;
 /// non-compliant population by failure reason. It reuses the enforcement hot-path
 /// <see cref="ILatticeSchemaPolicyProvider"/> cache, so the audit pays no policy
 /// recompilation, and enumerates values through the same
-/// <see cref="ILattice.EntriesAsync"/> read seam the remediation coordinator uses.
+/// <c>LatticeExtensions.ScanEntriesAsync</c> read seam the remediation coordinator uses.
 /// </summary>
 /// <remarks>
 /// The scan is allocation-lean on the per-value hot path: it performs one

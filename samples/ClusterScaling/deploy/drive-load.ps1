@@ -15,9 +15,9 @@
     distinct trees and keys with a tiny payload. That grows activation + dispatch
     pressure, which is what the scaling signal's scaleValue tracks; it does NOT
     grow retained bytes, which is the storage axis and never inflates replica
-    count. Expect scale-out to LAG the load by tens of seconds: KEDA polling
-    interval + cooldown + the signal's EWMA smoothing all sit between offered load
-    and a replica being added. Sustain the load (default 5 minutes) so the window
+    count. Expect scale-out to LAG the load by at least the KEDA polling interval
+    and container-app scheduling time. EWMA smoothing applies on falling demand,
+    so it affects scale-in rather than scale-out. Sustain the load (default 5 minutes) so the window
     is comfortably crossed, then watch the count settle back to minReplicas after
     the driver stops.
 

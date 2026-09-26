@@ -157,10 +157,9 @@ public interface ILatticeAuthAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the authorization rules currently in effect for
-    /// <paramref name="subjectId"/> - the grants and denies whose subject
-    /// selector matches the subject directly or through one of its groups -
-    /// computed from the live policy store.
+    /// Returns the authored authorization rules whose subject selector matches
+    /// <paramref name="subjectId"/> directly or through one of its groups - grants
+    /// and denies alike - computed from the live policy store.
     /// </summary>
     /// <param name="subjectId">The subject to resolve permissions for. Must not be <c>null</c> or empty.</param>
     /// <param name="subjectKind">

@@ -33,24 +33,23 @@ namespace Orleans.Lattice.Replication;
 /// enrols the shipper, maintenance, and (opt-in) digest-probe grains for
 /// any tree enabled after startup, without restarting the silo. Enrolment
 /// is additive only: disabling a tree at runtime does not tear the grains
-/// down (the shipper stops shipping on its own because the merge-mode
-/// resolver returns null once the tree is disabled), mirroring the
+/// down, and the shipper keeps shipping - it does not consult the merge-mode
+/// resolver to decide whether to run - so a peer that resolves the tree to no
+/// mode drops what it ships while the sender advances past it. This mirrors the
 /// peer-removed policy below.
 /// </para>
 /// <para>
 /// Peer membership is sourced from <see cref="IReplicationTopology"/>
-/// rather than read once from
-/// <see cref="LatticeReplicationOptions.ReplicationPeers"/>: the
-/// initial snapshot drives the startup activation pass, and a
+/// rather than read once from <see cref="LatticeReplicationOptions.ReplicationPeers"/>:
+/// the initial snapshot drives the startup activation pass, and a
 /// long-lived <see cref="IReplicationTopology.Subscribe"/> subscription
 /// activates one shipper per <b>currently enrolled</b> replicated tree
 /// for every peer added at runtime. <see cref="PeerChangeKind.Removed"/>
 /// events do not trigger any teardown - the shipper grain stays
 /// activated to drain its remaining backlog, and the producer-side
 /// doorbell ring stops firing for the removed peer automatically because
-/// <c>ShardedReplogSink</c> reads
-/// <see cref="LatticeReplicationOptions.ReplicationPeers"/> per WAL
-/// append.
+/// <c>ShardedReplogSink</c> reads <see cref="IReplicationTopology.CurrentPeers"/>
+/// per WAL append.
 /// </para>
 /// <para>
 /// <see cref="IHostedService.StartAsync"/> ordering is not guaranteed

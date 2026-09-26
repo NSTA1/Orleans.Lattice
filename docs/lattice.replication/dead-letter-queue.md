@@ -25,7 +25,7 @@ The decorator is registered as the silo-side `IReplicationApplier` singleton. Ap
 
 ## Storage
 
-Parked entries live in a reserved system tree named `_lattice_replog_dlq_{treeId}` accessed through the internal `ISystemLattice` surface. Each row is keyed `e/{19-padded-id}` and holds an Orleans-binary-serialised `DeadLetterEntry`. The DLQ inherits the scaling, sharding, and persistence of the core B+ tree rather than living inside one grains persistent-state row, which would hit the storage row-size ceiling under sustained apply failure.
+Parked entries live in a reserved system tree named `_lattice_replog_dlq_{treeId}` accessed through the internal `ISystemLattice` surface. Each row is keyed `e/{19-padded-id}` and holds an Orleans-binary-serialised `DeadLetterEntry`. The DLQ inherits the scaling, sharding, and persistence of the core B+ tree rather than living inside one grain's persistent-state row, which would hit the storage row-size ceiling under sustained apply failure.
 
 On activation the grain bulk-loads every parked row into an in-memory cache; subsequent reads (`List` / `Count` / `TryGet`) are served from memory and writes (`Enqueue` / `Discard` / `RemoveReplayed`) are applied to the cache and written through to the system tree. Cache size is bounded by `DeadLetterQueueCapacity` (validator pins to >= 1).
 
@@ -58,7 +58,7 @@ Resolve the seam from DI and call per-tree:
 | `ListAsync(treeId, ct)` | `IReadOnlyList<DeadLetterEntry>` | Ascending entry-id order. Pure read. |
 | `CountAsync(treeId, ct)` | `int` | Cached count, served from memory. |
 | `DiscardAsync(treeId, entryId, ct)` | `bool` | `true` when removed; `false` when the id was unknown. Emits `reason=discarded`. |
-| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorators failure tracker). On any non-throwing return - including HWM-filtered re-delivery - the entry is removed with `reason=replayed`. A thrown exception leaves the entry parked. |
+| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorator's failure tracker). On any non-throwing return - including a result the canonical applier filtered or diverted (`Applied = false`) - the entry is removed with `reason=replayed`. A thrown exception leaves the entry parked. |
 
 ```csharp verify
 var dlq = client.ServiceProvider.GetRequiredService<ILatticeReplicationDeadLetters>();
@@ -79,17 +79,18 @@ if (parked.Count > 0)
 
 ## High-water-mark interaction
 
-Parking advances the tree's per-origin HWM (the entry for the parked entry's `OriginClusterId`) past the parked entry's HLC for every operation except `DeleteRange` and the saga terminal records (`TxCommit` / `TxAbort`). The canonical appliers HWM filter then dedupes future re-deliveries from the transport, so a transport that re-ships the parked entry observes `Applied=false` at the canonical applier layer without re-engaging the failure tracker.
+Parking advances the tree's per-origin HWM (the entry for the parked entry's `OriginClusterId`) to at least the parked entry's HLC for every operation except `DeleteRange` and the saga terminal records (`TxCommit` / `TxAbort`). The advance does not make a later re-delivery a no-op: the canonical applier does not drop a point write at or below the per-origin HWM (its only point-write drop threshold is the snapshot-pinned causal floor, which parking does not move), so a re-delivered copy of the parked entry is applied afresh and, if it fails again, re-enters the failure tracker. The transport does not normally re-deliver it: parking returns a non-deferred `Applied=false`, so the receive path acknowledges the batch and the sender advances past the entry.
 
-`DeleteRange` entries skip HWM advance because the canonical applier does not consult the HWM for range deletes (range applies are naturally idempotent at the leaf layer). `TxCommit` / `TxAbort` skip it too: saga terminal records are deduplicated through the per-tree transaction registry, and advancing the HWM past a terminal's HLC would silently dedupe a legitimate same-origin point write at or below it. The entry is still parked.
+`DeleteRange` entries skip HWM advance because the canonical applier does not consult the HWM for range deletes (range applies are naturally idempotent at the leaf layer). `TxCommit` / `TxAbort` skip it too: a saga terminal's HLC is a saga linearization point, not a per-origin frontier, and terminals are deduplicated through the per-tree transaction registry instead. The entry is still parked.
 
 ## Replay semantics
 
-`ReplayAsync` deliberately routes through the **canonical** applier, not the decorator. Three reasons:
+`ReplayAsync` deliberately routes through the **canonical** applier, not the decorator. Two reasons:
 
 1. A parked entry that failed deterministically would re-park itself on every replay if routed through the decorator, which would produce an infinite re-park loop and corrupt the failure-counter state for that tuple.
 2. Operators are explicitly opting into a "this entry might still apply" attempt; the failure budget is logically a transport-level concern, not an operator-replay concern.
-3. The HWM is already at or past the parked entrys HLC (the parking step advanced it), so the canonical applier reports a filtered re-delivery (`Applied=false`) without touching downstream state. The seam treats that as terminal-for-cleanup and removes the parked row.
+
+The replay is a genuine apply attempt: parking advances the per-origin HWM but not the snapshot-pinned causal floor - the canonical applier's only point-write drop threshold - so a replayed point entry runs the full apply pipeline. The seam treats any non-throwing return as terminal for cleanup and removes the parked row, whatever the resulting `Applied` flag. `Applied = true` means the write landed. `Applied = false` means the canonical applier filtered or diverted it: its HLC is at or below the pinned floor, its identity is still held in the shadow-forward dedupe cache, a receiver-side gate rejected it (the enrollment gate drops it; the merge-mode and tenant-isolation gates dead-letter it again under a new id), or a dependency is still missing and it was re-parked in the causal-apply buffer.
 
 A throwing replay leaves the entry parked. The operator can re-attempt or `Discard`.
 
@@ -109,7 +110,7 @@ The grain bulk-loads its parked rows from the system tree on every activation. O
 ## When to discard vs. replay
 
 - **Discard** when you have validated the underlying data fault and deliberately want to drop the entry (e.g. it carries a key your tree no longer participates in). Emits `reason=discarded`.
-- **Replay** when you have fixed the upstream cause of the apply failure (config drift, schema mismatch, transient infra fault) and want the entry back in the apply path. Emits `reason=replayed`. Note that for point operations the HWM has already advanced past the entry; the replay surfaces this as `Applied=false`, which is terminal for inspection - the entry is still removed.
+- **Replay** when you have fixed the upstream cause of the apply failure (config drift, schema mismatch, transient infra fault) and want the entry back in the apply path. Emits `reason=replayed`. Check the returned `ApplyResult`: `Applied = true` confirms the write landed, while `Applied = false` means the canonical applier filtered or diverted it (see [Replay semantics](#replay-semantics)) - the entry is removed either way.
 
 ## Bootstrap under concurrent load
 
@@ -117,10 +118,10 @@ When a peer bootstraps from a snapshot while the rest of the topology is still a
 
 | Incoming entry | Receiver behaviour |
 |---|---|
-| `entry.VectorClock` is dominated by the pinned frontier | Per-origin HWM dedupes the entry as already-applied-via-snapshot. No buffering, no re-merge, no DLQ. |
-| `entry.VectorClock` is above the frontier on at least one origin AND every dep is satisfied by the local vector clock | Applies directly. HWM advances to the entry's HLC. |
-| `entry.VectorClock` is above the frontier on at least one origin AND a dep is not yet satisfied | Parks in the per-tree bounded causal-apply buffer (`CausalBufferMaxEntries` / `CausalBufferMaxBytes`). Drains and applies in FIFO order as soon as the missing predecessor lands and advances the local vector clock. |
-| Buffer is at capacity when the next park request arrives | Oldest parked entry is evicted to the DLQ with `reason=hlc_skew`. The newer entry takes its slot. The producer-side WAL still holds the evicted entry, so a peer that later closes its catch-up gap can replay it from the dead-letter store. |
+| `entry.Timestamp` is at or below its origin's coordinate in the pinned frontier | The snapshot-pinned causal floor dedupes the entry as already-applied-via-snapshot. No buffering, no re-merge, no DLQ. |
+| `entry.Timestamp` is above the pinned floor AND every dependency in `entry.VectorClock` is satisfied by the local vector clock | Applies directly. The per-origin HWM advances monotonically to the entry's HLC. |
+| `entry.Timestamp` is above the pinned floor AND a dependency in `entry.VectorClock` is not yet satisfied | Parks in the per-tree bounded causal-apply buffer (`CausalBufferMaxEntries` / `CausalBufferMaxBytes`). Drains and applies in FIFO order as soon as the missing predecessor lands and advances the local vector clock. |
+| Buffer is at capacity when the next park request arrives | Oldest parked entry is evicted to the DLQ with `reason=hlc_skew`. The newer entry takes its slot. The evicted entry is kept in the dead-letter store, so an operator can replay it once its dependencies have landed. |
 
 The window during which the third and fourth rows are reachable is bounded: it lasts only until every origin's local diagonal climbs to the frontier the producer pinned at snapshot time. Under steady-state load the window closes within seconds; under sustained heavy concurrent writes against the same origin set, it can extend long enough to fill the buffer.
 
@@ -130,7 +131,7 @@ The window during which the third and fourth rows are reachable is bounded: it l
 2. **List parked entries.** `await dlq.ListAsync(treeName, ct)` enumerates every entry the receiver parked since the bootstrap. Filter by `EnqueuedAtTicks` to scope to the bootstrap window if other DLQ traffic is mixed in.
 3. **Replay each entry.** `await dlq.ReplayAsync(treeName, entryId, ct)` routes the entry through the canonical applier (which bypasses the failure-tracking decorator). Two terminal outcomes:
    - `ApplyResult.Applied = true` - the entry's deps are now satisfied, the apply landed, and the entry is removed from the DLQ with `reason=replayed`.
-   - `ApplyResult.Applied = false` - the entry's deps were satisfied via in-flight transport delivery while it sat in the DLQ; the canonical applier short-circuits as a re-delivery and the entry is still removed with `reason=replayed`. **This is the expected case** for any entry that landed in the DLQ purely because it lost the FIFO eviction race.
+   - `ApplyResult.Applied = false` - the canonical applier did not install the entry on this attempt, and the entry is still removed with `reason=replayed`. It does not mean a later copy already landed: the transport never re-delivers an evicted entry (its original delivery was acknowledged when it was parked). Either a dependency is still missing and the entry was re-parked in the causal-apply buffer, or its identity is still held in the shadow-forward dedupe cache from that original delivery and the apply was suppressed. Verify the key's state rather than treating this outcome as confirmation.
 4. **Discard only after validation.** If `ReplayAsync` throws repeatedly (e.g. the entry references a tree configuration that no longer exists), fall back to `DiscardAsync`. Replication continues regardless - the dead-letter store never blocks the apply stream.
 
 A persistent rate of `reason=hlc_skew` long after every bootstrap completes signals a structural problem (sustained authoring load above the receiver's apply throughput, transport reordering breaking per-origin FIFO, an undersized `CausalBufferMaxEntries` for the tree's fan-in). Treat it as the cue to raise `CausalBufferMaxEntries` / `CausalBufferMaxBytes` for the affected tree, or to investigate the producer-side write rate.

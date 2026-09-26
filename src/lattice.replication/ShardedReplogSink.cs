@@ -97,8 +97,8 @@ internal sealed class ShardedReplogSink(
         // LatticeReplicationOptions.ReplicationPeers, so a host-supplied
         // dynamic topology drives this loop without having to mirror
         // membership back into options. ShipDoorbellEnabled stays
-        // options-resolved because it is a per-tree behaviour knob, not
-        // membership. Best-effort and fire-and-forget - the commit-path
+        // options-resolved from CurrentValue because it is a process-wide behaviour knob,
+        // not membership. Best-effort and fire-and-forget - the commit-path
         // semantics never depend on a doorbell ring.
         if (resolved.ShipDoorbellEnabled
             && treeId is { Length: > 0 } doorbellTreeId)

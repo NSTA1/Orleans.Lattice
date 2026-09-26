@@ -389,8 +389,8 @@ public static class LatticeExtensions
     /// <summary>
     /// Streams sorted key-value pairs into the tree, partitioning by physical
     /// shard and flushing chunks in parallel across shards. Each shard receives
-    /// its entries in key order via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkAppendAsync"/>,
-    /// which appends to the right edge without splits.
+    /// its entries in key order through the shard-root bulk-append path, which
+    /// appends to the right edge without splits.
     /// <para>
     /// The input <paramref name="sortedEntries"/> <b>must</b> be in ascending key order.
     /// Per-shard ordering is preserved because hash-partitioning a globally sorted

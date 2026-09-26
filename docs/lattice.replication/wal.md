@@ -1,8 +1,8 @@
 # Per-shard replication WAL (write-ahead log)
 
-Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the single source of truth for replication: shipping, snapshotting, and recovery all read from the WAL - never from the primary tree.
+Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per-shard write-ahead log before any downstream replication consumer observes it. The WAL is the source of truth for incremental replication: shipping and recovery read from the WAL, never from the primary tree. Snapshot bootstrap is the exception - the default snapshot provider exports a point-in-time view of the tree's committed leaf projections rather than replaying the WAL.
 
-> This document is the **replication-side overlay** - the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the replication-only configuration knobs. The cross-cutting WAL semantics shared with the core library - the WAL grain API, the commit pipeline, the durability boundary, the turn-safe batching protocol, recovery and rebuild, projection checkpointing, trim and GC, and origin-cluster-id stamping - all live in [`../lattice/wal.md`](../lattice/wal.md). The pluggable storage backend (in-memory vs Azure Table) lives in [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md). The causal+ entry-schema extension (vector clock + dependency summary slots on `WalRecord`) lives in [`../lattice/wal-causal-plus.md`](../lattice/wal-causal-plus.md).
+> This document is the **replication-side overlay** - the per-shard sharded sink, the producer-side filters, the change-feed consumer model, and the replication-only configuration knobs. The cross-cutting WAL semantics shared with the core library - the WAL grain API, the commit pipeline, the durability boundary, the turn-safe batching protocol, recovery and rebuild, projection checkpointing, trim and GC, and origin-cluster-id stamping - all live in [`../lattice/wal.md`](../lattice/wal.md). The pluggable storage backend (in-memory, Azure Table, or file system) lives in [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md). The causal+ entry-schema extension (vector clock + dependency summary slots on `WalRecord`) lives in [`../lattice/wal-causal-plus.md`](../lattice/wal-causal-plus.md).
 
 ## Topology
 
@@ -56,11 +56,11 @@ siloBuilder.AddLatticeReplication(opts =>
 
 ## Producer-side filters
 
-Three options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the per-shard WAL regardless; these filters gate the commit-time replication nudge and are re-applied by the shipper as it tails the WAL, so a mutation that fails a filter stays in the local WAL but is never shipped:
+Three options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the per-shard WAL regardless; these filters gate the commit-time replication nudge and are re-applied by the shipper as it tails the WAL, so a mutation that fails a filter stays in the local WAL but is never shipped (snapshot exports and the opt-in anti-entropy repair paths do not apply these filters):
 
 | Option | Default | Semantics |
 |---|---|---|
-| `ReplicatedTrees` | `null` | Per-tree opt-in map from tree id to `LatticeMergeMode`. `null` and an empty map both mean no tree is replicated - there is no implicit "all trees" wildcard; only the listed tree ids replicate, under their declared mode. |
+| `ReplicatedTrees` | `null` | Per-tree opt-in map from tree id to `LatticeMergeMode`. `null` and an empty map both mean no tree is replicated - there is no implicit "all trees" wildcard; only the listed tree ids replicate, under their declared mode, unless runtime replication config is enabled, which also replicates trees enabled at runtime ([Runtime Replication Config](runtime-config.md)). |
 | `KeyFilter` | `null` | Optional `Func<string, bool>` evaluated against the mutation's key. `null` = accept every key. |
 | `KeyPrefixes` | `null` | Optional declarative prefix allowlist. `null` or empty = no prefix restriction; otherwise the key must start with at least one listed prefix (ordinal, case-sensitive). |
 
@@ -93,16 +93,16 @@ The append-time failure semantics inside the WAL grain itself (offset rollback, 
 Capturing each mutation into a WAL grain at commit time, rather than reading values at ship time, guarantees three properties:
 
 - **No ship-time value read.** The captured `WalRecord` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
-- **No host-level outgoing-call filter.** Capture happens grain-side via `IMutationObserver`, so the WAL append is atomic with the write rather than a best-effort post-write hook.
+- **No host-level outgoing-call filter.** Capture happens grain-side in the leaf's commit path - the commit-log writer appends to the WAL before the write reports success - so the WAL append is atomic with the write rather than a best-effort post-write hook.
 - **No silent coalescing between append and ship.** Every mutation gets its own monotonic sequence number; a later overwrite cannot retroactively shadow an earlier WAL entry. (The outbound shipper does apply *pre-ship coalescing* by default - collapsing redundant per-key versions off the cross-cluster wire - but that is a convergent transform over what the ship loop reads, never a mutation of the durable WAL: a last-writer-wins tree keeps the highest-HLC version per key, registered CRDT shapes delta-merge, and generic / unregistered OR-Map plus opaque payloads ship verbatim. Every WAL entry retains its sequence and the resume cursor advances past every elided version. Opt out per tree with `PreShipCoalescingEnabled = false`.)
 
 ## Reading from the WAL
 
-Direct grain access is the low-level entry point; in-process consumers should use [`IChangeFeed`](./change-feed.md) instead. The change feed walks every WAL partition for a tree from a per-partition offset cursor, filters by origin, and merges the result in HLC ascending order. The outbound shipper does not use it: it tails the WAL partitions directly from its own durable per-partition cursors.
+The per-shard WAL grain is internal, so in-process consumers read the WAL through [`IChangeFeed`](./change-feed.md). The change feed walks every WAL partition for a tree from a per-partition offset cursor, filters by origin, and merges the result in HLC ascending order. The outbound shipper does not use it: it tails the WAL partitions directly from its own durable per-partition cursors.
 
 ## Pluggable durability (replication-only override)
 
-The replication WAL grain shape is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
+The replication WAL grain shape is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory, Azure Table, and file-system implementations.
 
 `LatticeReplicationOptions` adds one replication-only override on top of that seam: a per-tree resolver delegate that lets a host pick a different provider per tree.
 
@@ -118,12 +118,14 @@ siloBuilder.AddLatticeReplication(opts =>
 });
 ```
 
-When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), the WAL grain falls back to the DI-registered `IWalStorageProvider` singleton. `AddLattice` installs `InMemoryWalStorageProvider` as that fallback (a first-wins registration); replace it with `AddWalStorage(factory)` or a storage package such as `AddAzureTableWalStorage`, which replace the baseline whether they are called before or after `AddLattice`.
+When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), nothing is mirrored: a partition on the default WAL placement uses the core `LatticeOptions.WalStorageProvider` resolver when the host set one directly, and otherwise the DI-registered `IWalStorageProvider` singleton; a partition whose placement is pinned to a named catalog provider uses that provider instead. `AddLattice` installs `InMemoryWalStorageProvider` as that fallback (a first-wins registration); replace it with `AddWalStorage(factory)` or a storage package such as `AddAzureTableWalStorage`, which replace the baseline whether they are called before or after `AddLattice`.
 
 The exchanged `WalEntry` carries the dense per-shard `Offset` and the captured `LatticeMutation`. When the WAL is read back, the authored merge mode comes from the durable record itself (the record persists it since wire id 26), falling back to `ILatticeMergeModeResolver` only when it holds the default `LwwRegister` (a plain LWW write or a legacy record); `DependencySummary` is rebuilt from the mutation's `VectorClock`. The on-disk WAL therefore stays storage-pluggable for both single-cluster and multi-cluster hosts.
 
 ## Testing
 
-- Unit tests against the grain (`WalShardGrainTests`) instantiate it with substituted `IGrainContext`/`IServiceProvider`/`IOptionsMonitor<LatticeReplicationOptions>` and an `InMemoryWalStorageProvider`, calling the internal `InitializeForTestingAsync` test seam to bypass Orleans activation.
-- Integration tests (`WalShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` + `AddLatticeReplication` and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
+The per-shard WAL grain is core, so its fixtures live in the core test project (`test/lattice/BPlusTree/Grains/`):
+
+- Unit tests against the grain (`WalShardGrainTests`) construct it with a substituted `IGrainContext` and `IOptionsMonitor<LatticeOptions>`, permissive merge-mode and origin-cluster-id resolvers, and an `InMemoryWalStorageProvider`, then call the grain's internal test-initialisation seam to bypass Orleans activation.
+- Integration tests (`WalShardWalIntegrationTests`) bring up a single-silo `TestCluster` with `AddLattice` alone - pinning `WalPartitions = 1` and registering a merge-mode resolver that opts every tree into `LwwRegister` - and assert that WAL entries appear after `ILattice.SetAsync` / `DeleteAsync`.
 

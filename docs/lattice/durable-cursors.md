@@ -67,8 +67,10 @@ sequenceDiagram
         Note over C,P: Close
         C->>L: CloseCursorAsync(cursorId)
         L->>G: CloseAsync()
+        G->>G: UnregisterTtlAsync()
+        G->>G: release pins and snapshot baselines
         G->>P: ClearStateAsync()
-        G->>G: UnregisterTtlAsync() + DeactivateOnIdle()
+        G->>G: DeactivateOnIdle()
         L-->>C: ok
     end
 ```
@@ -87,7 +89,7 @@ sequenceDiagram
 
     loop Until HasMore = false
         C->>G: Next*Async(pageSize)
-        G-->>C: LatticeCursorPage (HasMore = true / false)
+        G-->>C: LatticeCursorKeysPage / LatticeCursorEntriesPage (HasMore = true / false)
     end
 
     Note over G: Exhausted
@@ -341,7 +343,7 @@ round-trips above a direct stateless scan call:
 
 | Cost component | Magnitude | Notes |
 |----------------|-----------|-------|
-| `WriteStateAsync` - checkpoint | 1 x storage write per step | Serialises `LatticeCursorState` (< 10 KB). On memory provider: negligible. On Azure Table / SQL: ~1-5 ms. |
+| `WriteStateAsync` - checkpoint | 1 x storage write per step | Serialises `LatticeCursorState` (< 10 KB for a live-mode cursor; see [Grain state size](#grain-state-size)). On memory provider: negligible. On Azure Table / SQL: ~1-5 ms. |
 | `RegisterOrUpdateReminder` - TTL slide | 1 x reminder-table write per step | ~1-5 ms round-trip. See [debounce](#reducing-reminder-write-frequency) below. |
 | Extra grain round-trip | +1 Orleans call per step | `ILatticeCursorGrain` sits between `ILattice` and the shard fan-out. Typically < 1 ms on a local cluster. |
 | Shard fan-out | Same as `ScanKeysAsync` / `ScanEntriesAsync` | Each step is a normal sharded scan - no additional shard calls. |
@@ -378,8 +380,11 @@ count halves the reminder and checkpoint write count proportionally.
 
 ### Grain state size
 
-`LatticeCursorState` is intentionally minimal. Even with a 4 KB
-`LastYieldedKey` and a 1 KB spec, the checkpoint is < 10 KB per cursor.
+`LatticeCursorState` is intentionally minimal. For a live-mode cursor, even
+with a 4 KB `LastYieldedKey` and a 1 KB spec, the checkpoint is < 10 KB. A
+point-in-time cursor adds its captured decision map (one entry per in-flight
+or recently completed saga at open), and a snapshot cursor adds its
+coordinate - including, on a multi-shard tree, the pinned routing map.
 Aggregate reminder-table storage for a typical fleet of concurrent cursors
 is negligible.
 

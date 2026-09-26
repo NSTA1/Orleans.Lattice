@@ -103,6 +103,8 @@ authoritative list with per-scenario knobs is in
 | Read-write mix      | `read-write-mix-random`                      | 50:50 mix, random keys (YCSB-A shape)                     |
 | Read-write mix      | `read-write-mix-ordered`                     | 50:50 mix, sequential `ScanKeysAsync` walk                |
 | Durable WAL         | `current-state-no-replication-azuretable`    | Same write topology with Azure Table WAL durable storage  |
+| Durable WAL         | `current-state-no-replication-azuretable-no-crow` | As above, with the WAL's phase-0 candidate row elided (`AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath`) |
+| Durable WAL         | `current-state-no-replication-azuretable-pipelined` | As above, with pipelined phase-2 commits (`AzureTableWalStorageOptions.PipelinePhaseTwoCommits`) |
 | Atomic writes       | `atomic-write`                               | Sustained `SetManyAtomicAsync` saga throughput            |
 | Atomic writes       | `atomic-write-replication`                   | Two-cluster bidirectional atomic-saga visibility          |
 | Replication         | `current-state-single-peer`                  | Current-state tree, single-peer replication               |
@@ -209,16 +211,31 @@ The available workload method names are listed by running
 table. The suite currently ships a broad set of `[Benchmark]` methods (on the
 order of ninety) covering point
 reads / writes (`PointRead`, `PointWrite`, `PointReadWithVersion`,
-`PointExists`), multi-key reads (`PointGetMany`, `PointGetMany_BatchSize`
+`PointExists`), the other point-write shapes (`PointDelete`, `PointGetOrSet`,
+`PointSetIfVersion`, `PointSetWithTtl`, `PointApplyCrdtDelta`) and an empty
+range delete (`DeleteRangeAbsent`), multi-key reads (`PointGetMany`, `PointGetMany_BatchSize`
 parameterised over batch sizes 1-64), bulk and multi-key writes
 (`BulkLoad`, `SetMany_4Shards`, `Mixed_70R_30W`), key/range scans
-(`KeyScan_PageOver4Shards`), deep- and deeper-tree variants of the point
-and bulk paths, atomic-write sagas (`SetManyAtomic`, `SetManyAtomic_4Shards`,
-`SetManyAtomic_Concurrent` parameterised over concurrency 1-64),
+(`KeyScan_PageOver4Shards`, `EntryScan_PageOver4Shards`, and the server-side
+predicate scan `PredicateKeyScan`), deep- and deeper-tree variants of the
+point, multi-get and bulk paths, atomic-write sagas (`SetManyAtomic`,
+`SetManyAtomic_2Keys`, `SetManyAtomic_64Keys`, `SetManyAtomic_4Shards`,
+`SetManyAtomic_Concurrent` parameterised over concurrency 1-64) and their
+cross-tree counterparts (`CrossTreeAtomic_2Keys`, `CrossTreeAtomic_64Keys`),
 atomic-tree reads (`PointRead_AtomicTreeIdle`,
-`PointRead_AtomicTreeWithActiveSaga`), WAL-encoder microbenchmarks
-(`EncodeWalBatch_AzureTable`), and the replication ship-envelope
-microbenchmarks (`Ship_TypedEnvelope`, `Ship_FramingOnly`).
+`PointRead_AtomicTreeWithActiveSaga`), CRDT delta application against a grown
+state and on the replication receiver (`CrdtApplyGrowstate`,
+`CrdtApplyGrowstateWriter`, `CrdtReceiverApplyPerEntry`,
+`CrdtReceiverApplyBatched`), per-operation costs of the CRDT primitives and
+version vectors (`OrSet_*`, `OrMap_*`, `Rga_*`, `GSet_*`, `RwSet_*`,
+`GCounter_*`, `OrFlag_*`, `RwFlag_*`, `BoundedRegister_*`, `VersionVector_*`,
+and the multi-value register and PN-counter `Crdt*` arms), the leaf's
+serialized, pipelined and batched WAL commit-dispatch shapes (`LeafQueue_*`),
+leaf-cache drain and split-pivot instruments (`LeafCache_*`), WAL-encoder
+microbenchmarks (`EncodeWalBatch_AzureTable`, `EncodeWalBatch_AzureTable_Zstd`),
+the replication ship-envelope microbenchmarks (`Ship_TypedEnvelope`,
+`Ship_FramingOnly`), and a `Noop` control that measures the harness's own
+floor.
 
 #### Opt-in suites
 
@@ -232,15 +249,15 @@ silo, a transport or a storage provider in the loop. The dispatch in
 
 | Suite | Covers |
 |---|---|
-| `observer` | Observer-notification dispatch. |
+| `observer` | The replication observer's per-commit producer-side work on every locally originating, replication-eligible write. |
 | `authdecision` | The warm authorization decision path (`PolicyEvaluator.Evaluate`). |
-| `hotpath` | Assorted per-request hot-path shapes. |
+| `hotpath` | Three steady-state allocation trims on grain hot paths: the shard root's batch-write guard, the batched CRDT receiver fold's ambient scope, and the atomic-write saga prepare's touched-shard set. |
 | `hashalloc` | View-maintenance UTF-8 hashing allocation trims (`AggregationRowCodec.Slot`, `AggregationApplier.OperationId`, `ViewMaintainerGrain.ComputeTreeDigestAsync`). |
-| `ordedup` | OR-set / CRDT reconcile de-duplication. |
+| `ordedup` | Observed-remove reconcile paths - OR-Set live-dot counting and remove de-duplication, OR-Map live-entry counting, and the flag family's disable/enable de-duplication - plus the cost of `BoundedRegister`'s deep-copy clone and candidate measurements for dot-equality order, set construction and the byte-sequence tie-breaker comparison. |
 | `mergefold` | The CRDT merge fold: folding an incoming dot delta into an accumulated dot list. |
 | `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
 | `rowcodec` | The aggregation-view row codec's encode and decode paths on the projection write and read path. |
-| `replayadmission` | The WAL replay-permit admission decision every replaying leaf passes on activation, including the freshness test on its smoothed-wait arm. |
+| `replayadmission` | The WAL replay-permit admission gate: the activation-time admission decision every replaying leaf passes (healthy, saturated and stale-mean-expired queues, the last exercising the freshness test on its smoothed-wait arm), the wait fold that feeds that mean, and background starvation-drive admission for a WAL GC sweep drive, a coverage-lag timer drive and a refused drive. |
 | `fanout` | Three read sites that replaced N sequential awaited grain reads with one batched multi-get. Prints a host-independent round-trip census first, also written to a `fanout-roundtrips.json` sidecar; set `BENCH_FANOUT_ROUNDTRIPS_ONLY=true` to skip the latency pass. |
 | `crosstree` | The allocation trim to the string sets the cross-tree and view coordination barriers canonicalise on every call. |
 | `alloctrims` | Three steady-state allocation trims on warm dictionary and set maintenance paths. |
@@ -266,17 +283,17 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `crdtrunfolds` | The complexity of folding a key's run of same-key deltas in the pre-ship CRDT coalescer; read it as a curve. |
 | `coalescedefertrims` | Deferred typed-delta deserialisation in the coalescer's first pass, and the grain-index predicate lowering's single-conjunction fast path. |
 | `grainindexquerytrims` | Three allocation reductions on the grain-index query path: the AND-intersect pass, the per-property accumulators, and the interval algebra. |
-| `grainindexplanfolds` | Three output-identical folds on the grain-index plan-and-execute path. |
+| `grainindexplanfolds` | Output-identical folds on the grain-index plan-and-execute path: reading a comparison's constant side without invoking the expression compiler, distributing AND over OR in place, de-duplicating a union's grains through a span probe, and a non-allocating walk for the planner's parameter-reference check. |
 | `applymergefanout` | Three physical-shard fan-out sites that partition a batch into a richer-than-list per-shard slot (replication apply merge, tree merge, saga backstop). |
 | `terminalpendingtrim` | Two core accumulator trims: the saga terminal fan-out's per-leaf grouping, and the leaf's per-read pending-key union while a saga is in flight. |
 | `statetrims` | Allocation trims on the state API's catalog ordering and metrics delta tick, and on the shard root's raw batch-read bucketing. |
 | `stateorder` | The state API's bounded catalog page selection and remaining catalog sort, plus the shard-summary ordering the shared metrics sampler runs on every tick. |
 | `applygatetrims` | Three allocation reductions on per-operation paths: the receiver's parallel-apply plan, durable-pin bucketing, and the tag-index tag-set reconcile on every tag-carrying write. |
-| `alloctrio` | Three allocation reductions on repeatedly executed paths, starting with the shared metrics sampler's per-tick aggregate map. |
+| `alloctrio` | Three allocation reductions on repeatedly executed paths: the shared metrics sampler's per-tick aggregate map, the tenant-usage snapshot compile behind write admission, and the shard-report ordering of each diagnostics report. |
 | `tagrowtrims` | Tag-index membership-row parsing and the aggregation applier's per-shard gathers. |
 | `tagindexbatching` | Three tag-index round-trip reductions: batched membership-row adds, overlapped removals, and a windowed intersection probe. |
 | `viewrebuildfanout` | Three corpus-sized round-trip reductions: the view-generation clear, the shard purge's internal-node sweep, and the view rebuild's source read. |
-| `bulkloadfanout` | Three structural round-trip reductions where a loop awaited one grain call before issuing the next: the bulk-load leaf chain and the write-fence fan-out. |
+| `bulkloadfanout` | Three structural round-trip reductions where a loop awaited one grain call before issuing the next: the bulk-load leaf chain, the shard purge's internal-node pre-walk, and the write-fence fan-out. |
 | `fanoutcollapse` | Three serial grain-call chains collapsed so a batch no longer pays one round-trip per item. |
 | `roundtripwaves` | Three serial grain-call chains: per-partition WAL head probes, the backup-restore per-shard drain, and the group-atomic set cutover. |
 | `partitionwaves` | The three remaining serial per-target waves: the per-partition source-head HLC scan, the producer-designation probe, and the orphan-shadow purge. |

@@ -32,6 +32,6 @@ internal sealed record McpBackupInventory
     /// <summary>The process-lifetime aggregate restore-failure count.</summary>
     public required long RestoreFailureCount { get; init; }
 
-    /// <summary>The process-lifetime bytes reclaimed by retention / deletion.</summary>
+    /// <summary>The process-lifetime bytes reclaimed by retention pruning.</summary>
     public required long BytesReclaimed { get; init; }
 }

@@ -4,8 +4,7 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// How much of an LWW (last-writer-wins) byte value a tree's durable-history
 /// revision rows retain per revision. Mirrors the core engine's own
 /// history-retention mode as a transport-agnostic value the tree-administration
-/// facade can accept and return without the abstractions package taking a
-/// dependency on the core library.
+/// facade can accept and return.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiTreeAdminTypeAliases.TreeHistoryRetentionMode)]

@@ -37,9 +37,8 @@ public static class ExplorerAreaSurfaceLabels
     public const string AreaRootSurfaceLabel = "Overview";
 
     /// <summary>
-    /// Returns <paramref name="tabs"/> with any tab whose label duplicates
-    /// <paramref name="areaLabel"/> relabelled to
-    /// <see cref="AreaRootSurfaceLabel"/>.
+    /// Returns <paramref name="tabs"/> with the first tab whose label duplicates
+    /// <paramref name="areaLabel"/> relabelled to <see cref="AreaRootSurfaceLabel"/>.
     /// </summary>
     /// <remarks>
     /// Comparison is case-insensitive and ordinal: "Tenants" and "tenants" are
@@ -53,7 +52,7 @@ public static class ExplorerAreaSurfaceLabels
     /// collide with and the list is returned unchanged.
     /// </param>
     /// <param name="tabs">The sub-surface tabs, or <see langword="null"/>.</param>
-    /// <returns>The tabs to render.</returns>
+    /// <returns>The tabs to render; only the first tab whose label collides with the area label is relabelled.</returns>
     public static IReadOnlyList<LatticeTabItem>? Disambiguate(
         string? areaLabel,
         IReadOnlyList<LatticeTabItem>? tabs)

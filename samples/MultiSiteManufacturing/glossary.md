@@ -34,7 +34,7 @@ Terms used throughout the sample. Split into the **domain** side
 | **Digital thread** | The ordered, queryable history of every fact recorded against a part across sites. What the sample's UI renders per part. |
 | **Severity lattice** | The totally ordered set of compliance states: `Nominal < UnderInspection < FlaggedForReview < Rework < Scrap`. |
 | **ComplianceState** | Current lattice position of a part, computed by folding its fact log. |
-| **Retest armed** | Internal flag that gates `MrbDisposition(UseAsIs)` demotion of `Rework` -> `Nominal`. Set by a passing post-rework inspection or `ReworkCompleted(retestPassed=true)`; cleared by a failed retest. |
+| **Retest armed** | Internal flag that gates `MrbDisposition(UseAsIs)` demotion of `Rework` -> `Nominal`. Set by a passing post-rework inspection or `ReworkCompleted(retestPassed=true)`; cleared by a failed retest or failed inspection, by any non-conformance, and by any MRB disposition. |
 | **Operator** | Human user driving the UI. The sample uses a static `operator:demo` identity - no operator sign-in in v1. |
 
 ---
@@ -55,7 +55,7 @@ Terms used throughout the sample. Split into the **domain** side
 | **Grain timer** | A periodic callback registered inside a grain activation. No minimum period; auto-disposed on deactivation. Used for the replication shipper's steady-state pump (every 100 ms by default). |
 | **Reminder** | Durable, cluster-wide scheduled callback surviving silo restarts. Minimum period of 1 minute. Used for the replication shipper's keepalive. |
 | **RequestContext** | Orleans per-call ambient dictionary flowing across grain calls. The sample no longer threads its own loop-break flag through it - loop-breaking now rides the origin stamped on every write-ahead-log record (see Replication section below). |
-| **TestingHost** | Orleans' in-process test-cluster fixture. The sample's integration tests share one single-silo cluster with in-memory storage; the coordinated-restore test stands up two such clusters over one shared backup sink directory. |
+| **TestingHost** | Orleans' in-process test-cluster fixture. Each of the sample's test fixtures stands up its own single-silo cluster with in-memory storage (the gRPC contract tests instead start the host itself in its in-memory `Testing` environment); the coordinated-restore test stands up two such clusters over one shared backup sink directory. |
 
 ### Lattice
 
@@ -95,7 +95,7 @@ from the core write-ahead log) and `Orleans.Lattice.Replication.Grpc`
 | **Shipper grain** | One package-managed grain per `(tree, peer-cluster)` pair. Drains the WAL, calls `IReplicationTransport.SendAsync`, advances its per-peer cursor on ack. |
 | **Applier** | Receiver-side package component that merges incoming batches into the local lattice using the tree's CRDT semantics (`LwwRegister`, `OrFlag`, or `OrSet`). |
 | **Cursor** | The shipper's per-peer high-watermark - everything at or before this HLC has been successfully shipped to the peer. The package persists it in grain storage. |
-| **Replication mode** | Per-tree CRDT semantic chosen on opt-in. `LwwRegister` for write-once keys (`mfg-facts`, `mfg-site-activity`); `OrFlag` for the `tag-mfg-site` membership tree (enable-wins flag-CRDT membership); `OrSet` for set-typed values (`mfg-part-labels`); unreplicated trees stay cluster-local. |
+| **Replication mode** | Per-tree CRDT semantic chosen on opt-in. `LwwRegister` for `mfg-facts` (write-once keys) and `mfg-site-activity` (the newest fact per part-at-site wins); `OrFlag` for the `tag-mfg-site` membership tree (enable-wins flag-CRDT membership); `OrSet` for set-typed values (`mfg-part-labels`); unreplicated trees stay cluster-local. |
 | **Per-origin HWM** | The receiver's per-origin high-water mark: the highest HLC applied from each origin, used to dedupe re-delivered entries. Loop-breaking is separate - a replicated apply lands in the receiver's WAL under its source origin, and a shipper ships only locally-authored entries. Together they replace the sample's earlier `RequestContext["lattice.replay"]` flag. |
 | **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`; `ChaosReplicationApplier` (sample-side, Tier 4b inbound half) wraps it outermost and rejects every apply while the disconnect flag is set. |
 | **IReplicationTransport** | Single-method (`SendAsync`) seam between the shipper and the wire. `ChaosReplicationTransport` (sample-side, Tier 4b) decorates it; the package-side gRPC push transport is the concrete implementation. |

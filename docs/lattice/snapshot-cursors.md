@@ -38,8 +38,10 @@ returning the cursor ID:
    are not idempotent, so each record is applied to a single leaf a
    single time). The per-leaf results are unioned into one fully
    materialised per-shard projection and **seeded in memory** into the
-   transient `ISnapshotLeafGrain` for that shard, keyed by
-   `{treeId}/{shardIndex}/{baselineToken:N}`. The seed is *not* written
+   transient snapshot leaf for that shard, keyed by
+   `{physicalTreeId}/{shardIndex}/{baselineToken:N}` - the physical tree
+   the capture resolved, so a later alias cutover of the logical tree
+   still reaches the seeded leaf. The seed is *not* written
    durably at capture - see [Lazy baseline persistence](#lazy-baseline-persistence)
    below. The uniform `capturedHead` (each shard's per-partition WAL
    head, read after every leaf has frozen) is the bound recorded on the
@@ -95,12 +97,14 @@ On every `NextKeysAsync` / `NextEntriesAsync` call, the cursor grain:
 
 1. Resolves the per-page sub-range from the cursor's persisted
    bookmark.
-2. Fans out to the per-shard transient `ISnapshotLeafGrain`s addressed
-   by `{treeId}/{shardIndex}/{baselineToken:N}`. Each snapshot leaf was
+2. Fans out to the per-shard transient snapshot leaves addressed
+   by `{physicalTreeId}/{shardIndex}/{baselineToken:N}`. Each snapshot leaf was
    seeded in memory at capture from the materialised per-shard
    projection. Pages are served straight from that in-memory baseline -
-   through the same `IsKeyOwned` donor-orphan / virtual-slot ownership
-   filter the live read path uses - with **no WAL replay**. If the leaf
+   on a multi-shard tree through a donor-orphan / virtual-slot ownership
+   filter that resolves each key's owner against the coordinate's pinned
+   routing map (the point-in-time counterpart of the live read path's
+   moved-away guard) - with **no WAL replay**. If the leaf
    was evicted and later reloads, it reloads from its durable baseline
    row (written lazily; see below). A coordinate persisted before the
    frozen-baseline store existed (empty `SnapshotBaselineToken`) falls
@@ -137,8 +141,12 @@ with `LatticeSnapshotExpiredException` (an `InvalidOperationException`),
 and the caller simply reopens the snapshot. This is an availability edge
 only - a wrong or partial point-in-time view is never returned.
 
-The snapshot leaves are activation-cached and idle-evict after
-`LatticeOptions.SnapshotLeafIdleTtl` (default 30 minutes). A
+The snapshot leaves are activation-cached and idle-evict under the
+silo's ordinary Orleans grain-collection policy
+(`GrainCollectionOptions.CollectionAge`).
+`LatticeOptions.SnapshotLeafIdleTtl` (default 30 minutes) is described
+as this eviction window, but no runtime code currently reads it, so
+changing it has no effect. A
 subsequent page after eviction transparently rebuilds the leaf by
 reloading the same durable frozen baseline, so the view stays stable
 regardless of any WAL trimming that happened in the meantime.
@@ -183,11 +191,14 @@ Open-time cost is gated by
 per shard). With the frozen-baseline store the per-shard cost is the
 **materialised baseline row count** - what the snapshot leaf seeds into
 memory - rather than the captured WAL head: after a GC trim the head can
-be arbitrarily large while the real projection is small. If the deepest
-shard's baseline exceeds this budget,
-`OpenSnapshot*CursorAsync` fails fast with
-`LatticeSnapshotReplayBudgetExceededException` and no snapshot leaf is
-materialised.
+be arbitrarily large while the real projection is small. The gate is
+checked once every shard's capture has returned: if the deepest shard's
+baseline exceeds this budget, `OpenSnapshot*CursorAsync` throws
+`LatticeSnapshotReplayBudgetExceededException` and no cursor is created.
+The budget does not bound the capture itself - by the time it is
+compared, every shard's baseline has already been built and seeded in
+memory into its snapshot leaf. Those seeds are never persisted, and
+they are released when the orphaned leaves idle-evict.
 
 ## Admission control under saturation
 
@@ -195,14 +206,14 @@ A snapshot open is heavier than a single write: it freezes and materialises ever
 
 To prevent that, when [`LatticeOptions.ShedSnapshotOpensWhenSaturated`](configuration.md#shedsnapshotopenswhensaturated) is enabled (the default) and the tree's per-silo WAL saturation signal reports `Saturated` at the moment of the open, `OpenSnapshot*CursorAsync` sheds the open at admission - before any per-shard baseline capture is fanned out - by throwing a retryable [`LatticeSaturatedException`](../../src/lattice/LatticeSaturatedException.cs) carrying the tree id. Only `Saturated` (the "pause new appends" regime) sheds; a `Throttled` tree is unaffected and stays browsable. The caller contract is the same as every other `LatticeSaturatedException` source: back off briefly and retry once the tree drains.
 
-Over the read-only state API this refusal is mapped to gRPC `ResourceExhausted`; the Explorer catches that code, leaves the connection connected (other trees stay browsable), does not auto-retry (which would amplify the storm), and shows a plain, non-expert "this table is very busy right now, try again in a few seconds" message with a **Try again** action. Set the option to `false` to restore the prior always-open behaviour.
+Over the read-only state API this refusal is mapped to gRPC `ResourceExhausted`; the Explorer catches that code, leaves the connection connected (other trees stay browsable), does not auto-retry (which would amplify the storm), and shows a plain, non-expert message ("This table is very busy right now, so it can't be opened for browsing for a moment. Please wait a few seconds and try again.") with a **Try again** action. Set the option to `false` to restore the prior always-open behaviour.
 
 ## Observability
 
 | Instrument | Kind | Tags | Description |
 |---|---|---|---|
 | `orleans.lattice.snapshot.replay.duration` | Histogram (ms) | `tree`, `shard`, `tenant` | Per-shard wall-clock WAL replay time when a snapshot leaf opens from a legacy coordinate (one persisted before the frozen-baseline store, with no baseline token). A frozen-baseline snapshot never replays the WAL, so it never records this. |
-| `orleans.lattice.snapshot.replay.entries` | Counter | `tree`, `shard`, `tenant` | WAL entries consumed by that legacy snapshot-leaf replay. Not recorded for a frozen-baseline snapshot. |
+| `orleans.lattice.snapshot.replay.entries` | Counter (`{entry}`) | `tree`, `shard`, `tenant` | WAL entries consumed by that legacy snapshot-leaf replay. Not recorded for a frozen-baseline snapshot. |
 | `orleans.lattice.snapshot.pins` | ObservableGauge (`{pin}`) | `tree`, `tenant` | Live WAL cursor-registry pins held by snapshot cursors (registrations that do not hold back trimming - see [WAL retention](#wal-retention)), derived from the WAL cursor registry rather than accumulated. |
 
 `orleans.lattice.snapshot.pins` reports the pins held **now**, derived from the WAL

@@ -6,8 +6,8 @@ estate on Azure Container Apps end to end, and the Bicep-native Entra module it
 drives.
 
 > This folder documents and drives the deploy. The Bicep it deploys lives under
-> `../bicep/`. The estate-wide validation runbook is a separate, coordinator-owned
-> document.
+> `../bicep/`. The estate-wide validation runbook is in
+> [`../README.md`](../README.md#real-azure-validation-runbook).
 
 ## What it provisions
 

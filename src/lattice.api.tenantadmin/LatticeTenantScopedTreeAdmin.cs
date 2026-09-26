@@ -8,16 +8,17 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// the tenant-confined composition of the existing <see cref="ILatticeTreeAdmin"/>
 /// and <see cref="ILatticeSchemaAdmin"/> surfaces. It is the single narrowest seam
 /// at which a tenant-local tree name is bound to the active tenant's namespace and
-/// quota; the wrapped facades then apply their own fail-closed authorization on the
-/// composed, fully-qualified tree id.
+/// quota. Lifecycle operations delegate to the tree-admin facade, which applies
+/// fail-closed authorization on the composed tree id; schema operations delegate to
+/// the in-process schema admin, which does not authorize by itself.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Single confinement seam.</b> Every verb funnels through <c>ResolveScope</c>,
 /// which (1) rejects a null/empty local name, (2) derives the operating tenant
-/// solely from the ambient <see cref="LatticeActiveTenantContext"/> - never from a
-/// parameter or the wire - refusing fail-closed with
-/// <see cref="TenantScopeRequiredException"/> when none is in scope, and
+/// from the ambient <see cref="LatticeActiveTenantContext"/> - never from a method
+/// parameter - refusing fail-closed with <see cref="TenantScopeRequiredException"/>
+/// when none is in scope, and
 /// (3) composes the target id through <see cref="LatticeTenantTrees.Compose"/> under
 /// that tenant's prefix. Because the composed id's structural owner is always the
 /// active tenant (<see cref="LatticeTenantTrees.GetOwner"/>), no supplied local name

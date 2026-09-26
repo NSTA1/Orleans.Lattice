@@ -44,9 +44,9 @@ internal static class SchemaConstants
 
     /// <summary>
     /// Ambient <c>RequestContext</c> key carrying the tree id of an in-flight
-    /// merge, so the merge observer can resolve the governing policy. The core
-    /// <c>LatticeMergeContext</c> (#1198) does not yet carry the tree id; until it
-    /// does, the observer only activates when this key is present.
+    /// merge for paths that cannot otherwise resolve it. The merge observer uses
+    /// this alongside the core merge context to resolve the governing policy and
+    /// only activates when a tree id is available.
     /// </summary>
     internal const string MergeTreeIdRequestContextKey = "ols.mtree";
 

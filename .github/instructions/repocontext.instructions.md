@@ -233,7 +233,8 @@ Two guardrails make it safe to lean on as primary - follow both every time:
    valid fallback - it is skipping the primary tool, and is the one thing this
    guardrail exists to stop. Drop to `grep` / `glob` for a query when any of
    these hold:
-   - `search` returns `mode: keyword` (semantic index unhealthy);
+   - `search` returns `mode: keyword` (semantic retrieval did not serve -
+     `retrievalPath` says whether by design or through a real capability loss);
    - `index_status` reports `status: Failed`;
    - the index is **mid-ingest** (`status: Running` with
      `filesEmbedded < filesScanned`): `mode: semantic` still answers, but it only
@@ -343,15 +344,28 @@ mid-task.
 - Pass a natural-language `query` and a small `k` (1-100, default 10); start
   small and widen only if needed.
 - **Always read the `mode` field on the result:**
-  - `semantic` - vector nearest-neighbour search (the good path).
-  - `keyword` - deterministic BM25 keyword/structural scan, used because the
-    vector index is unavailable or stale. Ranking is corpus-relative BM25 over
+  - `semantic` - vector nearest-neighbour search (the good path). It is
+    **approximate by default**: answered from a persisted approximate index
+    whose recall is bounded rather than complete (published recall@10 floors
+    of 0.95 on a clustered corpus and 0.55 on an adversarially unclustered
+    one). A host that needs complete recall sets
+    `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL=exact`.
+  - `keyword` - deterministic BM25 keyword/structural scan, used because no
+    embedding provider is bound, or because the vector index is unavailable or
+    stale. Ranking is corpus-relative BM25 over
     file content and names (a distinctive term outweighs a ubiquitous one), so it
     is a capable literal-term search - but it matches tokens, not meaning, so a
     purely conceptual query with no shared vocabulary can still rank poorly. When
     you see `keyword`, prefer distinctive identifier-like terms, and fall back to
     `grep` only if the terms you have are too generic.
   - `empty` - no matches.
+- **Then read `retrievalPath`, which says exactly which path served the answer
+  and, for a keyword answer, why.** Its six values are `semantic.approximate`
+  (the default), `semantic.exact`, `keyword.no_embedder` (no embedding provider
+  is bound - an intended keyword-only deployment, not a fault),
+  `keyword.vector_plane_unavailable`, `keyword.index_degraded`, and
+  `keyword.exact_fallback_suppressed`. Treat the last three as a real
+  capability loss.
 - Each hit carries a `score`, its `reasons` (see next bullet), the hydrated
   `entry` - `key`, `kind`, `path`, `fields`, `tags`, and `links` - and, on a
   `semantic` hit, the matched `vectorId`. A file hit's `fields` are `digest`,
@@ -506,8 +520,10 @@ ceiling**, collapsing the `search -> recall -> view` loop into one round trip th
 can never overrun your context budget. Prefer it over hand-running that loop when you
 need the actual source to *do* a task (not just locate a file).
 
-- It searches for the `task` (semantic when available, else a keyword bundle),
-  resolves the top hits to unique files, and packs each at a `detail` level:
+- It searches for the `task` (semantic when available - approximate by
+  default, as for `search` - else a keyword bundle, carrying the same
+  `retrievalPath` attribution as `search`), resolves the top hits to unique
+  files, and packs each at a `detail` level:
   `paths` (path only), `outline` (declared-symbol skeleton), or `slices` (bounded
   body text). `auto` (default) packs the richest level that yields a non-empty bundle
   and reports the level it settled on in `detail`.
@@ -814,11 +830,13 @@ anywhere to explain it.
 
 ## Write-tool safety
 
-- Every write tool (`add_repo`, `remove_repo`, `reset_index`, `remember`,
-  `update`, `forget`, the claim trio `claim` / `renew_claim` / `release_claim`,
-  and, in single-repository mode, `bootstrap`) is **destructive and
-  fail-closed** - offered only when the host opted writes in. Never call one
-  speculatively.
+- Every write tool (`remember`, `update`, `forget`, the claim trio `claim` /
+  `renew_claim` / `release_claim`, and the repository verbs - `add_repo`,
+  `remove_repo`, and `reset_index` in workspace mode, `bootstrap` in
+  single-repository mode) is **destructive and fail-closed** - offered only
+  when the host opted writes in. Never call one speculatively. The claim trio's
+  read-only companion, `claim_status`, reports who holds a claim and how deep
+  its queue is - a point-in-time observation, never an entitlement to write.
 - Do not write memory without a clear durable reason, and never `remove_repo`
   the repo you are working in.
 - **`remove_repo` requires explicit user consent, and is not the tool for repairing an index.** It drops a repository's
@@ -842,7 +860,9 @@ anywhere to explain it.
   reach for it when the index is actually degraded and the memory is worth
   preserving. Its sweep outlives the call: if `reset_index` times out or the
   connection drops, the reset keeps running, so poll `index_status` (`Running`
-  in phase `Resetting`, then `Completed` or `Failed`) rather than re-running it.
+  in phase `Resetting`, with `treesSwept` and `entriesDeleted` advancing as the
+  sweep drops each code-index tree, then `Completed` or `Failed`) rather than
+  re-running it.
   Only a host restart interrupts a reset, leaving it `Running`/`Resetting`;
   re-running it then is safe and idempotent. `remove_repo` remains the only verb that drops a repository from
   the listing entirely.

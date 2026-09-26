@@ -1655,9 +1655,9 @@ public sealed class LatticeWalGc(
     /// Returns <see langword="null"/> when the durable pin store is unavailable,
     /// carries no offsets (state predating this field, or a host that never
     /// reports offsets), so the GC degrades cleanly to the pre-existing HLC-only
-    /// behaviour. A single global minimum is applied to every WAL partition:
-    /// exact for the common single-partition layout and conservatively safe
-    /// (over-retains) across partitions, whose offsets are otherwise incomparable.
+    /// behaviour. Partition-attributed pins are minimumed per WAL partition; legacy
+    /// unattributed pins are folded into every partition's floor so an old single-
+    /// partition reporter remains conservatively safe.
     /// <para>
     /// The <b>set of consumers the floor speaks for</b> is returned alongside it
     /// (issue #3172), because the floor is only half of an offset-space

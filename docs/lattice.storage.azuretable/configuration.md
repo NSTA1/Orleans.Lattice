@@ -160,7 +160,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 
 ### `PipelinePhaseTwoCommits`
 
-When `true`, the provider can return from an append after the durable entry write and after observing the previous pending completion for the same shard. Commit completion still runs in strict offset order, and failures remain sticky to a later append or the configured fault handler. Set to `false` when you want every append to wait for its own completion before returning.
+When `true`, the provider can return from an append after the durable entry write and after observing the previous pending completion for the same shard. Each completion commit still writes its pending batches in ascending offset order, and failures remain sticky to a later append or the configured fault handler. Set to `false` when you want every append to wait for its own completion before returning.
 
 Because the read path is derived from commit metadata, this option introduces a bounded read visibility lag: the trailing batch on a shard is durable when the append returns but is not readable until its completion lands, so a read can omit it. The reported highest offset does not lag - `GetHighestOffsetAsync` folds the already-durable batches the shard's completion worker has accepted over the stored tail, so it never reports an offset lower than one a completed append returned. Callers that need read-after-write should await the provider's phase-two flush barrier rather than sleeping or polling; see [Architecture](architecture.md#read-visibility-lag-under-pipelining). Set the option to `false` if you would rather pay the latency on every append than take a barrier where you need one.
 
@@ -231,6 +231,8 @@ var optionsWithCooldownOverride = new AzureTableWalStorageOptions
 
 Stored WAL payload compression algorithm. Default is `LatticeCompression.Zstd`; set `LatticeCompression.None` to store payloads verbatim. Rows are self-describing, so changing this option affects newly written rows while older rows continue to decode with their recorded tags.
 
+Compression also decides whether a large entry fits. Each entry is stored in one binary property, which the Azure Table service limits to 64 KiB, measured on the stored bytes. With `LatticeCompression.None`, or for a payload compression cannot shrink, an entry fails as soon as its encoded record exceeds 64 KiB; a compressible one fits while its compressed form stays under the limit. See [Architecture](architecture.md#transactional-batch-contract).
+
 ### `CompressionMinPayloadBytes`
 
 Minimum encoded payload size at which compression is attempted. Default is 256 bytes. Must be non-negative. Ignored when `Compression` is `LatticeCompression.None`.
@@ -249,7 +251,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 
 ## Validation
 
-When the provider is constructed it rejects a negative `CompressionMinPayloadBytes` (`ArgumentOutOfRangeException`) and a `Compression` algorithm other than `None` for which no `ILatticeCompressor` is registered (`InvalidOperationException`).
+When the provider is constructed it rejects a negative `CompressionMinPayloadBytes` (`ArgumentOutOfRangeException`), a registered `ILatticeCompressor` that claims `LatticeCompression.None` or shares an algorithm tag with another registered compressor (`ArgumentException`), and a `Compression` algorithm other than `None` for which no `ILatticeCompressor` is registered (`InvalidOperationException`).
 
 At first use - when it builds its Azure SDK client and creates the table - the provider validates the following, throwing `InvalidOperationException` on a violation:
 

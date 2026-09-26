@@ -23,6 +23,11 @@ guard refuses to start when any of them is violated:
 | Host image tags | `repocontext-mcp:local` | `repocontext-mcp:coldstart-rig` |
 | Host port | 8080 | 18080 |
 
+The live model-cache name is a legacy one: the current live sample's ONNX
+embedder bakes its weights into its image and mounts no volume, so a host that
+never ran the earlier HuggingFace-cache sample has no such volume. The rig still
+refuses the name, and still keeps its own `lattice-coldstart-hf` cache.
+
 On top of the naming, five structural properties:
 
 - **The stack is never built.** `docker-compose.rig.yml` has no `build:` section
@@ -51,8 +56,10 @@ Prove it to yourself at any time:
 ./scripts/rig.ps1 guard
 ```
 
-The guard's refusals are covered by the regression suite, including one test per
-live identity at both layers:
+The guard's refusals are covered by the regression suite, including a refusal
+test at both layers for the live compose project, data volume, image tag and
+host port (the live model-cache volume is covered by the live volume-prefix rule
+rather than by a test of its own):
 
 ```powershell
 pwsh -File ./scripts/Test-RigHelpers.ps1
@@ -150,8 +157,10 @@ restart or recreate would **silently replace**, and the check says so loudly.
 
 The container is found from the compose project the isolation contract already
 declares forbidden, and the tag is read from the container itself, so there is
-no second copy of the live identity to drift out of date. The whole check is two
-`docker inspect` calls: it reads, and touches nothing.
+no second copy of the live identity to drift out of date. The whole check is one
+`docker ps` lookup and three `docker inspect` reads (the container's pinned image
+ID, the image reference it was created from, and what that reference resolves to
+now): it reads, and touches nothing.
 
 It is deliberately **fail-safe rather than fail-closed**, unlike the isolation
 guard. This is a read-only advisory about a deployment the rig does not own, so
@@ -215,7 +224,7 @@ Two supporting habits, both free:
 |------|---------|
 | `docker-compose.rig.yml` | The isolated stack. No build sections, external volumes, rig-only image tags, non-8080 host port. |
 | `census-expectations.json` | Known-answer figures for the offline census, quoted by the epic from a specific backup. |
-| `sql/*.sql` | The offline grain-state census queries. Committed files, never shell-assembled SQL. |
+| `sql/*.sql` | The offline grain-state census queries. Committed files, never shell-assembled SQL. `inspect-state.ps1` runs four of them (grain state by type, leaf counts, leaf snapshots by prefix, checkpoints by partition); the healing and shard-root queries are standalone, run by hand (the adoption report used them for its F-A and F-B findings). |
 | `scripts/parameters.ps1` | Default parameters and the isolation contract. |
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides. |
 | `scripts/_rig-helpers.ps1` | Pure helpers: config, the isolation guard, the file-WAL framing walk, statistics, log counters. |
@@ -227,7 +236,7 @@ Two supporting habits, both free:
 | `scripts/snapshot-volume.ps1` | Extracts a rig volume to a staging directory so the census can walk a volume that has moved on (a healed working volume, say). |
 | `scripts/observe-healing.ps1` | Attaches to a running box and records, on a cadence, whether it keeps serving while it heals itself. |
 | `scripts/generate-corpus.ps1` | Synthetic scale mode: generate, index and promote a corpus well beyond live size. |
-| `scripts/verify-corpus.ps1` | Fingerprints the corpus a running rig box serves (repositories, file and symbol scopes, memory keys, content spot checks, known queries) into `fingerprints/`, and with `-Compare` diffs two fingerprints as supersets, exiting non-zero on any loss. |
+| `scripts/verify-corpus.ps1` | Fingerprints the corpus a running rig box serves (repositories, file and symbol scopes, memory keys, content spot checks, known queries) into `fingerprints/`, and with `-Compare` diffs two fingerprints as supersets, exiting non-zero on any loss (`-RequireQueryOrder` compares the known-query results as ordered lists instead of sets). |
 | `scripts/rig.ps1` | Day-to-day helper: `guard`, `build`, `tag`, `clone`, `up`, `down`, `status`, `logs`, `mcp`, `clean`. |
 | `results/` | Committed cohort and census JSON, and the dated adoption and evaluation reports written from them. |
 
@@ -264,8 +273,12 @@ cd benchmark/coldstart-rig/scripts
    Docker VM's own filesystem rather than dragged across a host bind mount.
 3. Applies the rig's additional image tags.
 
-The master is written once and then only ever cloned. Re-run with `-Force` to
-rebuild it from a newer tarball.
+The master is written once and then only ever cloned. A re-run with an unchanged
+tarball reuses the existing staging copy and master; a changed tarball (its size
+or last-write time no longer matches the staging manifest), or one with a
+different file name, is extracted afresh and the master rebuilt from it.
+`-Force` rebuilds both even when nothing changed, and `-SkipImages` leaves the
+image tags alone when only the durable state needs refreshing.
 
 ## Running a cohort
 
@@ -286,8 +299,9 @@ mislead:
 Those three are only distinguishable because a drain window exists.
 `docker-compose.rig.yml` sets `init: true` so PID 1 is an init process that
 forwards `SIGTERM` and reaps orphans, and `stop_grace_period: 120s` so a drain
-is allowed to finish; the same pair carried by the live sample, for the same
-reasons (issues #2576 and #2389). A `graceful-restart` that got no drain would
+is allowed to finish. The live sample carries the same pair for the same
+reasons (issues #2576 and #2389), with a larger `240s` grant since issue #3304.
+A `graceful-restart` that got no drain would
 be a second, slower spelling of `sigkill-restart`, which is the one comparison
 in this table that must not collapse.
 
@@ -344,7 +358,8 @@ Useful flags:
 - `-WarmQueryCount <n>` overrides how many warm samples follow the first
   success (default `WarmQueryCount` in the parameters, 5).
 - `-ParametersFile <path>` loads a different parameters file instead of
-  `parameters.local.ps1` / `parameters.ps1`; every rig script accepts it.
+  `parameters.local.ps1` / `parameters.ps1`; every rig script except the
+  `Test-RigHelpers.ps1` regression suite accepts it.
 
 ### The warm-up phase, and why it exists
 
@@ -373,8 +388,17 @@ day, so a continuous background reconcile neither competes for CPU with the
 measured path nor writes to the working volume mid-run. That is what makes two
 runs from the same master comparable. Set
 `RIG_SELFINDEX_TICK_SECONDS=5`, `RIG_RECONCILE_INTERVAL_SECONDS=5` and
-`RIG_FULL_WALK_INTERVAL_SECONDS=120` in the environment to reproduce the live
-cadence when the background indexer is itself the thing under test.
+`RIG_FULL_WALK_INTERVAL_SECONDS=120` in the environment to reproduce the cadence
+of the sample's base compose file when the background indexer is itself the
+thing under test. That is not an exact copy: the rig pins
+`LATTICE_RECONCILE_JITTER_SECONDS` to `0` (as the base file does) and passes no
+`LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS`, so the embedding gap scan keeps
+the host default of 1200 s where the base file sets 300 s. The tuned local
+deployment in the
+[local-deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#the-settings-this-deployment-declares)
+runs a slower cadence again (tick 30 s, reconcile 60 s plus 15 s jitter, full
+walk and gap scan 3600 s), which the rig cannot reproduce without editing its
+compose file.
 
 ## Reading the output
 
@@ -390,8 +414,8 @@ Top level:
 | `kind` | `coldstart-rig/cohort`. |
 | `cohortId`, `generatedUtc` | Identity of the run. |
 | `hostContext` | What the host looked like: `dockerCpus`, `dockerMemoryBytes`, `runningContainers`, `foreignContainers`, `foreignContainerNames[]`, and `contended`. A cohort taken alongside unrelated containers is still valid, but its spread is the **host's** floor, not the rig's - read this before believing a spread figure. |
-| `configuration` | Project, port, images, volumes, repo id, query, scenarios, run count. |
-| `imageUnderTest` | **Which image produced these numbers**: `mcpImage` and its resolved `mcpImageId`, the same for the embedder, the configured `sourceMcpImage`, and `builtFrom` (git ref, commit, build time) when `rig.ps1 build` produced it. `builtFrom.matchesTestedImage` compares the recorded build's image ID with the tested one; a cohort refuses to start when they differ, so a written cohort only ever records `true` and a stale build record cannot claim provenance it no longer has. |
+| `configuration` | Project, port, images, master and working volumes, repo id, query, warm query count, scenarios, run count, and the `queryFromLive` / `skipClone` / `skipWarmup` switches. |
+| `imageUnderTest` | **Which image produced these numbers**: `mcpImage` and its resolved `mcpImageId`, the same for the embedder, the configured `sourceMcpImage`, and `builtFrom` (the built image and its ID, git ref, commit, build time) when `rig.ps1 build` produced it. `builtFrom.matchesTestedImage` compares the recorded build's image ID with the tested one; a cohort refuses to start when they differ, so a written cohort only ever records `true` and a stale build record cannot claim provenance it no longer has. |
 | `liveDeployment` | The live deployment's image pin `pinBeforeCohort` / `pinAfterCohort` (each `status` of `clean`, `drift` or `skipped`), and `postCondition`, which asserts the live container's pinned image ID was **unchanged** across the run. `checked` is false on a host with no live deployment. |
 | `runs[]` | One entry per run, each with `scenarios[]`. |
 | `summary[]` | One entry per scenario, aggregated across runs. |
@@ -421,7 +445,7 @@ Per scenario summary (`summary[]`):
 
 | Key | Meaning |
 |---|---|
-| `samples` | How many runs contributed. |
+| `scenario`, `samples` | Which scenario, and how many runs contributed. |
 | `firstQuerySeconds[]` | The raw headline samples. |
 | `firstQuerySecondsMin` / `Max` / `Mean` | Headline aggregates. |
 | `firstQueryRelativeSpreadPct` | `(max - min) / mean * 100`. **This is the comparability figure**: a sub-issue can only attribute a delta larger than this spread. |
@@ -496,8 +520,9 @@ file-WAL framing described in `FileWalRecordFormat`), per-tree leaf counts,
 leaf-snapshot rows and bytes per key prefix, per-partition projection
 checkpoints, and grain-state size by grain type.
 
-Output: `benchmark/.run/coldstart-rig/census/census-<stamp>.json` plus
-`census-latest.json`. Every figure also lands in a flat `metrics` map so two
+Output: `benchmark/.run/coldstart-rig/census/census-<stamp>.json` (or the path
+`-OutputPath` names) plus a `census-latest.json` copy beside it. Every figure
+also lands in a flat `metrics` map so two
 censuses can be diffed by key:
 
 | Metric key | Meaning |
@@ -521,8 +546,9 @@ The rig is an instrument, so it is validated against an answer arrived at
 independently. `census-expectations.json` pins the figures the epic quoted from
 `volume-backup-2026-08-29T1000.tar`, and `inspect-state.ps1` recomputes each one
 and reports match or mismatch (exiting non-zero on any mismatch). Point the rig
-at a different backup and pass `-SkipExpectations`, or replace the expectations
-file with figures for that backup.
+at a different backup and pass `-SkipExpectations`, or supply figures for that
+backup, either in the expectations file or in another one named by
+`-ExpectationsFile`.
 
 **The pinned figures are the PRE-epic baseline.** They describe a deployment
 whose WAL had been trimmed once, ever (559,455 data records against exactly 64
@@ -542,16 +568,16 @@ post-change volume, pass `-SkipExpectations` and compare `wal.trimRecords` and
 
 ### Measuring WAL reclamation
 
-Do it from **durable state, not telemetry**. The RepoContext container exposes
-no metrics endpoint, and it is not going to gain one: epic decision D5 requires
-every mechanism to be default-on so an existing deployment heals with no
-operator action, and S13's acceptance criterion is that the host picks up every
-mechanism with no change to its compose file or environment. Adding an exporter
-or environment plumbing for `LatticeOptions` would invert that promise, so the
-whole `orleans.lattice.wal.gc.*` family is unreachable from any external
-instrument by design.
+Do it from **durable state, not telemetry**. The RepoContext container does now
+serve a Prometheus scrape - `GET /metrics` on its one listener, so
+`http://localhost:18080/metrics` on the rig - and that exposition includes the
+`orleans.lattice.wal.gc.*` family (see
+[Metrics scraping](../../docs/lattice.api.mcp.repocontext/container.md#metrics-scraping)).
+It arrived after this rig was written (issue #2363), no rig script reads it, and
+a scrape covers only what the serving process has recorded since it started, so
+it resets across exactly the restarts this rig measures.
 
-The offline census is the stronger instrument for this question anyway: it
+The offline census is the stronger instrument for this question: it
 parses the file-WAL framing and counts Trim records per shard on a restored copy
 of the volume, so it measures what is actually on disk and cannot be defeated by
 a missing exporter, a sampling window, or a dropped metric. It is what
@@ -586,7 +612,9 @@ the working volume after a box has been left running long enough to heal itself:
 
 `snapshot-volume.ps1` tars the volume inside a throwaway container (read-only on
 the source) and extracts it to its own staging directory, leaving the pristine
-master untouched. Pass `-SkipExpectations`: `census-expectations.json` pins the
+master untouched. It snapshots the working volume unless `-Volume` names another
+rig volume, and refuses an existing staging directory of that name unless
+`-Force` is passed. Pass `-SkipExpectations`: `census-expectations.json` pins the
 pre-change figures from a specific backup, so a healed volume is *supposed* to
 differ from them.
 
@@ -607,12 +635,16 @@ Each sample records both health probes, a real query with its `mode` and
 data loss during a heal would appear as a step down rather than having to be
 inferred from a before/after pair), and the healing / index / replay counters
 tallied from the container's own log lines since the previous sample. It writes
-`benchmark/.run/coldstart-rig/observations/observation-<stamp>.json`.
+`benchmark/.run/coldstart-rig/observations/observation-<stamp>.json` unless
+`-OutputPath` names another file. `-DurationMinutes` and `-IntervalSeconds`
+default to 60 and 30, and `-RepoId` / `-SemanticQuery` override the parameters.
 
-It reads the log rather than a metric on purpose: the RepoContext container
-exposes no metrics endpoint, deliberately, so healing progress is read from the
-orchestrator's own Information lines and the durable outcome from
-`inspect-state.ps1`. Both are properties of what the box actually did.
+It reads the log rather than a metric: healing progress is tallied from the
+orchestrator's own Information lines and the durable outcome is read by
+`inspect-state.ps1`, so both are properties of what the box actually did. The
+container's `/metrics` scrape (see
+[Measuring WAL reclamation](#measuring-wal-reclamation)) postdates this script,
+which does not read it.
 
 One number in the summary is a contract check rather than a measurement:
 `readyButNotSemantic` counts samples where `/health/ready` returned 200 while a
@@ -630,8 +662,9 @@ start there:
 # 1. Generate a deterministic corpus under the mounted workspace root.
 ./generate-corpus.ps1 -Stage generate -Files 30000 -SymbolsPerFile 12
 
-# 2. Index it into a dedicated scale working volume (this is the slow stage:
-#    embedding runs on CPU in the companion container and takes hours).
+# 2. Index it into the rig's working volume, which this stage empties first
+#    (this is the slow stage: embedding runs on CPU in the companion container
+#    and takes hours).
 ./generate-corpus.ps1 -Stage index
 
 # 3. Snapshot the indexed volume as a reusable pristine scale master.
@@ -644,6 +677,16 @@ start there:
 The generator is seeded, so the same `-Files` / `-SymbolsPerFile` / `-Seed`
 always produce a byte-identical corpus and two scale cohorts differ only in the
 code under test.
+
+Stage 2 removes and recreates `lattice-coldstart-work`, the same working volume
+every cohort runs on, so do not run it while that volume holds state you still
+need.
+
+`-Stage all` runs the three stages in order. The corpus is written to
+`<WorkspaceRoot>/<CorpusRepoId>` (default `coldstart-scale-corpus`) unless
+`-TargetPath` names another directory under the mounted workspace root, `-Seed`
+defaults to 18380, and `-IndexTimeoutMinutes` (default 720) bounds how long the
+index stage waits for convergence.
 
 ## Cleaning up
 

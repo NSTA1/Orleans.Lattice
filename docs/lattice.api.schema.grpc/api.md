@@ -2,7 +2,7 @@
 
 The public surface is the typed client, the server-side options, the registration extensions, the authorization and identity seams (with the operation enum and authorization-context struct), and the wire message records. The gRPC service, method definitions, marshallers, interceptor, and the default header credential bridge / options auth-scheme source are internal and are described by behaviour in [Architecture](architecture.md).
 
-The wire message records are Orleans-serialized (`[GenerateSerializer]`) with stable aliases prefixed `oisg.`. The facade and shared abstractions records use aliases prefixed `ois.`.
+The wire message records are Orleans-serialized (`[GenerateSerializer]`) with stable aliases prefixed `oisg.`. The facade's own shared abstractions record (`LatticeSchemaCapabilities`) uses the `ois.` prefix, and the schema engine's records the wire carries (`LatticeSchemaPolicy`, `LatticeSchemaDeadLetterEntry`, `LatticeSchemaRemediationReport`, and the rest) keep the engine's own `ols.` aliases.
 
 ## Registration
 

@@ -36,8 +36,9 @@ public enum VectorIndexBuildPhase
     Persisting = 3,
 
     /// <summary>
-    /// A committed generation is loaded and the index answers from its
-    /// partitioning.
+    /// The build pipeline finished and the committed generation is loaded. The
+    /// index answers from its partitioning only when one was produced; below the
+    /// training minimum it serves exact exhaustive scans while still being finished.
     /// </summary>
     Ready = 4,
 }

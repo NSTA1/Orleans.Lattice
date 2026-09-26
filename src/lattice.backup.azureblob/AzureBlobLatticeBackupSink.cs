@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Backup.AzureBlob;
 
 /// <summary>
 /// An <see cref="ILatticeBackupSink"/> backed by an Azure Storage account.
-/// Content-addressed artifacts are stored as <b>append blobs</b> under
+/// Artifacts are stored as <b>append blobs</b> under
 /// <c>artifacts/{artifactId}</c> - the streamed chunks append in natural order
 /// and read back in order - and self-describing manifests are stored as
 /// <b>block blobs</b> under <c>manifests/{backupId}</c>, so a manifest is a
@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Backup.AzureBlob;
 /// split across a read boundary and deserialization never sees a truncated buffer.
 /// </para>
 /// <para>
-/// Writes are idempotent: artifact ids are content-addressed, so a completed
+/// Writes are idempotent for the same artifact id and bytes: a completed
 /// (committed) artifact blob already holds identical bytes and a retried write is
 /// a no-op. A partially written append blob (created but not yet marked committed
 /// via blob metadata) is overwritten on retry, so a crash mid-append never leaves

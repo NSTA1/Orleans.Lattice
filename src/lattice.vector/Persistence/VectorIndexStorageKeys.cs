@@ -12,9 +12,10 @@ namespace Orleans.Lattice.Vector.Persistence;
 /// one in place. An <i>epoch</i> covers one flush inside a generation: a dirty
 /// partition's chunks are written under a new epoch and committed by rewriting
 /// that partition's state record, so an interrupted flush leaves an uncommitted
-/// epoch the loader ignores and the next flush sweeps. Neither counter is ever
-/// reused, and both are rendered zero-padded so ordinal key order is numeric
-/// order.
+/// epoch the loader ignores and the next flush sweeps. Both counters are monotonic
+/// within a live generation, but a discarded generation resets its epoch space and
+/// a discard can reset the generation sequence. Components are rendered zero-padded
+/// so ordinal key order is numeric order.
 /// </para>
 /// </summary>
 public static class VectorIndexStorageKeys

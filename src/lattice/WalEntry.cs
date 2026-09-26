@@ -30,11 +30,9 @@ public readonly record struct WalEntry
     /// The captured mutation record. Carries every field required to
     /// reconstruct the original write (key, value, HLC, tombstone flag,
     /// expiry, origin cluster id, vector clock, transaction id,
-    /// category, and pre-merge delta payload). Replication-only metadata
-    /// (declared <c>LatticeMergeMode</c>, dependency summary) is
-    /// reconstructed at ship time by the replication package and is
-    /// deliberately not carried on the WAL boundary so the core library
-    /// remains self-contained.
+    /// category, declared merge mode, and pre-merge delta payload). Replication-only
+    /// transport metadata such as dependency summaries is reconstructed at ship time
+    /// by the replication package and is deliberately not carried on this provider boundary.
     /// </summary>
     [Id(1)] public LatticeMutation Mutation { get; init; }
 }

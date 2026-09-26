@@ -51,7 +51,10 @@ Prometheus to scrape the silo, then:
 - prints the four telemetry tools the agent discovered (and confirms it sees zero
   state tools),
 - runs `lattice_telemetry_query` for the silo's scrape-health (`up`),
-- lists the `orleans.lattice` metric names Prometheus discovered and queries one,
+- lists the Lattice metric names Prometheus discovered and queries one (in
+  Prometheus form, `orleans_lattice_*`: the OpenTelemetry exporter turns the
+  dots into underscores and appends unit words such as `_milliseconds` and
+  `_bytes`, and `_total` to counters),
 - shows the anonymous caller being offered zero tools,
 
 and exits. Tear Prometheus down afterwards with:
@@ -78,8 +81,9 @@ points the telemetry proxy at an authenticated Prometheus with a `Bearer`,
 
 - `Program.cs` - the silo + MCP host wiring (`AddOpenTelemetry().WithMetrics(...)`,
   `AddLatticeMcp` / `AddStateTools` / `AddTelemetryTools` / `MapLatticeMcp` /
-  `MapPrometheusScrapingEndpoint`), the cluster-wide telemetry grant seeding, and
-  the MCP client journey.
+  `MapPrometheusScrapingEndpoint`, with the MCP endpoint mounted at `/mcp` so it
+  coexists with `/metrics`), the cluster-wide telemetry grant seeding, and the MCP
+  client journey.
 - `docker-compose.yml` and `prometheus.yml` - the real Prometheus that scrapes
   the silo and answers the telemetry tools' PromQL queries.
 - `DemoCredentialBridge.cs` / `DemoAuthenticator.cs` - the fail-closed demo

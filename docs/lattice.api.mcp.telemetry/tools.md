@@ -28,7 +28,7 @@ There is no destructive opt-in flag, unlike the data, backup, auth, replication,
 
 | Argument | Type | Purpose |
 |---|---|---|
-| `query` | `string` | The PromQL expression to evaluate at a single instant, for example `up` or `rate(lattice_wal_append_total[5m])`. |
+| `query` | `string` | The PromQL expression to evaluate at a single instant, for example `up` or `rate(orleans_lattice_shard_writes_total[5m])`. |
 | `time` | `DateTimeOffset?` | Optional evaluation timestamp; `null` evaluates at the backend's current time. |
 
 Returns a `TelemetryQueryResult`: on success, the backend `ResultType` (`vector`, `matrix`, `scalar`, or `string`) and the projected `Series`; on failure, `Success = false` and an `Error`.
@@ -40,7 +40,7 @@ Returns a `TelemetryQueryResult`: on success, the backend `ResultType` (`vector`
 | `query` | `string` | The PromQL expression to evaluate across the range. |
 | `start` | `DateTimeOffset` | The inclusive start of the range. |
 | `end` | `DateTimeOffset` | The inclusive end of the range; must be at or after `start`. |
-| `step` | `TimeSpan` | The resolution step between evaluation points. Must be strictly positive. |
+| `step` | `TimeSpan` | The resolution step between evaluation points, as a duration (for example `00:00:30` for 30 seconds). Must be strictly positive. |
 
 Returns a `TelemetryQueryResult` (a `matrix`). The call is rejected with a clean `Success = false` result - without ever hitting the backend - when `end < start`, when `step <= 0`, when `end - start` exceeds `MaxRange`, or when `step` exceeds `MaxStep`.
 

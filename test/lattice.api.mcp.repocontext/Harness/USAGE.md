@@ -43,6 +43,12 @@ Switch the posture; nothing else changes:
   harness passes a `WorkspaceRoot` (the system temp directory unless a fixture
   sets another).
 
+Set `WorkspaceMode = true` to serve the workspace-mode surface instead:
+`repocontext_list_repos` is added and, under `Writer`, `repocontext_add_repo`,
+`repocontext_remove_repo`, and `repocontext_reset_index` replace
+`repocontext_bootstrap`. `WorkspaceRoot` bounds the caller-supplied path in either
+mode.
+
 The posture is driven through deterministic stub collaborators (a stub credential
 bridge and a stub permission resolver), so it never depends on a real Auth policy
 tree or its change-feed compile step.

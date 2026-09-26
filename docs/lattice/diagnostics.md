@@ -13,7 +13,7 @@ foreach (var shard in report.Shards)
 
 ## Report shape
 
-`TreeDiagnosticReport` aggregates per-shard structural and runtime metrics plus a bounded ring buffer of recent adaptive-split events:
+`TreeDiagnosticReport` aggregates per-shard structural and runtime metrics plus a bounded ring buffer of recent split events:
 
 | Field | Description |
 |---|---|
@@ -23,7 +23,7 @@ foreach (var shard in report.Shards)
 | `TotalLiveKeys` | Sum of live keys across all shards. |
 | `TotalTombstones` | Sum of tombstones across all shards (always `0` when `deep: false`). |
 | `Shards` | Per-shard reports, ordered by `ShardIndex`. |
-| `RecentSplits` | Most recent adaptive-split events (oldest first, capped at 32). |
+| `RecentSplits` | Most recent split commits, adaptive or driven by an online reshard, as `RecentSplit` entries (oldest first, capped at 32). |
 | `SampledAt` | UTC timestamp when the report was assembled. |
 | `Deep` | Whether the report includes tombstone counts. |
 
@@ -32,14 +32,14 @@ Each `ShardDiagnosticReport` carries structural, volume, and hotness fields:
 | Field | Description |
 |---|---|
 | `ShardIndex` | Zero-based physical shard index. |
-| `Depth` | B+ tree depth - `1` when the root is a leaf, `2` with one internal level, etc. `0` when the shard is empty. |
-| `RootIsLeaf` | Whether the shard's root is currently a leaf. |
+| `Depth` | B+ tree depth - `1` when the root is a leaf, `2` with one internal level, etc. `0` when the shard has no root yet. |
+| `RootIsLeaf` | Whether the shard's root is currently a leaf; `false` when the shard has no root yet. |
 | `LiveKeys` / `Tombstones` | Live and tombstoned entry counts. `Tombstones` is `0` unless `deep: true`. |
 | `TombstoneRatio` | `Tombstones / (LiveKeys + Tombstones)`; `0` when the shard is empty or `deep: false`. |
 | `OpsPerSecond` | `(Reads + Writes) / HotnessWindow.TotalSeconds` since shard activation. |
 | `Reads` / `Writes` | Volatile counters; reset on shard-grain deactivation. |
-| `HotnessWindow` | Wall-clock duration over which `Reads` and `Writes` accumulated. |
-| `SplitInProgress` | Whether the shard is participating in an adaptive split as the source. |
+| `HotnessWindow` | Wall-clock duration over which `Reads` and `Writes` accumulated - the time since the shard activated. Exactly `TimeSpan.Zero` only on the placeholder entry of a shard whose fan-out failed. |
+| `SplitInProgress` | Whether the shard is the source of an in-flight split, adaptive or driven by an online reshard. |
 | `BulkOperationPending` | Whether a bulk-load graft is pending on this shard. |
 
 ## Shallow vs deep
@@ -55,13 +55,13 @@ Use shallow reports for routine health probing; reach for deep reports when you 
 
 Repeat callers within `LatticeOptions.DiagnosticsCacheTtl` (default: 5 seconds) share the same snapshot - identical `SampledAt` timestamps are returned and no fan-out is performed. Shallow and deep reports are cached independently, so a shallow-then-deep sequence will always produce two distinct samples.
 
-The cache is invalidated immediately when an adaptive split commits, ensuring the next `DiagnoseAsync` call after a topology change returns a fresh report rather than serving a stale pre-split view.
+Recording a split commit - adaptive or reshard-driven - invalidates both cached reports, so the first `DiagnoseAsync` call after the record lands returns a fresh report rather than a stale pre-split view. The record is sent best-effort (see [Recent splits](#recent-splits)); if it is lost, the cached report simply lives out its TTL.
 
 Set `DiagnosticsCacheTtl = TimeSpan.Zero` to disable caching entirely - every call assembles a new report. See [Configuration](configuration.md#diagnosticscachettl) for details.
 
 ## Recent splits
 
-`RecentSplits` is a bounded (32-entry) ring buffer of the most recent adaptive-split commits observed by the diagnostics grain. Each entry carries the source `ShardIndex` and the UTC commit time. The buffer lives in memory for the lifetime of the diagnostics grain's activation - it is not persisted, so it starts empty again if that activation is collected - and is useful for correlating shard-count changes with recent traffic bursts.
+`RecentSplits` is a bounded (32-entry) ring buffer of the most recent split commits observed by the diagnostics grain - adaptive splits and the per-shard splits an online reshard drives alike. Each `RecentSplit` entry carries the source `ShardIndex` and the UTC commit time (`AtUtc`). The buffer lives in memory for the lifetime of the diagnostics grain's activation - it is not persisted, so it starts empty again if that activation is collected - and is useful for correlating shard-count changes with recent traffic bursts.
 
 Splits are pushed to the diagnostics grain on a best-effort, fire-and-forget basis from the split-coordinator's commit path, so a split may occasionally be missing from the buffer if the push RPC fails - the split itself still completes and is reflected in `ShardCount`/`Shards` on the next full report.
 
@@ -71,6 +71,8 @@ Splits are pushed to the diagnostics grain on a best-effort, fire-and-forget bas
 
 ## Operational notes
 
-- `DiagnoseAsync` is safe to call at any time, including during an ongoing resize or reshard - per-shard reports whose fan-out fails are returned as empty entries rather than failing the whole report.
+- `DiagnoseAsync` is safe to call at any time, including during an ongoing resize or reshard - per-shard reports whose fan-out fails are returned as empty entries rather than failing the whole report. Such an entry carries only its `ShardIndex`; its `HotnessWindow` of exactly `TimeSpan.Zero` is what tells it apart from a genuinely empty shard, which reports the time since it activated.
+- `DiagnoseAsync` is authorized as a whole-tree read. With the authorization add-on registered, the caller needs read access to the entire tree: a denial, or a grant scoped to a key prefix or single keys, throws `LatticeAuthorizationDeniedException` instead of returning a narrowed report, because per-shard counts would still disclose the keys they counted. With no authorization add-on registered every caller is allowed, at no cost. See [Security posture](../lattice.auth/security-posture.md).
+- Reserved system trees (ids starting with `_lattice_`) cannot be diagnosed through `ILattice`: the call throws `LatticeReservedTreeNamespaceException`.
 - The returned DTOs are `readonly record struct` types with `[Immutable]` serialization - they are cheap to copy and log.
 - Do not call `DiagnoseAsync` on a hot path. For routing or capacity decisions inside the data plane, use the dedicated public APIs (`CountAsync`, `CountPerShardAsync`) rather than decoding a diagnostics report.

@@ -30,23 +30,27 @@ The members are:
 | Member | Purpose |
 |---|---|
 | `ProviderId` | A stable, short id for the active provider (`"null"`, `"static"`, `"entra"`, or your own). Surfaced to the Explorer so it can label the source. |
-| `DescribeEntry` | One human-readable sentence describing what a *valid* id looks like for this source, scoped to the `DirectoryPrincipalKind?` a create form is entering (`User`, `Group`, or `null` for a combined form). The Explorer shows it under the create form so an operator knows what to type. |
+| `DescribeEntry` | A short, human-readable description of what a *valid* id looks like for this source, scoped to the `DirectoryPrincipalKind?` a create form is entering (`User`, `Group`, or `null` for a combined form). The Explorer shows it under the create form so an operator knows what to type. |
 | `SearchAsync` | Returns a `DirectorySearchPage` of `DirectoryPrincipal`s matching a term, optionally filtered by `DirectoryPrincipalKind`, with an opaque continuation token for paging. |
 | `ResolveAsync` | Looks up a single principal id and returns its `DirectoryPrincipal`, or `null` when the source has no such principal. This is the fail-closed validation call. |
 
 `DirectorySearchQuery` is a `readonly record struct` (`Term`, optional `Kind`,
 `PageSize`, `ContinuationToken`); an empty `Term` requests an unfiltered browse of
-the first page. `DirectorySearchPage.Empty` is a shared no-allocation page for a
-source that has nothing to return.
+the first page. `DirectorySearchPage` carries the matched `Principals` and an
+optional `ContinuationToken` (`null` on the final page), and
+`DirectorySearchPage.Empty` is a shared no-allocation page for a source that has
+nothing to return. Each `DirectoryPrincipal` is a sealed record of `Id`,
+`DisplayName`, `Kind` (`DirectoryPrincipalKind.User` or `Group`), and an optional
+flat `Claims` bag.
 
 ### Global provider options
 
 `LatticeIdentityDirectoryOptions` bounds every provider uniformly:
 
 ```csharp verify
-// AddLatticeMembership registers the identity-directory providers and the
-// default directory; ConfigureLatticeMembership only layers options, so the
-// directory registration is assumed already in place here.
+// AddLatticeMembership registers LatticeIdentityDirectoryOptions (with its
+// validator) and the default no-op NullIdentityDirectory; the options are then
+// bound through the standard options pattern.
 siloBuilder.AddLatticeMembership();
 siloBuilder.Services.Configure<LatticeIdentityDirectoryOptions>(options =>
 {
@@ -72,7 +76,7 @@ When `ValidationRequired` is `true` **and** a real provider is active (any provi
 - `UpsertGroupAsync` requires the group id to resolve to a `Group` principal.
 - `AddMemberAsync` requires both the member id and the target group id to resolve: the member id to the kind implied by the member kind - a `User` id for a user member, a `Group` id for a nested-group member - and the `groupId` to a `Group` principal.
 
-The check is **fail-closed**: an id that resolves to no principal, or that resolves to a principal of the wrong `DirectoryPrincipalKind` (for example a user id supplied where a group was required), is rejected with the public `LatticeDirectoryValidationException` (which derives from `ArgumentException`) *before* any membership edge is written, so an unresolved or mis-kinded reference never leaves a partial edge behind. Over the gRPC auth binding the exception surfaces as an `InvalidArgument` status.
+The check is **fail-closed**: an id that resolves to no principal, or that resolves to a principal of the wrong `DirectoryPrincipalKind` (for example a user id supplied where a group was required), is rejected with the public `LatticeDirectoryValidationException` (which derives from `ArgumentException`) *before* any membership edge is written, so an unresolved or mis-kinded reference never leaves a partial edge behind. The exception carries the offending `PrincipalId`, the `ExpectedKind`, and the `ResolvedKind` (`null` when the id resolved to no principal at all). Over the gRPC auth binding the exception surfaces as an `InvalidArgument` status.
 
 When the active provider is the no-op `NullIdentityDirectory`, no validation runs regardless of `ValidationRequired`, so the exception is never raised in that configuration.
 

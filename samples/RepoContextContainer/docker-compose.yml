@@ -484,7 +484,7 @@ services:
       # Environment.ProcessorCount is cgroup-aware only while
       # DOTNET_PROCESSOR_COUNT does not override it, and an override wins
       # silently - so a box granted 6 CPUs whose environment says 16 sizes this
-      # gate to 16 and oversubscribes a CPU-bound path 2.67x. Each permit admits
+      # gate to 16 and oversubscribes the memory-admitting replay path 2.67x. Each permit admits
       # one whole-readable-window WAL replay, which is exactly the expensive path
       # a reactivation storm multiplies.
       #
@@ -650,8 +650,9 @@ services:
       # All three are zero-primed, so a flat zero is a MEASURED zero and an
       # ABSENT series means the running image predates the instrument.
       # GARBAGE COLLECTION. Follows directly from the memory note above, because
-      # the hazard is the PAIR (issue #2596): .NET defaults to Workstation GC,
-      # which collects a single heap with effectively single-threaded blocking
+      # the hazard is the PAIR (issue #2596): this host uses Server GC (the Web SDK
+      # emits System.GC.Server=true), and changing that would put a multi-GiB heap under
+      # workstation collection, which walks a single heap with effectively single-threaded blocking
       # gen2 phases. That is the right default for a small heap and the wrong one
       # here. Once the heap is multi-GiB one collection walks all of it on one
       # thread with every other thread in the process suspended. A deployment of
@@ -1127,8 +1128,8 @@ services:
 
 volumes:
   # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
-  #
-  # the service above, which is not a declared volume and so is not removed.
+  # This volume is separate from the host bind mount used by the service above,
+  # which is not declared here and is therefore not removed with named volumes.
   #
   # NOTE: the agent-memory backup sink is likewise NOT declared here. It is a
   # host bind mount on the azurite-backup-sink service, for the same reason and

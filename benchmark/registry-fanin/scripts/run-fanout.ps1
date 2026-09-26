@@ -32,7 +32,7 @@
 
 	  2. A permit carries a BATCH. Pump() takes Math.Min(MaxBatchSize = 64,
 	     arrivals) per permit, so a single instantaneous burst needs more than
-	     16 x 64 = 960 waiting ids to exhaust the permits. With arrivals spread
+	     15 x 64 = 960 waiting ids to exhaust the permits. With arrivals spread
 	     in time the first 16 each take a permit of their own and 16 concurrent
 	     distinct reads suffice - the ~960 figure applies only to one
 	     simultaneous burst, which is what this arm issues.

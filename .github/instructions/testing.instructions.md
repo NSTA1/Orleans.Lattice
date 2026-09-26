@@ -458,7 +458,7 @@ docker run -d --name lattice-test-azurite `
 docker logs lattice-test-azurite   # expect "Table service is successfully listening at http://0.0.0.0:10002"
 ```
 
-Prefer the container over a global `azurite` install: invoking `azurite` from a PowerShell agent shell resolves to `azurite.ps1` and may not bind the ports. Check the ports are free first (`Get-NetTCPConnection -LocalPort 10002 -State Listen`) - the repo's reference local-dev compose leaves behind exited containers named `lattice-reference-local-dev-azurite-{a,b,backup-shared}` that are bound to *non-default* ports and therefore do **not** satisfy `UseDevelopmentStorage=true`.
+Prefer the container over a global `azurite` install: invoking `azurite` from a PowerShell agent shell resolves to `azurite.ps1` and may not bind the ports. Check the ports are free first (`Get-NetTCPConnection -LocalPort 10002 -State Listen`) - the repo's reference local-dev compose leaves behind exited containers named `lattice-reference-local-dev-azurite-{a,b,backup-shared}` that publish no host port at all (each is internal to its compose network) and therefore do **not** satisfy `UseDevelopmentStorage=true`. The single-region `reference-architecture/local/` compose is the opposite case: while it runs, its Azurite holds host ports 10000-10002, so the test container cannot bind them.
 
 The projects with emulator-gated fixtures are `test/lattice.storage.azuretable`, `test/lattice.backup.azureblob`, `test/lattice.caching.azureblob`, and `test/lattice.integration`.
 
@@ -479,7 +479,7 @@ dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene|FullyQualifiedName~SliceCoverage|FullyQualifiedName~DocsSnippet"
 ```
 
-Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI runs the Azure Table suite separately against an emulator that's spun up as part of the pipeline. If you *do* have Azurite up, remember the false-green trap above: a missing emulator shows up as a lower `Total`, never as a `Skipped` count.
+Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI attaches an Azurite service container to every test leg, so the emulator-gated suites run there instead. If you *do* have Azurite up, remember the false-green trap above: a missing emulator shows up as a lower `Total`, never as a `Skipped` count.
 
 **Scope Tier 4 to the fixtures your change can plausibly break, not reflexively to whole projects.** CI re-runs the full non-chaos suite for every matched package on the PR anyway, so a second full local run of the same project buys nothing but wall-clock. The local pass exists to catch *your* mistake before it costs a CI cycle - so run the fixtures you touched (and their nearest neighbours) first, and widen only when the change is broad enough that you genuinely cannot predict the blast radius. A test-only or single-grain change is usually well served by a `--filter "FullyQualifiedName~<Fixture>"` pass plus the hygiene filter; a change to a widely-referenced core type warrants the whole project. When you are unsure of the blast radius, `repocontext_related <path>` lists the indexed dependents and covering test types for a file, which is a cheaper way to size the run than guessing.
 
@@ -507,7 +507,7 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 | `MetricDocArmArityTests` | `test/lattice.dashboards/` | that every completeness count an instrument's **published description** states - the `# HELP` text on `/metrics` - is true of the arm set that instrument actually arms, matched by `ArityClaimRegex` and checked against the armed set `DashboardPanelTagDomainTests` resolves for it; an undecidable claim must be registered in `UndecidableClaims` with a reason rather than passing by accident |
 | `TelemetryQueryMetricNameResolutionTests` | `test/lattice.api.telemetry/` | that every metric name the shipped telemetry query catalogue (`LatticeTelemetryQueries`) references resolves to an instrument name declared in `src/`, in **both** the dotted descriptor spelling and the underscored PromQL template spelling - two crossings no compiler resolves and which nothing else compares against each other |
 
-Note the last two dashboard entries are **two separate enrolment lists for adjacent concerns**, and neither implies the other: `MeterDashboardCoverageEnrolmentTests` asks "is this meter charted by something", `DashboardJsonTests` asks "is this instrument on a panel". A new instrument on an already-covered meter satisfies the first and can still fail the second.
+Note that two of the entries in the table above are **two separate enrolment lists for adjacent concerns**, and neither implies the other: `MeterDashboardCoverageEnrolmentTests` asks "is this meter charted by something", `DashboardJsonTests` asks "is this instrument on a panel". A new instrument on an already-covered meter satisfies the first and can still fail the second.
 
 **The metrics-doc row is an enrolment gate too, and running it alone will not catch an undocumented instrument.** `MetricsDocCoverageEnrolmentTests` asks "does this package have a doc-coverage fixture at all"; the fixture that asserts **each instrument's row in its package reference doc** is the package's own `MetricsDocCoverageTestsBase` subclass - `MetricsDocCoverageTests` for `src/lattice`, `BackupMetricsDocCoverageTests` for `src/lattice.backup`, and so on. Those are per-package, not repository-wide, which is why they are not in the table above and why the enrolment gate exists at all. Adding an instrument to an already-enrolled package satisfies the enrolment gate and can still fail its package's substantive fixture, so **run both**: the enrolment gate, and the `MetricsDocCoverage*Tests` of the package you touched.
 
@@ -520,7 +520,7 @@ pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture MetricsDocCoverageEnrolmentTe
 dotnet test test/<pkg>/<Project>.Tests.csproj --filter "FullyQualifiedName~MetricsDocCoverage"
 ```
 
-So **a change that adds or removes a metric instrument in any package must also run these seventeen**, alongside the six standard content gates, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least four edits outside its own package, in two different test projects.
+So **a change that adds or removes a metric instrument in any package must also run these seventeen**, alongside the standard hygiene gates tabled under "Hygiene gates" below, whichever package the instrument itself lives in. Budget for it: adding a single instrument costs at least four edits outside its own package, in two different test projects.
 
 **Run them with the checked-in command, not a hand-composed filter.** `tools/Invoke-RepositoryWideGates.ps1` derives its run list from the table above, which is the same source `RepositoryWideGateEnrolmentTests` enforces against the tree, so adding a row here adds it to the run with no second edit. It runs each gate as its own filter and reports the EXECUTED count per gate, failing on any gate that executed zero tests.
 
@@ -561,7 +561,7 @@ The fourth pass exists because a value can be constructed and consumed in one ex
 Two things the detector deliberately does **not** treat as a signal, both pinned by tests in `IntegrationCategoryDetectionTests`:
 
 - **Generic type arguments are not unwrapped.** Matching them would catch `Task<IHost>` but equally `Mock<IHost>` in a pure unit test, and the recall given up is nil - a real host held across an await is already reached as the hoisted local itself.
-- **`ldtoken` operands are not read.** `typeof(IHost)` names a type without building one; `DocsSnippetCompilationTests` uses it to locate the ASP.NET shared framework, and an earlier build that read `InlineTok` flagged that compilation fixture as a cluster fixture.
+- **`ldtoken` operands are not read.** A `typeof(...)` names a type without building one: the shared snippet harness behind `DocsSnippetCompilationTests` writes `typeof(WebApplication)` - a type that implements `IHost` - to locate the ASP.NET shared framework, and an earlier build that read `InlineTok` flagged that compilation fixture as a cluster fixture.
 
 **Detected but measured cheap? Exempt it explicitly with `[FastInProcessHostFixture("...")]`, never by weakening the detector.** An in-process `WebApplication` with no silo, listener, or external dependency can cost tens of milliseconds, and pushing it behind `Integration` would cost dev-loop coverage for no gain. The exemption lives in `Orleans.Lattice.Testing.Hygiene` and takes a justification that must be substantive - at least 40 characters and containing a digit, because the only defensible reason to keep a host-building fixture in the fast loop is a *measurement*, and a measurement has a number in it. The threshold in use is **5 seconds per fixture**. The gate treats three further states as violations in their own right, so the escape hatch cannot rot:
 
@@ -573,7 +573,7 @@ Three anti-vacuity controls guard the gate itself, running the real detector aga
 
 **Every test project must carry that subclass, and this is a rule about the project, not about its contents.** The base reflects over `GetType().Assembly` - the assembly of whichever concrete subclass NUnit is running - so its coverage is opt-in per project by construction. A project that never derives from it is not reported as uncovered; the gate simply never runs there, and the solution-wide report stays green over whatever that project contains. Add `test/<package>/Hygiene/IntegrationCategoryHygieneTests.cs` when you create a test project, even if it has no cluster fixtures today - a project with none passes trivially, and the alternative is that the hole opens silently the moment one is added. `IntegrationCategoryGateEnrolmentTests` enumerates the test projects from disk and fails if any lacks the subclass, so this is enforced rather than remembered (issue #3100).
 
-The one placement exception is `test/lattice.explorer.uitests/`, where the fixture sits at the project root rather than under `Hygiene/`. The content-gate CI job selects on `FullyQualifiedName~Hygiene` and then subtracts `FullyQualifiedName!~Explorer.UiTests`, because every test in that assembly runs behind a `[SetUpFixture]` that launches Playwright chromium; `CiContentGateWiringTests` enforces that no fixture in a gate *directory* is ever caught by that exclusion, since the job would then stop running a gate it still claims to run. The fixture therefore lives at the project root and carries `[Category("UI")]`, mirroring `UiCategoryHygieneTests`, which sits there for the same reason. The enrolment gate scans the whole project directory rather than requiring the `Hygiene/` path, so this still counts as an enrolment.
+The one deliberate placement exception is `test/lattice.explorer.uitests/`, where the fixture sits at the project root rather than under `Hygiene/`. The content-gate CI job selects on `FullyQualifiedName~Hygiene` and then subtracts `FullyQualifiedName!~Explorer.UiTests`, because every test in that assembly runs behind a `[SetUpFixture]` that launches Playwright chromium; `CiContentGateWiringTests` enforces that no fixture in a gate *directory* is ever caught by that exclusion, since the job would then stop running a gate it still claims to run. The fixture therefore lives at the project root and carries `[Category("UI")]`, mirroring `UiCategoryHygieneTests`, which sits there for the same reason. The enrolment gate scans the whole project directory rather than requiring the `Hygiene/` path, so this still counts as an enrolment. `test/lattice.tenancy/` is the other project whose copy sits at the root - without a stated reason - and it counts on the same grounds.
 
 If you touch an uncategorized integration-style fixture as part of unrelated work, back-fill the appropriate `[Category(...)]` tag in the same commit - that is how the dev loop gets faster over time.
 
@@ -673,19 +673,19 @@ timing, and the end-to-end wiring of the actual grains. The Coyote model proves 
 *protocol logic* makes progress; the chaos suite proves the *deployed system* does, on
 real infrastructure.
 
-**Finalized CI exploration budget.** The per-PR opt-in Coyote step runs every model in
+**Finalized CI exploration budget.** The per-PR `coyote` tier of the CI test matrix runs every model in
 the `Coyote` category at the harness defaults - `DefaultIterations` (1000) schedules by
 `DefaultMaxSteps` (200) scheduling steps each - which the liveness models adopt
 unchanged; this completes in a few seconds per model and needs no per-model override,
-so the existing CI step (`--filter "TestCategory=Coyote"`) requires no parameter
+so the tier's filter (`TestCategory=Coyote`, in `.github/workflows/plan-test-matrix.py`) requires no parameter
 change. A deeper nightly sweep (a higher iteration count on a scheduled workflow) is
 optional and *not* wired up: it would add exploration depth for little marginal signal
 on these small bounded models, and no required check may depend on it.
 
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
-(Tier 2) and the per-package deterministic CI step, and run as their own opt-in
-tier. Run them explicitly with:
+(Tier 2) and the CI matrix's `deterministic` tier, and run as their own tier -
+opt-in locally, and the separate `coyote` tier in CI. Run them explicitly with:
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Coyote"
@@ -870,8 +870,8 @@ model): `VisibilityMatchesDecision`, `StrictIsolation`, `LinearizedTerminals`,
 `NoMixedTerminals` (as an interleaving property beyond the serialized suite),
 `DecisionDurability` (as an interleaving property beyond the serialized suite),
 `MonotonicVisibility` (as a single-saga temporal property), and `RevisionMonotonic`
-(as an explicit assertion). All seven live in `AtomicCommitInvariantModel` with a
-guard in `AtomicCommitInvariantCoyoteTests` - one each, except `DecisionDurability`, whose flip half and unset half are separately guarded because neither guard reds for the other.
+(as an explicit assertion). All seven live in `AtomicCommitInvariantModel`, guarded by
+six tests in `AtomicCommitInvariantCoyoteTests` (one per `AtomicCommitInvariantGuard` arm): `VisibilityMatchesDecision` and `StrictIsolation` share the in-flight-surfacing guard, `MonotonicVisibility` shares the decision-flip guard with `DecisionDurability`, and `DecisionDurability`'s unset half has a guard of its own because neither guard reds for the other.
 
 **Cited (already-covered) properties**: `AllOrNothing` and the cross-round form of
 `MonotonicVisibility` (`AtomicCommitVisibilityModel` / `ReshardMigrationModel`),
@@ -941,9 +941,9 @@ dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.cspro
 ### How CI runs them, and why it is a separate workflow
 
 - `test/lattice.explorer.uitests/**` is **carved out of the `code` and `nonSample` filters** in `ci.yml`, the same treatment `benchmark/**` and `apps/**` get. The core matrix therefore never tries to run browser tests without a browser.
-- The project has no `src/` counterpart, and `ci.yml` derives its package list from `src/*/`, so it can never enter the test matrix by accident.
+- The project has no `src/` counterpart, and `ci.yml`'s package selection (`select-test-packages.sh`) derives its list from `src/*/` plus an explicit test-only allow-list (`TEST_ONLY_PACKAGES`, currently only `lattice.integration`) that deliberately leaves it out, so it can never enter the test matrix by accident.
 - `publish.yml` resolves a package's test project from the package directory, so publishing never runs it either.
-- `.github/workflows/ui-tests.yml` is its only runner. It is **path-filtered to the Explorer UI**, so an unrelated PR never provisions a browser, and it caches both NuGet and the pinned browser build.
+- `.github/workflows/ui-tests.yml` is its only pull-request runner (the nightly coverage lane below also runs it). It is **path-filtered to the Explorer UI**, so an unrelated PR never provisions a browser, and it caches both NuGet and the pinned browser build.
 
 **Coverage does run them.** `coverage.yml` (main only, nightly) builds the solution and runs every test project, and the browser suite is included: it installs chromium and deliberately does **not** exclude the `UI` category. The suite hosts the Explorer in-process on Kestrel, so coverlet instruments the same process that serves the app and the server-side render path is genuinely counted - real production coverage, not just test code.
 
@@ -1002,17 +1002,12 @@ Two things that filter does **not** cover, so do not treat it as "all gates":
 
 - The em-dash, mojibake, deletion-mandate, and integration-category gates live as abstract bases in the shared `Orleans.Lattice.Testing` library, reached through a thin concrete subclass under a project's `Hygiene/` folder. **They do not all reach every package the same way, and the difference decides where you must run them.** The integration-category gate reflects over its *own assembly*, so it is genuinely per project. The three content gates scan a *slice of the filesystem*, and a slice is only scanned by its own project when that project declares one via `HygieneScanScope.ForSlice(...)` and registers it in `CoreHygieneScope.AllPackageSliceRoots`. Most packages do not. Everything not registered - the other `src/` and `test/` directories, plus `docs/`, `.github/`, `benchmark/`, `samples/`, `tools/`, and root files - falls to the **core** project's repo-level scan, which enumerates the whole repository minus the registered slices. Coverage is therefore complete either way; what varies is *which project's run* covers a given package.
 
-  The consequence for a pre-PR run, and it is the one that bites: **for a package with no registered slice, a package-scoped hygiene run checks none of its text, and says so in a way that reads like a pass.**
-
-  ```text
-  > dotnet test test/lattice.api.mcp.repocontext/... --filter "FullyQualifiedName~Hygiene"
-  No test matches the given testcase filter `FullyQualifiedName~Hygiene`   # exit code 0
-  ```
+  The consequence for a pre-PR run, and it is the one that bites: **for a package with no registered slice, a package-scoped hygiene run checks none of its text, and says so in a way that reads like a pass.** Now that every test project enrols the integration-category gate, that run is never empty: `dotnet test test/lattice.api.mcp.repocontext/... --filter "FullyQualifiedName~Hygiene"` discovers the project's own `IntegrationCategoryHygieneTests`, passes, and has scanned none of the package's text files. (Before that enrolment the same run printed `No test matches the given testcase filter` and exited 0 - the same false pass in another shape.)
 
   Treat that output as "this gate does not live here", never as "this package is clean". Two rules follow:
 
   - **Always run the core project's hygiene filter before a PR, whichever package you touched.** For an unregistered package that is the run that covers your text; for a registered one it still covers your `docs/` and `.github/` edits. `CoreHygieneScope.AllPackageSliceRoots` is the authority on which is which - if your package is absent from it, the core run is the only one that sees it.
-  - **A non-zero discovered count is not sufficient evidence either.** Several projects carry a `Hygiene/` folder holding *only* the assembly-scoped integration-category gate. There, `~Hygiene` matches tests, passes, and still scans none of the package's files. What tells the two apart is the registry, not the count.
+  - **A non-zero discovered count is not sufficient evidence either.** Most test projects carry a `Hygiene/` folder holding *only* the assembly-scoped integration-category gate. There, `~Hygiene` matches tests, passes, and still scans none of the package's files. What tells the two apart is the registry, not the count.
 
   In CI none of this matters: the `content-gates` job runs the whole cross-solution set, and `run-text-gates.py` fails the job outright when the run executed no tests. The hazard is local-only, and it is why `HygieneDenominator.RequireExamined` guards the inside of each gate - a gate that ran but examined nothing fails loudly. Nothing inside a test can defend against the test not being selected, which is the gap these two rules close by hand.
 
@@ -1050,7 +1045,7 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `IntegrationCategoryGateEnrolmentTests` | Every test project declares a concrete `IntegrationCategoryHygieneTestsBase` subclass, so the gate above actually runs there. | Add `test/<package>/Hygiene/IntegrationCategoryHygieneTests.cs`. The base reflects over its own subclass's assembly, so an unenrolled project is silently unexamined rather than reported as uncovered - this gate is what makes the row above's "every test project" true. |
 | `SerializableExceptionDeepCopyGateEnrolmentTests` | Every package under `src/` records whether it owes the same-silo exception deep-copy contract: its test project enrols a concrete `SerializableExceptionDeepCopyContractTestsBase` subclass, or it is listed in `PackagesDeclaringNoSerializableException` and a comment-stripped source scan confirms it declares no `[GenerateSerializer]` exception. | A package that gains a `[GenerateSerializer]` exception adds `test/<package>/SerializableExceptionDeepCopyContractTests.cs` and leaves the exemption list; a new package with none is added to that list. The base audits the assembly its subclass names and asserts it found at least one exception, so "no subclass" alone cannot distinguish "not owed" from "forgotten" - this gate records the difference and re-verifies the exemption on every run. Repo-level gate over `src/` and `test/`; runs only in the core project. |
 | `UiCategoryHygieneTests` | Every `[TestFixture]` in `test/lattice.explorer.uitests/` carries `[Category("UI")]`. | Tag the fixture `[Category("UI")]`. Browser tests are excluded from every default filter by category alone, so an untagged fixture would silently run in lanes that have no browser installed - and fail there rather than in the UI workflow. |
-| `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every C# snippet under `docs/` uses the ` ```csharp verify ` fence and compiles against the real `Orleans.Lattice` surface. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
+| `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every ` ```csharp verify `-fenced snippet in the fixture's docs slice compiles against the real product surface its test project references. The fence is opt-in: a plain ` ```csharp ` fence is never compiled and does not fail this gate, so the documentation skill's rule that every C# snippet under `docs/` carries `verify` is not machine-checked. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records, and in a method-body snippet the `MyReplicationObserver` / `MyRebindObserver` observer stubs). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
 | `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`) in `docs/lattice/performance-single-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
 | `DuplicateXmlSummaryHygieneTests` | No member under `src/` carries two consecutive XML `summary` elements. C# does not diagnose it, documentation tooling takes the FIRST element, and XML summaries ship in the NuGet packages, so the published documentation for a public member is the stale text. | Verify a documentation rewrite by reading the resulting FILE, never the diff - the diff renders the stale block as unchanged context directly above the added one. Replace the existing block rather than adding a second. Where the first block documents a neighbouring member that was displaced, move it to that member rather than deleting it. Repo-level gate over `src/`; runs only in the core project. |
 

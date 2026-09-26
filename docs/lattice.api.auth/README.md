@@ -54,7 +54,7 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | Operation | Facade method | Purpose |
 |---|---|---|
 | Explain a verdict | `ExplainAsync` | Returns the gate's allow/deny verdict for a subject / operation / scope, plus the authored rules that apply (including cluster-wide `Tree:*` wildcard rules that govern the target tree) - for debugging policy. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to explain the decision for a *group* (evaluated as a member of that group and its ancestors); the default is `User`. |
-| Resolve effective permissions | `EffectivePermissionsAsync` | Returns the rules currently in effect for a subject (matched directly or through a group) - for dashboards and UX. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to resolve the rules for a group evaluated as a member of itself and its ancestor groups (its transitive group closure), not the named group alone; the default is `User`. |
+| Resolve effective permissions | `EffectivePermissionsAsync` | Returns every authored rule that names the subject directly or through one of its groups - allow and deny alike, capped at `MaxExplanationRules` - for dashboards and UX. It lists rules rather than resolving a verdict: a listed rule can be overridden by a more specific one, or be a `Tree:*` rule that is inert while `AllTreesGrantsEnabled` is off, so use `ExplainAsync` for the decision a request actually receives. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to resolve the rules for a group evaluated as a member of itself and its ancestor groups (its transitive group closure), not the named group alone; the default is `User`. |
 
 ### Identity directory and access model
 
@@ -82,7 +82,7 @@ From the Explorer Access tab, the rule form has an **Access administration (dele
 
 An **all-trees grant** is a rule whose scope is the cluster-wide sentinel `Tree:*` (authored with `LatticeScope.ClusterWide()`). When enabled, it governs **every** ordinary application tree at once, so an operator can grant (or deny) a subject a capability across the whole cluster without authoring one rule per tree. This reuses the existing `*` sentinel and is off by default:
 
-- Set `AllTreesGrantsEnabled = true` in the `AddLatticeAuth(options => ...)` configuration. Existing clusters are byte-for-byte unchanged until they opt in. While the flag is off, authoring a *new* data-plane `Tree:*` rule is rejected fail-closed - the policy store throws an `ArgumentException` from `PutRuleAsync` rather than silently persisting a rule that does nothing - and a data-plane `Tree:*` rule authored earlier (while the tier was enabled) stays inert, listed for visibility but never granting or denying, until the tier is re-enabled. A pure `Telemetry` wildcard rule is unaffected and remains authorable while the flag is off, because telemetry resolves against the `*` bucket regardless of the tier flag.
+- Set `AllTreesGrantsEnabled = true` in the `AddLatticeAuth(options => ...)` configuration. Existing clusters are byte-for-byte unchanged until they opt in. While the flag is off, authoring a *new* data-plane `Tree:*` rule is rejected fail-closed - the policy store throws an `ArgumentException` from `PutRuleAsync` rather than silently persisting a rule that does nothing - and a data-plane `Tree:*` rule authored earlier (while the tier was enabled) stays inert, listed for visibility but never granting or denying, until the tier is re-enabled. A pure `Telemetry` wildcard rule is unaffected and remains authorable while the flag is off, because telemetry resolves against the `*` bucket regardless of the tier flag. A `Tree:*` rule carrying only `Replication` and/or `TreeLifecycle` is also accepted while the flag is off - the authoring check tests only the data-plane mask, `LatticeAuthOperations.All` - but it grants and denies nothing until the tier is enabled.
 - With the flag on, the decision engine consults the `Tree:*` bucket for every non-system tree using a **four-tier precedence** (most authoritative first):
   1. **All-trees deny** - a matched `Tree:*` deny is returned outright; a global deny is never overridden by a specific-tree allow.
   2. **Specific-tree verdict** - the target tree's own most-specific-wins verdict (a specific deny overrides a global allow, and a specific allow stands).
@@ -154,7 +154,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `Filtered` | `bool` | `true` when the allow is partial: a per-key filter applies to a tree- or prefix-scoped request. Always `false` for a point (key-scoped) request. |
 | `Reason` | `string?` | A human-readable reason, or `null` for a plain unqualified allow. |
 | `DefaultEffect` | `LatticeEffect` | The closed-world default effect applied when no rule matches. |
-| `MatchedRules` | `IReadOnlyList<LatticeAuthorizationRule>` | The authored rules that apply (advisory; `Allowed` is authoritative). Empty when the verdict rests on `DefaultEffect` or a bootstrap-administrator bypass. |
+| `MatchedRules` | `IReadOnlyList<LatticeAuthorizationRule>` | The authored rules whose subject, operations, and scope overlap the request, from the target tree and the cluster-wide `*` bucket, capped at `MaxExplanationRules` (advisory; `Allowed` is authoritative). The list is assembled independently of the verdict: it is empty when no authored rule matches, but it can cite a rule that did not decide the verdict - for example one naming a bootstrap administrator, whose allow comes from the bypass, or a data-plane `Tree:*` rule that is inert while `AllTreesGrantsEnabled` is off (see `Posture`). |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags), so a caller can tell an in-force all-trees rule from an authored-but-inert one. |
 
 ### `AuthEffectivePermissions` (returned by `EffectivePermissionsAsync`)
@@ -163,7 +163,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 |---|---|---|
 | `SubjectId` | `string` | The subject the permissions were resolved for. |
 | `GroupIds` | `IReadOnlyList<string>` | The subject's transitive group closure, ascending. |
-| `Rules` | `IReadOnlyList<LatticeAuthorizationRule>` | The rules currently in effect for the subject (matched directly or through a group), ordered by `(governed tree id, rule id)`. |
+| `Rules` | `IReadOnlyList<LatticeAuthorizationRule>` | Every authored rule whose subject is the subject itself or one of its groups, allow and deny alike, read from the live policy store, capped at `MaxExplanationRules`, and ordered by `(governed tree id, rule id)`. A listing rather than a verdict; see `EffectivePermissionsAsync` above. |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags). |
 
 ### `AuthPolicyPosture`

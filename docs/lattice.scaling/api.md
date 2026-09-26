@@ -28,8 +28,8 @@ All are immutable, serializable value types.
 
 | Member | Type | Meaning |
 |---|---|---|
-| `ScaleValue` | `double` | Smoothed, scale-in-gated replica-demand scalar an autoscaler should act on, in replica-units and never below `MinReplicas` once the first sample lands. It reads `0.0` while the signal is still warming up, and otherwise only when there is no pressure and `MinReplicas` is `0`. |
-| `RecommendedReplicas` | `int` | Concrete recommended replica count derived from `ScaleValue` and the configured floor. |
+| `ScaleValue` | `double` | Smoothed, scale-in-gated replica-demand scalar an autoscaler should act on, in replica-units and never below `MinReplicas` once the first sample lands. It reads `0.0` while the signal is still warming up, and otherwise only when there is no pressure and `MinReplicas` is `0`. It is the dominant compute pressure (`0.0` to `1.0`) times the current replica count, so it never exceeds that count except at the `MinReplicas` floor or while the scale-in gate holds an earlier value; see [the custom scale rule](keda-aca.md#the-custom-scale-rule) for what that means for an autoscaler's `targetValue`. |
+| `RecommendedReplicas` | `int` | `max(MinReplicas, ceil(ScaleValue))`: the replicas needed to carry the current demand at full per-replica pressure, so, like `ScaleValue`, it never exceeds the current count except at the floor or while the scale-in gate holds. |
 | `Compute` | `ComputePressure` | The compute-axis component. |
 | `Storage` | `StoragePressure` | The storage-axis component. |
 | `Reason` | `string` | Human-readable explanation of how the signal was derived. |

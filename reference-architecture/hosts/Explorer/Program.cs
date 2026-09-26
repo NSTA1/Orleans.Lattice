@@ -17,10 +17,10 @@ using Orleans.Lattice.ReferenceArchitecture.Hosting;
 // the Orleans.Lattice.Explorer.Web hosting library exposes, driven here purely by
 // configuration so the standalone head and any co-hosted explorer cannot drift.
 //
-// The console's first-run connection is seeded by the explorer's own environment
-// bootstrap (LATTICE_EXPLORER_ENDPOINT / LATTICE_EXPLORER_INSECURE_DEV /
-// LATTICE_EXPLORER_USERNAME / LATTICE_EXPLORER_PASSWORD / LATTICE_EXPLORER_CONFIG),
-// so the remote endpoint and any auto-sign-in are configuration, never code.
+// The console's first-run connection is seeded by the explorer's connection
+// environment bootstrap (LATTICE_EXPLORER_ENDPOINT / LATTICE_EXPLORER_INSECURE_DEV).
+// This host does not enable the packaged environment credential seed, and sets
+// ConfigFilePath explicitly below, so credentials and config path are not inferred here.
 //
 // Auth: the console offers a hosted-web Microsoft Entra sign-in (OpenID Connect,
 // auth-code + PKCE) when Entra is enabled (AddLatticeExplorerEntraWebAuth). The
@@ -58,8 +58,8 @@ var frontDoorId = config["LATTICE_FRONT_DOOR_ID"];
 
 // Persist the explorer's JSON config to a writable location. The chiseled,
 // non-root container has no writable per-user app-data directory, so default the
-// backing store to a writable path (overridable via Explorer:ConfigFilePath or
-// the LATTICE_EXPLORER_CONFIG environment variable).
+// backing store to a writable path. The host sets ConfigFilePath explicitly,
+// which wins over the package's environment-variable fallback.
 var configFilePath = config["Explorer:ConfigFilePath"]
     ?? Path.Combine(Path.GetTempPath(), "lattice-explorer", "config.json");
 Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
@@ -159,8 +159,8 @@ else
     // the console in as the configured bootstrap administrator by forwarding
     // `Bearer <subject>`, exactly the credential the silo's
     // DevBypassCredentialAuthenticator trusts (and the MCP head already forwards).
-    // Driven by the LATTICE_EXPLORER_USERNAME sign-in seed so it auto-applies on
-    // first load with no dialog. Registered ONLY when Entra is disabled, so it can
+    // The packaged environment credential seed stays disabled here, so this method
+    // is offered through the normal Basic sign-in UI. Registered ONLY when Entra is disabled, so it can
     // never coexist with, or weaken, a real deployment's Entra sign-in.
     builder.Services.RemoveAll<IExplorerAuthMethod>();
     builder.Services.AddSingleton<IExplorerAuthMethod, DevBypassExplorerAuthMethod>();

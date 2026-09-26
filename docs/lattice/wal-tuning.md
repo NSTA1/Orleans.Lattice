@@ -15,7 +15,7 @@ harness show the measurement protocol used to derive these numbers.
 ## The knobs
 
 The per-shard WAL grain's pipeline depth against
-`IWalStorageProvider.AppendBatchAsync` is bounded by two independent
+`IWalStorageProvider.AppendEncodedBatchAsync` is bounded by two independent
 caps - `WalMaxPendingBatches` and `WalPartitions` - and shaped by a third
 knob, `WalAppendCoalescingInFlightThreshold`, that decides how full each
 flush gets:
@@ -28,7 +28,7 @@ flush gets:
 
 The combined ceiling on simultaneous provider calls for one tree is
 therefore `WalPartitions * WalMaxPendingBatches` - at the defaults,
-`8 * 16 = 128` concurrent `AppendBatchAsync` calls. Each tree's WAL
+`8 * 16 = 128` concurrent provider appends. Each tree's WAL
 partitions carry their own caps, so concurrently written trees add up.
 
 ## Why 16 is the default
@@ -144,8 +144,9 @@ saturation back-pressure signal (`IWalSaturationSignal`,
 exposes the writer-side admission gate as a typed, `Healthy` /
 `Throttled` / `Saturated` per-tree state, so callers driving offered
 load into the silo can slow down or pause *before* the failure tail
-above surfaces. The signal is silo-scoped and zero-cost on the
-`SetAsync` / `SetManyAsync` hot path - it is the leading-edge surface
+above surfaces. The signal is silo-scoped, and a healthy partition's
+`SetAsync` / `SetManyAsync` hot path pays only a concurrent-dictionary
+lookup per append to consult it - it is the leading-edge surface
 that pairs with the structural fix above (multi-account fan-out) and
 the shutdown drain below (bounded SIGTERM). The storage-account
 ceiling is still the binding constraint; the signal stops callers
@@ -182,7 +183,7 @@ for the caller contract.
 
 The drain is **per-silo, local-only**. Each silo process in a
 multi-silo cluster has its own `WalCommitLogWriter` singleton with
-its own owned-tracker set; a drain on silo A does not touch silo B's
+its own drain state; a drain on silo A does not touch silo B's
 admission semaphore and does not interrupt any in-flight
 `IWalShardGrain` activation that silo B is dispatching to. Rolling
 restarts settle cleanly because each silo drains its own writer
@@ -226,7 +227,7 @@ Four instruments tell you which regime you are in:
   seconds, you are storage-bound and lifting the cap will not help.
 
 - **`wal.append.provider.duration`** - per-flush wall time against
-  `IWalStorageProvider.AppendBatchAsync`. If this climbs from the
+  `IWalStorageProvider.AppendEncodedBatchAsync`. If this climbs from the
   ~50-100 ms Tables RTT floor into the seconds, the storage account
   is throttling. Lifting `WalMaxPendingBatches` will not help; the
   recovery is `WalPartitions` fan-out across accounts.

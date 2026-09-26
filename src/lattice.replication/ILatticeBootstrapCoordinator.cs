@@ -6,9 +6,8 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ISnapshotProvider"/> export, applies every snapshot
 /// entry through the local apply seam preserving the source HLC, and
 /// pins the snapshot's causal-stable frontier on the per-tree
-/// high-water-mark grain so the first incremental entry arriving
-/// after the snapshot runs through the existing per-origin HWM dedupe
-/// and the causal-plus dependency check from a non-empty frontier.
+/// high-water-mark grain so the first incremental entry arriving after the
+/// snapshot sees a non-empty frontier and a snapshot-pinned floor.
 /// <para>
 /// Triggered by the auto-bootstrap detector (when the inbound apply
 /// path observes the sender's cursor has fallen off the WAL) and by

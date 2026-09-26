@@ -73,8 +73,8 @@ a silent gap. Any other transport fault, including an unreachable endpoint or a
 console not yet configured with one, withholds the grant instead: the area
 resolves `Denied` for a signed-in caller and `AuthenticationRequired` for an
 anonymous one, and is re-probed when the connection status next changes. Inside
-the area, each mutating action - setting or clearing a policy, changing or
-advancing the version config, running remediation, scanning compliance -
+the area, each action - setting or clearing a policy, changing or advancing the
+version config, running remediation, and the read-only compliance scan -
 disables from the **per-tree capability snapshot** the panel requests when a
 tree is loaded (and also whenever no tree is loaded or an action is already in
 flight), not from the coarse gate.

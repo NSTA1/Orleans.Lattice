@@ -29,8 +29,9 @@ public sealed record RepoContextReleaseClaimResult
 
     /// <summary>
     /// Why the release did not apply, or <see langword="null"/> when it did. One of
-    /// <c>stale</c> (the token had already been superseded) or <c>missing</c> (no
-    /// record exists at the key).
+    /// <c>stale</c> (the token had already been superseded), <c>missing</c> (no
+    /// record exists at the key), or <c>unclaimed</c> (the record has never held a
+    /// claim).
     /// </summary>
     public string? Reason { get; init; }
 }

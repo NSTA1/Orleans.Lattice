@@ -37,9 +37,15 @@ siloBuilder
 The view declared above keeps exactly the `people` keys whose JSON value
 satisfies `Age >= 18`, under the same key, in its own view tree.
 
-The maintainer also uses Orleans reminders for a keepalive, so register a
-reminder provider (for example `UseInMemoryReminderService()` in development, or
-a durable provider in production). For a durable commit log, register a WAL
+The maintainer also uses Orleans reminders for a keepalive - a one-minute
+reminder that re-activates it after a silo restart - so register a reminder
+provider (for example `UseInMemoryReminderService()` in development, or a durable
+provider in production). Orleans initialises its reminder service asynchronously
+after the silo starts, so a maintainer that comes online inside that window
+retries the keepalive registration with a short bounded backoff (1, 2, 3 and 5
+seconds - five attempts in all) instead of failing its start; any other reminder
+fault, or a service that is still initialising when the budget runs out, surfaces
+unchanged. For a durable commit log, register a WAL
 provider such as the Azure Table package (`AddAzureTableWalStorage(...)`) - that
 is a storage concern, independent of views.
 
@@ -62,7 +68,11 @@ There are two ways to create a view.
 
 **At startup** - declare it on the silo builder so the maintainer comes online
 with the host. `AddView` registers a filter / re-project view;
-`AddAggregationView` registers an aggregation:
+`AddAggregationView` registers an aggregation (and `AddFoldedView` a
+[folded view](#folded-custom-reducer-views)). Each also has an overload that takes
+a `Func<IServiceProvider, ...>` factory in place of the projection instance,
+resolving the projection from the silo's service provider at startup so it can
+take service dependencies. With a projection instance:
 
 ```csharp verify
 siloBuilder.AddLatticeViews(views => views.AddView(
@@ -163,9 +173,9 @@ off nothing is composed and every id is unchanged.
 
 A view's source must be a directly-writable tree, **not another view**: chaining a
 view onto another view's `view-*` tree is unsupported (it compounds apply lag at
-every hop and stacks source-WAL cursor pins), so `Create` and the startup
-`AddView` / `AddAggregationView` builders reject a `view-*` source with
-`InvalidOperationException`.
+every hop and stacks source-WAL cursor pins), so `Create` / `CreateAsync` and the
+startup `AddView` / `AddAggregationView` / `AddFoldedView` builders reject a
+`view-*` source with `InvalidOperationException`.
 
 ## Reading a view
 
@@ -196,7 +206,12 @@ public sealed class AdultsByNameReader(ILatticeViewFactory views)
 ```
 
 `ILatticeView` exposes the usual reads - `GetAsync`, `CountAsync`, `KeysAsync`,
-`EntriesAsync` - over the materialised content. If you are creating the view in
+`EntriesAsync` - over the materialised content. For long-running scans prefer the
+`ScanKeysAsync` / `ScanEntriesAsync` extensions, which enumerate forward and
+recover from `EnumerationAbortedException` without duplicates or gaps (the raw
+`KeysAsync` / `EntriesAsync` primitives do not), and use the typed `GetAsync<T>`,
+`EntriesAsync<T>` and `ScanEntriesAsync<T>` extensions to deserialize values
+(with `JsonLatticeSerializer<T>` unless you pass an `ILatticeSerializer<T>`). If you are creating the view in
 the same place you read it, the handle returned by `Create` (see
 [Create a view](#create-a-view)) exposes the same reads, so reuse it rather than
 re-resolving the view by name.
@@ -253,9 +268,12 @@ rebuilt view while consumers converge through replication anti-entropy.
 
 `ILatticeViewFactory.DeleteAsync` tears a runtime-created view down completely:
 it stops the maintainer, unregisters the keepalive reminder, releases the source
-WAL cursor pin, soft-deletes every backing view-tree generation, and clears the
-durable checkpoint and runtime registration. After it returns the view name is
-free to be re-created from scratch.
+WAL cursor pin, soft-deletes every backing view-tree generation, resets the
+durable checkpoint, and removes the catalog entry and runtime registration. After
+it returns the view name is free to be re-created from scratch. A deleted tree id
+is never reused, so a view re-created under the same name materialises in a fresh
+`view-{name}~g{N}` generation; read it through its `ILatticeView` handle as
+usual.
 
 ```csharp verify
 public sealed class AdultsViewAdmin(ILatticeViewFactory views)
@@ -740,7 +758,10 @@ Replication topology is fixed for the lifetime of a view name. Do not change an
 existing view between `DeriveLocally` and `ShipView`, or change its designated
 producer in place: the existing view-tree WAL may contain writes authored under
 the old topology. Create a new view name, let it converge, and then retire the
-old view.
+old view. The maintainer enforces part of this rule: a view configured as
+`ShipView` whose active generation is no longer its original tree (because a
+`DeriveLocally` shadow-swap rebuild has already run) throws
+`InvalidOperationException` whenever its maintainer activates or drains.
 
 Source-relative `GetLagAsync` and read barriers are producer-only for
 `ShipView`. Consumers receive view rows through replication, so their local
@@ -965,18 +986,18 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 The maintainer publishes the following instruments on the `orleans.lattice`
 meter, each tagged `view` (the view name) plus the derived `tenant` label:
 
-| Instrument | Kind | Meaning |
+| Instrument | Kind (unit) | Meaning |
 |------------|------|---------|
-| `orleans.lattice.view.apply_lag` | Histogram | Apply lag (committed-but-unapplied source entries) sampled at the end of each drain pass. |
-| `orleans.lattice.view.backlog_depth` | Histogram | WAL entries read in the drain pass. |
-| `orleans.lattice.view.applied` | Counter | View writes applied to the view tree. |
-| `orleans.lattice.view.key_collisions` | Counter | View keys that two or more distinct source keys re-mapped to in a drain batch (injectivity violation), counted once per view key per batch. |
-| `orleans.lattice.view.aggregation_applied` | Counter | Aggregation contributions folded into the view. |
-| `orleans.lattice.view.aggregation_rejected` | Counter | Aggregation contributions dropped for producing a reserved (empty or NUL-prefixed) group key. |
-| `orleans.lattice.view.atomic_staging_backstop` | Counter | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
-| `orleans.lattice.view.cross_tree_joint_violation` | Counter | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time. |
-| `orleans.lattice.view.lag_budget_eviction` | Counter | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
-| `orleans.lattice.view.source_backpressure` | Counter | Drain passes of any trigger - read-your-writes barrier drains included, not only background ticks - that shrank their batch because the source tree was under WAL saturation back-pressure. Also tagged `state` with the observed source regime (`throttled` / `saturated`). |
+| `orleans.lattice.view.apply_lag` | Histogram (`{entry}`) | Apply lag (committed-but-unapplied source entries) sampled at the end of each drain pass. |
+| `orleans.lattice.view.backlog_depth` | Histogram (`{entry}`) | WAL entries read in the drain pass. |
+| `orleans.lattice.view.applied` | Counter (`{write}`) | View writes applied to the view tree. |
+| `orleans.lattice.view.key_collisions` | Counter (`{collision}`) | View keys that two or more distinct source keys re-mapped to in a drain batch (injectivity violation), counted once per view key per batch. |
+| `orleans.lattice.view.aggregation_applied` | Counter (`{contribution}`) | Aggregation contributions folded into the view. |
+| `orleans.lattice.view.aggregation_rejected` | Counter (`{contribution}`) | Aggregation contributions dropped for producing a reserved (empty or NUL-prefixed) group key. |
+| `orleans.lattice.view.atomic_staging_backstop` | Counter (`{rebuild}`) | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
+| `orleans.lattice.view.cross_tree_joint_violation` | Counter (`{degradation}`) | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time. |
+| `orleans.lattice.view.lag_budget_eviction` | Counter (`{eviction}`) | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
+| `orleans.lattice.view.source_backpressure` | Counter (`{pass}`) | Drain passes of any trigger - read-your-writes barrier drains included, not only background ticks - that shrank their batch because the source tree was under WAL saturation back-pressure. Also tagged `state` with the observed source regime (`throttled` / `saturated`). |
 
 ## Durable per-key history
 

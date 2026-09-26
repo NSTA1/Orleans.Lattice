@@ -69,7 +69,7 @@ var clusterId = config["Mcp:ClusterId"];
 // real guarantee behind a global load balancer: a peer accidentally pointed at an
 // anycast/Front Door endpoint that latency-routes to the nearest region fails the
 // assertion and is omitted / rejected fail-closed rather than silently answered by
-// the wrong cluster. On by default here because the reference estate fronts every
+// the wrong cluster. Enabled explicitly here because the SDK default is false and the reference estate fronts every
 // region with one global Front Door; peers are always dialed at their DIRECT
 // region-pinned silo FQDN, so the assertion passes.
 var verifyRegionIdentity = config.GetValue("Mcp:VerifyRegionIdentity", false);

@@ -10,7 +10,8 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// <see cref="ProjectionCheckpointOffset"/>. This persisted row carries only
 /// topology (sibling/parent pointers, key range, shard index, split lifecycle),
 /// the projection-digest fold (<see cref="ProjectionHash"/>), the checkpoint
-/// offsets, and the HLC clock plus version vectors. See the reserved
+/// offsets, outstanding replay-work ledger, snapshot size hint, and the HLC clock
+/// plus version vectors. See the reserved
 /// <c>[Id(0)]</c> slot note below.
 /// <para>
 /// Persisted through the Orleans binary serializer
@@ -318,8 +319,8 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     /// return null/false for any key hashing into that slot, sealing the
     /// persistent-orphan read path that the cache-coherence prune pass
     /// cannot reach via the <see cref="Orleans.Lattice.BPlusTree.ILeafCacheGrain"/>
-    /// pending-key delegation hole. The list is sticky once written
-    /// (slots never un-move).
+    /// pending-key delegation hole. A later shard-consolidation reclaim can lift
+    /// the seal by removing slots from this list.
     /// <para>
     /// <see langword="null"/> in the steady state (no slot has ever moved
     /// away from this leaf), so non-resharded leaves pay zero per-leaf

@@ -60,7 +60,7 @@ permission and the audience to ask as structured data, and the console renders
 them:
 
 ```text
-Requires the Backup permission - ask a platform administrator
+Requires the Backup permission - ask an operator.
 ```
 
 not

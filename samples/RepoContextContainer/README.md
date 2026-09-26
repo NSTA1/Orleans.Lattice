@@ -11,7 +11,7 @@ The same box also serves the retrieval and token-economics tools for you to use 
 test: explainable search, the budgeted context bundle, its reuse economics, and
 usage accounting (see [Retrieval and token economics](#retrieval-and-token-economics)).
 
-Two containers, one private network:
+Three containers, one private network:
 
 - **`repocontext`** - the MCP host image (`apps/repocontext/Dockerfile`). Its
   ONLY application listener is the MCP endpoint on port 8080 (plus the HTTP health
@@ -26,6 +26,16 @@ Two containers, one private network:
   host keeps its single-listener surface. The host's default embedding provider
   is pointed at it via `LATTICE_EMBEDDING_ENDPOINT`. Its model weights are baked
   into an image layer, so it needs no cache volume and no download on first run.
+- **`azurite-backup-sink`** - a blob-only Azurite instance
+  (`mcr.microsoft.com/azure-storage/azurite:latest`) that receives the scheduled
+  captures of the durable agent-memory tree, so the backup does not live in the
+  store it protects. Its storage is a host bind mount at
+  `${REPOCONTEXT_BACKUP_PATH:-./backup-sink}` rather than a named volume, so
+  `docker compose down -v` cannot reach it; set `REPOCONTEXT_BACKUP_PATH` to an
+  absolute path to keep it outside the repository. Its blob endpoint is published
+  on host port `11000` (override with `REPOCONTEXT_BACKUP_SINK_PORT`) so a restore
+  can list it. See
+  [Agent-memory backup and recovery](../../docs/lattice.api.mcp.repocontext/container.md#agent-memory-backup-and-recovery).
 
 For a **long-lived, tuned** deployment rather than a first run - the CPU and
 memory grants, the reduced scan cadence, the image pin, the rollback ladder, and
@@ -120,11 +130,17 @@ claims, and why you must not enable it in the middle of a measurement.
   construction - its constants were fitted against one corpus on one host and are
   re-derived by nobody afterwards - and it goes stale in place, because its only
   corpus input is the indexed file count, so adding a repository to the workspace
-  or removing one moves the requirement without moving the grant. Nothing signals
-  that drift. Adapting sizing to the granted resources **at runtime**, instead of
-  predicting it at deploy time, is tracked in issue #3255. That work depends on
-  issue #3133: the runtime's own high-load signal is published at 90% of the
-  cgroup limit while the GC hard limit binds at 75% of it, so the threshold sits
+  or removing one moves the requirement without moving the grant. Nothing
+  re-derives the grant when that happens. Adapting sizing to the granted
+  resources **at runtime**, instead of predicting it at deploy time, is tracked in
+  issue #3255. What has landed from it so far is the measured consequence: the host
+  publishes its peak commitment and its peak occupancy of the granted ceiling,
+  records a managed-heap exhaustion on the data mount, and at the next start
+  refuses a grant no larger than a recorded exhaustion ceiling and warns when the
+  previous run's peak does not fit (see
+  [Measured requirement and startup admission](../../docs/lattice.api.mcp.repocontext/container.md#measured-requirement-and-startup-admission)).
+  The runtime adaptation depends on issue #3133: the runtime's own high-load signal
+  is published at 90% of the cgroup limit while the GC hard limit binds at 75% of it, so the threshold sits
   at 1.2x the limit at *every* grant and can never fire. It has been confirmed at
   both 12 GiB and 18 GiB with byte-exact matching percentages, so it is
   scale-invariant rather than a misconfiguration of one deployment.
@@ -160,8 +176,12 @@ Set `REPO_PATH` to the absolute path of a directory the box may see. It is mount
 READ-ONLY at `/workspace` inside the container, so the box can never mutate the
 code it indexes. This is a *workspace root*, not a single repository: mount a broad
 parent and register individual repositories under it at runtime with the
-`repocontext_add_repo` tool. It defaults to this repository's parent, so this repo
-is one registerable child.
+`repocontext_add_repo` tool. It defaults to `../../..` from this directory, which in
+an ordinary clone is this repository's parent, so this repo is one registerable
+child. From a git worktree the same default resolves to the worktree collection
+directory instead, silently - see
+[the worktree trap](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#the-worktree-trap) -
+so set `REPO_PATH` explicitly, in `.env` or the environment.
 
 ```bash
 export REPO_PATH=/absolute/path/to/some/parent    # PowerShell: $env:REPO_PATH="C:\path\to\parent"
@@ -197,9 +217,13 @@ and it selects its accelerator - CPU or NVIDIA - from one build via
 
 The original Onyx companion
 ([`apps/embedding`](../../apps/embedding/README.md)) remains available as a
-fallback, selected with an override file:
+fallback, selected with an override file. Build the embedder when you switch:
+both companions build under the same compose image name, so a plain `up -d`
+would reuse the cached ONNX image rather than build the Onyx one (switching back
+needs the same rebuild):
 
 ```bash
+docker compose -f docker-compose.yml -f docker-compose.onyx.yml build embedder
 docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
 ```
 
@@ -267,7 +291,13 @@ to the same place (clear `CUDA_VISIBLE_DEVICES` and add the reservation); see
 From this directory:
 
 ```bash
-# 1. Start both containers. The host waits for the embedder to become healthy.
+# 0. Copy the example environment file, then edit both paths in it for this
+#    machine. REPOCONTEXT_MEMORY_ARCHIVE_PATH is REQUIRED - compose refuses every
+#    command without it - and REPO_PATH picks the workspace root (see above).
+cp .env.example .env
+
+# 1. Start the stack. The host waits for the embedder to become healthy and for
+#    the backup sink to start.
 docker compose up -d --build
 
 # 2. Wait for the host to come up. /health/live returns 200 once the process and
@@ -296,7 +326,8 @@ curl -sS -o /dev/null -w 'ready: %{http_code}\n' http://localhost:8080/health/re
 # 4. Recall: query the box (repocontext_search / repocontext_recall) and confirm it
 #    returns the ingested context.
 
-# 5. Restart the container - a FULL recreation that evicts the in-memory projection
+# 5. Restart the container - a full process restart (not a recreation: the same
+#    container and its /data volume are kept) that evicts the in-memory projection
 #    and forces a WAL replay / cold rebuild on next access.
 docker compose restart repocontext
 curl -fsS http://localhost:8080/health/live
@@ -326,7 +357,9 @@ mcp call http://localhost:8080 repocontext_search \
 # B. Budgeted context bundle. repocontext_context packs the ranked, explained
 #    source for a task into ONE response under a HARD token ceiling: the reported
 #    `responseTokens` (the response as delivered, envelope included) never exceeds
-#    `responseBudgetTokens`, `totalTokens` is the narrower sum of packed source, and `truncated` /
+#    the ceiling it reports as `budgetTokens` - the `responseBudgetTokens` you asked
+#    for, clamped to 1-200000 and 8192 when omitted - `totalTokens` is the narrower
+#    sum of packed source, and `truncated` /
 #    `retryBudgetTokens` say whether more would fit at a larger budget. `detail`
 #    trades richness for budget - 'paths' (cheapest) -> 'outline' (declared-symbol
 #    skeleton) -> 'slices' (bounded body text, richest), or 'auto' (default) which
@@ -351,8 +384,8 @@ mcp call http://localhost:8080 repocontext_stats '{}'
 ```
 
 With the `embedder` companion healthy, search and the bundle rank semantically;
-with no embedding provider bound they degrade to a deterministic keyword rank - the
-bundle still answers either way. See
+with it unreachable they degrade to a deterministic keyword rank - the bundle still
+answers either way. See
 [docs/lattice.api.mcp.repocontext/retrieval-economics.md](../../docs/lattice.api.mcp.repocontext/retrieval-economics.md)
 for the full model.
 
@@ -460,10 +493,11 @@ It is **not a backup**, and it does not make `down -v` safe.
   time. `repocontext_reset_index` remains the correct way to rebuild an index:
   it drops the derived planes and preserves memory outright, with no window at
   all.
-* It is not the scheduled whole-store backup being wired up in issue #2602.
-  That one owns manifests, retention and operator-driven restore of everything;
-  this one owns automatic restore-on-empty for memory alone. Only this
-  mechanism restores automatically at startup.
+* It is not the scheduled backup that issue #2602 added (the
+  `azurite-backup-sink` service). That one captures the same memory tree to an
+  external sink, with manifests and retention, and restores only the backup id
+  an operator names; this one owns automatic restore-on-empty for memory alone.
+  Only this mechanism restores automatically at startup.
 
 See
 [docs/lattice.api.mcp.repocontext/memory-durability.md](../../docs/lattice.api.mcp.repocontext/memory-durability.md)
@@ -485,7 +519,10 @@ no shell-exec healthcheck:
   - **vector plane** - semantic retrieval has been demonstrated to work. A
     deployment with no embedder bound (keyword-only), and a host with no repository
     registered yet, both count as ready here: there is no vector plane to wait for
-    in the first case and nothing to serve in the second.
+    in the first case and nothing to serve in the second. This host always binds
+    its embedding provider, though, so a missing or unreachable `embedder` does
+    not make it keyword-only: searches report `keyword.vector_plane_unavailable`
+    and, once a repository is registered, readiness stays down.
 
   So it is not-ready during startup replay and during drain, but those are not the
   only causes, and a sustained 503 is far more likely to be the vector-plane
@@ -532,10 +569,13 @@ each one ruling out a cause the previous step left open:
    presence alongside a 503 means the plane was ready and has since lost it. Its
    `phase` label records which phase it first reached (`serving`, `keyword_only`,
    or `nothing_registered`). `repocontext_retrieval_unavailable_total` counts fault
-   episodes, and its `cause` label carries the same vocabulary as step 3's
-   `retrievalPath`, so it separates a vector plane that cannot serve
+   episodes under a closed `cause` label: the three capability-loss values of step
+   3's `retrievalPath`, so it separates a vector plane that cannot serve
    (`keyword.vector_plane_unavailable`) from an index that has drifted from its
-   sources (`keyword.index_degraded`).
+   sources (`keyword.index_degraded`) and from a withheld exact fallback
+   (`keyword.exact_fallback_suppressed`), plus `probe` (a readiness probe rather
+   than a real query saw the plane unable to serve), `saturated` (an admission gate
+   refused the plane's open past its bound) and `unknown`.
 
 **Issuing a query yourself does not clear it, and the host is already trying.** A
 warmup service issues the same semantic query from application start, retrying with
@@ -572,8 +612,9 @@ curl -fsS http://localhost:8080/metrics | head -n 20
 ## Notes on durability and shutdown
 
 - All durable local state (the WAL directory and the SQLite database file) lives
-  under `/data`, a named volume. The host fails fast at startup if that path is
-  missing or not writable by its non-root UID.
+  under `/data`, a named volume. The host fails fast at startup if that path
+  cannot be created or is not writable by its non-root UID; a missing directory is
+  created rather than refused.
 - On `SIGTERM` (a `docker stop` / `restart`) the host flips readiness to not-ready
   first, then drains: the silo deactivates and the WAL commit-log flushes buffered
   records before exit, so an in-flight write is durable after restart.
@@ -613,8 +654,8 @@ curl -fsS http://localhost:8080/metrics | head -n 20
     `stop_grace_period` is smaller than the drain (issue #2389). The exit code
     will not tell you, because a killed container reports `137` and the next
     `docker start` overwrites it.
-  - **`drain complete` at `Warning`.** The drain finished but consumed more than
-    70% of the budget. Nothing has failed; treat it as a lead indicator, because
+  - **`drain complete` at `Warning`.** The drain finished but consumed 70% or
+    more of the budget. Nothing has failed; treat it as a lead indicator, because
     drain time grows with resident state.
   - **`drain ABANDONED after 180s` at `Error`, and the container exits `70`.** The
     *host* stopped waiting and deactivation was abandoned part-way. Raise the
@@ -793,7 +834,7 @@ is what makes the deployed configuration reproducible from the checkout alone;
 layering a personal override on top of the tuning file makes it three, and you
 say so with `-ExpectedConfigFileCount 3`.
 
-The opt-in CPU pinning described below does **not** move the count: it is two
+The opt-in CPU pinning described above does **not** move the count: it is two
 variables on the existing services, not a third file.
 
 A machine-local override remains legitimate, and it is why check 1 reads the
@@ -813,12 +854,23 @@ Pass `-ExpectedConfigFileCount 1` if you genuinely mean to run without an
 override. Making that an explicit act is the point - dropping the override
 should be something you said, not something that happened.
 
-**What a green run does not establish.** That the image was built from the
-expected commit (check 3 as defaulted detects a stale container, not a
-mislabelled build; pass `-ExpectedImageId` if you need that). That the checkout
-was clean when `up` ran, since HEAD is a commit and uncommitted compose edits are
-invisible here. That any setting you did not name reached the process. Or
-anything whatever about a container you did not name.
+**What a green run does not establish.** That the checkout was clean when `up`
+ran, since HEAD is a commit and uncommitted compose edits are invisible here - and
+a `GIT_COMMIT` stamped from a dirty tree names a commit the image does not
+exactly contain. That any setting you did not name reached the process: check 4
+proves only the settings passed as `-ExpectedSetting`. That the memory archive's
+*content* is good, or that the indexed workspace is *current*: checks 5 and 7
+adjudicate where the archive landed and which tree is bound, not what state
+either is in. That the workspace root or the indexed repository is the one you
+meant, unless you named them with `-ExpectedWorkspaceRoot` and
+`-ExpectedRepositoryRoot` (the report prints `NOT ESTABLISHED` for each arm you
+did not ask for), or that every registered repository is correctly rooted - the
+indexed-root arm passes when one matches. Or anything whatever about a container
+you did not name. What a green run **does** establish, since check 6 (issue
+#2686), is that the image the container is executing was built from the expected
+commit, on the evidence of its own revision label or `candidate-<sha>` tag
+cross-checked against chronology. Check 3 as defaulted detects only a stale
+container; pass `-ExpectedImageId` if you need to pin an exact image.
 
 This is an operator check and is deliberately **not** wired into CI. It needs a
 running container, and a fixture that skipped when Docker was absent would
@@ -842,7 +894,7 @@ direction is exercised against fabricated disagreements rather than assumed:
 pwsh -File ./scripts/Test-ContainerProvenance.ps1
 ```
 
-Every one of the four checks has fixtures it accepts and fixtures it refuses,
+Every one of the seven checks has fixtures it accepts and fixtures it refuses,
 two of them reconstructed from the real gate run readings. A check only ever
 observed passing is indistinguishable from one that cannot fail, which is the
 same reason the suite itself is worth measuring rather than trusting: commit

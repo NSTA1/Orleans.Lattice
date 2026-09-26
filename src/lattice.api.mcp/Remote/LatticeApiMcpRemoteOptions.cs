@@ -43,9 +43,7 @@ public sealed class LatticeApiMcpRemoteOptions
     /// <summary>
     /// The id of the default (current) region - the one a tool call targets when
     /// no optional <c>region</c> selector is supplied, so every existing call is
-    /// unchanged. The top-level per-group endpoints (<see cref="State"/> /
-    /// <see cref="Data"/> / <see cref="Auth"/> / <see cref="Backup"/> /
-    /// <see cref="Replication"/>) define this region. Defaults to
+    /// unchanged. The top-level per-group endpoints define this region. Defaults to
     /// <see cref="DefaultRegionId"/>.
     /// </summary>
     public string RegionId { get; set; } = DefaultRegionId;
@@ -120,14 +118,13 @@ public sealed class LatticeApiMcpRemoteOptions
     /// The remote endpoint for the tree-administration control facade
     /// (<c>ILatticeTreeAdmin</c>) and its schema-management control facade
     /// (<c>ILatticeSchemaControl</c>), or <see langword="null"/> to not serve the
-    /// tree-administration group remotely. The tree-administration MCP group's
-    /// tools are the schema-control tools, so the schema-API gRPC service (which is
-    /// co-hosted with the tree-administration gRPC service on the same silo
-    /// address) is reached at this same endpoint - the group maps to one endpoint
-    /// throughout discovery, region routing, and the capabilities report, exactly
-    /// like every sibling group. Wiring it serves the read-only schema-inspection
-    /// tools; the mutating schema-management tools are added when
-    /// <see cref="EnableSchemaControl"/> is set.
+    /// tree-administration group remotely. The schema-API gRPC service is co-hosted
+    /// with the tree-administration gRPC service on the same silo address, so both
+    /// facades are reached at this endpoint and the group maps to one endpoint
+    /// throughout discovery, region routing, and the capabilities report. Wiring it
+    /// serves read-only tree/schema inspection tools; mutating lifecycle and schema
+    /// tools are added when <see cref="EnableLifecycleControl"/> and
+    /// <see cref="EnableSchemaControl"/> are set.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? TreeAdmin { get; set; }
 
@@ -147,22 +144,18 @@ public sealed class LatticeApiMcpRemoteOptions
     public LatticeApiMcpRemoteEndpoint? TenantAdmin { get; set; }
 
     /// <summary>
-    /// The remote endpoint for the read-only telemetry facade
-    /// (<c>ILatticeTelemetry</c>), or <see langword="null"/> to not serve the
-    /// telemetry group over a routable facade in the default region. Telemetry is
-    /// routable per region exactly like every sibling group, so a client that
-    /// cannot be trusted to scope itself - a desktop head, whose local enforcement
-    /// would be trivially bypassable - reaches a facade that applies the tenant
-    /// scope server-side.
+    /// The remote endpoint recorded for the read-only telemetry facade
+    /// (<c>ILatticeTelemetry</c>) in the default region's capability map, or
+    /// <see langword="null"/> when no routable telemetry facade is advertised.
+    /// Supplying this endpoint alone does not register telemetry MCP tools; call the
+    /// telemetry tool registration for the current host to serve telemetry queries.
     /// </summary>
     /// <remarks>
-    /// Additive, not a replacement: a head that instead wires the co-located
-    /// telemetry tool module (<c>AddTelemetryTools</c>) keeps serving telemetry
-    /// from that module and advertises the group at a <see langword="null"/>
-    /// (in-process) endpoint, exactly as a co-hosted in-silo group does. The
-    /// current region advertises telemetry when either is present; when both are,
-    /// this endpoint is the advertised one, because it is the one another process
-    /// can route to.
+    /// Additive, not a replacement: a head that wires the co-located telemetry tool
+    /// module serves telemetry from that local module and advertises the group at a
+    /// <see langword="null"/> (in-process) endpoint unless this endpoint is also
+    /// configured. Region routing can advertise telemetry reachability, but the
+    /// co-located telemetry tool still answers through the local backend.
     /// </remarks>
     public LatticeApiMcpRemoteEndpoint? Telemetry { get; set; }
 
@@ -247,8 +240,9 @@ public sealed class LatticeApiMcpRemoteOptions
     public bool EnableSchemaControl { get; set; }
 
     /// <summary>
-    /// Whether the tree-administration group's mutating tree-lifecycle tools
-    /// (explicit tree creation, alias assignment, per-tree configuration update) are
+    /// Whether the tree-administration group's mutating tree lifecycle and administration tools
+    /// (create, alias, configuration, delete/recover/purge, bulk load, restore, reshard,
+    /// resize/undo, snapshot, WAL placement/move, views, tag-index, retention, and compaction) are
     /// advertised. Forwarded to <c>AddTreeAdminTools</c> and mapped onto
     /// <see cref="LatticeApiMcpOptions.EnableTreeAdminLifecycleTools"/>. Defaults to
     /// <see langword="false"/> (the read-only lifecycle tools only). Ignored when
@@ -257,8 +251,9 @@ public sealed class LatticeApiMcpRemoteOptions
     public bool EnableLifecycleControl { get; set; }
 
     /// <summary>
-    /// Whether the tenant-administration group's mutating tenant-lifecycle tools
-    /// (create, suspend, resume, delete) are advertised. Forwarded to
+    /// Whether the tenant-administration group's control tools (create, suspend,
+    /// resume, delete, set quotas, authorize regions, set residency, and region
+    /// status) are advertised. Forwarded to
     /// <c>AddTenantAdminTools</c> and mapped onto
     /// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/>. Defaults to
     /// <see langword="false"/> (the read-only tenant self-awareness tools only).

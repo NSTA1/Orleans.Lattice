@@ -68,6 +68,10 @@ After mutation - views re-converged:
 - Views are read-only and derived. Attempting to write to a `view-*` tree
   directly through the public `ILattice` surface is **rejected** with an
   `InvalidOperationException` - change the **source** and let the view converge.
+  A direct content read of a `view-*` tree through `ILattice` is rejected the
+  same way, because a rebuild can swap the view's active generation under a raw
+  handle: read through the `ILatticeView` handle that `ILatticeViewFactory`
+  returns, as this sample does.
 
 ## Notes
 

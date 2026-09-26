@@ -35,7 +35,7 @@
   <!--
     Transitive security floors.
 
-    Orleans.Lattice.Api.Mcp 9.6.1 was packed before the 9.6.2 patch wave, so the
+    Orleans.Lattice.Api.Mcp 9.7.0 is pinned with the matching facade clients, so the
     dependency floors it emits still name the pre-wave versions (Orleans.Lattice
     >= 9.6.1, the facade gRPC clients >= 9.6.0). NuGet resolves a floor to the
     LOWEST version that satisfies it, so without the pins below this head would

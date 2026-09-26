@@ -6,9 +6,11 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The thin adapter methods the tree-administration tool module exposes as MCP
-/// tree-lifecycle tools: explicit tree creation, existence checks, alias
-/// assignment / resolution, per-tree configuration read / update, and the
-/// registry-persisted shard-map read. Every method is a stateless, static shim over
+/// tree-lifecycle tools: existence and alias/config/shard-map inspection; tree
+/// creation, alias assignment, per-tree configuration update (including WAL
+/// retained-byte ceilings), delete/recover/purge, bulk load, restore, reshard,
+/// resize/undo, snapshot, WAL placement/move, view, tag-index, retention, and
+/// compaction operations. Every method is a stateless, static shim over
 /// the transport-agnostic <see cref="ILatticeTreeAdmin"/> facade: it resolves the
 /// facade from the tool invocation's request service provider (bound by the MCP SDK
 /// from <c>RequestContext.Services</c>), marshals the tool-call arguments into the
@@ -18,10 +20,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// verbs) refuses an unauthorized caller even if one somehow reaches an invocation.
 /// </summary>
 /// <remarks>
-/// The mutating verbs (create, set-alias, set-config) are contributed only when the
-/// host opts in via <see cref="LatticeApiMcpOptions.EnableTreeAdminLifecycleTools"/>;
-/// the read verbs (exists, resolve-alias, get-config, get-shard-map) are always
-/// contributed. The methods are held as static method groups so the tool module
+/// The mutating lifecycle/admin verbs are contributed only when the host opts in via
+/// <see cref="LatticeApiMcpOptions.EnableTreeAdminLifecycleTools"/>; read-only
+/// inspection verbs are always contributed. The methods are held as static method groups so the tool module
 /// materialises each tool's delegate exactly once when it builds its tool list, never
 /// per <c>tools/call</c>. The facade DTOs are reused verbatim as the tool result
 /// shapes, so this surface adds no new serializable wire type.
@@ -329,7 +330,7 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.ResizeTreeAsync(treeId, newMaxLeafKeys, newMaxInternalChildren, cancellationToken);
     }
 
-    /// <summary>Undoes the most recent completed resize of a tree, reverting to the prior node capacity.</summary>
+    /// <summary>Undoes an in-flight resize or the most recent recoverable completed resize of a tree, reverting to the prior node capacity.</summary>
     public static Task<TreeResizeStatus> UndoTreeResizeAsync(
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree whose most recent resize to undo. Must not be null, empty, or a reserved system tree id.")]

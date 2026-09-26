@@ -77,7 +77,7 @@ Silo starting... ready.
 
 == As the signed-in Entra user (owner) ==
   write greeting/8b1e...c4a2 -> allowed   (owner: allowed)
-  read  greeting/8b1e...c4a2 -> 'Hello from Entra oid 8b1e...c4a2 at 2025-... UTC'
+  read  greeting/8b1e...c4a2 -> 'Hello from Entra oid 8b1e...c4a2 at 2025-...Z'
 
 == As an anonymous request (no credential) ==
   write greeting/8b1e...c4a2 -> DENIED   (default-deny)

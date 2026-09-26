@@ -221,9 +221,10 @@ public abstract class MeterDashboardCoverageTestsBase
 
         // KNOWN-INCOMPLETE RETENTION - see issue #3260.
         //
-        // The exporter appends no unit segment for "ms" or "s" any more than it
-        // does for "By": it records the unit in HELP text and leaves the family
-        // name bare. Measured on a live scrape (440 families):
+        // The repo-context container's in-house Prometheus exposition appends no unit
+        // segment for "ms" or "s" any more than it does for "By": it records the unit
+        // in HELP text and leaves the family name bare. Measured on that live scrape
+        // (440 families):
         //
         //   # HELP orleans_lattice_atomic_write_duration ... (unit: ms)
         //   # TYPE orleans_lattice_atomic_write_duration summary

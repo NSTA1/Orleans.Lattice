@@ -20,8 +20,13 @@ If you're looking for a different angle on the WAL:
 ## What the WAL is
 
 The WAL is an **append-only log of `LatticeMutation` envelopes**, partitioned per
-shard. Each shard owns a dense, monotonically increasing offset space starting at
-zero; offsets are never reused, never reordered, and never gapped.
+shard. Each shard owns a monotonically increasing offset space starting at zero,
+and an acknowledged offset is never reused or reordered. Offsets are dense in
+normal operation. A flush that fails leaves its window unacknowledged and the
+shard resumes from the provider's durable tail, so that window is either
+reassigned (when nothing above it landed) or left as a permanent gap (when a
+later concurrent window had already committed), which readers observe honestly -
+see [Append-failure semantics](#append-failure-semantics).
 
 ```text
 shard 0:  [0]Set k1   [1]Set k2     [2]Delete k1   [3]Set k3      ...
@@ -31,17 +36,24 @@ shard 2:  [0]Set x    [1]Set y      [2]Set z       [3]Delete y    ...
 
 A `LatticeMutation` carries everything a replay or replication consumer needs to
 reconstruct the effect of one foreground operation: the tree id, the operation
-kind (`Set` / `Delete` / `DeleteRange`), the key (and optional end-exclusive key
-for ranges), the LWW timestamp (an `HybridLogicalClock`), the value bytes (or
-tombstone marker), the optional TTL expiry, the origin cluster id, the vector
-clock, the optional transaction id, the maintenance category, and the optional
-delta payload. The envelope is the wire format and the on-disk format and the
-replication payload - there is exactly one shape.
+kind (`Set` / `Delete` / `DeleteRange`, plus the `TxCommit` / `TxAbort` saga
+terminals and the `Tombstone` compaction reap), the key (and optional
+end-exclusive key for ranges), the LWW timestamp (an `HybridLogicalClock`), the
+value bytes (or tombstone marker), the optional TTL expiry, the origin cluster
+id, the vector clock, the optional transaction id, the maintenance category, the
+optional delta payload and the merge mode, together with the atomic-batch
+metadata (batch size, index and shard count, and the prepared flag), the merge
+and backstop flags, the authoring shard index, the keys a predicate-filtered
+range delete matched, and the cross-tree operation id and participants. The WAL
+stores each envelope as its durable twin, `WalRecord` - the shape that is
+encoded onto storage and shipped to replication peers, which also carries the
+causal+ dependency summary - and a storage provider or `IMutationObserver` sees
+it projected back to a `LatticeMutation`.
 
 ## Why WAL-as-sole-commit-point
 
-Every foreground commit (set / delete / range-delete) appends exactly one
-`LatticeMutation` to the WAL **before** the in-memory projection sees the write.
+Every foreground commit (set / delete / range-delete) appends exactly one WAL
+record **before** the in-memory projection sees the write.
 The WAL append is the moment the operation is durable; everything after that is
 materialisation.
 
@@ -81,18 +93,19 @@ load-bearing - the WAL append must happen before any in-memory state mutates,
 and the observer publish must happen after both, inside a commit-log scope.
 
 ```text
-   build  ─►  wal  ─►  apply  ─►  observer
-   (HLC,    (append   (merge      (publish under
-    LwwValue, Lattice-  into       LatticeCommitLog-
-    Mutation) Mutation) projection) Context scope)
-   in-mem    durable    in-mem      in-mem
+   build  -->  wal  -->  apply  -->  observer
+   (HLC,       (append   (merge       (publish under
+    entry,      the WAL   into         the commit-log
+    WAL         record)   projection)  scope)
+    record)
+   in-mem      durable   in-mem       in-mem
 ```
 
 1. **build** - Tick the local hybrid-logical clock and the version vector,
-   construct the `LwwValue<byte[]>` for the new entry (or the tombstone), and
-   build the `LatticeMutation` envelope. The envelope captures the
-   `LatticeOriginContext`, `LatticeVectorClockContext`, `LatticeTransactionContext`,
-   `LatticeMaintenanceContext`, and any ambient `LatticeDeltaContext`.
+   construct the new entry's last-writer-wins value (or the tombstone), and
+   build its `WalRecord`. The record captures the ambient `LatticeOriginContext`,
+   `LatticeVectorClockContext` and `LatticeDeltaContext`, plus the ambient
+   transaction id, maintenance category and atomic-batch stamps.
 
 2. **wal** - Resolve the silo's commit-log writer and append the mutation.
    `AddLattice` always registers the writer, with the in-memory WAL provider as
@@ -144,13 +157,16 @@ follow:
   WAL append throws, the in-memory projection is untouched, and the caller sees
   the exception.
 - **In-memory projection is reconstructable from the WAL alone.** The
-  projection has no independent durability guarantee. `PersistAsync` still
-  exists for the projection-checkpoint flush (below) and for tree-metadata
-  paths (sibling pointer updates, tree-id stamping, split lifecycle,
-  last-compaction-version snapshotting), but those persist *metadata*, not a
-  fallback copy of the entry values. The grain-state row never stores entry
-  values as a backup; entry values live in the WAL until they reach a
-  durable snapshot.
+  projection has no independent durability guarantee. The leaf still persists
+  its grain-state row for the projection-checkpoint flush (below) and for
+  tree-metadata paths (sibling pointer updates, tree-id stamping, split
+  lifecycle, last-compaction-version snapshotting), but those persist
+  *metadata*, not a fallback copy of the entry values. The grain-state row never
+  stores committed entry values as a backup: apart from the small replay ledger
+  that records unresolved saga prepares and undrained deferred terminals
+  verbatim (see
+  [Resumable cold replay](projection-rebuild.md#resumable-cold-replay)), entry
+  values live in the WAL until they reach a durable snapshot.
 - **Replication consumers see exactly the foreground commit ordering.** A peer
   replicating from this shard sees the same `LatticeMutation` envelopes in the
   same order that the local projection saw them. The WAL is the linearization
@@ -159,8 +175,8 @@ follow:
 ## WAL grain API
 
 The per-shard WAL is owned by the internal `IWalShardGrain`, keyed
-`{treeId}/{partition}` where `partition` is `WalPartitionHash.Compute(key, partitions) %
-LatticeOptions.WalPartitions` (default `8`). The grain is in the core
+`{treeId}/{partition}` where `partition` is a stable FNV-1a hash of the key
+reduced modulo the tree's pinned `LatticeOptions.WalPartitions` (default `8`). The grain is in the core
 `Orleans.Lattice.BPlusTree.Grains` namespace and is the single producer-side
 entry point for foreground commits and the read-back source for the
 replication change feed.
@@ -174,6 +190,14 @@ replication change feed.
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so dashboards, alerts, and the back-pressure health check observe the persisted footprint rather than a monotonically-growing offset counter. |
 | `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetLiveEntryCountAsync` for the trim-aware live count. |
+
+The grain also serves the replication shipper's bytes-shaped page read (the
+same durable gap-free window, each entry carried as the payload bytes the
+encoder wrote at append time, read through `IWalStorageProvider.ReadEncodedAsync`),
+reports the provider's retained-payload and physical byte sizes for the shard
+(`-1` when the provider does not support byte accounting), and fences itself
+against appends and retires its activation during a placement move (see
+[Moving a partition to another account](wal-storage-providers.md#moving-a-partition-to-another-account)).
 
 Saga terminal mutations (`MutationKind.TxCommit` / `TxAbort`) carry their
 shard index in `mutation.Key` as a base-10 invariant-culture string; the
@@ -194,7 +218,7 @@ hot-path-optimised entry point that returns an already-completed
 `ValueTask<int>` on a cache hit and falls back to a one-shot
 `ILatticeRegistry.GetEntryAsync` grain RPC only on the first call per
 tree per silo. The foreground commit-log writer uses this fast path on
-every `AppendAsync` / `AppendBatchAsync`, so `WalCommitLogWriter` never
+every `AppendAsync` / `AppendManyAsync`, so `WalCommitLogWriter` never
 serialises through the cluster-singleton registry activation on the
 write path. The full `LatticeOptionsResolver.ResolveAsync` (used by
 admin grains and the activation-time materialiser) also populates the
@@ -215,16 +239,19 @@ saga pending-tx clamp is also partition-scoped: each prepared mutation
 records the `(transactionId, partition)` pair it arrived under, and the
 projection-checkpoint advance for partition `P` is clamped behind
 `(min unresolved prepare offset for P) - 1` so cross-partition offsets
-are never compared.
+are never compared. A prepare already recorded verbatim in the leaf's
+durable replay ledger no longer clamps, because a resumed replay rebuilds
+it from the ledger (see
+[Resumable cold replay](projection-rebuild.md#resumable-cold-replay)).
 
 Each leaf reports one cursor per partition to the WAL cursor registry
 under consumer ids of the form
 `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}`, so the
 per-shard WAL GC trims each partition independently against its own
-slowest consumer. On the legacy default `WalPartitions = 1` the
-unsuffixed `_lattice_materialiser_{treeId}_{leafGrainId}` shape is
-preserved so a host that has never enabled multi-partition replay is
-wire-compatible with its existing cursor registrations.
+slowest consumer. With `WalPartitions = 1` the unsuffixed
+`_lattice_materialiser_{treeId}_{leafGrainId}` shape is preserved, so a
+tree pinned to a single partition stays wire-compatible with its existing
+cursor registrations.
 
 ### Surviving a full restart
 
@@ -257,19 +284,23 @@ mirror is fire-and-forget and coalesced off the checkpoint path - a
 debounce keeps a busy every-write-checkpoint leaf from issuing a durable
 write per write - and because a too-low durable pin only ever retains
 *more* WAL, a coalesced or slightly stale pin is always safe. On each
-pass the GC consults the durable pins and lowers its trim floor for any
+pass the GC consults the durable pins and lowers its HLC trim floor for any
 materialiser consumer that is **missing** from the in-memory registry
 (a consumer that is present has a fresher in-memory cursor already
-folded into the floor, so steady-state trimming is unchanged; one
+folded into that floor; one
 registered only with a `Zero` block-pin-only cursor contributed nothing
-to that floor, so it is treated as missing). A leaf
+to it, so it is treated as missing). The checkpoint offsets the pins
+record are used for every leaf, present or not: they form the durable
+materialiser offset floor, which stops each trim scan and can overrule
+the in-memory cursor (see [Predicate](#predicate)). A leaf
 that activated but never checkpointed seeds a durable `Zero` "block"
 pin, which holds the WAL head for that leaf until it produces its first
 checkpoint; the TTL ceiling (`LatticeOptions.WalRetention`) still bounds
 growth in that state. Because durable WAL storage is the deployment
-shape most exposed to this hazard, `AddAzureTableWalStorage`
-automatically wires the cursor registry and WAL GC seams (both
-idempotent) so durable storage never ships without the durable floor.
+shape most exposed to this hazard, `AddAzureTableWalStorage` and
+`AddFileWalStorage` automatically wire the cursor registry and WAL GC
+seams (both idempotent) so durable storage never ships without the
+durable floor.
 
 Two cold-path **retention barriers** turn the durable pin from a
 best-effort mirror into an authoritative trim floor, so a write-once
@@ -298,14 +329,14 @@ failures so neither deactivation nor the checkpoint path is ever blocked.
 
 Every WAL record carries `OriginClusterId` so multi-site receivers can
 attribute the origin and break replication cycles. The stamp comes from
-two sources, applied in priority order at the producer-side
-`WalRecordConverter.ToWalRecord(...)` call site:
+two sources, applied in priority order when the silo's commit-log
+writer routes the record to its WAL partition:
 
 1. **`mutation.OriginClusterId` wins when present.** A remote replay path
    stamps the upstream cluster id onto the mutation before it reaches the
-   WAL writer; the converter preserves that value verbatim.
+   WAL writer; the writer preserves that value verbatim.
 2. **Fallback to the resolver-supplied local cluster id.** When the
-   mutation arrives with `OriginClusterId == null` - the foreground commit
+   mutation arrives with no `OriginClusterId` (null or empty) - the foreground commit
    path on a host where the replication observer has not yet stamped - the
    writer asks `ILatticeOriginClusterIdResolver.Resolve(treeId)` for the
    local id.
@@ -341,32 +372,35 @@ user-supplied resolver is preserved.
 The WAL grain's `AppendAsync` hot path implements a turn-safe batching
 protocol. Each call accumulates into an in-memory pending batch held on
 the grain instance; up to `WalMaxPendingBatches` flushes can be in
-motion against `IWalStorageProvider.AppendBatchAsync` simultaneously,
+motion against `IWalStorageProvider.AppendEncodedBatchAsync` simultaneously,
 each independently completing per-caller `TaskCompletionSource<long>`
 instances when the provider acknowledges durability. Offset assignment
 remains serialised under the grain turn, so each in-flight flush owns a
 strictly-increasing, non-overlapping offset window by construction.
 
 ```text
-AppendAsync(entry)
-    │  assigns offset = _nextOffset++
-    │  appends WalEntry to _pendingBatch
-    │  parks a TCS in _pendingAcks
-    │  if _inFlight.Count == 0     → StartFlush()
-    │  if would-overflow batch AND _inFlight.Count < cap → StartFlush()
-    │  if would-overflow batch AND _inFlight.Count >= cap → await head
-    ▼
-returns await tcs.Task    ◄── completes once provider acks the batch
+append(entry)
+    |  encodes the record once into a pooled buffer
+    |  while adding it would overflow the pending batch:
+    |      in-flight flushes <  cap -> start a flush of the pending batch
+    |      in-flight flushes >= cap -> await the oldest in-flight flush
+    |  assigns offset = next offset, then advances the counter
+    |  appends the encoded entry to the pending batch and parks an ack
+    |  in-flight flushes < cap -> start a flush
+    v
+returns the ack          <-- completes once the provider acks the batch
 ```
 
-Two batch limits are enforced at append time:
+The batching limits and flush bounds:
 
 | Option | Default | Trigger |
 |---|---|---|
 | `WalMaxBatchEntries` | `100` | Adding the new entry would push the pending count above the cap; the current batch is flushed first, then the new entry starts the next batch. |
-| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain encodes every captured `WalRecord` once through the registered `IWalRecordEncoder` (default: `OrleansBinaryWalRecordEncoder`, the canonical Orleans-binary codec) into a pooled buffer; the encoded length feeds the byte budget, and the same bytes are handed to the provider's `AppendEncodedBatchAsync` on flush without a second encode. The budget is an exact ceiling, suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). |
+| `WalMaxBatchBytes` | `4 MB` | Adding the new entry's exact serialised size would exceed the byte budget; same cutover. The grain encodes every captured `WalRecord` once through the registered `IWalRecordEncoder` (default: `OrleansBinaryWalRecordEncoder`, the canonical Orleans-binary codec) into a pooled buffer; the encoded length feeds the byte budget, and the same bytes are handed to the provider's `AppendEncodedBatchAsync` on flush without a second encode. The budget is an exact ceiling for any batch of more than one entry (a single entry larger than the whole budget is flushed alone rather than refused), suitable for sizing against backends with hard transactional limits (e.g. the Azure Table Storage 4 MB batch cap). It bounds the batch, not each entry: the Azure Table provider also limits each entry's stored payload to 64 KiB (see [WAL storage providers](wal-storage-providers.md#azuretablewalstorageprovider)). |
 | `WalMaxPendingBatches` | `16` | Maximum number of in-flight + just-started flushes the grain holds against the provider concurrently. The pre-6.1.0 default was `1`, which reproduced the original single-in-flight protocol bit-for-bit; the v6.1.0-v6.2.x default of `8` raised pipeline depth so writer-side bursts coalesced against higher-latency durable providers (e.g. Azure Tables). The post-v6.2 default of `16` was measured on Standard_D4as_v5 + Azure Tables Standard at 4,000 keys/s offered load to give a +57% increase in steady-state silo throughput at the 4k:5 rung with no reliability regression; see [WAL tuning](wal-tuning.md) for the storage-account-throughput envelope above which the dual-knob fan-out collapses to `429` throttling. The cap is the only synchronisation point new appends see, so cap values above the steady-state burst depth do not buy further throughput. Set explicitly to `1` to opt back into the legacy strict-serial-per-shard shape. |
 | `WalFlushTimeout` | `15 s` | Upper bound on how long a single flush may take before the grain abandons the wait, faults the flush, resynchronises the dense-offset tail from the provider, and drains the chain so callers retry. Set to `Timeout.InfiniteTimeSpan` to restore the historical unbounded await. See [Flush deadline](#flush-deadline). |
+| `WalFlushPreflightTimeout` | `5 s` | Upper bound on a flush's preflight - the setup and initial scheduler yield before the provider call is issued - so a flush whose continuation never resumes faults as a `TimeoutException` and its slot drains. See [Flush deadline](#flush-deadline). |
+| `WalAppendCoalescingInFlightThreshold` | `4` | In-flight depth at or above which a batch append's final entry stops kicking a flush of its own and coalesces into the pending batch, drained by the follow-on flush that fires when an in-flight flush settles. Self-disabling below the threshold; `0` restores the unconditional final-entry kick. See [WAL tuning](wal-tuning.md). |
 
 Cutovers below the in-flight cap start a fresh flush immediately;
 cutovers at the cap await the oldest in-flight flush before starting
@@ -375,8 +409,8 @@ load.
 
 ### Flush deadline
 
-Each in-flight flush is bounded by `WalMaxPendingBatches`; the cap is the
-only synchronisation point new appends see. If one flush never settles,
+The number of in-flight flushes is bounded by `WalMaxPendingBatches`; the
+cap is the only synchronisation point new appends see. If one flush never settles,
 its slot never leaves the in-flight chain, the chain saturates at the
 cap, and every subsequent append back-pressures behind a flush that can
 never complete - a steady-state stall with no fault and no activation
@@ -410,6 +444,16 @@ Bounding only the *call* (passing the token) is not sufficient on its own;
 bounding the *wait* is what makes the deadline wedge-proof against
 uncooperative providers.
 
+`WalFlushTimeout` arms only once the provider call is issued. The flush's
+preflight - the setup and initial scheduler yield that precede the call - has
+its own bound, `WalFlushPreflightTimeout` (default 5 s): a flush whose
+post-yield continuation never resumes (an activation parked by a reshard or
+membership change, a scheduler hogged by non-cooperative work, or a teardown
+mid-flush) faults as a `TimeoutException` through the same failure path, so its
+slot drains instead of saturating the chain, and the
+`orleans.lattice.wal.flush.preflight.timeouts` counter attributes each trip to
+the `(tree, shard)`.
+
 
 ### Batched leaf write path
 
@@ -423,8 +467,8 @@ through this path are:
 | Entry point | Caller |
 |---|---|
 | `BPlusLeafGrain.SetManyAsync` | Foreground `ILattice.SetManyAsync` / `TypedLatticeExtensions.SetManyAsync`. |
-| `BPlusLeafGrain.MergeEntriesAsync` | Sibling redistribute, snapshot restore, replication-apply, and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`. |
-| `BPlusLeafGrain.MergeManyAsync` | Cross-shard migration on shard split and online-reshard. |
+| `BPlusLeafGrain.MergeEntriesAsync` | Leaf split completion (the right half moving into the new sibling), and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`. |
+| `BPlusLeafGrain.MergeManyAsync` | Every shard-level merge: replication apply, snapshot copy and restore, backup restore, tree merge, and cross-shard migration on shard split, online reshard and shard consolidation (including writes shadow-forwarded during a split). |
 
 For an N-key batch routed to a single WAL partition the grain-hop count
 drops from O(N) to one. Multi-partition batches fan out one
@@ -433,7 +477,11 @@ the dense per-input offsets in input order. The whole batch coalesces
 into a single provider flush when it fits inside the
 `WalMaxBatchEntries` / `WalMaxBatchBytes` window; larger batches cut
 over across multiple flushes using the same in-flight cap as
-single-entry `AppendAsync`.
+single-entry `AppendAsync`. A partition group of exactly one entry still
+takes the WAL grain's interleaving batch append rather than its
+exclusive-turn single append (`WalBatchedSingleEntryAppends`, default
+`true`), so a wide fan-out of one-entry slices does not serialise on the
+partition.
 
 The `LeafWriteDuration` histogram records one sample per batched
 dispatch on the merge channel (`kind=merge`) rather than one sample per
@@ -442,9 +490,9 @@ size.
 
 ### Activation recovery
 
-On grain activation, `OnActivateAsync` calls
-`IWalStorageProvider.GetHighestOffsetAsync` and sets `_nextOffset =
-highest + 1`. The persisted log is the single source of truth for the
+On activation the WAL grain calls `IWalStorageProvider.ReconcileAsync`,
+then `IWalStorageProvider.GetHighestOffsetAsync`, and resumes assigning
+offsets at `highest + 1`. The persisted log is the single source of truth for the
 next-offset counter - the grain holds no Orleans grain state of its own.
 
 ### Deactivation drain
@@ -458,7 +506,7 @@ The drain is bounded by `WalDrainBudget` (default 75 seconds = `5 *
 WalFlushTimeout`). At drain entry the per-activation drain
 `CancellationTokenSource` is signalled - every in-flight flush has
 already linked its per-flush deadline into this source at construction
-time, so a co-operative provider's `AppendBatchAsync` cancellation
+time, so a co-operative provider's `AppendEncodedBatchAsync` cancellation
 token cancels in one shot and the flush surfaces a `TimeoutException`
 routed through the normal failure handler. The chain is then awaited
 to settle naturally for up to the budget; any slot that has not
@@ -509,7 +557,7 @@ for the caller contract.
 
 The drain is **per-silo, local-only**. Each silo process in a
 multi-silo cluster has its own `WalCommitLogWriter` singleton with
-its own owned-tracker set; a drain on silo A does not touch silo B's
+its own drain state; a drain on silo A does not touch silo B's
 admission semaphore and does not interrupt any in-flight
 `IWalShardGrain` activation that silo B is dispatching to. Rolling
 restarts settle cleanly because each silo drains its own writer
@@ -551,6 +599,10 @@ A flush failure is fail-fast for every affected caller:
    activation re-runs the activation-time reconcile instead of the shard
    refusing every append until the silo restarts.
 
+The faults of steps 2-4 are delivered only after the resync of step 5
+has run, so a caller that retries immediately observes a resynchronised
+grain.
+
 This contract makes WAL-append failures observable inline at the
 originating writer rather than being silently coalesced into a later
 batch.
@@ -558,24 +610,28 @@ batch.
 > **Contributor note - synchronously-completing providers.** `FlushAsync`
 > starts with `await Task.Yield()` so the returned `Task` is observably
 > incomplete by the time `StartFlush` stores it on the in-flight slot.
-> Without that yield, an `IWalStorageProvider` whose `AppendBatchAsync`
-> returns a synchronously-completed task (the in-memory provider does
-> this) would run the entire flush body inline before the slot is fully
-> initialised, including the chain-remove in the `finally` block - and
+> Without that yield, an `IWalStorageProvider` whose `AppendEncodedBatchAsync`
+> returns a synchronously-completed task (the in-memory provider's does,
+> through the default implementation that delegates to its synchronous
+> `AppendBatchAsync`) would run the entire flush body inline before the slot
+> is fully initialised, including the chain-remove in the `finally` block - and
 > the chain invariant ("every slot in `_inFlight` carries a task that
 > completes when its provider call settles") would be violated. Any
-> future refactor of the flush loop must preserve this yield.
+> future refactor of the flush loop must preserve this yield, which
+> `WalFlushPreflightTimeout` bounds.
 
 ## Recovery and rebuild
 
 
-When a leaf grain activates, it rebuilds its in-memory projection by replaying
-the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
+When a leaf grain activates, it rebuilds its in-memory projection by
+replaying the WAL through the per-partition `ILeafReplayCoordinatorGrain`,
+seeding the cache first from its own latest durable snapshot when that
+snapshot is newer than its checkpoint. Three cases:
 
 - **Tail replay.** The last persisted projection checkpoint is at offset *N*,
   the WAL head is at offset *M*, and `M - N` is bounded by the checkpoint
-  interval. The coordinator streams entries `(N, M]` and applies each via
-  `ILeafProjection.Apply`. Replay is in-process and typically completes in a
+  interval. The leaf reads entries `(N, M]` in bounded slices and applies
+  each to its projection. Replay is in-process and typically completes in a
   few milliseconds.
 - **Fresh-leaf tail replay.** A leaf created mid-run by a split (or by the
   first write to a virgin shard) carries the -1 "nothing applied" sentinel
@@ -583,24 +639,26 @@ the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
   sentinel from the replay-budget and trim triggers: the leaf has no
   projection state to lose, and the per-leaf range filter inside the
   materialiser (`ShouldApplyDuringReplay`) drops every WAL entry that falls
-  outside this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership range
-  on iteration, so the iteration cost is bounded by the leaf's own range
-  rather than by the WAL head. The replay still bounds the per-slice work
-  via `WalReplaySliceBudget` on the read side.
-- **Fall-off-log rebuild.** The persisted checkpoint is older than the WAL trim
-  watermark - the entries it would replay are no longer available. The
-  coordinator falls back to `ILeafProjection.Rebuild`, which drains the leaf's
-  key range from `ILeafSnapshotProvider` (an internal seam over the streaming
-  as-of snapshot export), persists the snapshot offset as the new checkpoint,
-  then tail-replays the remaining WAL entries past the snapshot offset. The
-  default policy is `ProjectionRebuildPolicy.SnapshotThenWal`; alternative
-  policies (`FullRebuildFromWal`, `Fail`) are described on the enum and in
-  [`projection-rebuild.md`](projection-rebuild.md). The grain-state row holds
-  only tree metadata (sibling pointers, tree id, shard index, key range,
-  split lifecycle, last-compaction-version) plus the projection checkpoint
-  snapshot - it is never the source of truth for entry values.
+  outside this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership range,
+  so the leaf applies only its own records - and a provider that classifies
+  records before decoding them decodes only those (see below). The read
+  itself still walks the whole retained window, in `WalReplaySliceBudget`-sized
+  slices.
+- **Genuine loss.** The persisted checkpoint is older than the WAL trim
+  watermark - the entries it would replay are no longer available - and no
+  snapshot covers the gap. Activation refuses the leaf with
+  `LeafProjectionStaleException` under every `ProjectionRebuildPolicy`:
+  neither the snapshot-then-WAL recovery beyond the snapshot rehydrate nor the
+  full-rebuild path is integrated yet, and replaying only the surviving suffix
+  would rebuild the leaf over the lost prefix. See
+  [`projection-rebuild.md`](projection-rebuild.md) for the policies and the
+  operator remedies. The grain-state row holds only tree metadata (sibling
+  pointers, tree id, shard index, key range, split lifecycle,
+  last-compaction-version), the projection checkpoints, the running
+  projection hash and the small replay ledger - it is never the source of
+  truth for committed entry values.
 
-In all three cases, the projection that a reader observes after activation is
+In both replay cases, the projection that a reader observes after activation is
 byte-equivalent to the projection at the moment the leaf last deactivated (or
 empty, for a freshly-created leaf).
 
@@ -633,7 +691,8 @@ The coordinator's five-second slice cache is keyed by the filter as well as
 the window, because a filtered slice is missing every other owner's records.
 Leaves with different ownership therefore no longer share one slice read when
 they replay the same window back to back. Each makes its own storage read
-instead, and decodes only its own records in it.
+instead and, with a provider that classifies records before decoding them,
+decodes only its own records in it.
 
 ## Projection checkpoint
 
@@ -646,7 +705,10 @@ leaf's persisted row, which records the WAL offset of the last applied mutation
 for each WAL partition together with the leaf's hybrid-logical clock and
 version vector. It does **not** capture entry values: the persisted leaf row
 has carried no per-key entries since the leaf-state collapse, and its former
-entries slot is reserved. On the next activation the leaf rehydrates its
+entries slot is reserved; the only mutations it can carry are the unresolved
+saga prepares and deferred terminals of the replay ledger (see
+[Resumable cold replay](projection-rebuild.md#resumable-cold-replay)). On the
+next activation the leaf rehydrates its
 entries from its latest durable snapshot and replays the WAL from the
 checkpoint offset rather than from zero.
 
@@ -674,15 +736,26 @@ does.
 
 ### Predicate
 
-A WAL entry is trim-eligible when the **HLC clause** *and* the **causal-stable
-clause** both accept it.
+A WAL entry is trim-eligible only when three independent clauses all accept
+it: the **entitlement clause**, the **causal-stable clause**, and the
+**blocked-floor clause**.
 
-The HLC clause is satisfied when **either** of the following holds:
+The entitlement clause has two axes. On the HLC axis it is satisfied when
+**either** of the following holds:
 
 | Condition | Meaning |
 |---|---|
 | `entry.Timestamp <= minCursor` | Every registered consumer has reported a cursor at or beyond this entry's HLC. |
 | `entry.Timestamp <= ttlCeiling` | The entry's wall-clock component is older than `now - WalRetention` (when configured). |
+
+On the offset axis, when a durable materialiser offset floor is available, the
+floor admits every entry at or below it that no consumer outside the floor's
+population still needs, so an entry the HLC axis refuses can still be entitled
+on durable offset evidence alone. The floor can also refuse an entry that only
+the in-memory consumer cursor would admit, because that cursor tracks what a
+leaf folded into its cache rather than what it made durable. It never
+overrules the TTL ceiling, and a tree with no durable floor evaluates the HLC
+axis alone.
 
 The causal-stable clause is satisfied when **either** of the following holds:
 
@@ -691,7 +764,13 @@ The causal-stable clause is satisfied when **either** of the following holds:
 | `causalStable is null` | No consumer has reported a per-origin `VersionVector` through the causal+ overload of `ReportCursorAsync`. The clause degrades to a no-op so the GC behaves identically to the legacy HLC-only predicate. |
 | `causalStable.DominatesOrEquals(entry.VectorClock)` | Every consumer that reported a vector has fully observed the entry's causal predecessors. Entries with a `null` `VectorClock` (legacy peers, range deletes, pre-causal+ entries) are treated as the empty frontier and pass automatically. |
 
-The two clauses are AND-ed: the cursor / TTL clause is kept for safety so a
+The blocked-floor clause holds back every entry whose HLC is at or after the
+lowest buffer pin any consumer reports (see
+[Consumer registration](#consumer-registration)), so a buffering receiver
+can recover from its staging state; it is inert while no consumer reports a
+pin.
+
+The clauses are AND-ed: the cursor / TTL clause is kept for safety so a
 stale or mis-configured causal-stable computation cannot cause the GC to
 over-trim past a consumer that is still pinning the HLC half.
 
@@ -710,7 +789,8 @@ detects the gap on its next read and re-bootstraps via the fall-off-log
 path described in [`projection-rebuild.md`](projection-rebuild.md).
 
 The scan is conservative: the first non-eligible entry per shard stops the
-walk for that shard. WAL offsets are dense and append-only but HLC
+walk for that shard, as does the first entry above the partition's durable
+materialiser offset floor. WAL offsets are dense and append-only but HLC
 `WallClockTicks` is mostly-monotonic-with-skew, so a stop-at-first-miss walk
 preserves correctness while a more aggressive scan would risk trimming an
 entry younger than a still-pinned later entry.
@@ -722,6 +802,10 @@ in-process bridges, custom transports, and the local in-memory materialiser -
 must publish its acked HLC to the registry so its progress contributes to
 `minCursor`. A consumer that never registers does not pin the log; the GC
 will trim under it and the consumer must detect the gap on the next read.
+A consumer that buffers entries it cannot apply yet also reports its lowest
+buffered HLC through the `blockedAtHlc` overloads of `ReportCursorAsync`; the
+lowest such pin across consumers is the blocked floor the predicate holds
+back.
 
 ```text
 // After successfully applying a batch acknowledged through `appliedHlc`,
@@ -747,8 +831,10 @@ replication hosts. The registry is process-local and loses its state on silo
 restart. A host that needs cross-restart durability supplies its own
 `IWalCursorRegistry` implementation through the
 `AddWalCursorRegistry(factory)` overload, which replaces that in-memory
-default regardless of registration order (or through
-`AddLatticeReplication(...)`, which wires the registry transitively).
+default regardless of registration order. `AddLatticeReplication(...)` and
+the durable storage helpers call the no-factory overload instead, which keeps
+the in-memory registry and adds the durable-pin-aware leaf reporter described
+under [Surviving a full restart](#surviving-a-full-restart).
 
 ### Causal-stable frontier
 
@@ -791,7 +877,7 @@ effective trim frontier is whichever bound binds first.
 
 | Bound | Knob | Default | What it caps | Can it trim past a live consumer? |
 |---|---|---|---|---|
-| Consumer frontier | *(none - always on)* | always on | The hard floor: `min(cursor)` across every registered consumer, intersected with the causal-stable frontier. | **No.** This is the durability invariant. |
+| Consumer frontier | *(none - always on)* | always on | The hard floor: `min(cursor)` across every registered consumer (overruled, where available, by the durable materialiser offset floor), intersected with the causal-stable frontier and held below the blocked floor. | **No.** This is the durability invariant. |
 | Wall-clock TTL | `WalRetention` | `null` (disabled) | Entries older than `now - WalRetention` fall off the log even if a consumer still pins them. | **Yes** - this is the only bound that does. |
 | Advisory byte ceiling | `WalMaxRetainedBytes` | `null` (disabled) | Schedules byte-pressure trim work when retained bytes exceed the ceiling, but only *within* the consumer frontier. | **No** - it surfaces an over-threshold signal instead. |
 
@@ -882,9 +968,17 @@ LatticeWalGcReport report = await gc.RunOnceAsync(
 // The report exposes the inputs and the outcome:
 //   - report.MinCursor       - minimum cursor across registered consumers, or null
 //   - report.TtlCeilingHlc   - TTL ceiling synthesised from WalRetention, or null
-//   - report.ShardsScanned   - number of WAL shards walked
 //   - report.CausalStable    - pointwise-min VersionVector across consumers, or null
-//   - report.EntriesTrimmed  - total entries removed across all shards
+//   - report.BlockedFloor    - lowest buffer pin across consumers, or null
+//   - report.ShardsScanned   - number of WAL shards walked
+//   - report.EntriesTrimmed  - total entries the pass found eligible and asked the
+//                              provider to trim, across all shards
+//   - report.ByteCeiling, RetainedBytesBefore, RetainedBytesAfter,
+//     LogicalRetainedBytes, BytePressureTriggered, BytePressureOverThreshold,
+//     CeilingUnsatisfiable - the advisory byte-pressure inputs and verdicts
+//   - report.CursorFloorState, BlockingConsumerId, BlockingConsumerIds - whether
+//     the cursor floor was usable, and which consumers blocked it
+//   - report.RetainedBacklog - whether a shard's scan stopped on WAL it had to retain
 ```
 
 ### Metrics
@@ -898,16 +992,16 @@ start from:
 | `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | Counter. WAL entries removed by a GC pass, reported once per shard the pass scanned. A shard that was scanned but reclaimed nothing records a zero, so an absent series means the shard was not scanned on this silo. |
 | `orleans.lattice.wal.gc.passes` | `tree`, `outcome` | Counter. One count per scheduled pass, by outcome: `reclaimed`, `blocked`, `no_consumer`, `idle`, `over_ceiling`, `stranded`, `unclassified` or `failed`. Only `reclaimed` states that WAL came back; every other arm says why nothing was trimmed. |
 | `orleans.lattice.wal.gc.interval` | `tree` | Histogram (seconds). The adaptive interval the scheduler chose for the tree after its latest pass. A series pinned at `WalGcMinInterval` is a tree the scheduler is holding at the floor - reclaiming, blocked, or over its byte ceiling. |
-| `orleans.lattice.wal.gc.trim_stop` | `tree`, `shard`, `reason` | Counter. Why each shard's trim scan stopped - for example `exhausted`, `cursor_floor`, `offset_floor`, `block_pin` or `durability_hold`. |
+| `orleans.lattice.wal.gc.trim_stop` | `tree`, `shard`, `reason` | Counter. Why each shard's trim scan stopped: `exhausted`, `empty`, `offset_floor`, `cursor_floor`, `causal_frontier`, `block_pin`, `durability_unverified`, `durability_hold` or `durable_offset_refusal`. |
 
 ## Relationship to replication
 
 Cross-cluster replication is an **additional consumer** of the same WAL - not
 a parallel pipeline. The replication change feed reads `LatticeMutation`
-envelopes from the WAL, applies them on the peer cluster via
-`IReplicationApplier` (which calls into the same `ILeafProjection.Apply` that
-local commit and local replay use), and acknowledges its progress through the
-same cursor registry that GC consults.
+envelopes from the WAL, applies them on the peer cluster through
+`IReplicationApplier`, which writes them into the peer tree through its
+per-tree apply path, and acknowledges its progress through the same cursor
+registry that GC consults.
 
 The single-cluster and multi-cluster code paths are identical up to the point
 where replication transports an envelope across a network boundary. There is
@@ -928,9 +1022,9 @@ the [Options Reference](configuration.md#options-reference).
 |---|---|---|
 | `MaterialiserCheckpointInterval` | 5 seconds | Time-driven flush of any pending projection-checkpoint advance. Set to `Timeout.InfiniteTimeSpan` to disable the time trigger and rely solely on the entry-count trigger. |
 | `MaterialiserCheckpointEntries` | `5_000` | Entry-count trigger: forces a checkpoint flush once this many advances are pending, regardless of `MaterialiserCheckpointInterval`. Bounds the worst-case replay cost when the steady-state apply rate is high. |
-| `MaxLeafReplayEntries` | `10_000` | Upper bound on the entries `ILeafReplayCoordinatorGrain` streams in a single tail replay. A leaf whose backlog exceeds this falls back to the rebuild path indicated by `ProjectionRebuildPolicy`. The budget is skipped for a freshly-created leaf whose persisted `ProjectionCheckpointOffset` is the -1 "nothing applied" sentinel: a fresh leaf has no projection state to lose, and the per-leaf range filter inside the materialiser bounds the actual work by the leaf's own range rather than by the WAL head. |
-| `LeafProjectionRetention` | 7 days | Age beyond which a persisted checkpoint is considered stale; the next activation falls off-log and rebuilds. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger. |
-| `ProjectionRebuildPolicy` | `SnapshotThenWal` | Recovery strategy when a fall-off-log trigger fires (snapshot + WAL tail, or full rebuild from the authoritative source). |
+| `MaxLeafReplayEntries` | `10_000` | Per-leaf replay size above which a cold activation logs a warning and increments `orleans.lattice.leaf.activation_replays_over_budget`. It counts the entries the leaf actually applies after its ownership filter, and it is a cost signal only: the leaf still tail-replays in full, and exceeding it never routes to `ProjectionRebuildPolicy` (issue #1738). |
+| `LeafProjectionRetention` | 7 days | Age beyond which a persisted checkpoint is flagged as a cost signal only - the leaf still tail-replays and never falls off-log on age alone. The activation path currently supplies a zero age, so the trigger does not fire from activation today. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger. |
+| `ProjectionRebuildPolicy` | `SnapshotThenWal` | Recovery strategy consulted only on genuine loss (the WAL trimmed past the checkpoint with no covering snapshot); today every policy refuses the leaf with `LeafProjectionStaleException`. See [`projection-rebuild.md`](projection-rebuild.md). |
 | `WalRetention` | `null` (disabled) | Wall-clock hard ceiling on retention: entries older than `now - WalRetention` fall off the log even if a consumer still pins them. The only knob that trims past a stuck consumer - set it where unbounded growth is unacceptable. See [How the retention bounds interact](#how-the-retention-bounds-interact). |
 | `WalMaxRetainedBytes` | `null` (disabled) | Advisory per-tree byte ceiling that schedules byte-pressure trim work, but only within the safe consumer frontier. See [Tree Storage](tree-storage.md#advisory-byte-pressure-wal-retention). |
 | `WalBytePressureReclaimTarget` | `0.8` | Low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the byte-pressure policy after a trim. Inert unless `WalMaxRetainedBytes` is set. |

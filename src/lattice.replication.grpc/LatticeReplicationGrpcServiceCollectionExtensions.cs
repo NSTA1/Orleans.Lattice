@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
 /// DI extensions for wiring up the unified
-/// <c>Orleans.Lattice.Replication.Grpc</c> binding (live push + snapshot
-/// bootstrap, sender + receiver) on a silo.
+/// <c>Orleans.Lattice.Replication.Grpc</c> binding (live push, snapshot
+/// bootstrap, saga control, sender + receiver) on a silo.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -30,11 +30,11 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// app.MapLatticeReplicationGrpc();
 /// </code>
 /// <para>
-/// <see cref="AddLatticeReplicationGrpc"/> registers both transports
-/// (live-push client + server, snapshot client + server), the shared
-/// auth interceptor, and the secret-provider chain.
-/// <see cref="MapLatticeReplicationGrpc"/> maps both the live-push
-/// route and the snapshot routes on the endpoint builder. Active-active
+/// <see cref="AddLatticeReplicationGrpc"/> registers the live-push,
+/// snapshot, and saga-control clients and servers, the shared auth interceptor,
+/// and the secret-provider chain. <see cref="MapLatticeReplicationGrpc"/>
+/// maps the live-push, snapshot, and saga-control routes on the endpoint
+/// builder. Active-active
 /// is the zero-ceremony default: a silo that registers the binding is
 /// both a sender (peer receivers can pull live pushes and snapshot
 /// streams from it) and a receiver (the silo can dial peer endpoints
@@ -222,8 +222,8 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps both the live-push <c>Push</c> route and the snapshot
-    /// <c>GetMetadata</c>/<c>RequestSnapshot</c> routes on the
+    /// Maps the live-push <c>Push</c> route, the snapshot
+    /// <c>GetMetadata</c>/<c>RequestSnapshot</c> routes, and the saga-control routes on the
     /// supplied <paramref name="endpoints"/>. The host must have
     /// called <c>AddLatticeReplication</c> (for the
     /// <see cref="IReplicationApplier"/> + encoder dependencies) and

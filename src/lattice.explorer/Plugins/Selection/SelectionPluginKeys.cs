@@ -22,7 +22,7 @@ public static class SelectionPluginKeys
     /// </remarks>
     public const string ActivePluginPreferenceKey = "detail-plugin";
 
-    /// <summary>The stable plugin id of the live-metrics surface. The tier's leftmost surface.</summary>
+    /// <summary>The stable plugin id of the live-metrics surface.</summary>
     public const string Metrics = "orleans.lattice.metrics";
 
     /// <summary>The stable plugin id of the tree-topology surface.</summary>

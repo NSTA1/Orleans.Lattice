@@ -17,10 +17,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <b>Decoupled from embeddings.</b> The whole point of the projection is to improve
 /// the keyword/degraded search path that runs when no embedder is bound, so content
 /// is written here - during the structural reconcile, where the changed-file bytes
-/// are already being read for hashing - and never in the embedding ingestor. Every
-/// walked file is a text file (the walk excludes binary), so all files are indexed;
-/// a file larger than <see cref="MaxReadBytes"/> is skipped so a single huge
-/// generated file cannot stall the pass.
+/// are already being read for hashing - and never in the embedding ingestor. The
+/// projection covers text files whose body can be read within <see cref="MaxReadBytes"/>;
+/// larger text files are deliberately skipped and left unmarked so a later pass can
+/// reconsider them without letting one huge generated file stall the pass.
 /// </para>
 /// <para>
 /// <b>Resumable by construction.</b> The reconcile runs before the file nodes are

@@ -225,8 +225,8 @@ and a re-run of this sweep would write more, smaller chunk records.
 
 ### Lazy load
 
-A lazy open reads only the centroids, then fetches a cell the first time a query
-actually probes it. At 250,000 vectors that is **0.52 s to open** and **75 ms for
+A lazy open reads the centroids - and the identifier mapping - but no vector
+chunk, then fetches a cell the first time a query actually probes it. At 250,000 vectors that is **0.52 s to open** and **75 ms for
 the first query**, after which the box holds **12% of the corpus** and every
 subsequent query over the same cells needs no store access at all. The resident
 fraction falls as the corpus grows because the probe count grows with the square
@@ -271,10 +271,14 @@ one rewrite rather than a pass over the store of record:
 | 50,000 | 224 | 2.50 | 510 | 214 |
 | 250,000 | 500 | 25.34 | 4,259 | 238 |
 
-The second column of that table is the honest cost of scattered updates: the unit
-of persistence is one cell, so 100 updates landing in 100 different cells rewrite
-100 cells. A maintenance loop that batches its updates before flushing pays for
-the distinct cells it touched, not for the updates it applied.
+The second column of that table is the honest cost of scattered updates as it was
+measured, when the unit of persistence was one cell, so 100 updates landing in 100
+different cells rewrote 100 cells. The table predates chunk-level rewrites
+(#3429): a flush now rewrites only the chunks whose content changed within each
+dirty cell, plus that cell's commit record, so a re-run would rewrite a few chunks
+per touched cell rather than whole cells. A maintenance loop that batches its
+updates before flushing still pays for the distinct chunks and cells it touched,
+not for the updates it applied.
 
 `UpdatesSinceTraining` is the signal a host watches to decide when to retrain; a
 quarter of the corpus is a reasonable threshold.

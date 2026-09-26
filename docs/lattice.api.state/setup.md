@@ -4,7 +4,7 @@
 
 ## 1. Register the facade on the silo
 
-`AddLatticeStateApi` registers the read-only facade (`ILatticeStateQuery`, `ILatticeStateObserver`, `ILatticeStateMetricsObserver`) and the shared metrics sampler. It must be called **after** `AddLattice`, because it resolves the same per-tree options the core library registers.
+`AddLatticeStateApi` registers the read-only facade (`ILatticeStateQuery`, `ILatticeStateObserver`, `ILatticeStateMetricsObserver`) and the shared metrics sampler. It must be called **after** `AddLattice`, because the core registration is the source of truth for the tree registry, per-shard digests, and options it reads; calling it first fails fast with an `InvalidOperationException`.
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();

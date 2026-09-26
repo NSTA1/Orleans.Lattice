@@ -41,23 +41,30 @@ preference store, outside the contract: the Data surface's key-search prefix,
 page size, scan mode, and selected tag index and value, and the active
 per-selection surface (`detail-plugin`). These expire with the store's retention
 window, but they are not registered keys, so `/reset-view` neither lists nor
-clears them.
+clears them. They are not scoped either: the Data surface's state is keyed by tree
+id alone and `detail-plugin` by nothing at all, so every account and cluster that
+uses the same browser profile - or, on the desktop head, the same app - shares
+them.
 
 ## Scope
 
-Shell keys are scoped **per user and per cluster**. Switching account or
+The shell's route-shaped keys, `shell.area` through `shell.all-tenants`, and
+the area keys are scoped **per user and per cluster**. Switching account or
 switching cluster does not resurrect someone else's view, and does not carry one
-cluster's selection into another where it may not exist.
+cluster's selection into another where it may not exist. The unregistered working
+state described above is the exception, because it is not scoped at all.
 
-Appearance keys are scoped **per user**, because a theme is a property of the
-person, not of the cluster they happen to be looking at.
+The appearance keys and `shell.hide-inaccessible` are scoped **per user**,
+because a theme - like how much of the product you want the rail to show - is a
+property of the person, not of the cluster they happen to be looking at.
 
 ## Storage and lifetime
 
 Preferences are held in a single browser storage entry,
-`orleans.lattice.explorer.preferences.v1`, with retention and owner-based
-cleanup. The web head encrypts the document with ASP.NET Data Protection; the
-desktop head uses the platform preference store.
+`orleans.lattice.explorer.preferences.v1`, with a 90-day retention window: when
+the store loads, it drops any entry last written more than 90 days earlier. The
+web head encrypts the document with ASP.NET Data Protection; the desktop head uses
+the platform preference store.
 
 One value is deliberately kept outside that encrypted document: a small,
 non-secret record of the last applied appearance, used to put the right palette
@@ -82,9 +89,11 @@ allowed. See [Tenant scope](tenant-scope.md).
 
 ## Resetting
 
-The `/reset-view` page lists what is currently remembered and clears it. Use it
-when a restored view is not what you want, or before handing a browser profile
-to someone else.
+The `/reset-view` page lists every registered key and, on request, clears them
+for the account and cluster you are connected to now. Use it when a restored view
+is not what you want. It is not a full wipe of the browser profile: values
+remembered for another account or against another cluster, and the unregistered
+working state described above, are left in place.
 
 ## The division of labour with the URL
 

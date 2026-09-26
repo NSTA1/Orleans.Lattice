@@ -66,7 +66,7 @@ gate will tell you if you forget.
   stamping tool) - through one shared **lock-step** gate. A tool that is hidden at
   advertisement must also be unreachable at invocation, and vice versa.
 - The gate is **fail-closed**: a null `HttpContext` or null authorizer denies. The
-  default `DenyAll` authorizer means tools are denied until a host explicitly opts
+  default `DenyAllMcpAuthorizer` means tools are denied until a host explicitly opts
   in a permissive authorizer. This is secure-by-default; do not add an implicit
   allow fallback.
 - The `lattice_capabilities` meta-tool is the only ungated advertisement; do not
@@ -126,8 +126,11 @@ When labelling or writing changelog/PR prose for a change on these surfaces, jud
 "breaking" by whether the change alters **previously shipped behaviour**, not by the
 change's surface area. Most packages in the family have shipped a release tag, but not
 all: `lattice.api.mcp.repocontext` and `lattice.api.mcp.repocontext.replication` are
-still unreleased (see `PACKAGES.md`), and `lattice.membership.oidc` first shipped at
-9.5.0. So verify a package's shipped versions with
+still unreleased, as are the `Orleans.Lattice.Explorer.DesignSystem` and
+`Orleans.Lattice.Explorer.Plugins.*` packages built from `src/lattice.explorer/` (see
+`PACKAGES.md`), and `lattice.membership.oidc`, `lattice.api.telemetry`, and
+`lattice.api.telemetry.grpc` first shipped at 9.5.0. So verify a package's shipped
+versions with
 `git tag | Select-String <package>` and reserve the `breaking` label for a behavioural
 or API change that alters behaviour a released version already exposed. An opt-in
 change (guarded by a default-off flag, like `ValidationRequired`) is additive, not

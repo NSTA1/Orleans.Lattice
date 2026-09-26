@@ -29,6 +29,8 @@ siloBuilder.Services
     .AddLatticeReplicationHealthCheck(name: "replication", tags: new[] { "ready" });
 ```
 
+The extension also takes an optional `failureStatus`, the status reported when the check itself throws (default `Unhealthy`); it does not change the threshold-derived `Degraded` / `Unhealthy` verdict of a probe that completes.
+
 ## Threshold tiers
 
 The check classifies every `(tree, peer)` pair captured in telemetry against three orthogonal signals. Each signal has a **soft** (degraded) and **hard** (unhealthy) bound; the worst per-peer classification across all signals becomes the peer's verdict, and the worst per-peer verdict becomes the aggregate probe result. Set a tier to `null` to disable that signal entirely.
@@ -50,7 +52,7 @@ The inbound signal is opt-in - a host that wants readiness gating on inbound liv
 
 Because the shipper records `EntriesBehind` from a single drain, the reading never exceeds the effective ship batch size (at most `ShipBatchSize`, default 256). With the default `ShipBatchSize` the default 1 000 / 10 000 bounds therefore cannot trip; a host that relies on this signal sets bounds below its ship batch size.
 
-Defaults are exposed as `public static readonly` fields on `LatticeReplicationHealthCheckOptions` (`DefaultEntriesBehind`, `DefaultLastContactSeconds`, `DefaultConsecutiveErrors`, `DefaultUnhealthyAfter`, `DefaultInboundDegradedAfter`, `DefaultInboundCriticalAfter`). The check reads the **named** options instance that matches its registered name (`LatticeReplicationHealthCheckOptions.DefaultName` unless overridden), so bind overrides under that name - an unnamed `Configure<LatticeReplicationHealthCheckOptions>(...)` targets the default options instance, which the check never reads. A host overrides any subset:
+Defaults are exposed as `public static readonly` fields on `LatticeReplicationHealthCheckOptions` (`DefaultEntriesBehind`, `DefaultLastContactSeconds`, `DefaultConsecutiveErrors`, `DefaultUnhealthyAfter`, `DefaultInboundDegradedAfter`, `DefaultInboundCriticalAfter`). The check reads the **named** options instance that matches its registered name (`LatticeReplicationHealthCheckOptions.DefaultName` unless overridden), so bind overrides under that name - an unnamed `Configure<LatticeReplicationHealthCheckOptions>(...)` targets the default options instance, which the check never reads. Each tier is a `(Degraded, Unhealthy)` pair: `LatticeReplicationHealthCheckOptions.LongTier` for `EntriesBehind` and `ConsecutiveErrors`, and `LatticeReplicationHealthCheckOptions.DoubleTier` for `LastContactSeconds`. A host overrides any subset:
 
 ```csharp verify
 siloBuilder.Services.Configure<LatticeReplicationHealthCheckOptions>(LatticeReplicationHealthCheckOptions.DefaultName, o =>
@@ -87,7 +89,7 @@ The check returns a `HealthCheckResult` whose `Data` dictionary populates a stan
 
 | Key | Type | Description |
 |---|---|---|
-| `peers` | `int` | Total number of `(tree, peer)` pairs in telemetry. |
+| `peers` | `int` | Total number of telemetry rows - one per `(tree, peer, direction)`, so a pair this silo both ships to and receives from counts once per direction. |
 | `degraded` | `int` | Count of peers in the degraded tier (after sustained-degraded escalation has been applied). |
 | `unhealthy` | `int` | Count of peers in the unhealthy tier. |
 | `degradedPeers` | `string[]` | `tree/peer` labels for every degraded peer. Present only when `degraded > 0`. |

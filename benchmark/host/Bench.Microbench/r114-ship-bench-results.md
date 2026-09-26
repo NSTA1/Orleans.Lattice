@@ -23,8 +23,15 @@ in `BuildShipFramingFixture` for why this matters).
 ```pwsh
 dotnet build benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release
 dotnet run -c Release --no-build --project benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj `
-    -- --filter "*Ship*" --memory --warmupCount 3 --iterationCount 3 --launchCount 1
+    -- --filter "*Ship*"
 ```
+
+The harness reads only its own switches (`--results`, `--filter`, `--baseline`,
+`--tolerance` and `--suite`) and forwards nothing else to BenchmarkDotNet, so
+the command runs at the default `BENCH_MICROBENCH_FIDELITY=quick`
+(`Job.ShortRun`: 1 launch, 3 warmup, 3 measured iterations) with the memory
+diagnoser always on. BenchmarkDotNet switches such as `--memory` or
+`--warmupCount` appended to it are silently ignored.
 
 Wall-clock: ~4.5 minutes for the 24-row sweep on AMD Ryzen 7 PRO 7840U,
 .NET 10.0.8, BenchmarkDotNet 0.15.8.
@@ -148,6 +155,17 @@ considering similar A/B fixtures should ensure per-entry payload
 identity for any batch-encoding microbench.
 
 ## R-117 follow-on - per-entry `WalRecord.Mode` slot off the wire
+
+> **Superseded (issue #926).** The de-tag this section describes was later
+> reversed: `WalRecord.Mode` is serialised again, at wire id `26`, so the
+> declared merge mode is durable on the encoded record for the storage replay
+> path, which has no framing header to recover it from. The canonical
+> `OrleansBinaryWalRecordEncoder` omits the slot whenever it holds the
+> `LwwRegister` default - the mode every entry in this benchmark carries - so
+> only typed-CRDT entries pay the extra bytes. The receiver-side
+> `Decode(span, treeId, mode)` re-stamp is kept and is now idempotent, and wire
+> id `9` stays permanently reserved. The measurements below are left as
+> recorded.
 
 R-117 removes the per-entry `WalRecord.Mode` slot from the encoded
 bytes by de-tagging the property (the field carries `[field:

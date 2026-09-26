@@ -5,7 +5,9 @@
 `ILattice.DiagnoseAsync` returns a point-in-time health snapshot of a tree without
 touching application data paths. The report exposes the shard count, total live keys,
 total tombstones, recent split activity, and a per-shard breakdown (B+ tree depth,
-live keys, tombstones, tombstone ratio, read/write counts, and current ops/second).
+whether the root is a leaf, live keys, tombstones, tombstone ratio, read/write
+counts, current ops/second and the window it is measured over, and whether a split
+or a bulk load is in flight).
 This sample writes ten keys, deletes three (leaving tombstones), then prints a deep
 snapshot. Both report depths walk each shard's leaf chain: a deep report reads each
 leaf's full statistics, so tombstone counts are exact, while a shallow report counts
@@ -19,9 +21,10 @@ dotnet run --project samples/Diagnostics
 
 ## Expected output
 
-The tree spreads keys across virtual shards by hashing, so the specific shard indices
-and the `ops/s` values (which depend on timing) vary between runs. The totals -
-7 live keys and 3 tombstones after 10 writes and 3 deletes - are deterministic.
+Each key is routed to its shard by a stable hash of the key, so the shard indices
+below are the same on every run; the sampled timestamp and the `ops/s` values (which
+depend on timing) vary between runs. The totals - 7 live keys and 3 tombstones after
+10 writes and 3 deletes - are deterministic.
 
 ```
 Silo starting... ready.

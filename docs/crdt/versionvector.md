@@ -11,7 +11,7 @@ progressed, and has A seen everything B has?".
 Each replica **ticks** its own entry when it does something noteworthy. Merging
 takes the **per-entry maximum** clock. Comparing two vectors then tells you
 whether one causally dominates the other (`DominatesOrEquals`) or whether they
-are **concurrent** (each has an entry the other lacks) - the classic signal that
+are **concurrent** (each is ahead of the other on at least one entry) - the classic signal that
 two updates conflicted and need reconciliation.
 
 Because merge is per-entry max, late or duplicate delivery is a harmless no-op.

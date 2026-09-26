@@ -40,8 +40,11 @@ Reference it from the host document after the design-system stylesheets:
 
 ## Gating
 
-The plugin owns its own access gate. The plugin-level decision answers "is the
-schema control endpoint reachable"; per-tree, per-action decisions are filed
+The plugin owns its own access gate. The plugin-level decision reads the
+capability set the schema control API's own probe reports, and admits the caller
+only when that set grants some schema authority - reaching the endpoint is not a
+grant - while a cluster that does not serve schema administration renders no
+entry at all. Per-tree, per-action decisions are filed
 under **scoped** access keys (`orleans.lattice.schema` + `{treeId}/{action}`)
 so a denied action renders disabled rather than hidden. Gating is advisory - the
 server remains the sole enforcement point.

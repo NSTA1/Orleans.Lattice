@@ -67,12 +67,13 @@ runs no tenancy add-on and serves no telemetry facade.
 An unavailable area renders no entry at all, and the rail's "why can I not see
 everything?" affordance names it, so the absence is disclosed once rather than
 being silently missing. That is deliberately different from a denial, which is
-the state for a capability the cluster does serve and this caller may not use. A
-denied area is not hidden and is not merely greyed: it stays visible, grouped
-below a divider at lower visual weight, and states the permission it needs and
-who to ask. Signing out changes Access from active to an invitation to sign in,
-because an anonymous caller is never told a surface is unavailable for their
-account.
+the state for a capability the cluster does serve and this caller may not use. By
+default a denied area is not hidden and is not merely greyed: it stays visible,
+grouped below a divider at lower visual weight, and states the permission it needs
+and who to ask. Ticking the rail's **Hide areas I cannot open** preference
+withholds it instead. Signing out changes Access from active to an invitation to
+sign in, because an anonymous caller is never told a surface is unavailable for
+their account.
 
 The gating is advisory throughout: the server is the sole enforcement point, so
 showing a denied entry costs nothing and hiding it would buy nothing. See
@@ -107,8 +108,11 @@ How the admin sign-in works, so you can adapt it:
 
 - The silo registers membership and authorization (`AddLatticeMembership`,
   `AddLatticeAuth`) with `explorer-admin` as a bootstrap administrator, plus
-  schema enforcement (`AddLatticeSchemaEnforcement`) and the auth and schema
-  control facades (`AddLatticeAuthApi`, `AddLatticeSchemaApi`).
+  schema enforcement (`AddLatticeSchemaEnforcement`), per-value schema versioning
+  with one demo schema (`AddLatticeSchemaVersioning`: schema 1 at versions 1 and
+  2, with a v1 -> v2 upcaster, so the Schema area's Versions tab has a registry
+  to target), and the state, auth and schema control facades
+  (`AddLatticeStateApi`, `AddLatticeAuthApi`, `AddLatticeSchemaApi`).
 - The state, auth, and schema gRPC bindings (`AddLatticeStateApiGrpc`,
   `AddLatticeAuthApiGrpc`, `AddLatticeSchemaApiGrpc`) are configured with the
   `Basic` credential scheme so the console's `authorization: Basic base64(user:pass)`
@@ -125,10 +129,10 @@ How the admin sign-in works, so you can adapt it:
 The data-plane authorization default is **deny-by-default** (`DefaultEffect =
 Deny`, the framework default): a subject with no matching rule is refused. So the
 Access area shows a real allow-vs-deny split out of the box, the sample seeds one
-grant on startup - the `operators` group may `Read` the `factory-floor` tree,
-with `alice` as a member - so in **Access > Explain** `alice` reading
-`factory-floor` resolves to *Allowed* (a matched rule) while `bob` resolves to
-*Denied* (the default). The console's own admin areas keep working because the
+grant on startup - the `operators` group may `Read` and `RangeRead` the
+`factory-floor` tree, with `alice` as a member - so in **Access > Explain**
+`alice` reading `factory-floor` resolves to *Allowed* (a matched rule) while `bob`
+resolves to *Denied* (the default). The console's own admin areas keep working because the
 signed-in `explorer-admin` is a bootstrap administrator, which bypasses the
 decision engine; the reserved control plane (membership and policy) is always
 governed and only that administrator can manage it. See:
@@ -178,8 +182,8 @@ Access area and, in a create form or a rule's subject picker:
 - type `nobody` -> the create form blocks it fail-closed, because it is not in the
   roster.
 
-This mode is what the sample's own tests exercise, so it stays CI-green and needs
-no cloud account.
+This mode needs no cloud account and no configuration, which is what keeps the
+sample a one-command run.
 
 ### Entra directory (opt-in - your real tenant over Microsoft Graph)
 

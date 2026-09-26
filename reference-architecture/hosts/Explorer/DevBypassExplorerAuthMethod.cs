@@ -16,13 +16,12 @@ namespace Orleans.Lattice.ReferenceArchitecture.Explorer;
 /// configured bootstrap administrator.
 /// </summary>
 /// <remarks>
-/// It reuses the <see cref="ExplorerAuthSchemes.Basic"/> scheme so the console's
-/// launcher-friendly sign-in seed (<c>LATTICE_EXPLORER_USERNAME</c> /
-/// <c>LATTICE_EXPLORER_PASSWORD</c>) auto-applies it on first load with no dialog.
-/// The username is the bootstrap-admin subject id; the password is ignored (the
-/// seed merely requires one to be present). The host registers this method ONLY
-/// when Entra is disabled, so it can never coexist with, or weaken, a real
-/// deployment's Entra sign-in.
+/// It reuses the <see cref="ExplorerAuthSchemes.Basic"/> scheme so an operator can
+/// sign in with the bootstrap-admin subject id when Entra is disabled. The
+/// packaged environment credential seed is not enabled by this host, so the method
+/// is offered through the normal Basic sign-in UI rather than auto-applied on
+/// first load. The host registers this method ONLY when Entra is disabled, so it
+/// can never coexist with, or weaken, a real deployment's Entra sign-in.
 /// </remarks>
 internal sealed class DevBypassExplorerAuthMethod : IExplorerAuthMethod
 {

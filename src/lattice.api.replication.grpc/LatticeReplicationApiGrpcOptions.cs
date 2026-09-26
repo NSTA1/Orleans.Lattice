@@ -21,10 +21,10 @@ public sealed class LatticeReplicationApiGrpcOptions
     /// The inbound request-header (gRPC metadata) name that carries the caller's
     /// credential token, bridged into the ambient Lattice credential so the
     /// replication access gate can resolve the caller's subject and authorize
-    /// each operation. Defaults to <c>authorization</c>. Only consulted when
-    /// auth-backed replication control is active (the <c>Orleans.Lattice.Auth</c>
-    /// add-on is registered); when it is not, no header is read and the
-    /// replication control API behaves exactly as before.
+    /// each operation. Defaults to <c>authorization</c>. The bridge may still
+    /// read this header and stamp an ambient credential when authorization is
+    /// disabled or no auth add-on is present; without auth-backed enforcement the
+    /// credential does not change replication-control behaviour.
     /// </summary>
     public string CredentialHeaderName { get; set; } = "authorization";
 

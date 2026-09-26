@@ -6,7 +6,7 @@ it must make TLC report as violated. Together they answer a question the base
 specification cannot answer about itself: **does this property actually fire?**
 
 Every property in [`../AtomicCommit.cfg`](../AtomicCommit.cfg) has one, and
-`TlcModelCheckTests` fails if that ever stops being true.
+`SpecMutationCatalogueTests` fails if that ever stops being true.
 
 ## Why
 
@@ -252,6 +252,6 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj \
   --filter "FullyQualifiedName~TerminationNoFairness"
 ```
 
-It needs a JVM and `tla2tools.jar`; see [`../README.md`](../README.md) for how
-the fixture finds them, and note that it fails rather than skips under
-`GITHUB_ACTIONS`.
+It needs a JVM and `tla2tools.jar`; see
+[how the fixture finds them](../README.md#how-the-nunit-fixture-finds-the-toolchain),
+and note that it fails rather than skips under `GITHUB_ACTIONS`.

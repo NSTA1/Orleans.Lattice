@@ -143,7 +143,7 @@ videos/
     composition.html                the episode: shared scenes, its words, stamped timing
     assets/                         media no other episode uses, if any
   voice/                            the series voice: its settings, reference clip, Python environment and lexicon;
-                                    the Kokoro audition candidates and heteronyms
+                                    the Kokoro audition candidates, their audition script and heteronyms
   tools/                            workspace tooling and its tests
   renders/, snapshots/              output, never committed: renders, narration, takes, review pages
 ```
@@ -202,14 +202,15 @@ committed to `docs-site/media/`, which the site plays (`npm run publish`).
 
 ## CI
 
-The videos lane ([videos.yml](../.github/workflows/videos.yml)) runs on pull
-requests that touch this folder, the companion pages, the published media
-(`docs-site/media`), or the parts of the site it reads
+The videos lane ([videos.yml](../.github/workflows/videos.yml)) is advisory, not a
+required check. It runs on pull requests that touch this folder, the companion
+pages, the published media (`docs-site/media`), the parts of the site it reads
 (`docs-site/template/public`, `docs-site/figures`, `docs-site/pages`,
-`PACKAGES.md`). It runs the unit tests, the ASCII check, the snippet and
-companion-page checks, `lint` and `check` on the smoke test and
-`check:episodes` on every episode, then draft-renders the smoke test and
-uploads it as an artifact. Narration audio is not committed, so CI checks each
+`PACKAGES.md`) or the workflow itself, on pushes to `*/epic/**` integration
+branches that touch the same paths, and by hand. It runs the unit tests, the
+ASCII check, the snippet and companion-page checks, `lint` and `check` on the
+smoke test and `check:episodes` on every episode, then draft-renders the smoke
+test and uploads it as an artifact. Narration audio is not committed, so CI checks each
 episode's pictures, timing and structure against silence of its stamped
 length; hearing it means narrating it locally, or watching its published cut.
 
