@@ -42,8 +42,9 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// <see cref="Stopwatch.GetTimestamp"/> reading at the last durable
     /// checkpoint persist. Compared against
-    /// <c>MaterialiserCheckpointInterval</c> on each advance to decide
-    /// whether the time-driven flush should fire.
+    /// <c>MaterialiserCheckpointInterval</c> on each advance, and on each
+    /// coverage-lag tick (issue #3608), to decide whether the time-driven
+    /// flush should fire.
     /// </summary>
     private long _lastCheckpointPersistTimestamp = Stopwatch.GetTimestamp();
 
@@ -332,14 +333,71 @@ internal sealed partial class BPlusLeafGrain
         // Coalescing predicate: persist if either threshold has been
         // exceeded. Zero interval means every-entry mode.
         var options = await GetOptionsAsync();
-        var pendingEntries = offset - persisted;
-
-        if (options.MaterialiserCheckpointInterval == TimeSpan.Zero
-            || pendingEntries >= options.MaterialiserCheckpointEntries
-            || HasIntervalElapsed(options.MaterialiserCheckpointInterval))
+        if (IsCheckpointPersistDue(options, offset - persisted))
         {
             await FlushPendingCheckpointAsync(persistEvenWithoutPendingAdvance: false);
         }
+    }
+
+    /// <summary>
+    /// The checkpoint-coalescing predicate: <c>true</c> when a pending advance
+    /// of <paramref name="pendingEntries"/> entries past the persisted
+    /// checkpoint must be persisted now rather than held pending. Persists in
+    /// every-entry mode (a zero <c>MaterialiserCheckpointInterval</c>), once the
+    /// advance reaches <c>MaterialiserCheckpointEntries</c>, or once the
+    /// interval has elapsed since the last durable persist.
+    /// <para>
+    /// Shared by <see cref="ILeafProjection.SetCheckpointOffsetAsync"/>, which
+    /// evaluates it as each advance is recorded, and by
+    /// <see cref="IsResidualPendingCheckpointPersistDue"/>, which re-evaluates it
+    /// on the coverage-lag tick against an advance no later call will revisit
+    /// (issue #3608). One predicate at both sites is what keeps the tick from
+    /// flushing anything the coalescing window would still hold pending.
+    /// </para>
+    /// </summary>
+    private bool IsCheckpointPersistDue(LatticeOptions options, long pendingEntries) =>
+        options.MaterialiserCheckpointInterval == TimeSpan.Zero
+        || pendingEntries >= options.MaterialiserCheckpointEntries
+        || HasIntervalElapsed(options.MaterialiserCheckpointInterval);
+
+    /// <summary>
+    /// <c>true</c> when this activation holds a pending checkpoint advance that
+    /// <see cref="IsCheckpointPersistDue"/> now says must be persisted, judged
+    /// on the largest per-partition advance past the persisted checkpoint.
+    /// <para>
+    /// Issue #3608. The predicate is otherwise evaluated only inside
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/>, so a residual
+    /// advance below <c>MaterialiserCheckpointEntries</c> that arrived inside the
+    /// interval - typically the last partition an activation replay reconciled -
+    /// stayed pending for as long as the leaf stayed resident and write-idle:
+    /// no later advance arrived to re-ask the question, and the leaf's durable
+    /// checkpoint, and so its durable pin and the tree's WAL trim floor, froze
+    /// below its in-memory position. The coverage-lag tick asks it instead.
+    /// </para>
+    /// <para>
+    /// Allocation-free: the dictionary's struct enumerator and the persisted
+    /// checkpoint reads allocate nothing, so a tick that finds nothing due costs
+    /// only the walk.
+    /// </para>
+    /// </summary>
+    private bool IsResidualPendingCheckpointPersistDue(LatticeOptions options)
+    {
+        if (_pendingCheckpointOffsetsByPartition is not { Count: > 0 } pending)
+        {
+            return false;
+        }
+
+        long largestPendingEntries = 0;
+        foreach (var (partition, offset) in pending)
+        {
+            var pendingEntries = offset - GetPersistedCheckpointForPartition(partition);
+            if (pendingEntries > largestPendingEntries)
+            {
+                largestPendingEntries = pendingEntries;
+            }
+        }
+
+        return IsCheckpointPersistDue(options, largestPendingEntries);
     }
 
     async Task ILeafProjection.FlushCheckpointAsync(CancellationToken cancellationToken)
@@ -875,6 +933,15 @@ internal sealed partial class BPlusLeafGrain
         var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
         return elapsedMs >= interval.TotalMilliseconds;
     }
+
+    /// <summary>
+    /// Test seam (issue #3608): moves the last durable checkpoint persist
+    /// <paramref name="age"/> into the past, so a fixture can close the
+    /// <c>MaterialiserCheckpointInterval</c> coalescing window deterministically
+    /// instead of sleeping through it.
+    /// </summary>
+    internal void AgeLastCheckpointPersistForTest(TimeSpan age) =>
+        _lastCheckpointPersistTimestamp -= (long)(age.TotalSeconds * Stopwatch.Frequency);
 
     private void ApplySet(in LatticeMutation mutation)
     {

@@ -2712,10 +2712,13 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// Since issue #3599 the recheck runs inside <see cref="BankDurablePinCoreAsync"/>,
     /// which publishes the durable pin after it when <c>min(persisted, coverage)</c>
-    /// is above what an awaited flush has published. The tick does not commit a
-    /// pending checkpoint advance (that would defeat checkpoint coalescing); it
-    /// banks only what is already persisted. That step acquires no replay
-    /// permit; only the two starvation branches above reach one.
+    /// is above what an awaited flush has published. The tick commits a pending
+    /// checkpoint advance only when the coalescing predicate
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> applies says it
+    /// is due (issue #3608), so a tick inside the coalescing window flushes
+    /// nothing; otherwise it banks only what is already persisted. That step
+    /// acquires no replay permit; only the two starvation branches above reach
+    /// one.
     /// </para>
     /// </summary>
     internal async Task OnCoverageLagTimerTickAsync(CancellationToken cancellationToken)
@@ -2817,18 +2820,33 @@ internal sealed partial class BPlusLeafGrain
         //
         // Issue #3599. The recheck runs inside the permit-free bank step, which
         // afterwards publishes the pin the recheck made bankable - and the one a
-        // write-idle leaf was already owed. The tick does not commit a pending
-        // checkpoint advance (that would defeat checkpoint coalescing); it banks
-        // what is already persisted. The pin is clamped per partition by min(persisted
+        // write-idle leaf was already owed. The tick banks what is already
+        // persisted, and commits a pending advance only once the coalescing
+        // window has closed (issue #3608, below). The pin is clamped per partition by min(persisted
         // checkpoint, durable coverage); on a leaf with no write traffic nothing
         // else republished it after a capture restamped coverage, or after a
         // debounced mirror that never landed, so the WAL floor froze below the
         // checkpoint indefinitely. The step acquires no replay permit and
         // replays nothing, and never loosens the clamp: a capture that declined,
         // threw or never ran leaves coverage, and so the pin, where it was.
+        //
+        // Issue #3608. The step DOES commit a residual pending advance once the
+        // coalescing predicate SetCheckpointOffsetAsync applies says it is due -
+        // in practice once MaterialiserCheckpointInterval has elapsed since the
+        // last persist. That predicate was evaluated only as each advance was
+        // recorded, so an advance below MaterialiserCheckpointEntries that
+        // arrived inside the interval (the last partition an activation replay
+        // reconciled, say) stayed pending on a resident, write-idle leaf for as
+        // long as it stayed resident: nothing re-asked the question, so the
+        // durable checkpoint, the pin and the WAL trim floor froze below the
+        // leaf's in-memory position until a teardown persist. The same predicate
+        // is re-evaluated here, so a tick inside the window still flushes
+        // nothing and coalescing is intact. The commit persists only an advance
+        // an apply already banked - no replay, no permit - and the pin it makes
+        // bankable stays clamped by coverage exactly as above.
         await BankDurablePinCoreAsync(
             starvationPartitionCount,
-            flushPendingCheckpoint: false,
+            flushPendingCheckpoint: IsResidualPendingCheckpointPersistDue(resolved),
             cancellationToken);
     }
 
