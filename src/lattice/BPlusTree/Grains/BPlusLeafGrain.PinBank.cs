@@ -65,9 +65,12 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="partitionCount">The configured WAL partition count.</param>
     /// <param name="flushPendingCheckpoint">
     /// Whether to commit a pending checkpoint advance first. The WAL GC's
-    /// explicit call does; the coverage-lag tick does not, so a periodic tick
-    /// never defeats the checkpoint-coalescing window that deliberately holds
-    /// an advance pending. The tick still banks everything already persisted.
+    /// explicit call always does; the coverage-lag tick does only when the
+    /// checkpoint-coalescing predicate says the advance is due (issue #3608),
+    /// so a periodic tick never defeats the coalescing window that
+    /// deliberately holds an advance pending, yet cannot leave one pending for
+    /// ever on a write-idle leaf. The tick still banks everything already
+    /// persisted.
     /// </param>
     /// <param name="cancellationToken">Bounds the flush, the recheck and the publish.</param>
     private async Task BankDurablePinCoreAsync(
