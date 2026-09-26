@@ -1663,6 +1663,7 @@ function Set-Layer3ProducerEvidence {
 	)
 	$slip = $null
 	$blocked = $null
+	$generated = $null
 	# Use paired full-run totals, never maxima drawn from different windows.
 	# Slip alone (including legacy logs) cannot distinguish a slow generator
 	# from one that fell behind because the cluster held its channel full.
@@ -1674,17 +1675,31 @@ function Set-Layer3ProducerEvidence {
 		if ($line.Line -match 'genBlockedFrac=\s*([\d.]+)') {
 			$blocked = [double]$Matches[1]
 		}
+		if ($line.Line -match '\savg=\s*([\d,.]+)\s*msg/s') {
+			$generated = [double]($Matches[1] -replace ',', '')
+		}
 	}
 	$offered = [double](Get-StateOr $Cohort 'rungVehicles' 0) * [double](Get-StateOr $Cohort 'rungTickHz' 0)
 	$achieved = Get-StateOr $Cohort 'finalThroughput' $null
+	# A slow generator only bounds the cell when the cluster kept pace with
+	# what it did generate. The point-write modes buffer a whole flush batch
+	# per slot, so the generator can run behind schedule without blocking
+	# while the cluster retires well under half of what was generated and
+	# drains the backlog long after the producer finishes; that cell is a
+	# cluster ceiling, and grading it producer-bound would publish a real
+	# measurement as a lower bound and drop its curve from every chart.
+	$clusterKeptPace = ($null -eq $generated) -or ($generated -le 0) -or ($null -eq $achieved) -or
+		([double]$achieved -ge (0.9 * $generated))
 	$bound = ($null -ne $slip -and $slip -gt 1000) -and
-		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2)
+		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2) -and
+		$clusterKeptPace
 	$Cohort['producerSlipMaxMs'] = $slip
 	$Cohort.Remove('producerGenBlockedFracMax')
 	$Cohort['producerGenBlockedFrac'] = $blocked
+	$Cohort['producerGeneratedPerSec'] = $generated
 	$Cohort['producerBound'] = $bound
 	if ($bound) {
-		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure; rendering a lower bound, not a cluster ceiling."
+		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked generated=$generated achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure and the cluster kept pace with it; rendering a lower bound, not a cluster ceiling."
 	}
 }
 
