@@ -236,7 +236,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Views - View creation failed during reminder-service startup.** The view maintainer registered its keepalive reminder unguarded. It now waits out the transient startup fault with the shared bounded retry, and a persistent or unrelated fault still surfaces. ([#3558](https://github.com/NSTA1/Orleans.Lattice/issues/3558)) (`Orleans.Lattice`)
 
-- **Tests - Two chaos tests flaked on harness timing.** The production-shipper fixture clears its startup backoff before tests run, and restore reconciliation is pinned by a deterministic regression across registry scan aborts. ([#3233](https://github.com/NSTA1/Orleans.Lattice/issues/3233), [#3337](https://github.com/NSTA1/Orleans.Lattice/issues/3337)) (`repository-wide`)
+- **Tests - Three tests flaked on harness timing.** The production-shipper fixture clears its startup backoff before tests run, restore reconciliation is pinned by a deterministic regression across registry scan aborts, and the saga registry liveness test injects write faults on a fixed schedule. ([#3233](https://github.com/NSTA1/Orleans.Lattice/issues/3233), [#3337](https://github.com/NSTA1/Orleans.Lattice/issues/3337), [#3563](https://github.com/NSTA1/Orleans.Lattice/issues/3563)) (`repository-wide`)
 
 - **Replay - Leaf replay decoded every record of a shared WAL partition.** Each leaf decoded every other leaf's records before discarding them, costing heavy GC on large trees. A new optional `IWalStorageProvider.ReadFilteredAsync` seam lets providers skip records the leaf does not own. ([#3565](https://github.com/NSTA1/Orleans.Lattice/issues/3565)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Storage.AzureTable`)
 
