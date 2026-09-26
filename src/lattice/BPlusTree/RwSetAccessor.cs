@@ -128,7 +128,12 @@ public readonly record struct RwSetAccessor
     {
         EnsureInitialised();
         var set = await GetAsync(cancellationToken).ConfigureAwait(false);
-        return set.Elements().ToArray();
+        // SnapshotElements, not Elements().ToArray(): Elements() is a
+        // yield-return iterator, so ToArray cannot size the destination and
+        // fills pooled segments it must then copy once more. Presizing from
+        // Count instead would re-run the whole survivor scan; the snapshot
+        // scans once.
+        return set.SnapshotElements();
     }
 
     /// <summary>
