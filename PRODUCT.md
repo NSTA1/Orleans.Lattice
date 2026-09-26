@@ -120,7 +120,7 @@ Three positions, taken from the README's "Why it exists":
 - A verification tier: Coyote concurrency testing over deterministic protocol
   cores, and a TLA+ specification for atomic commit (`spec/`,
   `docs/lattice/verified-*.md`).
-- Published NuGet packages (core at v9.7.x at the time of writing) and a
+- Published NuGet packages (core at v9.8.x at the time of writing) and a
   codecov coverage badge on the README.
 - Measured single-silo throughput and latency against real Azure Tables
   (`docs/lattice/performance-single-silo.md`) and a benchmark rig

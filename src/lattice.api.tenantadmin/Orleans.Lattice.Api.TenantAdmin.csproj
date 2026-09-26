@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TenantAdmin</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice multi-tenant clusters. Presents fail-closed tenant lifecycle, admin-subject, cross-tenant grant, quota and usage, region authorization, residency, and tenant self-service operations over the tenancy add-on. Registered separately; transport packages adapt over this facade.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
