@@ -1,0 +1,69 @@
+schema: lattice.agents/procedure/v1
+id: tag-index-reconcile
+name: "Reconcile a tag index"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.ReconcileTagIndexAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/ReconcileTagIndex"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReconcileTagIndexMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tag_index_reconcile"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: backing-tree-admin
+    check: "Caller has Admin authority over the derived backing membership tree."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: index-registered
+    check: "The tag index backing tree exists."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: source-readonly
+    check: "Covered source trees are scanned read-only by the reconcile."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "Read tag index status."
+    api: "ILatticeTreeAdmin.GetTagIndexStatusAsync / GetTagIndexStatus"
+    expects: "Returns backing tree, covered trees, shard count, and reconcile state."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
+  - n: 2
+    action: "Trigger reconcile for the index name."
+    api: "ILatticeTreeAdmin.ReconcileTagIndexAsync / ReconcileTagIndex"
+    expects: "Removes orphaned membership rows and returns counts."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+  - n: 3
+    action: "Read status again to confirm background reconcile is idle."
+    api: "ILatticeTreeAdmin.GetTagIndexStatusAsync / GetTagIndexStatus"
+    expects: "Reports whether the background reconcile sweep is idle."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
+postconditions:
+  - check: "Reconcile writes only to the backing membership tree."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "Result returns counts and does not disclose key or value content."
+    source: "docs/lattice.api.treeadmin/README.md"
+failure_modes:
+  - id: factory-missing
+    signal: "InvalidOperationException if the tag-index factory invariant is broken."
+    effect: "No reconcile is performed."
+    response: "Fix host registration."
+  - id: missing-backing-tree
+    signal: "Facade rejects an index whose backing tree is not registered."
+    effect: "No reconcile is performed."
+    response: "Define the tag index through the host code layer."
+rollback:
+  supported: false
+  mechanism: "No inverse operation for removed orphan membership rows is surfaced; reconcile is idempotent against current source state."
+  steps: []
+  source: "docs/lattice.api.treeadmin/README.md"
+concurrency:
+  - rule: "Covered source trees are scanned read-only while backing membership rows are repaired."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - rule: "Index definition and drop are not surfaced through tree administration."
+    source: "docs/lattice.api.treeadmin/README.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/api.md"

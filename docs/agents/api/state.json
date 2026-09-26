@@ -1,0 +1,2727 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "state",
+  "packages": [
+    "Orleans.Lattice.Api.Abstractions",
+    "Orleans.Lattice.Api.State",
+    "Orleans.Lattice.Api.State.Grpc"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery",
+    "src/lattice.api.abstractions/State/ILatticeStateObserver.cs#ILatticeStateObserver",
+    "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#ILatticeStateMetricsObserver",
+    "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery",
+    "src/lattice.api.state/LatticeApiStateServiceCollectionExtensions.cs#AddLatticeStateApi",
+    "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#LatticeStateGrpcMethods",
+    "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#LatticeStateGrpcService",
+    "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient",
+    "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#LatticeStateApiGrpcAuthInterceptor"
+  ],
+  "in_process": {
+    "interface": "ILatticeStateQuery",
+    "registration": "ISiloBuilder.AddLatticeStateApi",
+    "source": "src/lattice.api.state/LatticeApiStateServiceCollectionExtensions.cs#AddLatticeStateApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.state",
+    "methods_source": "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#LatticeStateGrpcMethods",
+    "marshalling": "Orleans serializers are used through LatticeStateGrpcMarshallers.Create.",
+    "metadata": [
+      {
+        "name": "authorization",
+        "purpose": "Request metadata carrying the credential token by default; the Bearer prefix is stripped when present.",
+        "source": "src/lattice.api.state.grpc/HeaderLatticeStateApiCredentialBridge.cs#Resolve"
+      },
+      {
+        "name": "lattice-active-tenant",
+        "purpose": "Request metadata carrying the asserted active tenant by default.",
+        "source": "src/lattice/LatticeActiveTenantAssertion.cs#DefaultHeaderName"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeStateApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeStateApiAuthorizer",
+      "decision": "The interceptor matches the state service prefix, exempts GetAuthScheme, optionally bypasses enforcement when RequireAuthorization is false, describes operation and target tree, and rejects false authorizer decisions with PermissionDenied.",
+      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+    }
+  },
+  "types": {
+    "AllowAllStateApiAuthorizer": {
+      "kind": "class",
+      "fields": [],
+      "source": "src/lattice.api.state.grpc/Security/ILatticeStateApiAuthorizer.cs#AllowAllStateApiAuthorizer"
+    },
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/AuthSchemeAdvertisement.cs#AuthSchemeAdvertisement"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.state.grpc/Model/AuthSchemeAdvertisementRequest.cs#AuthSchemeAdvertisementRequest"
+    },
+    "AuthSchemeDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Parameters",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/AuthSchemeDescriptor.cs#AuthSchemeDescriptor"
+    },
+    "CatalogRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "IncludeSystemTrees",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "IncludeViewStats",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SourceTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "IndexName",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/CatalogRequest.cs#CatalogRequest"
+    },
+    "ClusterInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ClusterId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ServiceId",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/ClusterInfo.cs#ClusterInfo"
+    },
+    "ClusterInfoRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.abstractions/State/Model/ClusterInfoRequest.cs#ClusterInfoRequest"
+    },
+    "CoveredTreeCatalogPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/CatalogResults.cs#CoveredTreeCatalogPage"
+    },
+    "DeadLetterCountRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/DeadLetterCountRequest.cs#DeadLetterCountRequest"
+    },
+    "DeadLetterCountResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Count",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/DeadLetterCountResponse.cs#DeadLetterCountResponse"
+    },
+    "DeadLetterEntryRecord": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ValuePreview",
+          "type": "byte[]",
+          "required": false
+        },
+        {
+          "name": "ValueByteLength",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Source",
+          "type": "DeadLetterSourceKind",
+          "required": false
+        },
+        {
+          "name": "TimestampUtc",
+          "type": "DateTimeOffset",
+          "required": false
+        },
+        {
+          "name": "PreviewTruncated",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/DeadLetterEntryRecord.cs#DeadLetterEntryRecord"
+    },
+    "DeadLetterQueuePage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<DeadLetterEntryRecord>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/DeadLetterQueuePage.cs#DeadLetterQueuePage"
+    },
+    "DeadLetterQueueRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/DeadLetterQueueRequest.cs#DeadLetterQueueRequest"
+    },
+    "DeadLetterSourceKind": {
+      "kind": "enum",
+      "values": [
+        "Replication",
+        "Restore",
+        "LocalRejected",
+        "Unknown"
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/DeadLetterSourceKind.cs#DeadLetterSourceKind"
+    },
+    "DenyAllStateApiAuthorizer": {
+      "kind": "class",
+      "fields": [],
+      "source": "src/lattice.api.state.grpc/Security/ILatticeStateApiAuthorizer.cs#DenyAllStateApiAuthorizer"
+    },
+    "EntryDetailResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entry",
+          "type": "EntryRecord?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#EntryDetailResult"
+    },
+    "EntryGetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/EntryGetRequest.cs#EntryGetRequest"
+    },
+    "EntryGetResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entry",
+          "type": "EntryRecord?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/EntryGetResponse.cs#EntryGetResponse"
+    },
+    "EntryHistoryBound": {
+      "kind": "enum",
+      "values": [
+        "BoundedByAge",
+        "Truncated",
+        "WalWindowFallback"
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryHistoryBound.cs#EntryHistoryBound"
+    },
+    "EntryHistoryRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "FromHlc",
+          "type": "HybridLogicalClock?",
+          "required": false
+        },
+        {
+          "name": "ToHlc",
+          "type": "HybridLogicalClock?",
+          "required": false
+        },
+        {
+          "name": "Limit",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ValuePreviewBudget",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Reverse",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryHistoryRequest.cs#EntryHistoryRequest"
+    },
+    "EntryHistoryResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Revisions",
+          "type": "IReadOnlyList<EntryRevisionRecord>",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Bound",
+          "type": "EntryHistoryBound",
+          "required": false
+        },
+        {
+          "name": "EarliestAvailable",
+          "type": "HybridLogicalClock",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/EntryHistoryResponse.cs#EntryHistoryResponse"
+    },
+    "EntryHistoryResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Revisions",
+          "type": "IReadOnlyList<EntryRevisionRecord>",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Bound",
+          "type": "EntryHistoryBound",
+          "required": false
+        },
+        {
+          "name": "EarliestAvailable",
+          "type": "HybridLogicalClock",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#EntryHistoryResult"
+    },
+    "EntryRecord": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ValuePreview",
+          "type": "byte[]",
+          "required": false
+        },
+        {
+          "name": "ValueLength",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Truncated",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Hlc",
+          "type": "HybridLogicalClock",
+          "required": false
+        },
+        {
+          "name": "IsTombstone",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "ExpiresAtTicks",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "CrdtShape",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "CurrentMembers",
+          "type": "IReadOnlyList<CrdtMemberValue>",
+          "required": false
+        },
+        {
+          "name": "MergeMode",
+          "type": "LatticeMergeMode?",
+          "required": false
+        },
+        {
+          "name": "Raw",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryRecord.cs#EntryRecord"
+    },
+    "EntryRevisionRecord": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Hlc",
+          "type": "HybridLogicalClock",
+          "required": false
+        },
+        {
+          "name": "Kind",
+          "type": "HistoryRowKind",
+          "required": false
+        },
+        {
+          "name": "Category",
+          "type": "MutationCategory",
+          "required": false
+        },
+        {
+          "name": "SourceKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OriginClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ValuePreview",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "ValueLength",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Truncated",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "ValueHash",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Delta",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeMergeMode",
+          "required": false
+        },
+        {
+          "name": "MemberChanges",
+          "type": "IReadOnlyList<CrdtMemberChange>",
+          "required": false
+        },
+        {
+          "name": "Retention",
+          "type": "RevisionRetention",
+          "required": false
+        },
+        {
+          "name": "EndKey",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryRevisionRecord.cs#EntryRevisionRecord"
+    },
+    "EntryScanCancelRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryScanCancelRequest.cs#EntryScanCancelRequest"
+    },
+    "EntryScanCancelResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.state.grpc/Model/EntryScanCancelResponse.cs#EntryScanCancelResponse"
+    },
+    "EntryScanMode": {
+      "kind": "enum",
+      "values": [
+        "Snapshot",
+        "Live",
+        "LivePointInTime"
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryScanMode.cs#EntryScanMode"
+    },
+    "EntryScanRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "StartInclusive",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "EndExclusive",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Reverse",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ValuePreviewBudget",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Predicate",
+          "type": "LatticePredicateNode?",
+          "required": false
+        },
+        {
+          "name": "IndexName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Tag",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "EntryScanMode",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/EntryScanRequest.cs#EntryScanRequest"
+    },
+    "EntryScanResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<EntryRecord>",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/EntryScanResponse.cs#EntryScanResponse"
+    },
+    "EntryScanResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<EntryRecord>",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#EntryScanResult"
+    },
+    "LatticeStateApiAuthorizationContext": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Call",
+          "type": "ServerCallContext",
+          "required": true
+        },
+        {
+          "name": "Operation",
+          "type": "LatticeStateApiOperation",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiAuthorizationContext.cs#LatticeStateApiAuthorizationContext"
+    },
+    "LatticeStateApiGrpcOptions": {
+      "kind": "class",
+      "fields": [
+        {
+          "name": "RequireAuthorization",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CredentialHeaderName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ActiveTenantHeaderName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "CredentialScheme",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "AdvertisedAuthSchemes",
+          "type": "IList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcOptions.cs#LatticeStateApiGrpcOptions"
+    },
+    "LatticeStateApiOperation": {
+      "kind": "enum",
+      "values": [
+        "ListTrees",
+        "ListViews",
+        "GetTreeStructure",
+        "ScanEntries",
+        "GetEntry",
+        "GetEntryHistory",
+        "ListTagIndexes",
+        "ListTagValues",
+        "ListCoveredTrees",
+        "ListIndexTags",
+        "ScanTagMembers",
+        "CancelScan",
+        "ObserveChanges",
+        "ObserveMetrics",
+        "GetMetricsSnapshot",
+        "GetClusterInfo",
+        "Unknown",
+        "GetDeadLetterCount",
+        "ListDeadLetters"
+      ],
+      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiAuthorizationContext.cs#LatticeStateApiOperation"
+    },
+    "NodeKind": {
+      "kind": "enum",
+      "values": [
+        "ShardRoot",
+        "Internal",
+        "Leaf"
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/StateEnums.cs#NodeKind"
+    },
+    "NodeStateSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Kind",
+          "type": "NodeKind",
+          "required": false
+        },
+        {
+          "name": "NodeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Depth",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "KeyRangeLow",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "KeyRangeHigh",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ChildCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "SubtreeKeyCount",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "SubtreeTombstoneCount",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "SplitInProgress",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "HasMoreChildren",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Children",
+          "type": "IReadOnlyList<NodeStateSummary>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/NodeStateSummary.cs#NodeStateSummary"
+    },
+    "RevisionRetention": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Mode",
+          "type": "HistoryRetentionMode",
+          "required": false
+        },
+        {
+          "name": "ValueRetained",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/RevisionRetention.cs#RevisionRetention"
+    },
+    "ShardHotness": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "OpsPerSecond",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "LiveKeys",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "SplitInProgress",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/ShardHotness.cs#ShardHotness"
+    },
+    "ShardStateSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Depth",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "RootIsLeaf",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "LiveKeys",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Tombstones",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "OpsPerSecond",
+          "type": "double",
+          "required": false
+        },
+        {
+          "name": "SplitInProgress",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/ShardStateSummary.cs#ShardStateSummary"
+    },
+    "ShardSummariesResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Shards",
+          "type": "IReadOnlyList<ShardStateSummary>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#ShardSummariesResult"
+    },
+    "StateChangeKind": {
+      "kind": "enum",
+      "values": [
+        "Set",
+        "Delete",
+        "DeleteRange"
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/StateChangeKind.cs#StateChangeKind"
+    },
+    "StateChangeNotification": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EndExclusiveKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Kind",
+          "type": "StateChangeKind",
+          "required": false
+        },
+        {
+          "name": "Hlc",
+          "type": "HybridLogicalClock",
+          "required": false
+        },
+        {
+          "name": "Category",
+          "type": "MutationCategory",
+          "required": false
+        },
+        {
+          "name": "Position",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/StateChangeNotification.cs#StateChangeNotification"
+    },
+    "StateObserveRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "StartInclusive",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "EndExclusive",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "IncludeMaintenance",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/StateObserveRequest.cs#StateObserveRequest"
+    },
+    "StateQueryStatus": {
+      "kind": "enum",
+      "values": [
+        "Found",
+        "TreeNotFound",
+        "KeyNotFound",
+        "IndexNotFound"
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#StateQueryStatus"
+    },
+    "StructureRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "SubPathNodeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "DepthLimit",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxNodes",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/StructureRequest.cs#StructureRequest"
+    },
+    "StructureResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Roots",
+          "type": "IReadOnlyList<NodeStateSummary>",
+          "required": false
+        },
+        {
+          "name": "Truncated",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state.grpc/Model/StructureResponse.cs#StructureResponse"
+    },
+    "TagIndexCatalogPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<TagIndexStateSummary>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/CatalogResults.cs#TagIndexCatalogPage"
+    },
+    "TagIndexStateSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "IndexName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TagIndexStateSummary.cs#TagIndexStateSummary"
+    },
+    "TagMember": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TagMember.cs#TagMember"
+    },
+    "TagMemberScanPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<TagMember>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/CatalogResults.cs#TagMemberScanPage"
+    },
+    "TagMemberScanRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "IndexName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Tag",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TagMemberScanRequest.cs#TagMemberScanRequest"
+    },
+    "TagValueCatalogPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/CatalogResults.cs#TagValueCatalogPage"
+    },
+    "TreeCatalogEntry": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "IsAlias",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "PhysicalTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Lifecycle",
+          "type": "TreeLifecycleState",
+          "required": false
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Config",
+          "type": "TreeConfigSummary",
+          "required": true
+        },
+        {
+          "name": "RestoreShadowOfTreeId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TreeCatalogEntry.cs#TreeCatalogEntry"
+    },
+    "TreeCatalogPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<TreeCatalogEntry>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/CatalogResults.cs#TreeCatalogPage"
+    },
+    "TreeConfigSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxLeafKeys",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxInternalChildren",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "WalPartitions",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "SoftDeleteDuration",
+          "type": "TimeSpan",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TreeConfigSummary.cs#TreeConfigSummary"
+    },
+    "TreeLifecycleState": {
+      "kind": "enum",
+      "values": [
+        "Active",
+        "SoftDeleted",
+        "Purging"
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/StateEnums.cs#TreeLifecycleState"
+    },
+    "TreeMetrics": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Lifecycle",
+          "type": "TreeLifecycleState",
+          "required": false
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "LiveKeys",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Tombstones",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "MinDepth",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxDepth",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ShardsSplitting",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ViewCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "ViewLagTotal",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "ShardHotness",
+          "type": "IReadOnlyList<ShardHotness>",
+          "required": false
+        },
+        {
+          "name": "DetailPaused",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TreeMetrics.cs#TreeMetrics"
+    },
+    "TreeMetricsRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeIds",
+          "type": "IReadOnlyList<string>?",
+          "required": false
+        },
+        {
+          "name": "IncludeShardHotness",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "IncludeViewLag",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "IncludeSystemTrees",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SampleInterval",
+          "type": "TimeSpan?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TreeMetricsRequest.cs#TreeMetricsRequest"
+    },
+    "TreeMetricsSnapshot": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": false
+        },
+        {
+          "name": "IsInitial",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Trees",
+          "type": "IReadOnlyList<TreeMetrics>",
+          "required": false
+        },
+        {
+          "name": "RemovedTreeIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TreeMetricsSnapshot.cs#TreeMetricsSnapshot"
+    },
+    "TreeStateSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Lifecycle",
+          "type": "TreeLifecycleState",
+          "required": false
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "TotalLiveKeys",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "TombstoneCount",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "MinDepth",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxDepth",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ShardsSplitting",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "Config",
+          "type": "TreeConfigSummary?",
+          "required": false
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/TreeStateSummary.cs#TreeStateSummary"
+    },
+    "TreeStructureResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Roots",
+          "type": "IReadOnlyList<NodeStateSummary>",
+          "required": false
+        },
+        {
+          "name": "Truncated",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#TreeStructureResult"
+    },
+    "TreeSummaryResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Status",
+          "type": "StateQueryStatus",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Summary",
+          "type": "TreeStateSummary?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#TreeSummaryResult"
+    },
+    "ViewCatalogPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<ViewStateSummary>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/CatalogResults.cs#ViewCatalogPage"
+    },
+    "ViewStateSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ViewName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SourceTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Lag",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "EntryCount",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "LastDigest",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "IsAggregation",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "IsHistory",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "ProjectionProviderKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ProjectionVersion",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/State/Model/ViewStateSummary.cs#ViewStateSummary"
+    }
+  },
+  "operations": [
+    {
+      "id": "cancel-scan",
+      "in_process": "ILatticeStateQuery.CancelScanAsync",
+      "grpc_method": "/orleans.lattice.api.state/CancelScan",
+      "transport_scope": "both",
+      "request": "EntryScanCancelRequest",
+      "response": "EntryScanCancelResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Best-effort cursor release is safe to retry because unknown, drained, or already closed cursors are tolerated no-ops.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#CancelScanAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The contract states CancelScanAsync is best-effort and idempotent.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#CancelScanAsync"
+      },
+      "concurrency": {
+        "rule": "The operation releases server-side snapshot cursor state and holds back no WAL trimming.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#CancelScanAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#CancelScan",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#CancelScanMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#CancelScanAsync"
+      ]
+    },
+    {
+      "id": "get-auth-scheme",
+      "in_process": "ILatticeStateApiAuthSchemeSource.GetAdvertisement",
+      "grpc_method": "/orleans.lattice.api.state/GetAuthScheme",
+      "transport_scope": "both",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [],
+      "retry": {
+        "safe": true,
+        "policy": "The call is unauthenticated and has no built-in client retry policy.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#GetAuthSchemeAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The method returns the configured public auth-scheme advertisement and does not bridge credentials.",
+        "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetAuthScheme"
+      },
+      "concurrency": {
+        "rule": "This RPC is exempt from the authorization interceptor so a client can discover how to sign in before it holds a credential.",
+        "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#IsUnauthenticatedMethod"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetAuthScheme",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetAuthSchemeMethodName",
+        "src/lattice.api.state.grpc/Security/OptionsLatticeStateApiAuthSchemeSource.cs#GetAdvertisement"
+      ]
+    },
+    {
+      "id": "get-cluster-info",
+      "in_process": "ILatticeStateQuery.GetClusterInfoAsync",
+      "grpc_method": "/orleans.lattice.api.state/GetClusterInfo",
+      "transport_scope": "both",
+      "request": "ClusterInfoRequest",
+      "response": "ClusterInfo",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "Returns generic cluster identity metadata and does not mutate state.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetClusterInfoAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetClusterInfo",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetClusterInfoMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetClusterInfoAsync"
+      ]
+    },
+    {
+      "id": "get-dead-letter-count",
+      "in_process": "ILatticeStateQuery.GetDeadLetterCountAsync",
+      "grpc_method": "/orleans.lattice.api.state/GetDeadLetterCount",
+      "transport_scope": "both",
+      "request": "DeadLetterCountRequest",
+      "response": "DeadLetterCountResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "Returns zero when the queue is absent, enforcement is unregistered, or the caller may not read the tree.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetDeadLetterCountAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetDeadLetterCount",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetDeadLetterCountMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetDeadLetterCountAsync"
+      ]
+    },
+    {
+      "id": "get-entry",
+      "in_process": "ILatticeStateQuery.GetEntryAsync",
+      "grpc_method": "/orleans.lattice.api.state/GetEntry",
+      "transport_scope": "both",
+      "request": "EntryGetRequest",
+      "response": "EntryGetResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "TreeNotFound and KeyNotFound are structured Status values rather than NotFound transport errors.",
+        "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetEntry"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetEntry",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetEntryMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetEntryAsync"
+      ]
+    },
+    {
+      "id": "get-entry-history",
+      "in_process": "ILatticeStateQuery.GetEntryHistoryAsync",
+      "grpc_method": "/orleans.lattice.api.state/GetEntryHistory",
+      "transport_scope": "both",
+      "request": "EntryHistoryRequest",
+      "response": "EntryHistoryResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The timeline is continuation-paged from the durable per-key history view when enabled or from a retained WAL-window fallback that reports truncation.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetEntryHistoryAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetEntryHistory",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetEntryHistoryMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetEntryHistoryAsync"
+      ]
+    },
+    {
+      "id": "get-metrics-snapshot",
+      "in_process": "ILatticeStateMetricsObserver.SampleAsync",
+      "grpc_method": "/orleans.lattice.api.state/GetMetricsSnapshot",
+      "transport_scope": "both",
+      "request": "TreeMetricsRequest",
+      "response": "TreeMetricsSnapshot",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "SampleAsync returns a single full metrics snapshot and adds no per-mutation cost.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#SampleAsync"
+      },
+      "concurrency": {
+        "rule": "The snapshot is sourced from already maintained aggregates and is bounded by tree and shard count.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#ILatticeStateMetricsObserver"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetMetricsSnapshot",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetMetricsSnapshotMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#SampleAsync"
+      ]
+    },
+    {
+      "id": "get-tree-structure",
+      "in_process": "ILatticeStateQuery.GetTreeStructureAsync",
+      "grpc_method": "/orleans.lattice.api.state/GetTreeStructure",
+      "transport_scope": "both",
+      "request": "StructureRequest",
+      "response": "StructureResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The whole-tree read issues one structural read per shard root and is bounded by depth and node-count budgets.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetTreeStructureAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetTreeStructure",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetTreeStructureMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetTreeStructureAsync"
+      ]
+    },
+    {
+      "id": "list-covered-trees",
+      "in_process": "ILatticeStateQuery.ListCoveredTreesAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListCoveredTrees",
+      "transport_scope": "both",
+      "request": "CatalogRequest",
+      "response": "CoveredTreeCatalogPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The catalog is deterministic and ordered ascending by covered tree id.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListCoveredTreesAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListCoveredTrees",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListCoveredTreesMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListCoveredTreesAsync"
+      ]
+    },
+    {
+      "id": "list-dead-letters",
+      "in_process": "ILatticeStateQuery.ListDeadLettersAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListDeadLetters",
+      "transport_scope": "both",
+      "request": "DeadLetterQueueRequest",
+      "response": "DeadLetterQueuePage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The listing is read-only, deterministic, append-ordered, and never replays or requeues diverted items.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListDeadLettersAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListDeadLetters",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListDeadLettersMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListDeadLettersAsync"
+      ]
+    },
+    {
+      "id": "list-index-tags",
+      "in_process": "ILatticeStateQuery.ListIndexTagsAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListIndexTags",
+      "transport_scope": "both",
+      "request": "CatalogRequest",
+      "response": "TagValueCatalogPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The catalog is deterministic and ordered ascending by tag value across every covered tree.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListIndexTagsAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListIndexTags",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListIndexTagsMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListIndexTagsAsync"
+      ]
+    },
+    {
+      "id": "list-tag-indexes",
+      "in_process": "ILatticeStateQuery.ListTagIndexesAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListTagIndexes",
+      "transport_scope": "both",
+      "request": "CatalogRequest",
+      "response": "TagIndexCatalogPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The catalog enumerates tag-index membership trees as a deterministic paged catalog.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListTagIndexesAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListTagIndexes",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListTagIndexesMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListTagIndexesAsync"
+      ]
+    },
+    {
+      "id": "list-tag-values",
+      "in_process": "ILatticeStateQuery.ListTagValuesAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListTagValues",
+      "transport_scope": "both",
+      "request": "CatalogRequest",
+      "response": "TagValueCatalogPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The catalog is deterministic and ordered ascending by tag value for one subject tree and index.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListTagValuesAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListTagValues",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListTagValuesMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListTagValuesAsync"
+      ]
+    },
+    {
+      "id": "list-trees",
+      "in_process": "ILatticeStateQuery.ListTreesAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListTrees",
+      "transport_scope": "both",
+      "request": "CatalogRequest",
+      "response": "TreeCatalogPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The catalog is deterministic, paged, ordered by tree id, and hides reserved internal system trees unless IncludeSystemTrees is set.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListTreesAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListTrees",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListTreesMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListTreesAsync"
+      ]
+    },
+    {
+      "id": "list-views",
+      "in_process": "ILatticeStateQuery.ListViewsAsync",
+      "grpc_method": "/orleans.lattice.api.state/ListViews",
+      "transport_scope": "both",
+      "request": "CatalogRequest",
+      "response": "ViewCatalogPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "The catalog is deterministic, paged, and ordered by view name.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListViewsAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ListViews",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ListViewsMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ListViewsAsync"
+      ]
+    },
+    {
+      "id": "observe-changes",
+      "in_process": "ILatticeStateObserver.ObserveAsync",
+      "grpc_method": "/orleans.lattice.api.state/ObserveChanges",
+      "transport_scope": "both",
+      "request": "StateObserveRequest",
+      "response": "stream<StateChangeNotification>",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cursor-expired",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "A supplied resume cursor can continue the WAL tail until it falls outside retention, which maps to FailedPrecondition.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateObserver.cs#ObserveAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The subscription is at-least-once and resumable by cursor; delivery can repeat notifications.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateObserver.cs#ILatticeStateObserver"
+      },
+      "concurrency": {
+        "rule": "A slow consumer tails the WAL more slowly; writers are not blocked and there is no per-subscription memory buffer.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateObserver.cs#ILatticeStateObserver"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ObserveChanges",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ObserveChangesMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateObserver.cs#ObserveAsync"
+      ]
+    },
+    {
+      "id": "observe-metrics",
+      "in_process": "ILatticeStateMetricsObserver.ObserveAsync",
+      "grpc_method": "/orleans.lattice.api.state/ObserveMetrics",
+      "transport_scope": "both",
+      "request": "TreeMetricsRequest",
+      "response": "stream<TreeMetricsSnapshot>",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "The stream runs until cancellation; the client defines no reconnect policy.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#ObserveAsync"
+      },
+      "idempotency": {
+        "status": "uncertain",
+        "reason": "No idempotency or resume contract is documented for ObserveMetrics streams.",
+        "required_source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs",
+        "issue": 3636
+      },
+      "concurrency": {
+        "rule": "The first tick is a full snapshot and later ticks are deltas containing only changed trees.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#ObserveAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ObserveMetrics",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ObserveMetricsMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateMetricsObserver.cs#ObserveAsync"
+      ]
+    },
+    {
+      "id": "scan-entries",
+      "in_process": "ILatticeStateQuery.ScanEntriesAsync",
+      "grpc_method": "/orleans.lattice.api.state/ScanEntries",
+      "transport_scope": "both",
+      "request": "EntryScanRequest",
+      "response": "EntryScanResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "Snapshot mode opens a point-in-time cursor resilient to concurrent writes, splits, and reshards; live modes can reflect writes committed after open.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ScanEntriesAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ScanEntries",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ScanEntriesMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ScanEntriesAsync"
+      ]
+    },
+    {
+      "id": "scan-tag-members",
+      "in_process": "ILatticeStateQuery.ScanTagMembersAsync",
+      "grpc_method": "/orleans.lattice.api.state/ScanTagMembers",
+      "transport_scope": "both",
+      "request": "TagMemberScanRequest",
+      "response": "TagMemberScanPage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client carries no transport retry policy; this state API operation is read-only.",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcClient.cs#LatticeStateApiGrpcClient"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "Members are deterministic in ascending tree id and key order and rows whose primary key no longer exists are skipped.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ScanTagMembersAsync"
+      },
+      "sources": [
+        "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ScanTagMembers",
+        "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#ScanTagMembersMethodName",
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ScanTagMembersAsync"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "argument-invalid",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "The request failed service validation.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": false,
+      "meaning": "A unary state-API request was cancelled.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "cursor-expired",
+      "type": "LatticeStateCursorExpiredException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "An observe resume cursor fell outside the WAL retention window.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ObserveChanges"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "The server logged an unexpected state-API failure and returned a generic fault.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "not-found",
+      "type": "KeyNotFoundException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "The change subscription named a missing target.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#ObserveChanges"
+    },
+    {
+      "id": "saturated",
+      "type": "LatticeSaturatedException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": true,
+      "meaning": "The tree is busy under storage back-pressure and the caller should back off.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "tenant-access-denied",
+      "type": "LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The caller has no valid active tenant or may not act as the asserted tenant.",
+      "source": "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "transport-authorization-cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": false,
+      "meaning": "The gRPC authorization check was cancelled.",
+      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+    },
+    {
+      "id": "transport-authorization-denied",
+      "type": "ILatticeStateApiAuthorizer false",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The coarse gRPC authorizer denied the call before it reached the facade.",
+      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+    }
+  ]
+}

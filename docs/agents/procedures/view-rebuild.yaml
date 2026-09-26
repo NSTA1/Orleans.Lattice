@@ -1,0 +1,73 @@
+schema: lattice.agents/procedure/v1
+id: view-rebuild
+name: "Rebuild or reconcile a materialised view"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.RebuildViewAsync and ReconcileViewAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RebuildViewAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/RebuildView and ReconcileView"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RebuildViewMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_view_rebuild and lattice_treeadmin_view_reconcile"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: runtime-view
+    check: "Target is a runtime-registered view for runtime control."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: source-admin
+    check: "Caller has Admin authority over the view source tree."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: view-subsystem
+    check: "The view subsystem is registered."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "Read view status."
+    api: "ILatticeTreeAdmin.GetViewStatusAsync / GetViewStatus"
+    expects: "Returns source tree, apply lag, active generation tree id, provider key, and projection version."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync"
+  - n: 2
+    action: "Run reconcile when drift repair is conditional."
+    api: "ILatticeTreeAdmin.ReconcileViewAsync / ReconcileView"
+    expects: "Repairs only when expected view diverges from live view."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileViewAsync"
+  - n: 3
+    action: "Run rebuild when a full generation rebuild is intended."
+    api: "ILatticeTreeAdmin.RebuildViewAsync / RebuildView"
+    expects: "Builds a complete shadow generation and atomically flips it active."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RebuildViewAsync"
+postconditions:
+  - check: "Readers do not observe a half-built view during rebuild."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - check: "Provider payloads are never returned by list or status."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+failure_modes:
+  - id: source-unresolved
+    signal: "A view whose source cannot be resolved is rejected fail-closed."
+    effect: "No maintenance is performed."
+    response: "Repair or recreate the view registration."
+  - id: startup-declared-drop
+    signal: "Drop rejects startup-declared views."
+    effect: "The view remains declared by code."
+    response: "Remove the code declaration instead of using runtime drop."
+  - id: subsystem-absent
+    signal: "InvalidOperationException when no view subsystem is registered."
+    effect: "No view verb is performed."
+    response: "Register AddLatticeViews for runtime view support."
+rollback:
+  supported: false
+  mechanism: "No revert for a completed view rebuild is surfaced; rebuild again from current source state if needed."
+  steps: []
+  source: "docs/lattice.api.treeadmin/README.md"
+concurrency:
+  - rule: "View authorization is derived from the source tree resolved by the facade, not caller input."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - rule: "Reconcile is online and idempotent when the view already matches its source."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/materialised-views.md"

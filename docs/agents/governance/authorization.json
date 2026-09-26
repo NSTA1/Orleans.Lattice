@@ -1,0 +1,683 @@
+{
+  "schema": "lattice.agents/governance-authorization/v1",
+  "decision_trees": [
+    {
+      "id": "grpc-auth-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.auth/.",
+          "on_true": "require-option",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeAuthApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeAuthApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyAllAuthApiAuthorizer is the default and unknown methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.auth.grpc/Security/ILatticeAuthApiAuthorizer.cs",
+        "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-backup-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.backup/.",
+          "on_true": "unauthenticated-exempt",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unauthenticated-exempt",
+          "check": "Method is GetAuthScheme.",
+          "on_true": "allow-discovery",
+          "on_false": "require-option",
+          "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeBackupApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeBackupApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyAllBackupApiAuthorizer is the default and unrecognised methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.backup.grpc/Security/ILatticeBackupApiAuthorizer.cs",
+        "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-data-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.data/.",
+          "on_true": "require-option",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeDataApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeDataApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyAllDataApiAuthorizer is the default and unrecognised methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.data.grpc/Security/ILatticeDataApiAuthorizer.cs",
+        "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-replication-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.replication/.",
+          "on_true": "unauthenticated-exempt",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unauthenticated-exempt",
+          "check": "Method is GetAuthScheme.",
+          "on_true": "allow-discovery",
+          "on_false": "require-option",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeReplicationApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeReplicationApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyAllReplicationApiAuthorizer is the default and unrecognised methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.replication.grpc/Security/ILatticeReplicationApiAuthorizer.cs",
+        "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-replication-peer-authentication",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method targets the live push, remote snapshot, or saga replication gRPC service.",
+          "on_true": "require-authentication",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-authentication",
+          "check": "LatticeReplicationSecurityOptions.RequireAuthentication is true.",
+          "on_true": "secret-present",
+          "on_false": "allow",
+          "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "secret-present",
+          "check": "Metadata contains x-lattice-replication-secret.",
+          "on_true": "secret-accepted",
+          "on_false": "deny-unauthenticated",
+          "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "secret-accepted",
+          "check": "IReplicationSecretProvider.IsAcceptedAsync accepts the presented secret.",
+          "on_true": "saga-origin-check",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "saga-origin-check",
+          "check": "Call is a saga control RPC.",
+          "on_true": "origin-authorized",
+          "on_false": "allow",
+          "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs"
+        },
+        {
+          "id": "origin-authorized",
+          "check": "Origin header or coordinator cluster id is a non-empty key in LatticeReplicationGrpcOptions.Peers.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs"
+        }
+      ],
+      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, and saga control also requires an authorized peer origin.",
+      "sources": [
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs",
+        "src/lattice.replication.grpc/LatticeSagaGrpcService.cs",
+        "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs",
+        "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs"
+      ]
+    },
+    {
+      "id": "grpc-schema-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.schema/.",
+          "on_true": "unauthenticated-exempt",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unauthenticated-exempt",
+          "check": "Method is GetAuthScheme.",
+          "on_true": "allow-discovery",
+          "on_false": "require-option",
+          "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeSchemaApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeSchemaApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenySchemaApiAuthorizer is the default and unrecognised methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.schema.grpc/Security/ILatticeSchemaApiAuthorizer.cs",
+        "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-state-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.state/.",
+          "on_true": "unauthenticated-exempt",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unauthenticated-exempt",
+          "check": "Method is GetAuthScheme.",
+          "on_true": "allow-discovery",
+          "on_false": "require-option",
+          "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeStateApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeStateApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyAllStateApiAuthorizer is the default and unrecognised methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.state.grpc/Security/ILatticeStateApiAuthorizer.cs",
+        "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-telemetry-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.telemetry/.",
+          "on_true": "unauthenticated-exempt",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unauthenticated-exempt",
+          "check": "Method is GetAuthScheme.",
+          "on_true": "allow-discovery",
+          "on_false": "require-option",
+          "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeTelemetryApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeTelemetryApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyTelemetryApiAuthorizer is the default and unrecognised methods map to Unknown.",
+      "sources": [
+        "src/lattice.api.telemetry.grpc/Security/ILatticeTelemetryApiAuthorizer.cs",
+        "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-tenantadmin-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.tenantadmin/.",
+          "on_true": "exemption",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "exemption",
+          "check": "Method is GetAuthScheme or tenant self-service.",
+          "on_true": "allow-facade-scoped",
+          "on_false": "require-option",
+          "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeTenantAdminApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeTenantAdminApiAuthorizer.IsAuthorizedAsync returns true.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyTenantAdminApiAuthorizer is the default and unknown operations map to Unknown.",
+      "sources": [
+        "src/lattice.api.tenantadmin.grpc/Security/ILatticeTenantAdminApiAuthorizer.cs",
+        "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "grpc-treeadmin-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.treeadmin/.",
+          "on_true": "unauthenticated-exempt",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unauthenticated-exempt",
+          "check": "Method is GetAuthScheme.",
+          "on_true": "allow-discovery",
+          "on_false": "require-option",
+          "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeTreeAdminApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "primary-authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "primary-authorizer",
+          "check": "ILatticeTreeAdminApiAuthorizer.IsAuthorizedAsync returns true for the primary target.",
+          "on_true": "secondary-target",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "secondary-target",
+          "check": "Request names a second caller-supplied tree id distinct from the primary target.",
+          "on_true": "secondary-authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "secondary-authorizer",
+          "check": "ILatticeTreeAdminApiAuthorizer.IsAuthorizedAsync returns true for the secondary target.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "fail_closed": "DenyTreeAdminApiAuthorizer is the default; unrecognised methods map to Unknown and every caller-supplied tree target is authorized.",
+      "sources": [
+        "src/lattice.api.treeadmin.grpc/Security/ILatticeTreeAdminApiAuthorizer.cs",
+        "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
+      ]
+    },
+    {
+      "id": "ilattice-access-gate",
+      "nodes": [
+        {
+          "id": "bootstrap-admin",
+          "check": "Subject id is in BootstrapAdministrators.",
+          "on_true": "allow",
+          "on_false": "control-plane",
+          "source": "src/lattice.auth/PolicyAccessGate.cs"
+        },
+        {
+          "id": "control-plane",
+          "check": "Tree is reserved auth, tenant-admin capability, tenant registry, or * sentinel.",
+          "on_true": "explicit-control-allow",
+          "on_false": "strict-fence",
+          "source": "src/lattice.auth/PolicyAccessGate.cs"
+        },
+        {
+          "id": "explicit-control-allow",
+          "check": "Compiled policy has an explicit matching allow.",
+          "on_true": "allow",
+          "on_false": "deny-control-plane",
+          "source": "src/lattice.auth/PolicyAccessGate.cs"
+        },
+        {
+          "id": "strict-fence",
+          "check": "Write targets a strict-consistency tree with an unmet required policy epoch.",
+          "on_true": "deny",
+          "on_false": "policy-evaluate",
+          "source": "src/lattice.auth/PolicyAccessGate.cs"
+        },
+        {
+          "id": "policy-evaluate",
+          "check": "PolicyEvaluator returns allow or filtered allow.",
+          "on_true": "tenant-enforcer",
+          "on_false": "deny",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "tenant-enforcer",
+          "check": "Tenancy is active and tenant isolation denies the request.",
+          "on_true": "deny",
+          "on_false": "allow",
+          "source": "src/lattice.auth/PolicyAccessGate.cs"
+        }
+      ],
+      "fail_closed": "Control-plane namespaces deny independently of DefaultEffect unless bootstrap or explicit allow applies.",
+      "sources": [
+        "src/lattice/ILatticeAccessGate.cs",
+        "src/lattice.auth/PolicyAccessGate.cs",
+        "src/lattice.auth/PolicyEvaluator.cs"
+      ]
+    },
+    {
+      "id": "lattice-auth-policy-evaluator",
+      "nodes": [
+        {
+          "id": "all-trees-deny",
+          "check": "All-trees grants are enabled and the * bucket has a matching deny.",
+          "on_true": "deny",
+          "on_false": "specific-tree",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "specific-tree",
+          "check": "The target tree bucket has a matching rule.",
+          "on_true": "matched-effect",
+          "on_false": "all-trees-allow",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "all-trees-allow",
+          "check": "All-trees grants are enabled and the * bucket has a matching allow.",
+          "on_true": "allow",
+          "on_false": "default-effect",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        },
+        {
+          "id": "default-effect",
+          "check": "DefaultEffect is Allow.",
+          "on_true": "allow",
+          "on_false": "deny",
+          "source": "src/lattice.auth/PolicyEvaluator.cs"
+        }
+      ],
+      "fail_closed": "DefaultEffect defaults to Deny and control-plane namespaces do not consult the all-trees tier.",
+      "sources": [
+        "src/lattice.auth/LatticeAuthOptions.cs",
+        "src/lattice.auth/PolicyEvaluator.cs"
+      ]
+    },
+    {
+      "id": "mcp-authorization-gate",
+      "nodes": [
+        {
+          "id": "http-authorization",
+          "check": "LatticeApiMcpOptions.RequireAuthorization is true.",
+          "on_true": "aspnet-authenticated",
+          "on_false": "session-plan",
+          "source": "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs"
+        },
+        {
+          "id": "aspnet-authenticated",
+          "check": "ASP.NET Core endpoint authorization authenticates the caller.",
+          "on_true": "session-plan",
+          "on_false": "deny-http",
+          "source": "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs"
+        },
+        {
+          "id": "credential",
+          "check": "The MCP credential bridge resolves a non-null LatticeCredential for the session.",
+          "on_true": "permission-resolver",
+          "on_false": "advertise-no-tools",
+          "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs"
+        },
+        {
+          "id": "permission-resolver",
+          "check": "ILatticeApiMcpPermissionResolver grants at least one facade group from effective permissions.",
+          "on_true": "group-registered",
+          "on_false": "advertise-capabilities-only",
+          "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs"
+        },
+        {
+          "id": "group-registered",
+          "check": "A registered ILatticeApiMcpToolGroup contributes the requested group.",
+          "on_true": "group-granted",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp/Discovery/ILatticeApiMcpToolGroup.cs"
+        },
+        {
+          "id": "group-granted",
+          "check": "The session access set contains the group required by LatticeApiMcpGroupCapabilityMap.",
+          "on_true": "write-opt-in",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpGroupCapabilityMap.cs"
+        },
+        {
+          "id": "write-opt-in",
+          "check": "Requested data mutation tool was contributed by AddDataTools(enableWrites: true), or the requested tool is not a data mutation.",
+          "on_true": "coarse-authorizer",
+          "on_false": "not-registered",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs"
+        },
+        {
+          "id": "coarse-authorizer",
+          "check": "McpToolAuthorizationGate resolves HttpContext and ILatticeApiMcpAuthorizer returns true.",
+          "on_true": "stamp-and-invoke",
+          "on_false": "deny-mcp",
+          "source": "src/lattice.api.mcp/Discovery/McpToolAuthorizationGate.cs"
+        }
+      ],
+      "fail_closed": "The endpoint requires authentication by default, DenyAllMcpAuthorizer denies by default, missing HttpContext or authorizer denies, unauthenticated sessions get no tools, and data write tools are absent unless explicitly enabled.",
+      "sources": [
+        "src/lattice.api.mcp/LatticeApiMcpOptions.cs",
+        "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs",
+        "src/lattice.api.mcp/Security/ILatticeApiMcpAuthorizer.cs",
+        "src/lattice.api.mcp/Discovery/McpToolAuthorizationGate.cs",
+        "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
+        "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs",
+        "src/lattice.api.mcp/Discovery/AuthorizedMetaTool.cs",
+        "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs"
+      ]
+    },
+    {
+      "id": "membership-providers",
+      "nodes": [
+        {
+          "id": "credential-present",
+          "check": "LatticeCredentialContext is active.",
+          "on_true": "cache",
+          "on_false": "anonymous",
+          "source": "src/lattice.membership/MembershipContext.cs"
+        },
+        {
+          "id": "cache",
+          "check": "Resolution cache has a fresh subject.",
+          "on_true": "return-cached",
+          "on_false": "select-authenticator",
+          "source": "src/lattice.membership/MembershipContext.cs"
+        },
+        {
+          "id": "select-authenticator",
+          "check": "A registered authenticator CanHandle returns true.",
+          "on_true": "authenticate",
+          "on_false": "anonymous",
+          "source": "src/lattice.membership/MembershipContext.cs"
+        },
+        {
+          "id": "authenticate",
+          "check": "Authenticator returns a principal.",
+          "on_true": "directory-groups",
+          "on_false": "anonymous",
+          "source": "src/lattice.membership/MembershipContext.cs"
+        },
+        {
+          "id": "directory-groups",
+          "check": "Group merge mode requires directory groups.",
+          "on_true": "merge-directory",
+          "on_false": "map-subject",
+          "source": "src/lattice.membership/MembershipContext.cs"
+        }
+      ],
+      "fail_closed": "No credential, no handler, invalid token, or unmapped principal resolves to LatticeSubject.Anonymous.",
+      "sources": [
+        "src/lattice.membership/MembershipContext.cs",
+        "src/lattice.membership/JwtCredentialAuthenticator.cs",
+        "src/lattice.membership.entra/EntraCredentialAuthenticator.cs",
+        "src/lattice.membership.entra.graph/EntraGraphIdentityDirectory.cs",
+        "src/lattice.membership.oidc/OidcCredentialAuthenticator.cs"
+      ]
+    },
+    {
+      "id": "tenancy-admission",
+      "nodes": [
+        {
+          "id": "rate-limit",
+          "check": "Tenant rate limiter accepts the operation.",
+          "on_true": "usage-view",
+          "on_false": "deny-quota-exceeded",
+          "source": "src/lattice.tenancy/LatticeTenantAdmissionController.cs"
+        },
+        {
+          "id": "usage-view",
+          "check": "A warm tenant usage view exists.",
+          "on_true": "quota-evaluate",
+          "on_false": "allow-fail-open-warmup",
+          "source": "src/lattice.tenancy/LatticeTenantAdmissionController.cs"
+        },
+        {
+          "id": "quota-evaluate",
+          "check": "TenantQuotaEvaluator admits every bounded dimension.",
+          "on_true": "allow",
+          "on_false": "deny-quota-exceeded",
+          "source": "src/lattice.tenancy/LatticeTenantAdmissionController.cs"
+        }
+      ],
+      "fail_closed": "Quota breaches throw LatticeQuotaExceededException; unknown or not-yet-warm tenants admit until the first sample lands.",
+      "sources": [
+        "src/lattice.tenancy/LatticeTenantAdmissionController.cs",
+        "src/lattice.tenancy/TenantQuotaEvaluator.cs"
+      ]
+    },
+    {
+      "id": "tenant-enumeration-filter",
+      "nodes": [
+        {
+          "id": "owner",
+          "check": "Tree owner is platform-owned or equals active tenant.",
+          "on_true": "include",
+          "on_false": "exclude",
+          "source": "src/lattice.tenancy/TenantEnumerationFilter.cs"
+        }
+      ],
+      "fail_closed": "An uninitialized tenant owns no tenant trees and observes only platform-owned ids.",
+      "sources": [
+        "src/lattice.tenancy/TenantEnumerationFilter.cs"
+      ]
+    },
+    {
+      "id": "tenant-region-visibility",
+      "nodes": [
+        {
+          "id": "tenant-present",
+          "check": "Tenant id is initialized.",
+          "on_true": "registry-read",
+          "on_false": "unresolved",
+          "source": "src/lattice.tenancy/TenantRegionVisibilityResolver.cs"
+        },
+        {
+          "id": "registry-read",
+          "check": "Registry read succeeds and tenant record exists.",
+          "on_true": "project-map",
+          "on_false": "unresolved",
+          "source": "src/lattice.tenancy/TenantRegionVisibilityResolver.cs"
+        }
+      ],
+      "fail_closed": "Unknown standing resolves to Unresolved rather than a permissive topology.",
+      "sources": [
+        "src/lattice.tenancy/TenantRegionVisibilityResolver.cs"
+      ]
+    }
+  ]
+}

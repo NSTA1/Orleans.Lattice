@@ -1,0 +1,1423 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "tenantadmin",
+  "packages": [
+    "Orleans.Lattice.Api.Abstractions",
+    "Orleans.Lattice.Api.TenantAdmin",
+    "Orleans.Lattice.Api.TenantAdmin.Grpc"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs",
+    "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+  ],
+  "in_process": {
+    "interface": "ILatticeTenantAdmin, ILatticeTenantRegionAdmin, ILatticeTenantAccessAdmin, ILatticeTenantGrantAdmin, ILatticeTenantSelfService, ILatticeTenantQuotaUsage",
+    "registration": "AddLatticeTenantAdminApi",
+    "source": "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.tenantadmin",
+    "methods_source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+    "marshalling": "Unary RPCs use Orleans serializers through LatticeTenantAdminGrpcMarshallers.",
+    "metadata": [
+      {
+        "name": "authorization",
+        "purpose": "Carries the caller credential token; the default bridge strips the Bearer scheme and stamps LatticeCredentialContext.",
+        "source": "src/lattice.api.tenantadmin.grpc/HeaderLatticeTenantAdminApiCredentialBridge.cs"
+      },
+      {
+        "name": "lattice-active-tenant",
+        "purpose": "Carries the caller asserted active tenant and is stamped through LatticeActiveTenantAssertion.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcOptions.cs"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeTenantAdminApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeTenantAdminApiAuthorizer",
+      "decision": "RequireAuthorization defaults true; DenyTenantAdminApiAuthorizer denies until opt-in; GetAuthScheme and self-service methods are exempt and defer to facade scoping.",
+      "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+    }
+  },
+  "types": {
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/AuthSchemeAdvertisement.cs"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/AuthSchemeAdvertisementRequest.cs"
+    },
+    "AuthSchemeDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Parameters",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/AuthSchemeDescriptor.cs"
+    },
+    "TenantAdminCreateRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "AdminSubjects",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminCreateRequest.cs"
+    },
+    "TenantAdminGrantOfferRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "GranterTenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GranteeTenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Operations",
+          "type": "TenantGrantAccess",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGrantOfferRequest.cs"
+    },
+    "TenantAdminGrantRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "GranterTenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GranteeTenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminGrantRequest.cs"
+    },
+    "TenantAdminRegionSetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Regions",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminRegionSetRequest.cs"
+    },
+    "TenantAdminSetQuotasRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Quotas",
+          "type": "TenantQuotasDescriptor",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminSetQuotasRequest.cs"
+    },
+    "TenantAdminSubjectRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SubjectId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminSubjectRequest.cs"
+    },
+    "TenantAdminTenantRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminTenantRequest.cs"
+    },
+    "TenantCreationResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "TenantLifecycleStatus",
+          "required": true
+        },
+        {
+          "name": "AdminSubjects",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantCreationResult.cs"
+    },
+    "TenantDeletionResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "CascadedTreeCount",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantDeletionResult.cs"
+    },
+    "TenantDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "TenantLifecycleStatus",
+          "required": true
+        },
+        {
+          "name": "IsDefault",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantDescriptor.cs"
+    },
+    "TenantGrantChangeResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Grant",
+          "type": "TenantGrantDescriptor",
+          "required": true
+        },
+        {
+          "name": "Changed",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantChangeResult.cs"
+    },
+    "TenantGrantDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "GranterTenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "GranteeTenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Operations",
+          "type": "TenantGrantAccess",
+          "required": true
+        },
+        {
+          "name": "State",
+          "type": "TenantGrantLifecycleState",
+          "required": true
+        },
+        {
+          "name": "GrantId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantDescriptor.cs"
+    },
+    "TenantGrantReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Issued",
+          "type": "IReadOnlyList<TenantGrantDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Received",
+          "type": "IReadOnlyList<TenantGrantDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantReport.cs"
+    },
+    "TenantQuotaUsageReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EnforcementScope",
+          "type": "TenantQuotaEnforcementScope",
+          "required": true
+        },
+        {
+          "name": "HasUsage",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Quotas",
+          "type": "TenantQuotasDescriptor",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaUsageReport.cs"
+    },
+    "TenantQuotasDescriptor": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "MaxBytes",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "MaxKeys",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "MaxMemoryBytes",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "MaxTreeCount",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "MaxOpsPerSecond",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "BurstPercent",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotasDescriptor.cs"
+    },
+    "TenantRegionStatusReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Regions",
+          "type": "IReadOnlyList<TenantRegionStatusDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusReport.cs"
+    },
+    "TenantResidencyChangeResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "AddedRegions",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "RemovedRegions",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "Regions",
+          "type": "IReadOnlyList<TenantRegionStatusDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantResidencyChangeResult.cs"
+    },
+    "TenantSelfCurrentRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantSelfCurrentRequest.cs"
+    },
+    "TenantSelfDescriptorList": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Tenants",
+          "type": "IReadOnlyList<TenantDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantSelfDescriptorList.cs"
+    },
+    "TenantSelfListRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantSelfListRequest.cs"
+    },
+    "TenantStatusChangeResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PreviousStatus",
+          "type": "TenantLifecycleStatus",
+          "required": true
+        },
+        {
+          "name": "NewStatus",
+          "type": "TenantLifecycleStatus",
+          "required": true
+        },
+        {
+          "name": "Changed",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusChangeResult.cs"
+    },
+    "TenantStatusReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "TenantLifecycleStatus",
+          "required": true
+        },
+        {
+          "name": "IsDefault",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Regions",
+          "type": "IReadOnlyList<TenantRegionStatusDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Quotas",
+          "type": "TenantQuotasDescriptor",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusReport.cs"
+    }
+  },
+  "operations": [
+    {
+      "id": "add-tenant-admin-subject",
+      "in_process": "AddAdminSubjectAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/AddTenantAdminSubject",
+      "transport_scope": "both",
+      "request": "TenantAdminSubjectRequest",
+      "response": "TenantAdminSubjectChangeResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Invalid tenant id or subject id."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither platform operator nor target tenant admin."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Reserved default tenant target."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Tenant access-administration facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Adding an existing admin subject reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Admin-subject mutations are stamped through the tenant record CRDT merge.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "approve-cross-tenant-grant",
+      "in_process": "ApproveGrantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ApproveCrossTenantGrant",
+      "transport_scope": "both",
+      "request": "TenantAdminGrantRequest",
+      "response": "TenantGrantChangeResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "No such grant was offered."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Grant is not pending."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not platform operator and not an admin of the grantee tenant."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Cross-tenant grant facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; repeated approval of an active grant is idempotent.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Idempotent on an already-active grant.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Concurrent grant transitions converge on the more restrictive outcome.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "authorize-allowed-regions",
+      "in_process": "AuthorizeAllowedRegionsAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/AuthorizeAllowedRegions",
+      "transport_scope": "both",
+      "request": "TenantAdminRegionSetRequest",
+      "response": "TenantRegionAuthorizationResult",
+      "errors": [
+        {
+          "error_id": "failed-precondition",
+          "condition": "A revoked region is still resident."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not a platform operator."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Region-residency facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Retry only when resubmitting the same complete allowed-region set.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The call sets the allowed set to exactly the supplied regions.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Residency must stay a subset of the allowed set; revoking a resident region is refused.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "create-tenant",
+      "in_process": "CreateTenantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/CreateTenant",
+      "transport_scope": "both",
+      "request": "TenantAdminCreateRequest",
+      "response": "TenantCreationResult",
+      "errors": [
+        {
+          "error_id": "already-exists",
+          "condition": "Tenant id is already registered."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "Invalid tenant id or admin subject."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized to administer tenants."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Create is not an idempotent upsert; retry can observe AlreadyExists after a successful first attempt.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Create fails with TenantAlreadyExistsException when the tenant is already registered.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "The facade refuses a duplicate tenant id rather than resetting an existing definition.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "delete-tenant",
+      "in_process": "DeleteTenantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/DeleteTenant",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantDeletionResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant id is not registered."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Tenant id is the reserved default tenant."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized to administer tenants."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Retry after a successful delete observes NotFound.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Delete fails closed with TenantNotFoundException when the tenant is absent.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Deletes cascade tenant-owned tree soft deletes before removing the registry record.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-auth-scheme",
+      "in_process": "GetAuthSchemeAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetAuthScheme",
+      "transport_scope": "both",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [],
+      "retry": {
+        "safe": true,
+        "policy": "Unauthenticated read-only advertisement.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Reads configured public auth-scheme advertisement.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      },
+      "concurrency": {
+        "rule": "No state mutation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
+      ]
+    },
+    {
+      "id": "get-current-tenant",
+      "in_process": "GetCurrentTenantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetCurrentTenant",
+      "transport_scope": "both",
+      "request": "TenantSelfCurrentRequest",
+      "response": "TenantDescriptor",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "Active tenant assertion is not valid for the caller."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only self-service operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantSelfServiceApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only current tenant resolution.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
+      },
+      "concurrency": {
+        "rule": "No state mutation.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-tenant",
+      "in_process": "GetTenantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenant",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantStatusReport",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant does not exist or caller is not authorized to see it."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only self-service operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantSelfServiceApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tenant status report.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
+      },
+      "concurrency": {
+        "rule": "Absent and unauthorized tenants are deliberately indistinguishable.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-tenant-quota-usage",
+      "in_process": "GetQuotaUsageAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantQuotaUsage",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantQuotaUsageReport",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant does not exist or caller is not authorized to read it."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Quota usage facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only quota usage report.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs"
+      },
+      "concurrency": {
+        "rule": "Reads the tenancy engine warm per-tenant usage index.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "get-tenant-region-status",
+      "in_process": "GetTenantRegionStatusAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantRegionStatus",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantRegionStatusReport",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant does not exist."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither platform operator nor tenant admin."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Region-residency facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only per-region status report.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Reports one row per region that is either allowed or carries a non-None status.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-accessible-tenants",
+      "in_process": "ListAccessibleTenantsAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListAccessibleTenants",
+      "transport_scope": "both",
+      "request": "TenantSelfListRequest",
+      "response": "TenantSelfDescriptorList",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "Active tenant assertion is not valid for the caller."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only self-service operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantSelfServiceApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only accessible tenant enumeration.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
+      },
+      "concurrency": {
+        "rule": "Enumeration is scoped to the caller resolved subject and omits tenants the caller cannot see.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-cross-tenant-grants",
+      "in_process": "ListGrantsAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListCrossTenantGrants",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantGrantReport",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant does not exist for an operator caller."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither platform operator nor tenant admin."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Cross-tenant grant facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only grant report.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Lists issued and received grants in every lifecycle state.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-tenant-admin-subjects",
+      "in_process": "ListAdminSubjectsAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantAdminSubjects",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantAdminSubjectReport",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant does not exist for an operator caller."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither platform operator nor tenant admin."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Tenant access-administration facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tenant admin subject report.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Lists live tenant-admin subjects in ordinal order.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "offer-cross-tenant-grant",
+      "in_process": "OfferGrantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/OfferCrossTenantGrant",
+      "transport_scope": "both",
+      "request": "TenantAdminGrantOfferRequest",
+      "response": "TenantGrantChangeResult",
+      "errors": [
+        {
+          "error_id": "failed-precondition",
+          "condition": "A live active grant exists for the same grantee and scope or a reserved tenant was targeted."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not platform operator and not an admin of the granting tenant."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Cross-tenant grant facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Retry only when resubmitting the same offer terms.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Re-offering over a pending offer amends terms; re-offering over a terminal grant starts a fresh agreement.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Grant writes are stamped through the tenant record CRDT merge and concurrent transitions converge on the more restrictive outcome.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "reject-cross-tenant-grant",
+      "in_process": "RejectGrantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RejectCrossTenantGrant",
+      "transport_scope": "both",
+      "request": "TenantAdminGrantRequest",
+      "response": "TenantGrantChangeResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "No such grant was offered."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Grant is not pending."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not platform operator and not an admin of the grantee tenant."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Cross-tenant grant facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; repeated rejection of a rejected grant is idempotent.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Idempotent on an already-rejected grant.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Concurrent grant transitions converge on the more restrictive outcome.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "remove-tenant-admin-subject",
+      "in_process": "RemoveAdminSubjectAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RemoveTenantAdminSubject",
+      "transport_scope": "both",
+      "request": "TenantAdminSubjectRequest",
+      "response": "TenantAdminSubjectChangeResult",
+      "errors": [
+        {
+          "error_id": "failed-precondition",
+          "condition": "Removal would leave no admin subjects or the reserved default tenant was targeted."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither platform operator nor target tenant admin."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Tenant access-administration facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; removing a non-member reports Changed false.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removing a subject that is not a member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Concurrent removals that would empty the set are detected on the registry merged result and repaired before refusal.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "resume-tenant",
+      "in_process": "ResumeTenantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ResumeTenant",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantStatusChangeResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant id is not registered."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized to administer tenants."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; resuming an already-active tenant is idempotent.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Resuming an already-active tenant reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Status transition is written through the tenant registry record.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "revoke-cross-tenant-grant",
+      "in_process": "RevokeGrantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/RevokeCrossTenantGrant",
+      "transport_scope": "both",
+      "request": "TenantAdminGrantRequest",
+      "response": "TenantGrantChangeResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "No such grant exists."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Grant is not active."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is platform operator for neither tenant and admin of neither party."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Cross-tenant grant facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; repeated revocation of a revoked grant is idempotent.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Idempotent on an already-revoked grant.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Concurrent grant transitions converge on the more restrictive outcome.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "set-tenant-quotas",
+      "in_process": "SetTenantQuotasAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/SetTenantQuotas",
+      "transport_scope": "both",
+      "request": "TenantAdminSetQuotasRequest",
+      "response": "TenantQuotasUpdateResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant id is not registered."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Tenant id is the reserved default tenant."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "Invalid tenant id or negative burst percent."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized to administer tenants."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry is safe when resubmitting the same quota descriptor.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Replacing quotas with the same descriptor is idempotent.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Quota descriptor replaces the tenant current quotas in the registry record.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "set-tenant-residency",
+      "in_process": "SetResidencyAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/SetTenantResidency",
+      "transport_scope": "both",
+      "request": "TenantAdminRegionSetRequest",
+      "response": "TenantResidencyChangeResult",
+      "errors": [
+        {
+          "error_id": "failed-precondition",
+          "condition": "Requested region is not allowed or the change removes the last resident region."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither platform operator nor tenant admin."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Region-residency facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry is safe when resubmitting the same complete residency set.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Setting the same residency set is idempotent; invalid sets are refused.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "The last-resident-region guard runs before the write and again after the CRDT join to handle concurrent removals.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "suspend-tenant",
+      "in_process": "SuspendTenantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/SuspendTenant",
+      "transport_scope": "both",
+      "request": "TenantAdminTenantRequest",
+      "response": "TenantStatusChangeResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "Tenant id is not registered."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Tenant id is the reserved default tenant."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized to administer tenants."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; suspending an already-suspended tenant is idempotent.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Suspending an already-suspended tenant reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Status transition is written through the tenant registry record.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "already-exists",
+      "type": "TenantAlreadyExistsException",
+      "grpc_status": "AlreadyExists",
+      "retryable": false,
+      "meaning": "A create attempted to register an existing tenant.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": true,
+      "meaning": "The request was cancelled before completion.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "failed-precondition",
+      "type": "ReservedTenantOperationException, TenantLastAdminSubjectException, TenantLastRegionException, TenantGrantTransitionException, TenantRegionNotAllowedException, InvalidOperationException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "Cluster state or reserved-target invariants refused a well-formed request.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "Unhandled facade or binding failure after logging.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "invalid-argument",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "Request validation failed.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "not-found",
+      "type": "TenantNotFoundException or TenantGrantNotFoundException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "The tenant or grant is absent, or a facade deliberately unifies unauthorized visibility with absence.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "permission-denied",
+      "type": "LatticeAuthorizationDeniedException or LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The transport authorizer, access gate, or active-tenant validation denied the caller.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "unimplemented",
+      "type": "RpcException",
+      "grpc_status": "Unimplemented",
+      "retryable": false,
+      "meaning": "An optional tenant facade is not registered on the host.",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    }
+  ]
+}

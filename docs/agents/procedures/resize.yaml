@@ -1,0 +1,84 @@
+schema: lattice.agents/procedure/v1
+id: resize
+name: "Change B+ node capacity with online resize"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.ResizeTreeAsync and UndoTreeResizeAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/ResizeTree and UndoTreeResize"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ResizeTreeMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_resize and lattice_treeadmin_tree_resize_undo"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: no-reshard
+    check: "No reshard is already in flight."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  - id: tree-lifecycle
+    check: "Caller has whole-tree TreeLifecycle authority."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: valid-capacity
+    check: "newMaxLeafKeys is at least 2 and newMaxInternalChildren is at least 3."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+steps:
+  - n: 1
+    action: "Read current resize status."
+    api: "ILatticeTreeAdmin.GetResizeStatusAsync / GetResizeStatus"
+    expects: "Returns in-flight flag and effective B+ node capacity."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync"
+  - n: 2
+    action: "Trigger the online resize with target capacities."
+    api: "ILatticeTreeAdmin.ResizeTreeAsync / ResizeTree"
+    expects: "Returns accepted intent and observed capacity."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  - n: 3
+    action: "Poll resize status until in-flight is false."
+    api: "ILatticeTreeAdmin.GetResizeStatusAsync / GetResizeStatus"
+    expects: "Reports whether a resize remains in flight."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync"
+  - n: 4
+    action: "Undo while in flight or while the prior tree is recoverable."
+    api: "ILatticeTreeAdmin.UndoTreeResizeAsync / UndoTreeResize"
+    expects: "Returns resize status after the undo request."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+postconditions:
+  - check: "The tree keeps serving reads and writes while a shadow tree is built and swapped."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  - check: "Undo is available only while a resize is in progress or while the pre-resize tree is inside its soft-delete recovery window."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+failure_modes:
+  - id: invalid-capacity
+    signal: "ArgumentOutOfRangeException for too-small node capacity."
+    effect: "No resize is started."
+    response: "Use at least 2 leaf keys and 3 internal children."
+  - id: no-undo-target
+    signal: "InvalidOperationException when no in-flight or recoverable completed resize exists."
+    effect: "Undo is not started."
+    response: "Treat the current capacity as authoritative."
+  - id: purged-before-undo
+    signal: "InvalidOperationException when the pre-resize tree has already been purged."
+    effect: "Undo is unavailable."
+    response: "Restore from backup if a prior point-in-time state is required."
+rollback:
+  supported: true
+  mechanism: "UndoTreeResizeAsync coordinates a return to the pre-resize physical tree while recoverable."
+  steps:
+    - action: "Call UndoTreeResizeAsync for the logical tree."
+      api: "ILatticeTreeAdmin.UndoTreeResizeAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+    - action: "Poll GetResizeStatusAsync until the undo completes."
+      api: "ILatticeTreeAdmin.GetResizeStatusAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+concurrency:
+  - rule: "A matching in-flight target is idempotent; different resize parameters are rejected."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  - rule: "Resize and reshard are mutually exclusive in-flight operations."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/tree-sizing.md"
