@@ -1,0 +1,1564 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "data",
+  "packages": [
+    "Orleans.Lattice.Api.Abstractions",
+    "Orleans.Lattice.Api.Data",
+    "Orleans.Lattice.Api.Data.Grpc"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#ILatticeDataApi",
+    "src/lattice.api.data/LatticeDataApi.cs#LatticeDataApi",
+    "src/lattice.api.data/LatticeDataApi.Crdt.cs#LatticeDataApi",
+    "src/lattice.api.data/LatticeApiDataServiceCollectionExtensions.cs#AddLatticeDataApi",
+    "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#LatticeDataApiGrpcMethods",
+    "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService",
+    "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#LatticeDataApiGrpcClient",
+    "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs#LatticeDataApiGrpcAuthInterceptor"
+  ],
+  "in_process": {
+    "interface": "ILatticeDataApi",
+    "registration": "ISiloBuilder.AddLatticeDataApi",
+    "source": "src/lattice.api.data/LatticeApiDataServiceCollectionExtensions.cs#AddLatticeDataApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.data",
+    "methods_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#LatticeDataApiGrpcMethods",
+    "marshalling": "Orleans serializers are used through LatticeDataApiGrpcMarshallers.Create.",
+    "metadata": [
+      {
+        "name": "authorization",
+        "purpose": "Request metadata carrying the credential token by default; the Bearer prefix is stripped when present.",
+        "source": "src/lattice.api.data.grpc/HeaderLatticeDataApiCredentialBridge.cs#Resolve"
+      },
+      {
+        "name": "lattice-active-tenant",
+        "purpose": "Request metadata carrying the asserted active tenant by default.",
+        "source": "src/lattice.api.data.grpc/HeaderLatticeDataApiActiveTenantBridge.cs#Resolve"
+      },
+      {
+        "name": "lattice-denied-operation",
+        "purpose": "Response trailer carrying the denied data operation on access-gate denial.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#DeniedOperationTrailer"
+      },
+      {
+        "name": "lattice-denied-reason",
+        "purpose": "Response trailer carrying the access gate denial reason.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#DeniedReasonTrailer"
+      },
+      {
+        "name": "lattice-denied-subject",
+        "purpose": "Response trailer carrying the denied subject id on access-gate denial.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#DeniedSubjectTrailer"
+      },
+      {
+        "name": "lattice-denied-tree",
+        "purpose": "Response trailer carrying the denied tree id on access-gate denial.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#DeniedTreeTrailer"
+      },
+      {
+        "name": "lattice-quota-current",
+        "purpose": "Response trailer carrying the observed quota value when the breached dimension has a numeric ceiling.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#QuotaCurrentTrailer"
+      },
+      {
+        "name": "lattice-quota-dimension",
+        "purpose": "Response trailer carrying the breached quota dimension.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#QuotaDimensionTrailer"
+      },
+      {
+        "name": "lattice-quota-limit",
+        "purpose": "Response trailer carrying the configured quota ceiling when present.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#QuotaLimitTrailer"
+      },
+      {
+        "name": "lattice-quota-tree",
+        "purpose": "Response trailer carrying the tree whose admission quota was breached.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#QuotaTreeTrailer"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeDataApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeDataApiAuthorizer",
+      "decision": "The interceptor matches the data service prefix, optionally bypasses enforcement when RequireAuthorization is false, describes operation and target tree, and rejects false authorizer decisions with PermissionDenied before the facade runs.",
+      "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+    }
+  },
+  "types": {
+    "AllowAllDataApiAuthorizer": {
+      "kind": "class",
+      "fields": [],
+      "source": "src/lattice.api.data.grpc/Security/ILatticeDataApiAuthorizer.cs#AllowAllDataApiAuthorizer"
+    },
+    "CrdtKind": {
+      "kind": "enum",
+      "values": [
+        "PnCounter",
+        "OrSet",
+        "OrFlag",
+        "RwFlag",
+        "VersionVector",
+        "MvRegister",
+        "Sequence",
+        "OrMap",
+        "GCounter",
+        "GSet",
+        "RwSet",
+        "MaxRegister",
+        "MinRegister"
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtKind.cs#CrdtKind"
+    },
+    "CrdtMapField": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Field",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Values",
+          "type": "List<byte[]>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtMapField.cs#CrdtMapField"
+    },
+    "CrdtReadRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "CrdtKind",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtReadRequest.cs#CrdtReadRequest"
+    },
+    "CrdtReadResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "CounterValue",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "FlagValue",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Elements",
+          "type": "List<byte[]>",
+          "required": false
+        },
+        {
+          "name": "Vector",
+          "type": "List<CrdtVectorEntry>",
+          "required": false
+        },
+        {
+          "name": "Map",
+          "type": "List<CrdtMapField>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtReadResponse.cs#CrdtReadResponse"
+    },
+    "CrdtVectorEntry": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ReplicaId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Clock",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtVectorEntry.cs#CrdtVectorEntry"
+    },
+    "CrdtWriteOp": {
+      "kind": "enum",
+      "values": [
+        "CounterIncrement",
+        "CounterDecrement",
+        "SetAdd",
+        "SetRemove",
+        "OrFlagEnable",
+        "OrFlagDisable",
+        "RwFlagEnable",
+        "RwFlagDisable",
+        "VersionVectorTick",
+        "RegisterSet",
+        "SequenceInsertAt",
+        "SequenceRemoveAt",
+        "MapSet",
+        "MapRemove",
+        "GCounterIncrement",
+        "GSetAdd",
+        "RwSetAdd",
+        "RwSetRemove",
+        "MaxRegisterSet",
+        "MinRegisterSet"
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtWriteOp.cs#CrdtWriteOp"
+    },
+    "CrdtWriteRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Op",
+          "type": "CrdtWriteOp",
+          "required": true
+        },
+        {
+          "name": "ReplicaId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Amount",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Element",
+          "type": "byte[]",
+          "required": false
+        },
+        {
+          "name": "Field",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Index",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/CrdtWriteRequest.cs#CrdtWriteRequest"
+    },
+    "CrdtWriteResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.data.grpc/Model/CrdtWriteResponse.cs#CrdtWriteResponse"
+    },
+    "CrossTreeAtomicWriteOutcome": {
+      "kind": "enum",
+      "values": [
+        "Committed",
+        "PreconditionFailed"
+      ],
+      "source": "src/lattice/CrossTreeAtomicWriteOutcome.cs#CrossTreeAtomicWriteOutcome"
+    },
+    "DataAtomicBatch": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Upserts",
+          "type": "List<DataEntry>",
+          "required": false
+        },
+        {
+          "name": "DeleteKeys",
+          "type": "List<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataAtomicBatch.cs#DataAtomicBatch"
+    },
+    "DataAtomicRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Batch",
+          "type": "DataAtomicBatch",
+          "required": false
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataAtomicRequest.cs#DataAtomicRequest"
+    },
+    "DataAtomicResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.data.grpc/Model/DataAtomicResponse.cs#DataAtomicResponse"
+    },
+    "DataCrossTreeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Batches",
+          "type": "List<DataTreeBatch>",
+          "required": false
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataCrossTreeRequest.cs#DataCrossTreeRequest"
+    },
+    "DataCrossTreeResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Outcome",
+          "type": "CrossTreeAtomicWriteOutcome",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataCrossTreeResponse.cs#DataCrossTreeResponse"
+    },
+    "DataDeleteRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataDeleteRequest.cs#DataDeleteRequest"
+    },
+    "DataDeleteResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Removed",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataDeleteResponse.cs#DataDeleteResponse"
+    },
+    "DataEntry": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Value",
+          "type": "byte[]",
+          "required": false
+        },
+        {
+          "name": "MergeMode",
+          "type": "LatticeMergeMode?",
+          "required": false
+        },
+        {
+          "name": "Raw",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataEntry.cs#DataEntry"
+    },
+    "DataGetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataGetRequest.cs#DataGetRequest"
+    },
+    "DataRangeDeleteRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "StartInclusive",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EndExclusive",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataRangeDeleteRequest.cs#DataRangeDeleteRequest"
+    },
+    "DataRangeDeleteResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DeletedCount",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataRangeDeleteResult.cs#DataRangeDeleteResult"
+    },
+    "DataRangePage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<DataEntry>",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataRangePage.cs#DataRangePage"
+    },
+    "DataRangeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "StartInclusive",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "EndExclusive",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ContinuationToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataRangeRequest.cs#DataRangeRequest"
+    },
+    "DataReadResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Value",
+          "type": "byte[]",
+          "required": false
+        },
+        {
+          "name": "MergeMode",
+          "type": "LatticeMergeMode?",
+          "required": false
+        },
+        {
+          "name": "Raw",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataReadResult.cs#DataReadResult"
+    },
+    "DataSetManyRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Upserts",
+          "type": "List<DataEntry>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataSetManyRequest.cs#DataSetManyRequest"
+    },
+    "DataSetManyResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.data.grpc/Model/DataSetManyResponse.cs#DataSetManyResponse"
+    },
+    "DataSetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Value",
+          "type": "byte[]",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataSetRequest.cs#DataSetRequest"
+    },
+    "DataSetResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.data.grpc/Model/DataSetResponse.cs#DataSetResponse"
+    },
+    "DataTreeBatch": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Upserts",
+          "type": "List<DataEntry>",
+          "required": false
+        },
+        {
+          "name": "DeleteKeys",
+          "type": "List<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/DataTreeBatch.cs#DataTreeBatch"
+    },
+    "DenyAllDataApiAuthorizer": {
+      "kind": "class",
+      "fields": [],
+      "source": "src/lattice.api.data.grpc/Security/ILatticeDataApiAuthorizer.cs#DenyAllDataApiAuthorizer"
+    },
+    "LatticeDataApiAuthorizationContext": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Call",
+          "type": "ServerCallContext",
+          "required": true
+        },
+        {
+          "name": "Operation",
+          "type": "LatticeDataApiOperation",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Security/LatticeDataApiAuthorizationContext.cs#LatticeDataApiAuthorizationContext"
+    },
+    "LatticeDataApiGrpcOptions": {
+      "kind": "class",
+      "fields": [
+        {
+          "name": "RequireAuthorization",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CredentialHeaderName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "CredentialScheme",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ActiveTenantHeaderName",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcOptions.cs#LatticeDataApiGrpcOptions"
+    },
+    "LatticeDataApiOperation": {
+      "kind": "enum",
+      "values": [
+        "SetPoint",
+        "DeletePoint",
+        "SetManyAtomic",
+        "SetManyAtomicCrossTree",
+        "GetPoint",
+        "ReadRange",
+        "DeleteRange",
+        "Unknown",
+        "SetMany",
+        "CrdtWrite",
+        "CrdtRead"
+      ],
+      "source": "src/lattice.api.data.grpc/Security/LatticeDataApiAuthorizationContext.cs#LatticeDataApiOperation"
+    },
+    "LatticeMergeMode": {
+      "kind": "enum",
+      "values": [
+        "Lww",
+        "Crdt"
+      ],
+      "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
+    }
+  },
+  "operations": [
+    {
+      "id": "crdt-read",
+      "in_process": "ILatticeDataApi CRDT read method selected by CrdtReadRequest.Kind",
+      "grpc_method": "/orleans.lattice.api.data/CrdtRead",
+      "transport_scope": "both",
+      "request": "CrdtReadRequest",
+      "response": "CrdtReadResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unary CRDT reads use no built-in client retry policy; absent or unreadable values return the empty value for their kind.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtReadAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation reads a logical CRDT value and returns an empty value when absent or unreadable.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtReadAsync"
+      },
+      "concurrency": {
+        "rule": "CRDT read verbs resolve existing trees only and return zero, false, empty, or null values for unregistered trees without materializing one.",
+        "source": "src/lattice.api.data/LatticeDataApi.Crdt.cs#ExistingTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#CrdtRead",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#CrdtReadMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#CounterGetAsync"
+      ]
+    },
+    {
+      "id": "crdt-write",
+      "in_process": "ILatticeDataApi CRDT write method selected by CrdtWriteRequest.Op",
+      "grpc_method": "/orleans.lattice.api.data/CrdtWrite",
+      "transport_scope": "both",
+      "request": "CrdtWriteRequest",
+      "response": "CrdtWriteResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No operation id is carried; the client defines no built-in retry policy for CRDT writes.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
+      },
+      "idempotency": {
+        "status": "uncertain",
+        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
+        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
+        "issue": 3636
+      },
+      "concurrency": {
+        "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
+        "source": "src/lattice.api.data/LatticeDataApi.Crdt.cs#LatticeDataApi"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#CrdtWrite",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#CrdtWriteMethodName",
+        "src/lattice.api.data/LatticeDataApi.Crdt.cs#LatticeDataApi"
+      ]
+    },
+    {
+      "id": "delete",
+      "in_process": "ILatticeDataApi.DeleteAsync",
+      "grpc_method": "/orleans.lattice.api.data/Delete",
+      "transport_scope": "both",
+      "request": "DataDeleteRequest",
+      "response": "DataDeleteResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No operation id is carried and the client defines no built-in retry policy for point delete.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#DeleteAsync"
+      },
+      "idempotency": {
+        "status": "uncertain",
+        "reason": "Point delete has no documented idempotency key or replay contract beyond returning whether a live value existed and was removed.",
+        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
+        "issue": 3636
+      },
+      "concurrency": {
+        "rule": "Deleting from an unknown tree is a documented no-op that must still run behind the delete gate.",
+        "source": "src/lattice.api.data/LatticeDataApi.cs#DeleteAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#Delete",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#DeleteMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#DeleteAsync"
+      ]
+    },
+    {
+      "id": "delete-range",
+      "in_process": "ILatticeDataApi.DeleteRangeAsync",
+      "grpc_method": "/orleans.lattice.api.data/DeleteRange",
+      "transport_scope": "both",
+      "request": "DataRangeDeleteRequest",
+      "response": "DataRangeDeleteResult",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The facade transparently reconnects transient range-delete cursor loss; the gRPC client defines no additional retry policy.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#DeleteRangeAsync"
+      },
+      "idempotency": {
+        "status": "uncertain",
+        "reason": "Range delete has no documented caller-supplied idempotency key or replay contract.",
+        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
+        "issue": 3636
+      },
+      "concurrency": {
+        "rule": "Range delete is all-or-nothing across its span for authorization; partial authorization tombstones nothing.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#DeleteRangeAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#DeleteRange",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#DeleteRangeMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#DeleteRangeAsync"
+      ]
+    },
+    {
+      "id": "get",
+      "in_process": "ILatticeDataApi.GetAsync",
+      "grpc_method": "/orleans.lattice.api.data/Get",
+      "transport_scope": "both",
+      "request": "DataGetRequest",
+      "response": "DataReadResult",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unary point reads use no built-in client retry policy; reads of hidden, absent, or unknown entries return a miss.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#GetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is a read and an unknown tree or unreadable key reports Found=false.",
+        "source": "src/lattice.api.data/LatticeDataApi.cs#GetAsync"
+      },
+      "concurrency": {
+        "rule": "A read must never materialize a tree; an unknown tree reports a clean miss before routing to the shard root.",
+        "source": "src/lattice.api.data/LatticeDataApi.cs#GetAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#Get",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#GetMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#GetAsync"
+      ]
+    },
+    {
+      "id": "read-range",
+      "in_process": "ILatticeDataApi.ReadRangeAsync",
+      "grpc_method": "/orleans.lattice.api.data/ReadRange",
+      "transport_scope": "both",
+      "request": "DataRangeRequest",
+      "response": "DataRangePage",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unary range reads use no built-in client retry policy; invalid or expired continuation tokens map to InvalidArgument.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#ReadRangeAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation reads one page and unknown trees return an empty drained page for fresh scans.",
+        "source": "src/lattice.api.data/LatticeDataApi.cs#ReadRangeAsync"
+      },
+      "concurrency": {
+        "rule": "Range reads use a live cursor, return raw stored bytes, and close the cursor when the page drains.",
+        "source": "src/lattice.api.data/LatticeDataApi.cs#ReadRangeAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#ReadRange",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#ReadRangeMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#ReadRangeAsync"
+      ]
+    },
+    {
+      "id": "set",
+      "in_process": "ILatticeDataApi.SetAsync",
+      "grpc_method": "/orleans.lattice.api.data/Set",
+      "transport_scope": "both",
+      "request": "DataSetRequest",
+      "response": "DataSetResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "No operation id is carried and the client defines no built-in retry policy for point set.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#SetAsync"
+      },
+      "idempotency": {
+        "status": "uncertain",
+        "reason": "Point set has no documented idempotency key or replay contract at the API layer.",
+        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
+        "issue": 3636
+      },
+      "concurrency": {
+        "rule": "The operation routes through the same gated ILattice.SetAsync write path used by in-cluster clients.",
+        "source": "src/lattice.api.data/LatticeDataApi.cs#SetAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#Set",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#SetMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetAsync"
+      ]
+    },
+    {
+      "id": "set-many",
+      "in_process": "ILatticeDataApi.SetManyAsync",
+      "grpc_method": "/orleans.lattice.api.data/SetMany",
+      "transport_scope": "both",
+      "request": "DataSetManyRequest",
+      "response": "DataSetManyResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Not safe as a transparent retry: partial failure may leave some keys written and others not.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "The contract states there is no idempotency key to make a retry a safe no-op.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAsync"
+      },
+      "concurrency": {
+        "rule": "The operation is non-atomic and each shard slice commits independently with no compensating rollback.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#SetMany",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#SetManyMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAsync"
+      ]
+    },
+    {
+      "id": "set-many-atomic",
+      "in_process": "ILatticeDataApi.SetManyAtomicAsync",
+      "grpc_method": "/orleans.lattice.api.data/SetManyAtomic",
+      "transport_scope": "both",
+      "request": "DataAtomicRequest",
+      "response": "DataAtomicResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry is safe when the same non-empty operationId is reused with the same single-tree batch.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The operationId is a stable idempotency key and a key mismatch maps to FailedPrecondition.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicAsync"
+      },
+      "concurrency": {
+        "rule": "Every leg is authorized before apply; a denied leg aborts the whole batch with nothing persisted.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#SetManyAtomic",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#SetManyAtomicMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicAsync"
+      ]
+    },
+    {
+      "id": "set-many-atomic-cross-tree",
+      "in_process": "ILatticeDataApi.SetManyAtomicCrossTreeAsync",
+      "grpc_method": "/orleans.lattice.api.data/SetManyAtomicCrossTree",
+      "transport_scope": "both",
+      "request": "DataCrossTreeRequest",
+      "response": "DataCrossTreeResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry is safe when the same required operationId is reused with the same cross-tree batches.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicCrossTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The operationId is a required cross-tree idempotency key and every tree slice commits at one coordinator decision moment.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicCrossTreeAsync"
+      },
+      "concurrency": {
+        "rule": "Every leg on every participating tree is authorized before apply and a denial aborts the whole cross-tree batch.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicCrossTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#SetManyAtomicCrossTree",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#SetManyAtomicCrossTreeMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicCrossTreeAsync"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "argument-invalid",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "The request failed validation or carried an invalid continuation token.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "authorization-denied",
+      "type": "LatticeAuthorizationDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The access gate denied the requested tree, operation, subject, or key span.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#ToPermissionDenied"
+    },
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": false,
+      "meaning": "The request or authorization check was cancelled.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "crdt-shape-not-registered",
+      "type": "LatticeCrdtShapeNotRegisteredException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "A typed OR-Map verb targeted a tree without the required map shape.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "idempotency-key-mismatch",
+      "type": "LatticeIdempotencyKeyMismatchException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "An operationId was reused with a different key or tree set.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "The server logged an unexpected data-API failure and returned a generic fault.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "quota-exceeded",
+      "type": "LatticeQuotaExceededException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": true,
+      "meaning": "An admission quota or sustained request-rate budget refused the operation.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#ToResourceExhausted"
+    },
+    {
+      "id": "replication-mode-mismatch",
+      "type": "LatticeReplicationModeMismatchException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "The write shape does not match the replicated tree mode.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "reserved-tree-namespace",
+      "type": "LatticeReservedTreeNamespaceException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "The call named an internal reserved tree namespace.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "saturated",
+      "type": "LatticeSaturatedException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": true,
+      "meaning": "The tree is busy under storage back-pressure and the caller should back off.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "tenant-access-denied",
+      "type": "LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The asserted active tenant could not be attributed or used for the target tree.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "transport-authorization-denied",
+      "type": "ILatticeDataApiAuthorizer false",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The coarse gRPC authorizer denied the call before it reached the facade.",
+      "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+    }
+  ]
+}

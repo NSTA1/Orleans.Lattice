@@ -1,0 +1,145 @@
+{
+  "schema": "lattice.agents/governance-identity-propagation/v1",
+  "headers": [
+    {
+      "id": "active-tenant",
+      "name": "lattice-active-tenant",
+      "value": "tenant id",
+      "request_context_key": "ol.atid",
+      "source": "src/lattice/LatticeActiveTenantAssertion.cs"
+    },
+    {
+      "id": "authorization",
+      "name": "authorization",
+      "value": "Bearer token by default",
+      "request_context_key": "ol.cred",
+      "source": "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs"
+    }
+  ],
+  "request_context_keys": [
+    {
+      "id": "active-tenant",
+      "constant": "LatticeEventConstants.ActiveTenantRequestContextKey",
+      "value": "ol.atid",
+      "carrier": "TenantId",
+      "source": "src/lattice/BPlusTree/LatticeEventConstants.cs"
+    },
+    {
+      "id": "credential",
+      "constant": "LatticeEventConstants.CredentialRequestContextKey",
+      "value": "ol.cred",
+      "carrier": "LatticeCredential",
+      "source": "src/lattice/BPlusTree/LatticeEventConstants.cs"
+    }
+  ],
+  "flows": [
+    {
+      "id": "grpc-auth-credential",
+      "entry": "HeaderLatticeAuthApiCredentialBridge.Resolve",
+      "steps": [
+        "Read the configured gRPC metadata credential header.",
+        "Strip the configured scheme prefix when present.",
+        "Stamp LatticeCredentialContext for the facade call.",
+        "ILatticeMembershipContext resolves the current subject from LatticeCredentialContext."
+      ],
+      "sources": [
+        "src/lattice.api.auth.grpc/HeaderLatticeAuthApiCredentialBridge.cs",
+        "src/lattice.api.auth.grpc/LatticeAuthApiGrpcService.cs",
+        "src/lattice/ILatticeMembershipContext.cs",
+        "src/lattice.membership/MembershipContext.cs"
+      ]
+    },
+    {
+      "id": "grpc-tenantadmin-active-tenant",
+      "entry": "LatticeTenantAdminGrpcService.StampActiveTenant",
+      "steps": [
+        "Read the configured gRPC metadata active-tenant header.",
+        "LatticeActiveTenantAssertion validates syntax and stamps LatticeActiveTenantContext.",
+        "TenantContextResolver validates the asserted tenant against membership before it scopes a tree name."
+      ],
+      "sources": [
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs",
+        "src/lattice/LatticeActiveTenantAssertion.cs",
+        "src/lattice.tenancy/TenantContextResolver.cs"
+      ]
+    },
+    {
+      "id": "grpc-tenantadmin-credential",
+      "entry": "HeaderLatticeTenantAdminApiCredentialBridge.Resolve",
+      "steps": [
+        "Read the configured gRPC metadata credential header.",
+        "Strip the configured scheme prefix when present.",
+        "Stamp LatticeCredentialContext for the facade call.",
+        "Tenant facades authorize through ILatticeAccessGate and optional ILatticeMembershipContext."
+      ],
+      "sources": [
+        "src/lattice.api.tenantadmin.grpc/HeaderLatticeTenantAdminApiCredentialBridge.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs",
+        "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs"
+      ]
+    },
+    {
+      "id": "in-process",
+      "entry": "LatticeCredentialContext.With and LatticeActiveTenantContext.With",
+      "steps": [
+        "Caller opens an ambient credential and optional active-tenant scope.",
+        "RequestContext carries ol.cred and ol.atid on outgoing grain calls.",
+        "MembershipContext resolves a subject.",
+        "TenantContextResolver validates tenant assertions."
+      ],
+      "sources": [
+        "src/lattice/LatticeCredentialContext.cs",
+        "src/lattice/LatticeActiveTenantContext.cs",
+        "src/lattice.membership/MembershipContext.cs",
+        "src/lattice.tenancy/TenantContextResolver.cs"
+      ]
+    },
+    {
+      "id": "mcp-active-tenant",
+      "entry": "McpToolActiveTenantScope.Stamp",
+      "steps": [
+        "Resolve HttpContext from the tool invocation service provider.",
+        "HttpContextLatticeApiMcpActiveTenantBridge reads the configured active-tenant header.",
+        "Stamp LatticeActiveTenantContext for the tool invocation.",
+        "Remote heads re-emit the ambient tenant as outbound gRPC metadata according to MCP options."
+      ],
+      "sources": [
+        "src/lattice.api.mcp/Discovery/McpToolActiveTenantScope.cs",
+        "src/lattice.api.mcp/Security/HttpContextLatticeApiMcpActiveTenantBridge.cs",
+        "src/lattice.api.mcp/LatticeApiMcpOptions.cs"
+      ]
+    },
+    {
+      "id": "mcp-credential",
+      "entry": "McpToolCredentialScope.Stamp",
+      "steps": [
+        "Resolve HttpContext from the tool invocation service provider.",
+        "HttpContextLatticeApiMcpCredentialBridge requires an authenticated ASP.NET Core principal.",
+        "Read the configured credential header or use the principal id as the token for authenticated non-bearer sessions.",
+        "Stamp LatticeCredentialContext for the tool invocation."
+      ],
+      "sources": [
+        "src/lattice.api.mcp/Discovery/McpToolCredentialScope.cs",
+        "src/lattice.api.mcp/Security/HttpContextLatticeApiMcpCredentialBridge.cs"
+      ]
+    }
+  ],
+  "fail_closed": [
+    {
+      "id": "blank-credential",
+      "rule": "Missing, empty, or bare-scheme credential headers resolve to anonymous or null and downstream gates deny when authority is required.",
+      "sources": [
+        "src/lattice.api.auth.grpc/HeaderLatticeAuthApiCredentialBridge.cs",
+        "src/lattice.api.tenantadmin.grpc/HeaderLatticeTenantAdminApiCredentialBridge.cs"
+      ]
+    },
+    {
+      "id": "invalid-active-tenant",
+      "rule": "Missing, blank, or syntactically invalid active-tenant headers stamp no active tenant; unauthorized assertions validate to the uninitialized tenant and fail closed at composition or gate seams.",
+      "sources": [
+        "src/lattice/LatticeActiveTenantAssertion.cs",
+        "src/lattice.tenancy/TenantContextResolver.cs"
+      ]
+    }
+  ]
+}

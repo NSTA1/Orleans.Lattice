@@ -1,0 +1,85 @@
+schema: lattice.agents/procedure/v1
+id: wal-tuning
+name: "Tune WAL storage, saturation, and garbage collection"
+surfaces:
+  in_process:
+    api: "LatticeOptions plus ILatticeTreeAdmin.SetTreeConfigAsync and GetTreeStatsAsync"
+    source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/GetTreeStats, SetTreeConfig, AuditWalPlacement"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTreeStatsMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_stats, lattice_treeadmin_tree_set_config, lattice_treeadmin_wal_placement_audit"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: admin-for-config
+    check: "Caller has whole-tree Admin authority before changing tree config."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: options-known
+    check: "Cluster operators know the effective LatticeOptions and per-tree registry overrides."
+    source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions"
+  - id: placement-audited
+    check: "WAL provider placement resolves on every silo before storage placement changes."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
+steps:
+  - n: 1
+    action: "Read tree storage stats and retained WAL bytes."
+    api: "ILatticeTreeAdmin.GetTreeStatsAsync / GetTreeStats"
+    expects: "Returns WAL retained bytes in the storage byte breakdown."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeStatsAsync"
+  - n: 2
+    action: "Audit WAL placement before relying on provider keys."
+    api: "ILatticeTreeAdmin.AuditWalPlacementAsync / AuditWalPlacement"
+    expects: "Surfaces unresolved provider keys and known provider keys."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
+  - n: 3
+    action: "Set the per-tree advisory WAL retained-byte ceiling when needed."
+    api: "ILatticeTreeAdmin.SetTreeConfigAsync / SetTreeConfig"
+    expects: "Applies WalMaxRetainedBytes only when its apply flag is set."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - n: 4
+    action: "Tune host-level WAL partitions, GC, and saturation knobs through options."
+    api: "LatticeOptions and WalSaturationReceiverFlowControlOptions"
+    expects: "Host configuration changes take effect when the host applies the options."
+    source: "src/lattice.replication/WalSaturationReceiverFlowControlOptions.cs#WalSaturationReceiverFlowControlOptions"
+postconditions:
+  - check: "The WAL retained-byte ceiling is advisory and never changes what a WAL garbage-collection pass may trim."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "Lowering the advisory ceiling takes effect on the tree's next pass."
+    source: "docs/lattice.api.treeadmin/README.md"
+failure_modes:
+  - id: ceiling-nonpositive
+    signal: "SetTreeConfig rejects a supplied WAL ceiling that is not strictly positive."
+    effect: "Config is not applied."
+    response: "Use a positive byte value or clear the override."
+  - id: saturation
+    signal: "Saturation signal indicates receiver flow control or storage pressure."
+    effect: "Replication or apply throughput may be throttled."
+    response: "Treat it as a scaling or WAL placement investigation signal."
+  - id: unresolved-provider
+    signal: "Audit reports a provider key this silo cannot resolve."
+    effect: "WAL shards using that key fail closed."
+    response: "Fix provider registration before moving or relying on placement."
+rollback:
+  supported: true
+  mechanism: "Restore previous host option values and previous per-tree WalMaxRetainedBytes; already-trimmed WAL cannot be untrimmed."
+  steps:
+    - action: "Reapply the previous per-tree WAL retained-byte ceiling or clear it."
+      api: "ILatticeTreeAdmin.SetTreeConfigAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync"
+    - action: "Redeploy previous host LatticeOptions values."
+      api: "ISiloBuilder.ConfigureLattice"
+      source: "src/lattice/LatticeServiceCollectionExtensions.cs#ConfigureLattice"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync"
+concurrency:
+  - rule: "WAL polling uses a cheap WAL-only fan-out and must not be confused with deep storage refresh."
+    source: "src/lattice/ILatticeAdmin.cs#PollWalUsageAsync"
+  - rule: "Storage usage fan-out is bounded by LatticeOptions concurrency limits."
+    source: "src/lattice/ILatticeAdmin.cs#GetTotalStorageUsageAsync"
+sources:
+  - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.replication/WalSaturationReceiverFlowControlOptions.cs"
+  - "docs/lattice/wal-tuning.md"
+  - "docs/lattice/wal-saturation-signal.md"
+  - "docs/lattice/wal.md"
