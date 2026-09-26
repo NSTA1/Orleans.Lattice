@@ -65,7 +65,7 @@ sequenceDiagram
     C->>R: Unregister keepalive reminder
 ```
 
-The reminder is registered lazily, on the first write the tree accepts through the public surface - a set, delete, range delete, batch or conditional write, or CRDT delta - and at most once per activation of the tree's grain. A write that lands while the Orleans reminder service is still initialising after silo start defers the registration to a later write instead of failing, and a tree whose `TombstoneGracePeriod` is `Timeout.InfiniteTimeSpan` never registers one.
+The reminder is registered lazily, on the first write the tree accepts through the public surface - a set, delete, range delete, batch or conditional write, or CRDT delta. The tree's grain is a stateless worker, so each worker activation asks once, on its first write. The reminder is registered only when it is absent: a later ask - from a new worker after a silo restart, an idle gap or a load spike, or from tree recovery or a snapshot restore - never moves an existing schedule (issue #3592). A changed `TombstoneGracePeriod` is applied by the next tick, which re-registers the reminder under the new period. A write that lands while the Orleans reminder service is still initialising after silo start defers the registration to a later write instead of failing, and a tree whose `TombstoneGracePeriod` is `Timeout.InfiniteTimeSpan` never registers one.
 
 The compaction coordinator is not part of the public API, and it handles the reminder tick itself. For on-demand compaction, call [`ILattice.CompactShardAsync`](#operator-api), which schedules an out-of-cycle pass scoped to one shard.
 
