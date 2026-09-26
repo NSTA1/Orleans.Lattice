@@ -43,6 +43,66 @@ public sealed class AddTelemetryToolsTests
     }
 
     [Test]
+    public void AddTelemetryTools_registers_the_access_authorizer()
+    {
+        // The handlers consult the authorizer at call time, and the MCP tool SDK
+        // marks a handler parameter DI-injected (and so schema-excluded) only when
+        // IServiceProviderIsService recognises it. Were this registration absent,
+        // the capability gate would resolve nothing and the parameter would surface
+        // as a caller-supplied tool argument.
+        var services = new ServiceCollection();
+        services.AddTelemetryTools(ConfigureValid);
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetService<TelemetryAccessAuthorizer>(), Is.Not.Null);
+            Assert.That(
+                provider.GetRequiredService<IServiceProviderIsService>()
+                    .IsService(typeof(TelemetryAccessAuthorizer)),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void AddTelemetryTools_registers_a_single_access_authorizer()
+    {
+        var services = new ServiceCollection();
+        services.AddTelemetryTools(ConfigureValid);
+        services.AddTelemetryTools(ConfigureValid);
+
+        var registrations = services.Count(d => d.ServiceType == typeof(TelemetryAccessAuthorizer));
+        Assert.That(registrations, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void AddTelemetryTools_excludes_the_access_authorizer_from_every_tool_schema()
+    {
+        var services = new ServiceCollection();
+        services.AddTelemetryTools(ConfigureValid);
+
+        using var provider = services.BuildServiceProvider();
+        var group = (TelemetryToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+
+        Assert.Multiple(() =>
+        {
+            foreach (var tool in group.Tools)
+            {
+                var schema = tool.ProtocolTool.InputSchema;
+                var hasAccess = schema.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && schema.TryGetProperty("properties", out var props)
+                    && props.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && props.EnumerateObject().Any(p =>
+                        string.Equals(p.Name, "access", StringComparison.OrdinalIgnoreCase));
+
+                Assert.That(hasAccess, Is.False,
+                    $"{tool.ProtocolTool.Name} must not expose the access authorizer as an argument.");
+            }
+        });
+    }
+
+    [Test]
     public void AddTelemetryTools_is_idempotent_for_the_tool_group()
     {
         var services = new ServiceCollection();

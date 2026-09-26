@@ -10,8 +10,8 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
 /// Tests for <see cref="TelemetryToolGroup"/>: it serves the telemetry group,
 /// contributes the four read-only <c>lattice_telemetry_*</c> tools built once,
 /// annotates every tool read-only and non-destructive, and excludes its
-/// DI-injected collaborators (the backend client, metric-access policy, options,
-/// and cancellation token) from every tool's input schema.
+/// DI-injected collaborators (the backend client, metric-access policy, access
+/// authorizer, options, and cancellation token) from every tool's input schema.
 /// </summary>
 [TestFixture]
 public sealed class TelemetryToolGroupTests
@@ -33,6 +33,7 @@ public sealed class TelemetryToolGroupTests
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IPrometheusQueryClient>());
         services.AddSingleton(new TelemetryMetricAccessPolicy(options));
+        services.AddSingleton(new TelemetryAccessAuthorizer());
         services.AddSingleton<IOptions<LatticeApiMcpTelemetryOptions>>(Options.Create(options));
         return new TelemetryToolGroup(services.BuildServiceProvider());
     }
@@ -102,6 +103,9 @@ public sealed class TelemetryToolGroupTests
                     $"{tool.ProtocolTool.Name} must resolve the backend client from DI.");
                 Assert.That(names, Does.Not.Contain("policy"),
                     $"{tool.ProtocolTool.Name} must resolve the metric-access policy from DI.");
+                Assert.That(names, Does.Not.Contain("access"),
+                    $"{tool.ProtocolTool.Name} must resolve the access authorizer from DI - a "
+                    + "caller-supplied authorizer argument would be an authorization bypass.");
                 Assert.That(names, Does.Not.Contain("options"),
                     $"{tool.ProtocolTool.Name} must resolve its options from DI.");
                 Assert.That(names, Does.Not.Contain("cancellationToken"),

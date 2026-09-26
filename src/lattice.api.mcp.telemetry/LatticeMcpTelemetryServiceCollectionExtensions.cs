@@ -28,7 +28,11 @@ public static class LatticeMcpTelemetryServiceCollectionExtensions
     /// from the transport-neutral <c>Orleans.Lattice.Api.Telemetry</c> package
     /// through
     /// <see cref="LatticeApiTelemetryServiceCollectionExtensions.AddLatticeTelemetryBackend"/>,
-    /// so this binding contributes only the MCP tool surface over them. The proxy
+    /// so this binding contributes only the MCP tool surface over them. It also
+    /// registers that package's <see cref="TelemetryAccessAuthorizer"/>, because the
+    /// tools enforce the cluster-wide <c>LatticeOperation.Telemetry</c> capability
+    /// at call time and must do so whether or not the host also opted into the
+    /// transport-neutral facade. The proxy
     /// stamps the configured <b>backend</b> credential (bearer, basic, dynamic
     /// bearer, or mutual-TLS) selected by
     /// <see cref="LatticeTelemetryOptions.AuthMode"/> and never forwards the
@@ -63,6 +67,18 @@ public static class LatticeMcpTelemetryServiceCollectionExtensions
                 provider.GetRequiredService<IOptions<LatticeApiMcpTelemetryOptions>>().Value));
 
         services.AddLatticeTelemetryBackend();
+
+        // The call-time capability seam every handler consults. It is registered
+        // here rather than inherited from AddLatticeTelemetryApi because that is a
+        // different, independent opt-in: a host may register the MCP tools without
+        // the transport-neutral facade, and the tools must be gated either way.
+        // TryAddSingleton so a host that opted into both gets exactly one.
+        // Registering it also makes IServiceProviderIsService recognise the type,
+        // which is what keeps the handler parameter excluded from each tool's
+        // input schema instead of surfacing as a caller-supplied argument.
+        services.TryAddSingleton(static provider => new TelemetryAccessAuthorizer(
+            provider.GetService<ILatticeAccessGate>(),
+            provider.GetService<ILatticeMembershipContext>()));
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup, TelemetryToolGroup>());
