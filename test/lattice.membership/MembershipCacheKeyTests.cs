@@ -136,6 +136,97 @@ public class MembershipCacheKeyTests
     }
 
     [Test]
+    public void For_projects_every_credential_field_onto_the_key_it_is_read_from()
+    {
+        // The tests above assert only that two keys DIFFER. Discrimination is
+        // necessary but not sufficient: a key that hashed the whole credential
+        // into one opaque field would satisfy every one of them while losing
+        // the property this type exists for, which is that each field is
+        // carried separately so no two can be spliced together. Reading the
+        // accessors back is what pins the projection itself.
+        var metadata = new Dictionary<string, string> { ["tid"] = "t1" };
+        var key = MembershipCacheKey.For(new LatticeCredential(Token, "issuer-a", "alice", metadata));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(key.Token, Is.EqualTo(Token));
+            Assert.That(key.Scheme, Is.EqualTo("issuer-a"));
+            Assert.That(key.PrincipalId, Is.EqualTo("alice"));
+            Assert.That(key.MetadataDigest, Is.Not.Null.And.Not.Empty);
+        });
+    }
+
+    [Test]
+    public void For_carries_the_credentials_absent_fields_through_as_null()
+    {
+        // A credential carrying only a token must leave the other three fields
+        // null rather than defaulting them to empty strings, because an empty
+        // string is a value a caller can actually supply and the two must not
+        // collide.
+        var key = MembershipCacheKey.For(new LatticeCredential(Token));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(key.Token, Is.EqualTo(Token));
+            Assert.That(key.Scheme, Is.Null);
+            Assert.That(key.PrincipalId, Is.Null);
+            Assert.That(key.MetadataDigest, Is.Null, "an absent bag must not digest to a value");
+        });
+    }
+
+    [Test]
+    public void ForToken_carries_only_the_token()
+    {
+        var key = MembershipCacheKey.ForToken(Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(key.Token, Is.EqualTo(Token));
+            Assert.That(key.Scheme, Is.Null);
+            Assert.That(key.PrincipalId, Is.Null);
+            Assert.That(key.MetadataDigest, Is.Null);
+        });
+    }
+
+    [Test]
+    public void An_empty_metadata_bag_digests_to_an_empty_string_and_not_to_null()
+    {
+        // The distinction the equality test asserts indirectly, stated directly
+        // on the field that carries it: null means "no bag", empty means "a bag
+        // with nothing in it", and a digest that collapsed the two would make
+        // the two credentials share a cache entry.
+        var empty = MembershipCacheKey.For(
+            new LatticeCredential(Token, metadata: new Dictionary<string, string>()));
+
+        Assert.That(empty.MetadataDigest, Is.Empty);
+    }
+
+    [Test]
+    public void A_populated_metadata_bag_digests_to_a_fixed_width_hex_string()
+    {
+        // The bag is caller-supplied and unbounded, so the key must not grow
+        // with it. A digest that ever varied in width would mean the raw bag
+        // had leaked into the key.
+        var small = MembershipCacheKey.For(
+            new LatticeCredential(Token, metadata: new Dictionary<string, string> { ["a"] = "1" }));
+
+        var large = new Dictionary<string, string>();
+        for (var i = 0; i < 200; i++)
+        {
+            large[$"key-{i}"] = new string('v', 64);
+        }
+
+        var wide = MembershipCacheKey.For(new LatticeCredential(Token, metadata: large));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(small.MetadataDigest, Has.Length.EqualTo(64), "SHA-256 renders as 64 hex characters");
+            Assert.That(wide.MetadataDigest, Has.Length.EqualTo(64), "the key must not grow with the bag");
+            Assert.That(wide.MetadataDigest, Is.Not.EqualTo(small.MetadataDigest));
+        });
+    }
+
+    [Test]
     public async Task ResolveAsync_does_not_serve_a_subject_across_credentials_that_share_a_token()
     {
         var options = new LatticeMembershipOptions { ResolutionCacheTtl = TimeSpan.FromMinutes(5) };
