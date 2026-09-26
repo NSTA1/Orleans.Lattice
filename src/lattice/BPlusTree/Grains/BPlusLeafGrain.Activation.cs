@@ -6550,7 +6550,14 @@ internal sealed partial class BPlusLeafGrain
                         : entry.Offset <= maxApplied)
                     _warmCacheReplayFailed = true;
 
-                if (replayOwnership.ShouldApply(entry.Mutation))
+                // Issue #3601. A DeleteRange disjoint from this leaf's range is
+                // consumed here, exactly like a sibling's Set: no deferral, no
+                // ledger slot, no apply, and the scanned-through advance at the
+                // foot of the loop carries the checkpoint past it. Deferring it
+                // spent a durable ledger slot per range the leaf can never own
+                // and, once the ledger filled, armed the flush clamp.
+                if (replayOwnership.ShouldApply(entry.Mutation)
+                    && !replayOwnership.IsDisjointRangeDelete(entry.Mutation))
                 {
                     // This entry is this leaf's own work: it either goes
                     // through ILeafProjection.Apply now, or is deferred to
@@ -7152,7 +7159,10 @@ internal sealed partial class BPlusLeafGrain
     ///     unconditionally. <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>'s replay
     ///     handler iterates this leaf's own entries only, so the call
     ///     is naturally a no-op on leaves that own no keys in the
-    ///     range.
+    ///     range. Replay nonetheless consumes a range disjoint from the
+    ///     leaf's bounds before it reaches the deferral decision (see
+    ///     <see cref="LeafReplayOwnership.IsDisjointRangeDelete"/>, issue
+    ///     #3601), so it never occupies a durable unresolved-work slot.
     /// </para>
     /// <para>
     ///     <see cref="MutationKind.TxCommit"/> /

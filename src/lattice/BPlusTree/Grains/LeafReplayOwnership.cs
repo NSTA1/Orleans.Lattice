@@ -74,4 +74,45 @@ internal readonly struct LeafReplayOwnership
     public bool ShouldApply(in LatticeMutation mutation) =>
         BPlusLeafGrain.ShouldApplyDuringReplay(
             mutation, _shardIndex, _lowKeyInclusive, _highKeyExclusive, _shardMap);
+
+    /// <summary>
+    /// Whether <paramref name="mutation"/> is a <see cref="MutationKind.DeleteRange"/>
+    /// whose <c>[start, end)</c> cannot intersect the captured
+    /// <c>[low, high)</c> key range (issue #3601). Such a range delete is a
+    /// no-op on this leaf by construction: the judge drops every Set outside
+    /// the range, so no key the delete could tombstone is ever replayed into
+    /// the cache. Replay therefore consumes it without deferring, recording, or
+    /// applying it, instead of spending a durable unresolved-work ledger slot
+    /// (or, at the cap, arming the in-memory flush clamp) on a range the leaf
+    /// can never own. Tests key-range overlap only; the shard axis and saga
+    /// terminals are untouched.
+    /// </summary>
+    public bool IsDisjointRangeDelete(in LatticeMutation mutation) =>
+        mutation.Kind == MutationKind.DeleteRange
+        && !RangeOverlaps(mutation.Key, mutation.EndExclusiveKey, _lowKeyInclusive, _highKeyExclusive);
+
+    /// <summary>
+    /// Whether the half-open ranges <c>[<paramref name="startInclusive"/>, <paramref name="endExclusive"/>)</c>
+    /// and <c>[<paramref name="lowInclusive"/>, <paramref name="highExclusive"/>)</c>
+    /// share at least one key under ordinal ordering. A <see langword="null"/>
+    /// bound is unbounded on that side, so a <see langword="null"/>
+    /// <paramref name="endExclusive"/> is treated conservatively as overlapping
+    /// everything above <paramref name="startInclusive"/>.
+    /// </summary>
+    internal static bool RangeOverlaps(
+        string startInclusive,
+        string? endExclusive,
+        string? lowInclusive,
+        string? highExclusive)
+    {
+        var lower = lowInclusive is null || string.CompareOrdinal(startInclusive, lowInclusive) >= 0
+            ? startInclusive
+            : lowInclusive;
+        var upper = endExclusive is null
+            ? highExclusive
+            : highExclusive is null || string.CompareOrdinal(endExclusive, highExclusive) <= 0
+                ? endExclusive
+                : highExclusive;
+        return upper is null || string.CompareOrdinal(lower, upper) < 0;
+    }
 }
