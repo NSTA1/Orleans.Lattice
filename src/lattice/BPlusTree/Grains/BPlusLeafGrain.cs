@@ -164,9 +164,10 @@ internal sealed partial class BPlusLeafGrain(
             // by the teardown persist's tail (see
             // FlushPendingCheckpointOnDeactivateAsync), so it no longer depends
             // on the trailing frontier-pin barrier surviving to run. The tail
-            // publishes AFTER its snapshot recheck (issue #3599), so a capture
-            // the recheck lands is reflected in that pin rather than in the
-            // pre-capture coverage.
+            // publishes before its snapshot recheck and republishes after it
+            // when a capture landed (issue #3599), so a recheck that overruns
+            // cannot cost the pin and a capture it lands is reflected in the
+            // pin rather than left at the pre-capture coverage.
             await RunBarrierAsync(
                 LatticeMetrics.DeactivationBarrierCheckpointFlush,
                 async ct => await FlushPendingCheckpointOnDeactivateAsync(ct));

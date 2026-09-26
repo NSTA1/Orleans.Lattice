@@ -780,11 +780,12 @@ The capture path is **leaf-driven**, not maintenance-driven:
   partition that no snapshot covers yet, before it publishes its final
   durable pin, so a short-lived activation that never reached the
   periodic cadence still leaves coverage behind.
-- A checkpoint persist, including the final one of a graceful
-  deactivation, publishes the durable pin only after its own snapshot
-  recheck, so a capture it made reaches the pin at once instead of being
-  left to the later `frontier_pin` barrier, which a deactivation deadline
-  can skip. The coverage-lag check also republishes a pin that has fallen
+- A checkpoint persist whose snapshot recheck lands a capture publishes
+  the durable pin again after that recheck, so the capture reaches the pin
+  at once instead of being left to the later `frontier_pin` barrier, which
+  a deactivation deadline can skip. The final persist of a graceful
+  deactivation also publishes its pin before the recheck, so a recheck
+  that overruns the deadline cannot cost the pin. The coverage-lag check also republishes a pin that has fallen
   below `min(persisted checkpoint, coverage)`, and the WAL GC's
   blocked-leaf sweep asks a floor-holding leaf for the same step before it
   spends a replay permit on a drive. That step takes no replay permit and

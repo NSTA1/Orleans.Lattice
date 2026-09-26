@@ -288,6 +288,62 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
+    /// Test (vi), the teardown recheck overruns and then throws. The tail must
+    /// already have published <c>min(persisted 3, existing coverage 0)</c>
+    /// BEFORE the recheck's capture was entered (issue #3393's ordering), so a
+    /// recheck that overruns the drain deadline cannot cost the pin; and since
+    /// the capture is not kept, nothing may later publish above coverage 0.
+    /// </summary>
+    [Test]
+    public async Task OnDeactivateAsync_teardown_tail_publishes_before_a_recheck_that_overruns_and_throws()
+    {
+        var (leaf, _) = await ActivatePinBankLeafAsync(reclassifyEveryNCheckpoints: 1);
+
+        var captureEntered = new TaskCompletionSource<long[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCapture = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        leaf.Snapshot.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+            .Returns<Task<LeafSnapshotSaveOutcome>>(async _ =>
+            {
+                attempts++;
+                captureEntered.TrySetResult(leaf.Batched
+                    .Where(p => p.PersistedCheckpoint == 3L)
+                    .Select(p => p.PublishedOffset)
+                    .ToArray());
+                await releaseCapture.Task;
+                throw new InvalidOperationException("snapshot store overran the deadline");
+            });
+        leaf.Published.Clear();
+        leaf.Calls.Clear();
+
+        var deactivation = DeactivateFinalAdvanceLeafAsync(leaf, CancellationToken.None);
+        var publishedBeforeCapture = await captureEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        releaseCapture.SetResult();
+        await deactivation;
+
+        leaf.State.ThrowOnStateAccess = null;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaf.State.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
+                "control: the teardown persist committed the final advance.");
+            Assert.That(attempts, Is.GreaterThan(0),
+                "control: the teardown recheck attempted its capture.");
+            Assert.That(leaf.Grain.DurableSnapshotCoverageForPartition(0), Is.EqualTo(0L),
+                "control: the capture was not kept, so coverage stayed at 0.");
+            Assert.That(publishedBeforeCapture, Is.Not.Empty,
+                "THE assertion: the final advance's pin was already published when the recheck's capture "
+                    + "was entered, so an overrunning recheck cannot cost the teardown its pin.");
+            Assert.That(publishedBeforeCapture, Is.All.EqualTo(0L),
+                "and it was published at min(persisted 3, existing coverage 0).");
+            Assert.That(leaf.Batched.Select(p => p.PublishedOffset), Is.All.LessThanOrEqualTo(0L),
+                "SAFETY: a capture that was not kept may never raise the pin above the existing coverage.");
+            Assert.That(leaf.Mirrored.Select(p => p.PublishedOffset), Is.All.LessThanOrEqualTo(0L),
+                "and the debounced mirror is held to the same clamp.");
+        });
+    }
+
+    /// <summary>
     /// A leaf with no tree id bound has nothing to bank: the call must return
     /// without touching the reporter or the snapshot store.
     /// </summary>

@@ -611,15 +611,17 @@ internal sealed partial class BPlusLeafGrain
     /// deactivation, and the pin grain's own batching is untouched.
     /// </para>
     /// <para>
-    /// <b>The publish follows the snapshot recheck, never precedes it</b>
-    /// (issue #3599), mirroring the starvation drive's tail. Because the pin is
-    /// clamped by durable coverage and coverage is restamped only by a capture
-    /// the store kept, publishing before the recheck clamped the final pin at
-    /// the pre-capture coverage and left the post-capture value to the
-    /// <c>frontier_pin</c> barrier, which a drain deadline most often skips. The
-    /// clamp itself is unchanged: when the recheck captures nothing, throws, or
-    /// has its save declined, the publish carries
-    /// <c>min(persisted, existing coverage)</c> and never more.
+    /// <b>The pin is published before the snapshot recheck and again after it
+    /// when a capture landed</b> (issue #3599). The first publish is #3393's:
+    /// it precedes the recheck so a recheck that overruns the drain deadline or
+    /// throws can never cost the teardown its pin. Because the pin is clamped
+    /// by durable coverage and coverage is restamped only by a capture the store
+    /// kept, that first publish carries the pre-capture coverage; when the
+    /// recheck's capture is kept (the kept revision moved, the same gate the
+    /// ordinary tail uses) the pin is republished at the post-capture coverage
+    /// rather than left to the <c>frontier_pin</c> barrier, which a drain
+    /// deadline most often skips. The clamp itself is unchanged: each publish
+    /// carries <c>min(persisted, coverage at publish time)</c> and never more.
     /// </para>
     /// <para>
     /// <b>The inline upward digest publish is deferred</b>, not dropped: it is
@@ -647,6 +649,14 @@ internal sealed partial class BPlusLeafGrain
     {
         _deactivationInlineDigestDeferred = true;
 
+        // Issue #3393: the final advance's pin is published FIRST, ahead of the
+        // recheck, so a recheck that overruns the drain deadline or throws can
+        // never cost the teardown its pin. It resolves per partition to
+        // min(persisted, existing coverage).
+        await PublishDeactivationDurablePinAsync(afterRecheck: false, cancellationToken);
+
+
+        var keptRevisionBeforeRecheck = _snapshotKeptRevision;
         try
         {
             await MaybeRunPeriodicSnapshotRecheckAsync(fromCheckpointPersist: true);
@@ -657,37 +667,22 @@ internal sealed partial class BPlusLeafGrain
             ResolveLogger()?.LogWarning(
                 ex,
                 "Leaf {GrainId}: periodic snapshot recheck failed after the final checkpoint flush of a "
-                + "graceful deactivation; the checkpoint is persisted, its durable pin is still published at "
+                + "graceful deactivation; the checkpoint is persisted, its durable pin was already published at "
                 + "the existing coverage, and the deactivation snapshot capture still runs (#2220, #3599).",
                 context.GrainId);
         }
 
-        try
+        // Issue #3599: a capture the store kept during the recheck restamped
+        // coverage, so the pin published above is clamped at the PRE-capture
+        // coverage. Republish now rather than leave the post-capture value to
+        // the frontier_pin barrier, the step a drain deadline most often skips.
+        // Gated on the kept revision exactly as the ordinary tail is, so a
+        // recheck that captured nothing, failed, or had its save declined costs
+        // no second round trip, and the clamp is never loosened.
+        if (_snapshotKeptRevision != keptRevisionBeforeRecheck)
         {
-            // Issue #3599: published AFTER the recheck above, never before it,
-            // mirroring the starvation drive's tail. The pin resolves per
-            // partition to min(persisted, durable coverage), and coverage is
-            // restamped only by a capture the store kept, so publishing first
-            // clamped the final pin at the PRE-capture coverage and left the
-            // post-capture value to the frontier_pin barrier - the step a drain
-            // deadline most often skips. If the recheck captured nothing, or its
-            // capture failed or was declined by the store, this still publishes
-            // min(persisted, existing coverage): the clamp is never loosened.
-            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+            await PublishDeactivationDurablePinAsync(afterRecheck: true, cancellationToken);
 
-            // The first-real-frontier batched flush the cursor report would
-            // otherwise perform has just happened.
-            _durableFrontierBarriered = true;
-        }
-        catch (Exception ex)
-        {
-            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailCursorReport);
-            ResolveLogger()?.LogWarning(
-                ex,
-                "Leaf {GrainId}: publishing the durable pin for the final checkpoint of a graceful "
-                + "deactivation failed; the checkpoint is persisted and the frontier-pin barrier retries the "
-                + "publish (#3393).",
-                context.GrainId);
         }
 
         try
@@ -702,6 +697,50 @@ internal sealed partial class BPlusLeafGrain
                 "Leaf {GrainId}: cursor report failed after the final checkpoint flush of a graceful "
                 + "deactivation; the checkpoint is persisted and its durable pin was already published (#3393).",
                 context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// Publishes the durable pin from <see cref="CompleteDeactivationCheckpointFlushTailAsync"/>
+    /// through the batched, awaited <see cref="FlushDurableMaterialiserFrontierAsync"/>,
+    /// and never throws.
+    /// </summary>
+    /// <param name="afterRecheck">
+    /// <see langword="false"/> for the #3393 publish that precedes the recheck;
+    /// <see langword="true"/> for the #3599 republish after a capture the store kept.
+    /// </param>
+    /// <param name="cancellationToken">The deactivation deadline.</param>
+    private async Task PublishDeactivationDurablePinAsync(bool afterRecheck, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+
+            // The first-real-frontier batched flush the cursor report would
+            // otherwise perform has just happened.
+            _durableFrontierBarriered = true;
+        }
+        catch (Exception ex)
+        {
+            RecordCheckpointFlushTailFailure(LatticeMetrics.CheckpointFlushTailCursorReport);
+            if (afterRecheck)
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Leaf {GrainId}: republishing the durable pin after the final snapshot recheck of a "
+                    + "graceful deactivation failed; the pre-capture pin is already published and the "
+                    + "frontier-pin barrier retries the publish (#3599).",
+                    context.GrainId);
+            }
+            else
+            {
+                ResolveLogger()?.LogWarning(
+                    ex,
+                    "Leaf {GrainId}: publishing the durable pin for the final checkpoint of a graceful "
+                    + "deactivation failed; the checkpoint is persisted and the frontier-pin barrier retries the "
+                    + "publish (#3393).",
+                    context.GrainId);
+            }
         }
     }
 
