@@ -127,8 +127,8 @@ each modelling a distinct real-world failure class:
 | Tier | Models | Toggle |
 |---:|---|---|
 | 1 | Site unavailable / WAN latency | `IsPaused`, `DelayMs` on `IProcessSiteGrain` |
-| 2 | Per-backend storage jitter, transient failure, write amplification | `IBackendChaosGrain` wrapping one backend |
-| 3 | Cross-site out-of-order arrival after a pause lifts | `ReorderEnabled` on `IProcessSiteGrain` |
+| 2 | Per-backend storage jitter, transient failure, write amplification, ingress reordering | `IBackendChaosGrain` wrapping one backend |
+| 3 | Cross-site out-of-order arrival (the site grain releases admitted facts four at a time, shuffled) | `ReorderEnabled` on `IProcessSiteGrain` |
 | 4 | Simulated intra-cluster silo partition | `IPartitionChaosGrain` + router hash filter |
 | 4b | App-level cross-cluster replication pause | `IReplicationDisconnectGrain` |
 | 5 | Genuine cross-cluster transport partition | `docker network disconnect` against the peer Traefik |

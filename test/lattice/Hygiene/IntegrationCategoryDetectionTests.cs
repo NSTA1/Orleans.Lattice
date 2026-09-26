@@ -215,9 +215,9 @@ public sealed class IntegrationCategoryDetectionTests
 
     /// <summary>
     /// Regression for a measured false positive.
-    /// <c>DocsSnippetCompilationTestsBase</c> writes <c>typeof(IHost)</c> to
+    /// <c>DocsSnippetCompilationTestsBase</c> writes <c>typeof(WebApplication)</c> to
     /// locate the ASP.NET shared framework for its metadata reference set,
-    /// which emits <c>ldtoken IHost</c>. An earlier revision of the IL pass
+    /// which emits <c>ldtoken WebApplication</c>. An earlier revision of the IL pass
     /// read <c>InlineTok</c> operands and duly reported a Roslyn compilation
     /// fixture as a cluster fixture. Naming a type is not building one.
     /// </summary>

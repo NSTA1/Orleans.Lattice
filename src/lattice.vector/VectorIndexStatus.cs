@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Vector;
 /// </summary>
 /// <param name="State">Whether the index is empty, still building its partitioning, or ready.</param>
 /// <param name="Count">The number of live vectors the index holds.</param>
-/// <param name="Capacity">The number of vector slots currently allocated in the contiguous backing block.</param>
+/// <param name="Capacity">The number of vector slots currently allocated across the index's per-cell storage.</param>
 /// <param name="Dimensions">The fixed dimensionality every vector in the index has.</param>
 /// <param name="Metric">The similarity kernel the index ranks by.</param>
 /// <param name="PartitionCount">The number of trained partitions, or <c>0</c> when the index is untrained.</param>

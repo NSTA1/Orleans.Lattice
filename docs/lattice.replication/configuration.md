@@ -165,11 +165,11 @@ The local cluster id stamped onto authored mutations and used for cycle-breaking
 
 ### `ReplicatedTrees`
 
-Per-tree opt-in map from tree id to merge mode. A tree absent from the map does not replicate. See [Replication Modes](replication-modes.md) for mode selection.
+Per-tree opt-in map from tree id to merge mode. A tree absent from the map does not replicate unless runtime replication config is enabled (`AddLatticeReplication(..., enableRuntimeConfig: true)`), in which case a tree enabled at runtime replicates too - see [Runtime Replication Config](runtime-config.md). See [Replication Modes](replication-modes.md) for mode selection.
 
 ### `KeyFilter`
 
-Optional producer-side predicate. Use it when the replicated subset cannot be described by prefixes. It runs before shipping, so filtered keys never leave the source cluster.
+Optional producer-side predicate. Use it when the replicated subset cannot be described by prefixes. The shipper applies it (and `KeyPrefixes`) before shipping, so a filtered key is never shipped incrementally. Snapshot exports and the opt-in anti-entropy repair paths do not apply it, so a peer that bootstraps from this cluster still receives filtered keys - do not treat it as a data-residency boundary.
 
 ### `KeyPrefixes`
 
@@ -215,7 +215,7 @@ Byte cap for the causal buffer. This bounds receiver memory when dependencies la
 
 ### `ShadowForwardDedupeCacheSize`
 
-Dedup cache for structural shadow-forward entries. Increase if topology maintenance creates many recent duplicate forwards.
+Capacity of the per-tree recent-apply cache that suppresses a repeated `(origin, hlc, key, op)` point write on the receiver - a structural shadow-forward duplicate or any other re-delivery. A repeat that has aged out of the cache still applies idempotently at the leaf, so raising it trades memory for fewer leaf round trips on duplicates. Must be `>= 64`.
 
 ### `ApplyMaxParallelRuns`
 
@@ -251,7 +251,7 @@ Escape hatch (default `false`) that permits `WalRetention` on a replicated tree 
 
 ### `AutoBootstrapOnFallOffLog`
 
-When enabled, a peer that falls behind retained WAL is re-seeded automatically from a snapshot. See [Auto-Bootstrap](auto-bootstrap.md).
+When enabled, a fall-off detection makes this cluster re-seed the tree from a snapshot of the lagging source cluster automatically; when disabled the detection is still counted on `peer.fell_off_log`. See [Auto-Bootstrap](auto-bootstrap.md), and [`WalRetention`](#walretention) for the cross-cluster trim gap the built-in check cannot see.
 
 ### `OperatorReseedMinInterval`
 
@@ -375,7 +375,7 @@ Algorithm tag stamped into the framing header. Default `Zstd` (dict-less Zstanda
 
 ### `FramingCompressionLevel`
 
-Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `ZstdDictionary`; ignored otherwise. Default `3`.
+Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `ZstdDictionary`; default `3`. The compressors do not read it: the dict-less Zstd compressor `AddLatticeReplication` registers is built at the fixed default level `3`, and the dictionary compressor takes its level from `AddLatticeZstdDictionaryCompressor`, so changing this option alone does not change the compression level. To use a different level, register your own `ILatticeCompressor` built with that level before calling `AddLatticeReplication`.
 
 ### `MaxInboundDecompressedBytes`
 

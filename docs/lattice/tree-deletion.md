@@ -11,6 +11,8 @@ await tree.DeleteTreeAsync();
 
 After deletion, any attempt to read from or write to the tree throws `InvalidOperationException` with the message *"This tree has been deleted and is no longer accessible."*
 
+`DeleteTreeAsync`, `RecoverTreeAsync`, and `PurgeTreeAsync` are whole-tree lifecycle operations: each is authorised as `LatticeOperation.TreeLifecycle` over the whole tree, and each rejects a reserved system tree with `LatticeReservedTreeNamespaceException` and a materialised-view tree with `InvalidOperationException`. `DeleteTreeAsync` additionally refuses, with `InvalidOperationException`, a tree that one or more [materialised views](materialised-views.md) derive from - delete the dependent views first through `ILatticeViewFactory.DeleteAsync`.
+
 ## How It Works
 
 Deletion uses a three-phase approach:
@@ -69,7 +71,7 @@ sequenceDiagram
 
 ### Phase 2: Persist and schedule
 
-After all shards are marked, the `TreeDeletionGrain` persists its own `IsDeleted` flag and `DeletedAtUtc` timestamp, unregisters the [tombstone compaction](tombstone-compaction.md) reminder (compaction is no longer needed for a deleted tree), then registers a grain reminder for deferred purge. The reminder fires at intervals equal to the configured `SoftDeleteDuration` (clamped to a minimum of 1 minute).
+After all shards are marked, the `TreeDeletionGrain` persists its own `IsDeleted` flag and `DeletedAtUtc` timestamp, unregisters the [tombstone compaction](tombstone-compaction.md) reminder (compaction is no longer needed for a deleted tree), then registers a grain reminder for deferred purge. The reminder fires at intervals equal to the configured `SoftDeleteDuration` (clamped to a minimum of 1 minute). A registration that races the Orleans reminder service's start-up is retried; if it still cannot be registered, the grain rolls its soft delete back (the shard marks stay in place) and the call fails, so a retried delete is a real retry rather than a no-op against a tree nothing would ever purge.
 
 ### Phase 3: Purge
 
@@ -103,7 +105,7 @@ After all shards are purged, the deletion grain records the purge as complete, r
 - `DeleteTreeAsync()` is idempotent - calling it on an already-deleted tree is a no-op.
 - `MarkDeletedAsync()` is idempotent per shard.
 - `PurgeAsync()` is safe to call multiple times - `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op. A retry reaches the leaves a failed attempt left behind, even past the chain break that attempt caused, through the routed-leaf sweep in step 3.
-- Failed shards during purge are retried once before being skipped. The next reminder tick starts a fresh purge pass.
+- Failed shards during purge are retried once before being skipped, and a skipped shard is not revisited: the pass still completes, records the purge as complete, removes the tree from the registry, and unregisters its reminders, so a shard whose purge failed twice keeps its state in storage.
 
 ## Read Cache Behaviour
 

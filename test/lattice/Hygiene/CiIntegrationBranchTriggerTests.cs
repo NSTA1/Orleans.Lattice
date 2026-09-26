@@ -109,7 +109,7 @@ public sealed class CiIntegrationBranchTriggerTests
     private const int MinimumPullRequestContextReaders = 6;
 
     /// <summary>
-    /// Anti-vacuity floor for the workflow enumeration. The repository has seven
+    /// Anti-vacuity floor for the workflow enumeration. The repository has eight
     /// workflow files at the time of writing; the floor sits below that so
     /// deleting one does not red the gate, but far enough above zero that a
     /// broken directory walk cannot pass as a clean scan.

@@ -10,9 +10,11 @@ afterwards.
 
 This is the "does it work in anger" capstone for the autoscaling-signal work
 (issue #1216, epic #1190). It **consumes** the shipped scaling surface
-(`MapLatticeScalingSignal`, `AddLatticeScalingSignal`, the health check, and the
-reference ACA scale rule from `Orleans.Lattice.Scaling`); it does not redefine
-them.
+(`MapLatticeScalingSignal`, `AddLatticeScalingSignal`, and the health check from
+`Orleans.Lattice.Scaling`); it does not redefine them. Its scale rule is written
+inline in `main.bicep` in the shape of the package's reference ACA scale rule,
+but with `targetValue: 0.5` where the reference rule uses `1` (see "Why
+`targetValue: 0.5` and not `1`?" under Deploy).
 
 ## The two axes (read this first)
 
@@ -88,8 +90,11 @@ flowchart TB
   only the **hash** to the bicep template.
 - The bicep injects the hash as a container-app **secret**, surfaced through the
   `LATTICE_DATA_USER_<admin>` environment variable the data-API authorizer reads.
-  The plaintext is never stored, never baked into the image, and never passed on
-  a command line.
+  `deploy.ps1` never stores the plaintext, never bakes it into the image, and
+  never passes it on a command line (the hashing helper reads it from an
+  inherited environment variable). `drive-load.ps1` does hand it to the local
+  LoadDriver as a `--password` argument, because the driver presents it as the
+  Basic credential.
 - The data-API `BasicAdminDataApiAuthorizer` verifies the inbound
   `authorization: Basic base64(user:pass)` header against that hash in constant
   time. An anonymous or wrong-password call is rejected with `PermissionDenied`.
@@ -119,7 +124,9 @@ You don't build the image, provision a registry, or run Docker by hand -
 
 1. provisions a **Basic Azure Container Registry** (`registry.bicep`) into the
    resource group;
-2. runs `az acr build` from the repository root against
+2. stages a clean copy of the build inputs (`Directory.Build.targets`, `src/`
+   and `samples/ClusterScaling/src/`, without `bin`, `obj` or `.vs`) in a
+   temporary folder and runs `az acr build` there against
    [`src/ClusterScaling.Silo/Dockerfile`](src/ClusterScaling.Silo/Dockerfile),
    which builds and pushes the image **server-side in that registry** (no local
    Docker daemon) and streams the build log to your console; and
@@ -182,16 +189,16 @@ $pw = Read-Host -AsSecureString -Prompt 'Admin password'
   -Rate 2000 -Duration 300
 ```
 
-`drive-load.ps1` resolves the ingress FQDN, launches the bundled LoadDriver
-(compute-axis load), and - while it runs - polls `az containerapp replica list`
+`drive-load.ps1` resolves the ingress FQDN, waits for the app's `/healthz` to
+answer 200, launches the bundled LoadDriver (compute-axis load), and - while it
+runs - polls `az containerapp replica list`
 to print a **replica-count timeline** interleaved with the driver's continuous
 offered-load throughput. Example shape:
 
 ```
 Replica-count timeline (offered-load lines come from the driver):
-  [t=    0s] replicas = 1
   [t=   10s] replicas = 1
-    t=  10.0s  offered=    20,000  offered/s=    2,000  completed=    19,880 ...
+      t=  10.0s  offered=    20,000  offered/s=    2,000  completed=    19,880 ...
   [t=   40s] replicas = 3
   [t=   70s] replicas = 6
   ...
@@ -234,7 +241,9 @@ than as silent zero throughput.
 ./teardown.ps1 -ResourceGroup rg-clusterscaling
 ```
 
-Deletes the whole resource group. An idle deployment is **not free** even at
+Deletes the whole resource group, after a confirmation prompt (`-Yes` skips it;
+`-NoWait` returns without waiting for the deletion to finish). An idle
+deployment is **not free** even at
 `minReplicas=1`: the always-on replica bills vCPU + memory per second, Log
 Analytics bills for ingested logs, and the storage account bills for the tables
 it retains. Tear down as soon as an experiment finishes.

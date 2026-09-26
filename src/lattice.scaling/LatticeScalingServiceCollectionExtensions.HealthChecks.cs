@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Scaling;
 public static partial class LatticeScalingServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="LatticeScalingHealthCheck"/> on the supplied
+    /// Registers the Orleans.Lattice scaling health check on the supplied
     /// <see cref="IHealthChecksBuilder"/>. The check reads the
     /// <see cref="ILatticeScalingSignal"/> facade registered by
     /// <see cref="AddLatticeScalingSignal(Orleans.Hosting.ISiloBuilder, System.Action{LatticeScalingSignalOptions})"/>,

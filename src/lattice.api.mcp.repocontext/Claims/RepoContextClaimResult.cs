@@ -32,8 +32,9 @@ public sealed record RepoContextClaimResult
     /// <summary>
     /// The monotonically increasing fencing token identifying this grant, or
     /// <see langword="null"/> when the claim was not granted. Present it as
-    /// <c>fencingToken</c> on every <c>repocontext_remember</c> and
-    /// <c>repocontext_update</c> write against <see cref="Key"/>; a write bearing a
+    /// <c>fencingToken</c> on every <c>repocontext_remember</c>,
+    /// <c>repocontext_update</c>, and <c>repocontext_forget</c> write against
+    /// <see cref="Key"/>; a write bearing a
     /// token that a later claim has superseded is refused.
     /// </summary>
     public long? FencingToken { get; init; }
@@ -101,7 +102,8 @@ public sealed record RepoContextClaimResult
     /// <summary>
     /// Why the claim was not granted, or <see langword="null"/> when it was. One of
     /// <c>contended</c> (another agent holds it), <c>timeout</c> (the bounded wait
-    /// elapsed), or <c>missing</c> (no record exists at the key).
+    /// elapsed), <c>missing</c> (no record exists at the key), or <c>superseded</c>
+    /// (a renew presented a token whose lease had lapsed or been superseded).
     /// </summary>
     public string? Reason { get; init; }
 }

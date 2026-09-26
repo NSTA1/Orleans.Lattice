@@ -10,7 +10,7 @@ It is built the same way as the sibling [`Orleans.Lattice.Api.Backup`](../lattic
 
 - **A transport-agnostic facade.** A single control surface (`ILatticeReplicationControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes enable, disable, and permission-scoped config reporting over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Replication.Grpc`](../lattice.api.replication.grpc/README.md) package) that projects this facade onto a remotely callable service and typed client.
-- **An MCP tool group** (in [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)) that exposes the same three operations as agent tools, gated by the same access control.
+- **An MCP tool group** (in [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)) that exposes the same three operations as agent tools, gated by the same access control. The config-inspect tool is always offered; the mutating enable and disable tools only once replication control is opted in (see [the replication tools](../lattice.api.mcp/tools.md#replication-tools-lattice_replication_)).
 
 ## How configuration is distributed
 
@@ -23,9 +23,9 @@ For the engine-side mechanics - the static anchor, the compiled snapshot, and th
 ## Core properties
 
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeReplicationApi()` on the silo, and the facade does no background work until a method is called.
-- **Fail-closed by construction.** Every operation authorizes its target tree through the existing Lattice access gate for the dedicated `LatticeOperation.Replication` capability, before touching engine state. An anonymous or unauthorized caller is denied with `LatticeAuthorizationDeniedException` and the engine is never consulted. As on the data plane, a host with no authorization add-on registered runs the core no-op access gate, which allows every call.
+- **Fail-closed by construction.** Enable and disable authorize their target tree through the existing Lattice access gate for the dedicated `LatticeOperation.Replication` capability, before touching engine state: an anonymous or unauthorized caller is denied with `LatticeAuthorizationDeniedException` and the engine is never consulted. The config read applies the same check per tree to filter what it reports (see permission-scoped discovery below). As on the data plane, a host with no authorization add-on registered runs the core no-op access gate, which allows every call.
 - **Mode fixed at enable time.** The merge mode is chosen when a tree is first enabled and cannot be changed in place; enabling an already-enabled tree under a different mode is rejected. The sanctioned way to change a mode is to disable, then re-enable under the new mode; supplying a bootstrap source cluster on that enable re-seeds a tree that already holds data from a snapshot.
-- **Disable never purges.** Disabling pauses shipping new mutations; it never deletes data already replicated to peers.
+- **Disable never purges.** Disabling never deletes data already replicated to peers. Unless the static map also declares the tree, its merge-mode resolution then returns no mode, but shipping does not pause: an already-active shipper keeps shipping the tree's new local writes.
 - **Permission-scoped discovery.** `GetReplicationConfigAsync` reports only the trees the caller is authorized to manage, so it never reveals the existence of a tree outside the caller's grant.
 - **Both enrollment sources are reconciled.** A replication-enabled host resolves a tree's merge mode from the runtime config tree *and* the static deployment-time replicated-tree map, which acts as a fallback floor. `GetReplicationConfigAsync` reports the union under the same precedence the commit path applies, so an estate enrolled purely through deployment configuration is reported as replicating rather than as empty. Each entry's `Source` names which one is in force.
 
@@ -40,7 +40,7 @@ The facade operations (each reached over the gRPC binding as one RPC, and over M
 | Operation | Purpose |
 |---|---|
 | Enable replication | Enable a tree under a fixed merge mode, optionally bootstrapping a non-empty tree from a named source cluster. |
-| Disable replication | Pause shipping a tree without purging already-replicated peer data. Idempotent. |
+| Disable replication | Disable a tree's runtime enrollment without purging already-replicated peer data. Idempotent. |
 | Get replication config | Report each authorized tree's enrolled state, the merge mode in force, its ambiguity status, and which enrollment source put it in force. |
 
 ## Reference

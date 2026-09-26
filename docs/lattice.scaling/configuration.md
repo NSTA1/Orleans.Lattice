@@ -60,6 +60,15 @@ The storage axis is report-only: none of these knobs affect the compute
 | `AccountSaturationWindow` | `TimeSpan` | `30s` | How long a provider key must be continuously observed saturated before the collector classifies it throughput-bound and recommends a move. Debounces a transient blip. A non-positive value classifies on the first saturated sample. |
 | `StorageRecommendationsEnabled` | `bool` | `true` | Master switch for emitting a `WalRebalanceRecommendation`. When `false` the collector still reports `OverThreshold` and the per-account breakdown but leaves `Recommendation` `null`. |
 
+Every default above is also a public constant or static field on
+`LatticeScalingSignalOptions` - `DefaultEndpointPath`, `DefaultMinReplicas`,
+`DefaultSampleInterval`, `DefaultEwmaHalfLife`, `DefaultScaleInGateWindow`,
+`DefaultScaleInThreshold` (shared by the three scale-in thresholds),
+`DefaultActivationWorkingSetTarget`, `DefaultSplitAwareScaleIn`,
+`DefaultRetainedBytesAdvisoryRatio`, `DefaultAccountSaturationWindow`, and
+`DefaultStorageRecommendationsEnabled` - so a host can reference them rather than
+repeat the values.
+
 ## `LatticeScalingHealthCheckOptions`
 
 `AddLatticeScalingHealthCheck` registers an ASP.NET Core health check that
@@ -87,7 +96,7 @@ services.Configure<LatticeScalingHealthCheckOptions>(
 
 | Option | Type | Default | Guidance |
 |---|---|---|---|
-| `ComputePressure` | `DoubleTier?` | `0.85` / `0.95` | Tiered bound on the worst normalised compute dimension: at or above the soft bound reports `Degraded`, at or above the hard bound reports `Unhealthy`. Set to `null` to disable the tiered compute signal. |
+| `ComputePressure` | `DoubleTier?` | `0.85` / `0.95` (`DefaultComputePressure`) | Tiered bound on the worst normalised compute dimension: at or above the soft bound reports `Degraded`, at or above the hard bound reports `Unhealthy`. Set to `null` to disable the tiered compute signal. |
 | `UnhealthyOnWalSaturated` | `bool` | `true` | When `true`, a `Saturated` worst-case WAL state reports `Unhealthy` regardless of the compute ratios. |
 | `DegradeOnWalThrottled` | `bool` | `true` | When `true`, a `Throttled` worst-case WAL state contributes `Degraded`. |
 | `DegradeOnStorageOverThreshold` | `bool` | `true` | When `true`, an over-threshold storage axis contributes `Degraded`. The storage axis never escalates past `Degraded` because it is advisory and not wired to the replica recommendation. |

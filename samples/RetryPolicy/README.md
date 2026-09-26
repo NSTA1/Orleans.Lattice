@@ -5,9 +5,10 @@
 Storage faults are sometimes transient (a throttle, a brief network blip). This
 sample wraps a write in `BoundedExponentialRetryPolicy` and pairs it with a
 `LatticeIdempotencyContext` scope, so the operation is retried under a stable
-**idempotency key**. A simulated transient fault fails the first two attempts;
-the third succeeds, and because every attempt carried the same idempotency key
-the retries collapse to a single logical mutation.
+**idempotency key**. A simulated transient fault fails the first two attempts
+before the write is issued, and the third succeeds. Every attempt carries the
+same idempotency key, so had a failed attempt already landed its write, the
+retry would collapse to a single logical mutation rather than apply twice.
 
 ## Run it
 

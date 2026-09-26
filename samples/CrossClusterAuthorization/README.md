@@ -17,19 +17,21 @@ authorization change on one cluster converges onto the other.
 
 The demo runs in four acts:
 
-1. **Membership.** Create users (`alice`, `bob`, `carol`) and groups
-   (`line-operators`, `auditors`), and place `alice` and `bob` in groups.
+1. **Membership.** Create the groups (`line-operators`, `auditors`) on both
+   sites and add `alice` and `bob` to them (users are plain member ids - the
+   directory keeps no user records - and `carol` is in no group).
 2. **Rules and enforcement.** Author three rules under a default-deny policy -
    a prefix grant (operators read/write/delete/range the `station/` subtree), a
    key grant (only `alice` may read/write the single `config/threshold` key),
-   and a tree grant (auditors read the whole tree). Then exercise write, delete,
-   and range operations as each subject and watch the gate allow or deny each
-   one. `carol`, who is in no group, is denied everything.
+   and a tree grant (auditors read the whole tree). Then exercise writes, a
+   read, and deletes as `alice` and `bob` and watch the gate allow or deny each
+   one.
 3. **Read visibility.** A point read of a key the caller lacks read permission
    for is soft-denied (returns absent, not an error), and a range read returns
    **only** the keys the caller is authorized to read - `bob` (auditor) sees all
-   keys, `alice` sees only her stations and her own config key, `carol` sees
-   nothing.
+   keys, `alice` sees only her two remaining stations (her config-key grant
+   covers point reads and writes, not range reads), and `carol`, who is in no
+   group, sees nothing.
 4. **Cross-cluster convergence.** Revoke `alice`'s config-key grant on `site-a`
    **only** and watch the revoke replicate onto `site-b`'s policy tree with no
    direct write to `site-b`.

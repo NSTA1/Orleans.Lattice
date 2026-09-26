@@ -10,9 +10,9 @@ namespace Orleans.Lattice.Auth;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This engine is a decision surface only. Registering it does not wire
-/// enforcement: the core access gate stays the default no-op, and nothing on the
-/// data path consults the engine until a later feature wires it in.
+/// This engine is the decision surface consulted by the policy access gate once
+/// the auth add-on is registered. The gate also applies the strict tenant fence
+/// and bootstrap root-of-trust before returning an enforcement decision.
 /// </para>
 /// <para>
 /// <see cref="Evaluate"/> consumes the subject's already-transitively-expanded
@@ -26,9 +26,8 @@ public interface ILatticeDecisionEngine
     /// <summary>
     /// The monotonically increasing epoch of the current compiled snapshot. It
     /// advances every time the snapshot is rebuilt from a committed policy change,
-    /// so a caller can detect that its cached decisions may be stale. A later
-    /// strict-consistency feature fences enforcement on this epoch; this engine
-    /// only produces it.
+    /// so a caller can detect that its cached decisions may be stale. Enforcement
+    /// observes the current compiled snapshot through the policy access gate.
     /// </summary>
     long CurrentEpoch { get; }
 

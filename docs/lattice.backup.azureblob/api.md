@@ -1,6 +1,6 @@
 # Orleans.Lattice.Backup.AzureBlob API reference
 
-The package has two public types: the options record and the registration extension. The sink implementation itself is internal and is reached only through the core `ILatticeBackupSink` seam; its behaviour is described in [Architecture](architecture.md).
+The package has two public types: the options class and the registration extension. The sink implementation itself is internal and is reached only through the core `ILatticeBackupSink` seam; its behaviour is described in [Architecture](architecture.md).
 
 ## `LatticeBackupAzureBlobServiceCollectionExtensions`
 
@@ -23,4 +23,4 @@ Configuration for the Azure Blob Storage sink. Exactly one authentication mode m
 - `string ContainerName` - the container that backs the sink (default `DefaultContainerName`).
 - `Action<Azure.Storage.Blobs.BlobClientOptions>? ConfigureClientOptions` - optional callback to customise the client options the sink builds (ignored when `ServiceClient` is supplied).
 
-The options type also carries internal helpers (`Validate`, `BuildContainerClient`) that the registration invokes; these are not part of the public surface.
+The options type also carries internal validation and client-construction helpers that the registration invokes; these are not part of the public surface.

@@ -196,11 +196,14 @@ concrete binding the host registers.
 - **Point-in-time view.** The canonical default snapshot provider
   reads the producer's causal-stable frontier once at the start of
   the export and applies the receiver-supplied `fromAsOfHlc` filter
-  at entry-emission time. Writes committed on the sender after the
-  metadata cut-point are excluded from the matching stream call by
-  the per-entry HLC filter, so the stream remains a point-in-time
-  view at `metadata.AsOfHlc` even though the metadata RPC and the
-  stream RPC are separate calls.
+  at entry-emission time. When `fromAsOfHlc` is greater than `Zero`,
+  writes committed on the sender after the metadata cut-point are
+  excluded from the matching stream call by the per-entry HLC filter,
+  so the stream remains a point-in-time view at `metadata.AsOfHlc` even
+  though the metadata RPC and the stream RPC are separate calls. A
+  `Zero` `fromAsOfHlc` - what a fresh bootstrap passes - disables the
+  filter, so that stream can include writes committed after the
+  metadata call.
 - **Host-replaceable provider.** Hosts that register a custom
   `ISnapshotProvider` (for example, a storage-backend-aware export)
   drive the handler through the standard DI seam: replacing the
@@ -305,7 +308,7 @@ channel-reuse conventions.
 
 | Type | Role |
 |------|------|
-| Client-side gRPC snapshot transport | Client-side `IRemoteSnapshotTransport` that hosts the cross-cluster `GetMetadataAsync` unary call and the `RequestSnapshotAsync` server-streaming call. One gRPC channel is cached per `sourceClusterId` and shared with the live-push transport. |
+| Client-side gRPC snapshot transport | Client-side `IRemoteSnapshotTransport` that hosts the cross-cluster `GetMetadataAsync` unary call and the `RequestSnapshotAsync` server-streaming call. One gRPC channel is cached per `sourceClusterId` for the transport's lifetime, built through the same hardened channel pipeline (TLS gate and shared-secret call credentials) as the live-push transport, which keeps its own channel cache. |
 | Sender-side gRPC snapshot service | Sender-side ASP.NET Core gRPC service that delegates each call to the local `LatticeRemoteSnapshotService` (which in turn drives the host-registered `ISnapshotProvider`). |
 | `LatticeReplicationGrpcOptions` | Per-peer endpoint map (`Peers`), TLS-required-by-default gate (`AllowPlaintextEndpoints`), optional per-channel configuration hook (`ConfigureChannel`), and an override for the local cluster id used in outbound headers. The same options instance drives both the live-push transport and the snapshot transport. |
 
@@ -448,14 +451,18 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   silo crash, Orleans reactivates the grain on a surviving silo
   within the keepalive reminder period and the phase pump resumes
   from the persisted phase. During `ApplyingSnapshot` the cursor
-  is persisted every 100 entries; on resume, the snapshot stream
-  is re-opened at `LastAppliedHlc` (not `Zero`), so the cost
-  of a crash is bounded re-application of at most ~100 entries - 
-  and the receiver-side LWW reconciliation on each leaf grain
-  (plus the per-leaf recently-terminal short-circuit and the per-tx
-  registry no-op described under "Bootstrap drain bypasses the
-  pinned-floor gate and the high-water-mark advance" below) makes
-  that re-application a correctness no-op.
+  (the highest source HLC applied so far) is persisted every 100
+  entries. On resume the coordinator re-opens the export with
+  `LastAppliedHlc` as the export's `asOfHlc`, which
+  `ISnapshotProvider.ExportAsync` treats as a strict upper bound, not
+  as a resume point: the re-opened stream re-yields the entries stamped
+  at or below the cursor and excludes those stamped above it. Re-applying
+  the former is a correctness no-op, because the receiver-side LWW
+  reconciliation on each leaf grain (plus the per-leaf recently-terminal
+  short-circuit and the per-tx registry no-op described under "Bootstrap
+  drain bypasses the pinned-floor gate and the high-water-mark advance"
+  below) absorbs it. A fresh `BootstrapAsync` kickoff resets the cursor
+  to `Zero`, which disables the bound.
 - **`Failed` is restartable.** On any thrown exception inside the
   phase pump the state transitions to `Failed` (persisted) and
   the pump tears down. A subsequent `BootstrapAsync` call
@@ -470,10 +477,11 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   `Unavailable`, `DeadlineExceeded`, or `Aborted`), the coordinator
   retries the drain in-place using a bounded exponential backoff
   (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
-  `500 ms`, capped at `30 s`). Each retry re-opens the snapshot from
-  the persisted apply cursor; the drain applies without the
-  pinned-floor gate, and receiver-side LWW reconciliation is what makes
-  the overlap between attempts a correctness no-op. Every retry increments
+  `500 ms`, capped at `30 s`). Each retry re-opens the export with
+  the current apply cursor as its `asOfHlc` upper bound (the resume rule
+  above); the drain applies without the pinned-floor gate, and
+  receiver-side LWW reconciliation is what makes re-applying the entries
+  at or below the cursor a correctness no-op. Every retry increments
   the `orleans.lattice.replication.bootstrap.transient_retries`
   counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
   operators can dashboard the rate. Non-transient faults still pivot
@@ -486,14 +494,17 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   applied through `IReplicationApplier.ApplyAsync`, the same canonical
   inbound apply seam used by live-incremental replication, carrying
   the entry's commit-time `Timestamp` and the supplied
-  `sourceClusterId`. Transitive replication paths (A -> B -> C)
-  preserve the originating HLC.
+  `sourceClusterId`. On a last-writer-wins tree the receiver keeps that
+  `Timestamp`, so transitive replication paths (A -> B -> C) preserve
+  the originating HLC; a typed-CRDT row folds through a state-based
+  merge that the receiver writes at a fresh local HLC.
 - **Bootstrap and live-incremental share the apply seam.** Routing
-  the snapshot drain through `IReplicationApplier` means every host
-  decorator stacked on the applier - dead-letter tracking, the
-  causal-apply buffer, and any host-supplied per-key change observer
-  - fires identically for bootstrap-arrived entries and
-  live-incremental entries. A receiver that catches up via bootstrap
+  the snapshot drain through `IReplicationApplier` means every
+  decorator stacked on the applier - dead-letter tracking and any
+  host-supplied per-key change observer - fires identically for
+  bootstrap-arrived entries and live-incremental entries. (Bootstrap
+  entries carry no vector clock, so the applier's causal-dependency
+  gate never parks them in the causal-apply buffer.) A receiver that catches up via bootstrap
   therefore raises the same observable side-effects as a receiver
   that catches up via the WAL tail, so UI live-update hooks and
   audit observers see the bootstrap window rather than missing it.
@@ -537,7 +548,7 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   high-water-mark vector and the pinned causal floor with the
   snapshot's causal-stable frontier, so the
   bootstrap-to-incremental handoff retains exactly-once semantics on
-  the live tail. Range deletes (which carry `HybridLogicalClock.Zero`),
+  the live tail. Range deletes,
   saga terminal records (which carry the saga's own terminal HLC), and
   tombstone-reap envelopes are routed before the pinned-floor gate, so
   the bootstrap scope does not change how they apply.
@@ -568,13 +579,16 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   `IsTombstone` set is applied as a prepared delete.
 - **Per-tree merge mode is honoured on bootstrap.** Every
   `WalRecord` emitted by the bootstrap drain is stamped with the
-  merge mode declared for the tree in
-  `LatticeReplicationOptions.ReplicatedTrees`. Trees declared as
+  merge mode `ILatticeMergeModeResolver` resolves for the tree - the
+  `LatticeReplicationOptions.ReplicatedTrees` declaration, or the
+  runtime configuration on a host that enables it. Trees declared as
   `LatticeMergeMode.OrSet` or `LatticeMergeMode.PnCounter` therefore
-  merge bootstrap-arrived entries under the correct CRDT semantics,
-  identical to how live-incremental entries are applied. Trees not
-  enumerated in `ReplicatedTrees` (and trees declared as
-  `LwwRegister`) default to `LatticeMergeMode.LwwRegister`. The
+  merge bootstrap-arrived entries under the tree's CRDT semantics: a
+  committed-projection row carries the primitive's full state, which the
+  receiver folds through the primitive's state-based merge rather than
+  the per-entry delta fold live-incremental entries use. A tree the
+  resolver returns no mode for (and a tree declared as
+  `LwwRegister`) is stamped `LatticeMergeMode.LwwRegister`. The
   mode is resolved once at the start of the drain, not per entry:
   the resolver is on the hot path's allocation budget but is
   invariant for the lifetime of a single drain.
@@ -608,7 +622,7 @@ Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), t
 - **Process-local rate-limit table.** The default implementation tracks honoured requests in process memory only; a silo restart resets the rate-limit window for every pair. Cross-silo coordination is not required because `ILatticeBootstrapCoordinator` is itself idempotent under concurrent invocations against the same tree from the same source cluster (the per-tree internal grain absorbs the second call as a no-op) and rejects mismatched-source concurrent kickoffs as `InvalidOperationException`. The rate limit is therefore a fairness mechanism, not a correctness one.
 - **Timestamp updates only on success.** The dictionary timestamp is stamped only after the coordinator call returns successfully, so a thrown coordinator exception (transport failure, conflicting in-flight bootstrap from a different source) does not consume the rate-limit budget against the operator. The same rule applies to both the rate-limited overload and the bypass overload.
 - **Per-tree options resolution.** The minimum interval is resolved per-tree via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`, so different replicated trees can run different re-seed cadences without separate seam instances.
-- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentNullException` when `null`, `ArgumentException` when whitespace-only); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator. The bypass overload validates identically.
+- **Argument validation.** `treeName` and `sourceClusterId` must be non-null and non-empty (`ArgumentNullException` when `null`, `ArgumentException` when empty); the cancellation token is observed before the rate-limit check and propagated to the underlying coordinator. The bypass overload validates identically.
 
 ### Force-bypass semantics
 

@@ -68,7 +68,8 @@ closes.
   matching capability catalogue is [FEATURES.md](FEATURES.md).
 - `test/<package>/` - the NUnit test project for each `src/<package>/`.
 - `docs/<package>/` - Markdown documentation for each package (plus a docs-only
-  `docs/crdt/` conceptual topic with no `src/`/`test/` counterpart).
+  `docs/crdt/` conceptual topic and the `docs/videos/` companion pages for the
+  video series, neither with a `src/`/`test/` counterpart).
 - `samples/`, `benchmark/` - runnable samples and the throughput rig.
 - `videos/` - the educational video series: a HyperFrames (HTML-to-video)
   workspace with its own CI lane. See [videos/README.md](videos/README.md) and
@@ -161,7 +162,8 @@ several `Orleans.Lattice.Explorer.*` assemblies.
 - Security invariants for the auth, membership, replication, telemetry, MCP, and
   Explorer surfaces (fail closed; never trust peer/wire-supplied classification;
   enforce at the single narrowest seam; isolate credential state per circuit; no
-  dead security config) live in `.github/instructions/security.instructions.md`,
+  dead security config; keep the allocation bar on security hot paths) live in
+  `.github/instructions/security.instructions.md`,
   which auto-attaches when you edit those packages.
 
 ## Hygiene gates (these fail the build at PR time)

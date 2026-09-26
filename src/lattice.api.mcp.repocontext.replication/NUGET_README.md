@@ -30,7 +30,7 @@ A startup validator fails fast if memory or membership is enrolled under any oth
 
 ## Topology
 
-There is exactly one valid multi-cluster topology: **single-indexer hub-and-spoke**. One cluster, the hub, walks, reconciles, prunes, and re-embeds; every other cluster runs as a spoke (`LATTICE_REPOCONTEXT_INDEXING_ROLE=spoke`) that serves retrieval from the replicated trees without re-embedding. Active-active *indexing* is not supported: enrolling an index-plane tree under a CRDT mode - the only way to express it - fails the startup validator. Every cluster may still serve reads and accept agent-memory writes, which converge through the pinned modes.
+There is exactly one valid multi-cluster topology: **single-indexer hub-and-spoke**. One cluster, the hub, walks, reconciles, prunes, and re-embeds; every other cluster runs as a spoke (`LATTICE_REPOCONTEXT_INDEXING_ROLE=spoke`) that serves retrieval from the replicated trees without re-embedding. Active-active *indexing* is not supported: enrolling an index-plane tree under a CRDT mode fails the startup validator, which reads only the per-tree modes and so cannot detect two clusters both started as `hub` - run exactly one. Every cluster may still serve reads and accept agent-memory writes, which converge through the pinned modes.
 
 The embedding-gap scanner is part of the hub's index pass, so it stays local to the hub and a spoke never runs it; this helper only governs which trees ship and how they converge.
 

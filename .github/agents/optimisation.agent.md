@@ -35,10 +35,10 @@ Every primitive below is exposed by the harness in the working tree. You do not 
 
 ```powershell
 # Docker-compose tier (end-to-end, replication, two clusters).
-./benchmark.ps1 -Scenario bidirectional-replication
+./benchmark/benchmark.ps1 -Scenario bidirectional-replication
 
 # Microbench tier (in-process single silo, BDN).
-./benchmark.ps1 -Scenario microbench
+./benchmark/benchmark.ps1 -Scenario microbench
 ```
 
 Each invocation:
@@ -50,27 +50,28 @@ Each invocation:
 ### Backfill local results to VM
 
 ```powershell
-./benchmark.ps1 -ImportHistory
+./benchmark/benchmark.ps1 -ImportHistory
 ```
 
 Idempotent. Use this if a cohort was accidentally run with `-NoHistoryPush`, or if you cleared the VM volume.
 
 ### Query the metric store
 
-The VM is at `$env:BENCH_HISTORY_VM_URL` (default `http://localhost:8428`). Use the harness function for instant queries:
+The VM is at `$env:BENCH_HISTORY_VM_URL` (default `http://localhost:8428` - the harness applies that default itself, so a shell with the variable unset must too). It runs with `-search.maxStalenessInterval=8760h` (`benchmark/history/docker-compose.history.yml`), so an instant query still sees a run pushed months ago. Query it over its Prometheus-compatible HTTP API:
 
 ```powershell
-. ./benchmark/benchmark.ps1   # dot-source for Invoke-PromInstantQuery
-$value = Invoke-PromInstantQuery -Query 'bench_replication_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="51671fa"}'
+$vmUrl = if ($env:BENCH_HISTORY_VM_URL) { $env:BENCH_HISTORY_VM_URL } else { 'http://localhost:8428' }
+$q = 'bench_replication_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="51671fa"}'
+$result = (Invoke-RestMethod -Uri "$vmUrl/api/v1/query?query=$([uri]::EscapeDataString($q))").data.result
 ```
 
-`Invoke-PromInstantQuery` returns `[double]` or `$null`. It never throws - missing series, `NaN`, `+Inf`, parse failures all become `$null`. **Do not catch exceptions around it; check for `$null` instead.**
+Each run is its own series (its `run_id` label), so `$result` holds one entry per run, with the value at `.value[1]`. Do not reach for the harness's `Invoke-PromInstantQuery`: it queries the live run's Prometheus (`$env:BENCH_PROMETHEUS_URL`, default `http://localhost:9090`) while a run captures its scalars, not this history store, and `benchmark/benchmark.ps1` cannot be dot-sourced to load it - its default `Run` parameter set makes `-Scenario` mandatory, so a bare `. ./benchmark/benchmark.ps1` fails to bind and defines nothing, and supplying `-Scenario` runs a benchmark.
 
 For multi-sample series (a cohort), use the underlying `/api/v1/query_range` or `/api/v1/series` endpoints directly:
 
 ```powershell
 # All run_ids for a sha:
-$uri = "$env:BENCH_HISTORY_VM_URL/api/v1/series?match%5B%5D=" +
+$uri = "$vmUrl/api/v1/series?match%5B%5D=" +
        [uri]::EscapeDataString('bench_replication_apply_lag_p95_ms{git_sha="51671fa"}')
 $series = (Invoke-RestMethod -Uri $uri).data
 ```
@@ -83,16 +84,20 @@ The auto-discovered percentile suffixes for histograms are `_p50`, `_p95`, `_p99
 
 ### Local cohort read (disk)
 
+The harness's `Get-AllResults` and `Get-LatestPerScenario` live inside `benchmark/benchmark.ps1`, which cannot be dot-sourced (above), so read the files the same way they do:
+
 ```powershell
-. ./benchmark/benchmark.ps1
-$all     = Get-AllResults              # every results.json under .run/
-$latest  = Get-LatestPerScenario       # one row per scenario, freshest only
+$all = Get-ChildItem benchmark/.run -Recurse -Filter results.json |
+       ForEach-Object { Get-Content $_.FullName -Raw | ConvertFrom-Json } |
+       Where-Object { $_.scenario -and $_.run_id }                        # every results.json under .run/
+$latest = $all | Group-Object scenario |
+          ForEach-Object { $_.Group | Sort-Object ended -Descending | Select-Object -First 1 }   # one row per scenario, freshest only
 ```
 
 ### Cross-scenario delta (built-in)
 
 ```powershell
-./benchmark.ps1 -Compare -CompareAgainst bidirectional-replication
+./benchmark/benchmark.ps1 -Compare -CompareAgainst bidirectional-replication
 ```
 
 This is markdown-rendering. **It compares scenarios, not commits.** For commit-cohort comparison (the optimisation agent's primary use case), query VM directly grouped by `git_sha`.
@@ -133,7 +138,7 @@ This phase is cheap (seconds) and is the difference between an agent that compou
 State, in writing, before doing anything else:
 
 1. **Target metric.** A single primary metric (a series the harness already auto-discovers, or one you will add an OTel instrument for first). Example: `bench_replication_apply_lag_p95_ms`.
-2. **Target scenario.** Which `./benchmark.ps1 -Scenario` invocation will exercise the metric. Example: `bidirectional-replication`.
+2. **Target scenario.** Which `./benchmark/benchmark.ps1 -Scenario` invocation will exercise the metric. Example: `bidirectional-replication`.
 3. **Expected direction and magnitude.** "Reduce by `>= 20%`", "increase by `>= 1000`", or similar. Magnitude must be greater than what you can attribute to noise - if you cannot articulate a noise band yet, defer that to Phase 3 but commit to a direction now.
 4. **Code locus.** Which file or hot path you suspect dominates the metric. If you cannot name one - or you have named one but the target metric sits at the noise floor of `-Fidelity dry` (IQR=0 across n>=3 baseline runs) so that no candidate hypothesis can clear the threshold without an empirical pointer - run a per-method profiling pass first (see the "Per-method profiling (microbench tier)" subsection below). The profiler attributes allocations and CPU samples to specific managed methods, so it produces an empirically-grounded code locus instead of a guess.
 5. **Falsification rule.** Under what observed outcome will you discard the change. Default: "candidate median fails to move past `baseline_median +/- 1.5 * IQR_baseline` in the desired direction".
@@ -165,14 +170,14 @@ State which **tier shape** you are using and why in the chat reply. Name the spe
 **Recommended optimisation-cycle invocation** (baseline and candidate cohorts both):
 
 ```powershell
-./benchmark.ps1 microbench -Workloads '*.PointWrite,*.PointRead' -Fidelity dry
+./benchmark/benchmark.ps1 microbench -Workloads '*.PointWrite,*.PointRead' -Fidelity dry
 ```
 
 A 7-method `dry`-fidelity run completes in ~5-10 seconds end-to-end vs ~8 minutes for the full-suite `quick` run, so an n=3 cohort costs roughly **30 seconds wall time** instead of the historical **~25-30 minutes**. The n>=3 cohort-average already provides the statistical guard `dry` fidelity sacrifices by collapsing to 1 warmup + 1 measurement iteration per method.
 
 **Filter semantics.** `BENCH_MICROBENCH_WORKLOADS` is forwarded as a single `--filter` argument; BDN's binder splits the comma-separated value internally into multiple globs. Empirically (BDN 0.15.4, May 2026): `--filter '*.PointWrite,*.PointRead'` correctly matches the union of both pattern families. Repeated `--filter` flags do NOT accumulate (only the last wins), and space-separated values after a single `--filter` are not consumed past the first - both of those forms are wrong; always use the comma-joined single-arg form. Globs match fully-qualified names: `*.MethodName` pulls in any method whose identifier *starts with* `MethodName` (so `*.PointWrite` pulls in `PointWrite_DeepTree` and `PointWrite_DeeperTree` too) - narrow further with `*.MethodName_ExactSuffix` if that is wrong.
 
-**Fidelity levels.** `quick` (default) = `Job.ShortRun` (1 launch + 3 warmup + 3 measurement iters) + in-process toolchain. `dry` = `Job.Dry` (1 warmup + 1 measurement iter) + in-process toolchain. `full` = `Job.Default` + forking toolchain (~30+ min/run, gold-standard rigour reserved for cycle-end re-verification when a `dry`/`quick` delta is borderline).
+**Fidelity levels.** `quick` (default) = `Job.ShortRun` (1 launch + 3 warmup + 3 measurement iters) + in-process toolchain. `dry` = `Job.Dry` (1 warmup + 1 measurement iter) + in-process toolchain. `full` = `Job.Default` + forking toolchain (~30+ min/run, gold-standard rigour reserved for cycle-end re-verification when a `dry`/`quick` delta is borderline). `BENCH_MICROBENCH_FIDELITY` also accepts `quick-oop` (the `-Fidelity` flag does not): `Job.ShortRun` on the default forking toolchain, for the authorization-gate-enabled configuration whose cold multi-shard first calls the in-process toolchain refuses as taking too long.
 
 **Both cohorts must run against the same scoping AND the same fidelity.** If you change `-Workloads` or `-Fidelity` between baseline and candidate, you have a confounded experiment - same rule as for any other scenario env var. Record both values in the Phase 1 hypothesis so the post-mortem can reproduce the cohort verbatim.
 
@@ -194,13 +199,13 @@ Activate via the `-Profile` parameter on `benchmark.ps1`:
 | Value | Captures |
 |---|---|
 | `off` (default) | Nothing. Profiler does not start. |
-| `alloc` | `GCSampledObjectAllocation` events. Top-N allocators by bytes. |
+| `alloc` | `GCSampledObjectAllocation` and `GCAllocationTick` events (the tick, fired every ~100 KB of managed allocation, is the signal that dominates over EventPipe). Top-N allocators by bytes. |
 | `cpu` | `SampleProfiler` events (every ~10ms thread sample). Top-N hot methods by sample count. |
 | `both` | Both of the above. |
 
 ```powershell
 # Attribute allocations for the Mixed_70R_30W workload at dry fidelity:
-./benchmark.ps1 microbench -Workloads '*.Mixed_70R_30W' -Fidelity dry -Profile alloc
+./benchmark/benchmark.ps1 microbench -Workloads '*.Mixed_70R_30W' -Fidelity dry -Profile alloc
 ```
 
 The `profile.json` shape is identical across `-Profile` values; unused lists
@@ -292,23 +297,25 @@ Each `run-cohort.ps1` call stops any leftover silo/producer, restarts the silo w
 
 ```text
 === Cohort complete ===
-Host         : 8 vCPU / 32092 MiB / 6.17.0-1017-azure
-Cohort       : v4000-h5-30s-<utc>
+Host         : <nproc> vCPU / <MiB> MiB / <kernel>
+Cohort       : v<vehicles>-h<tickHz>-<duration>s-<utc>
 Producer     : inactive
-Silo FINAL   : [silo] FINAL written=547,006 failed=0 elapsed=43.9s active=35.7s Entries written per second (avg)=12,434 (active avg)=15,297
-Throughput   : 547,006 entries in 35.7s active = 15,297/s
-Silo CPU     : avg 163.3% / peak 220% (of one vCPU)
-System CPU   : avg 20.4% / peak 24.1%
-Silo RSS peak: 0.6 GiB (of 31.3 GiB)
-Diagnostics  : stall-watchdog=0  wal-slot=0  wal-append=0
-Verdict      : HEALTHY
+Silo FINAL   : [silo] FINAL ops=<n> failed=<n> discarded=<n> elapsed=<s>s active=<s>s ops/sec (avg)=<n> (active avg)=<n>
+Steady mean  : <n> e/s (n=<samples> samples, t>=15s, rate>0) inFlight med/max=<m>/<m>
+FINAL active : <n> entries in <s>s active = <n>/s
+Drain tail   : <n> trailing rate=0 sample(s) post-producer
+Silo CPU     : avg <pct>% / peak <pct>% (of one vCPU)
+System CPU   : avg <pct>% / peak <pct>%
+Silo RSS peak: <GiB> GiB (of <GiB> GiB)
+Diagnostics  : stall-watchdog=<n>  wal-slot=<n>  wal-append=<n>  exceptions=<n>  failed-samples=<n>
+Verdict      : HEALTHY | DEGRADED | FAILED | WEDGE (<reasons>)
 ```
 
-The `Throughput` line is the **active-window** average - entries divided by (last-flush-drain - first-accepted-batch). Excludes the silo's pre-connect idle window and the post-FINAL drain, so it's the honest sustained-ingest number. Use this as the cohort sample. The raw silo journal (with `[phaseA]` instruments and per-second `[silo] t=...` rate samples) is at `benchmark/.run/azure-throughput/silo-<cohort>.log`; the per-second VM-level CPU/RSS samples are at `sampler-<cohort>.csv`.
+The `Steady mean` line is the **primary cohort sample**: the mean of the silo's per-second `[silo] t=` rate samples at `t >= 15s` with a non-zero rate, which trims the warm-up ramp and the post-producer drain. `FINAL active` (entries divided by the window from the first accepted batch to the last drained flush) is a secondary diagnostic: a wedged silo's drain stall inflates its denominator, so the runner marks it `(drain-inflated; ignore)` on a WEDGE verdict. The raw silo journal (with `[phaseA]` instruments and per-second `[silo] t=...` rate samples) is at `benchmark/.run/azure-throughput/silo-<cohort>.log`; the per-second VM-level CPU/RSS samples are at `sampler-<cohort>.csv`.
 
-**`failed=N` non-zero in the FINAL line is a degraded cohort, not a HEALTHY result**, even though the runner may still print `Verdict : HEALTHY`. The most common cause at higher rungs is the silo's grain-RPC `ResponseTimeout` (default 30s) firing on calls honestly queueing at the writer admission cap - the silo log will show `[silo] grain-rpc-deadline: ...` lines pointing at `BENCH_RESPONSE_TIMEOUT_SEC`. Pass `-ExtraSiloEnv @{ BENCH_RESPONSE_TIMEOUT_SEC = '180' }` to lift the deadline, drop the offered rate, or widen WAL fan-out. See `benchmark/azure-throughput/wedge-plan.md` section 23.3 for the full saturation-knobs catalogue and failure-mode -> knob mapping.
+**`failed=N` non-zero in the FINAL line is not a clean result** - the runner classifies such a cohort `FAILED` (reason `FINAL failed=N`), or `WEDGE` when that also applies. The most common cause at higher rungs is the silo's grain-RPC `ResponseTimeout` (default 30s) firing on calls honestly queueing at the writer admission cap - the silo log will show `[silo] grain-rpc-deadline: ...` lines pointing at `BENCH_RESPONSE_TIMEOUT_SEC`. Pass `-ExtraSiloEnv @{ BENCH_RESPONSE_TIMEOUT_SEC = '180' }` to lift the deadline, drop the offered rate, or widen WAL fan-out. See `benchmark/azure-throughput/wedge-plan.md` section 23.3 for the full saturation-knobs catalogue and failure-mode -> knob mapping.
 
-**n=3 cohort discipline.** Run each arm three times back-to-back (six runs total). A cohort of three at the 4k:5 / 45s rung is ~3-4 minutes wall-clock per arm after the initial `update.ps1`. Record the active throughput average and the per-run variance in the Phase 3 / Phase 5 cohort tables exactly like the other tiers. If variance is wide (CoV > 10%), increase `DurationSec` before re-running.
+**n=3 cohort discipline.** Run each arm three times back-to-back (six runs total). A cohort of three at the 4k:5 / 45s rung is ~3-4 minutes wall-clock per arm after the initial `update.ps1`. Record the steady mean and the per-run variance in the Phase 3 / Phase 5 cohort tables exactly like the other tiers. If variance is wide (CoV > 10%), increase `DurationSec` before re-running.
 
 **No history-stack push.** This tier does not write to the local VictoriaMetrics history stack - the result lives in `benchmark/.run/azure-throughput/silo-*.log` (plus the per-cohort `sampler-*.csv`) only. That is intentional: a one-off real-Azure cohort is not directly comparable to docker-compose or microbench rows in the persona-trend dashboards. If you need cross-cycle continuity for this tier, copy the cohort summary block and selected `[phaseA]` rows into the Phase 7 post-mortem.
 
@@ -330,7 +337,7 @@ If no existing scenario exercises the hypothesis's hot path - for example, a hyp
 
 1. Add a new env file at `benchmark/scenarios/<slug>.env` modelled on the closest existing scenario. Set the `BENCH_*` variables that pin fleet shape, cadence, payload mix, and duration. The slug is the scenario id you will pass to `-Scenario`.
 2. If the scenario needs a docker-compose topology that is not yet expressed in the harness, raise the gap to the user before proceeding - extending the compose graph is a feature-dev change, not an optimisation change, and conflating the two confounds the cohort.
-3. Run `./benchmark.ps1 -Scenario <slug>` once on `main` to confirm the scenario produces metrics in VM and the run finishes cleanly. This is a **smoke run**, not part of the baseline cohort.
+3. Run `./benchmark/benchmark.ps1 -Scenario <slug>` once on `main` to confirm the scenario produces metrics in VM and the run finishes cleanly. This is a **smoke run**, not part of the baseline cohort.
 4. The new scenario file is committed on the optimisation branch alongside the candidate change. Both the baseline cohort (Phase 3) and the candidate cohort (Phase 5) must run against the **same** scenario file - if you tweak the scenario between cohorts you have a confounded experiment.
 5. If the candidate is discarded (Phase 7), the new scenario file goes with the branch unless it is independently useful for future cycles. If it is, mention it in the post-mortem and either keep the file uncommitted on disk for future cycles, or hand the scenario file to `feature-dev` as a separate PR (label `enhancement`) so it lands on `main` as a stable, reusable scenario.
 
@@ -343,7 +350,6 @@ The rest of the workflow (Phase 3 onward) is scenario-agnostic - everywhere the 
 3. After the third run, query VM for the cohort:
 
    ```powershell
-   . ./benchmark/benchmark.ps1
    $sha = (& git rev-parse --short HEAD).Trim()
    $vmUrl = if ($env:BENCH_HISTORY_VM_URL) { $env:BENCH_HISTORY_VM_URL } else { 'http://localhost:8428' }
    $q = 'bench_replication_apply_lag_p95_ms{scenario="bidirectional-replication",git_sha="' + $sha + '"}'
@@ -356,7 +362,7 @@ The rest of the workflow (Phase 3 onward) is scenario-agnostic - everywhere the 
    ```
 
 4. Record `baseline_median` and `iqr_baseline` in the chat reply. Compute the **decision threshold**: `threshold = 1.5 * iqr_baseline` (or your stated falsification rule).
-5. If the cohort is fewer than 3 samples (e.g. one push silently failed), re-import with `./benchmark.ps1 -ImportHistory` or re-run.
+5. If the cohort is fewer than 3 samples (e.g. one push silently failed), re-import with `./benchmark/benchmark.ps1 -ImportHistory` or re-run.
 
 ### Phase 4 - Candidate change
 
@@ -374,7 +380,8 @@ The rest of the workflow (Phase 3 onward) is scenario-agnostic - everywhere the 
    ```powershell
    $candSha = (& git rev-parse --short HEAD).Trim()
    Write-Host "candidate sha: $candSha"
-   $uri = "$env:BENCH_HISTORY_VM_URL/api/v1/series?match%5B%5D=" +
+   $vmUrl = if ($env:BENCH_HISTORY_VM_URL) { $env:BENCH_HISTORY_VM_URL } else { 'http://localhost:8428' }
+   $uri = "$vmUrl/api/v1/series?match%5B%5D=" +
           [uri]::EscapeDataString('bench_replication_apply_lag_p95_ms{git_sha="' + $candSha + '"}')
    (Invoke-RestMethod -Uri $uri).data.Count
    ```
@@ -415,7 +422,7 @@ If you discard, write a short post-mortem (1-2 paragraphs) into `benchmark/.run/
 
 If the change is being kept:
 
-1. Re-read `.github/agents/feature-dev.agent.md`. The shipment workflow (Phase 6 build/hygiene gates, Phase 7 review with the mandatory memory-allocation pass and dep cross-reference flip, Phase 8 deliver) is non-negotiable - the optimisation agent does **not** ship PRs directly. Hand the branch off.
+1. Re-read `.github/agents/feature-dev.agent.md`. The shipment workflow (Phase 6 build/hygiene gates, Phase 7 review with the mandatory memory-allocation pass, Phase 8 deliver) is non-negotiable - the optimisation agent does **not** ship PRs directly. Hand the branch off.
 
 2. The PR body **must** include:
 
@@ -450,7 +457,7 @@ The following have all happened in this codebase before. Each one wasted hours.
 
 - **Removing the last `await` from a hot grain method.** Converting a grain method like `public async Task<T> GetAsync(...)` into a sync wrapper that returns `Task.FromResult(...)` on the dominant path looks like a clean win on paper - one MoveNext gone per call - but it also removes the only yield point Orleans' grain scheduler had between successive inbound calls on that activation. The empirical signature is *IQR widening across multiple metrics simultaneously* (cycle 41 measured 2.6x p99 IQR, 7x p95 IQR, 6x reads/s IQR) rather than a clean median regression. Only elide synchronous fast paths when the surrounding caller still awaits an inter-grain call on the dominant path (cycle 39 / PR #240 - the `ShardRootGrain.PrepareForOperationAsync` ship - is the model: the helper sync-completed, but the caller's downstream `await cache.GetAsync(...)` still produced the inter-grain yield). See Phase 1 clause 6 (yield-boundary preservation) and Phase 6 IQR-ratio check for the prospective and retrospective guards on this anti-pattern.
 
-- **Launching benchmark runs (or any other long-running command) as background processes from the agent.** Empirically, the `run_command_in_terminal` tool's `background=true` mode does not reliably attach to or stream output from interactive PowerShell scripts in this workspace: every observed attempt has produced a pwsh process with near-zero CPU, no child `docker`/`dotnet`/`az` processes, no tee/redirect file, and no output retrievable via `get_background_terminal_output` (returns literal `nothing`). The most plausible cause is that the script reaches an interactive `az`/docker prompt or a `Read-Host`-equivalent that has no stdin attached in detached mode, and the script silently parks. The agent then wastes 5+ minutes polling a stuck background id while believing a 30-minute cohort is in flight. **Mandatory rule:** every benchmark invocation (`./benchmark.ps1 ...`, `./benchmark/azure-throughput/scripts/run-cohort.ps1 ...`, `./benchmark/azure-throughput/scripts/ladder.ps1 ...`, `./benchmark/azure-throughput/scripts/deploy.ps1`, `./benchmark/azure-throughput/scripts/update.ps1`, `dotnet test`, `docker build`, `az ...` deploys, anything that takes more than ~30 s) MUST be run with `background=false` in the foreground, one run at a time. If the tool blocks the agent's turn for the duration of a long cohort, that is the correct behaviour - hand control back to the user **before** the cohort with a short summary of the exact command(s) you intend to run and what each will write to `.run/`, and let the user run them at the shell so you can read the artefacts afterwards. Do not try to "split the cohort across background tasks", "parallelise the deploys", or "tee the output and poll" - all three have failed in this workspace. The only sanctioned use of `background=true` is for genuinely fire-and-forget local processes that do not need orchestration (e.g. starting a local VictoriaMetrics container that another foreground command will then query); benchmark cohorts are not that.
+- **Launching benchmark runs (or any other long-running command) as background processes from the agent.** Empirically, the `run_command_in_terminal` tool's `background=true` mode does not reliably attach to or stream output from interactive PowerShell scripts in this workspace: every observed attempt has produced a pwsh process with near-zero CPU, no child `docker`/`dotnet`/`az` processes, no tee/redirect file, and no output retrievable via `get_background_terminal_output` (returns literal `nothing`). The most plausible cause is that the script reaches an interactive `az`/docker prompt or a `Read-Host`-equivalent that has no stdin attached in detached mode, and the script silently parks. The agent then wastes 5+ minutes polling a stuck background id while believing a 30-minute cohort is in flight. **Mandatory rule:** every benchmark invocation (`./benchmark/benchmark.ps1 ...`, `./benchmark/azure-throughput/scripts/run-cohort.ps1 ...`, `./benchmark/azure-throughput/scripts/ladder.ps1 ...`, `./benchmark/azure-throughput/scripts/deploy.ps1`, `./benchmark/azure-throughput/scripts/update.ps1`, `dotnet test`, `docker build`, `az ...` deploys, anything that takes more than ~30 s) MUST be run with `background=false` in the foreground, one run at a time. If the tool blocks the agent's turn for the duration of a long cohort, that is the correct behaviour - hand control back to the user **before** the cohort with a short summary of the exact command(s) you intend to run and what each will write to `.run/`, and let the user run them at the shell so you can read the artefacts afterwards. Do not try to "split the cohort across background tasks", "parallelise the deploys", or "tee the output and poll" - all three have failed in this workspace. The only sanctioned use of `background=true` is for genuinely fire-and-forget local processes that do not need orchestration (e.g. starting a local VictoriaMetrics container that another foreground command will then query); benchmark cohorts are not that.
 
 ## What this agent does NOT do
 

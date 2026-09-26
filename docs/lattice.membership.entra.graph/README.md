@@ -4,7 +4,7 @@ Microsoft Graph-backed group-overflow resolver for [Orleans.Lattice.Membership.E
 
 ## What is it?
 
-`Orleans.Lattice.Membership.Entra.Graph` provides the Microsoft Graph-backed implementation of the Entra group resolver abstraction defined in `Orleans.Lattice.Membership.Entra`. It is a separate, opt-in package so that the Microsoft Graph SDK and the MSAL client library are pulled in only by applications that actually need to resolve overflowed group membership. Applications that never overflow their groups claim, or that are satisfied with the token-only fallback, never take this dependency.
+`Orleans.Lattice.Membership.Entra.Graph` provides the Microsoft Graph-backed implementation of the Entra group resolver abstraction defined in `Orleans.Lattice.Membership.Entra`. It is a separate, opt-in package so that the Microsoft Graph SDK and the MSAL client library are pulled in only by applications that actually need to resolve overflowed group membership or want the Graph-backed identity directory it also installs. Applications that never overflow their groups claim, or that are satisfied with the token-only fallback, never take this dependency.
 
 ## What it does
 
@@ -51,11 +51,14 @@ The two modes are validated fail-closed at registration: exactly one must be con
 ## Identity directory
 
 The same registration also installs a Microsoft Graph-backed
-`ILatticeIdentityDirectory` (`ProviderId` `"entra"`) - the provider-agnostic
+`ILatticeIdentityDirectory`, the public `EntraGraphIdentityDirectory`
+(`ProviderId` `"entra"`, its `EntraProviderId` constant) - the provider-agnostic
 identity source that the Explorer Access area searches and validates against when
 an operator picks or creates a subject. It searches users and groups in the tenant
-over the same app-only Graph token described above, requiring the `User.Read.All`
-and `Group.Read.All` application permissions. A Graph call that Graph itself
+over the same app-only Graph client described above, requiring the `User.Read.All`
+and `Group.Read.All` application permissions, and records each principal's id
+per `LatticeEntraGraphOptions.DirectorySubjectIdSource` (the object id by default)
+so validation matches the authenticator's subject claim. A Graph call that Graph itself
 denies (an `ODataError`) degrades cleanly rather than throwing: a search returns
 an empty page and a resolve returns `null`, so the Access area keeps working
 without an unhandled fault. Token-acquisition failures and non-OData transport

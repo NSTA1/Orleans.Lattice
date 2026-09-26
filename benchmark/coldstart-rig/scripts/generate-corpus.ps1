@@ -20,7 +20,7 @@
 	     must live under the rig's mounted workspace root, because the box only
 	     ever sees /workspace and refuses a path that escapes it.
 
-	  2. INDEX. Brings the rig stack up on a dedicated scale working volume,
+	  2. INDEX. Brings the rig stack up on the rig working volume,
 	     registers the corpus over the stateless MCP endpoint with
 	     repocontext_add_repo, and polls repocontext_index_status until
 	     scanning and embedding have both converged.

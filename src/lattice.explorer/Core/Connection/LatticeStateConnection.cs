@@ -216,7 +216,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         => StreamAsync((c, ct) => c.ObserveMetricsAsync(request, ct), cancellationToken);
 
     /// <summary>
-    /// The background health-monitor step: probes a degraded or reconnecting
+    /// The background health-monitor step: probes a connecting, degraded, or reconnecting
     /// endpoint to recover it. Invoked by the internal timer and, in tests,
     /// directly to drive recovery and the degrade transition deterministically.
     /// </summary>

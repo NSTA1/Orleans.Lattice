@@ -90,8 +90,8 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 Title = "Get replication config",
                 Description =
                     "Reports the effective replicated-tree set the caller may manage: each tree's enrolled "
-                    + "state, the merge mode in force, whether its mode is ambiguous (shipping paused "
-                    + "fail-closed), and which enrollment source put it in force - Runtime (enabled through "
+                    + "state, the merge mode in force, whether its mode is ambiguous (no mode is picked; an "
+                    + "already-active shipper is not paused), and which enrollment source put it in force - Runtime (enabled through "
                     + "this surface), Static (declared in deployment configuration, so change it there, not "
                     + "at runtime), or RuntimeAndStatic. Both sources are reconciled, so a statically "
                     + "configured estate is reported as replicating. Permission-scoped: a tree the caller "
@@ -147,9 +147,10 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Disable replication",
                 Description =
-                    "Disables cross-cluster replication for a tree, pausing shipping of new mutations. Never purges "
-                    + "already-replicated peer data and keeps the tree's fixed merge mode so a later re-enable is a "
-                    + "fresh bootstrap. Idempotent. Subject to the fail-closed replication access gate. Requires "
+                    "Disables cross-cluster replication for a tree: its runtime merge mode stops resolving, but a "
+                    + "shipper already active for the tree is not stopped. Never purges already-replicated peer data "
+                    + "and keeps the tree's fixed merge mode; a later re-enable bootstraps only when a source cluster "
+                    + "is supplied and the tree already holds data. Idempotent. Subject to the fail-closed replication access gate. Requires "
                     + "replication control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,

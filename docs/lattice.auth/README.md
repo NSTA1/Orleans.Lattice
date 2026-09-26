@@ -54,6 +54,9 @@ var rule = new LatticeAuthorizationRule(
 - **Subject selector** (`LatticeSubjectSelector`) targets a `User(id)` or a `Group(id)`.
 - **Operations** (`LatticeOperation`, a `[Flags]` set) name the capability classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, `Admin`, `Backup`, `Restore`, `SchemaAdmin`, `Telemetry`, `Replication`, and `TreeLifecycle`. Grants do not imply each other unless the enum member explicitly says so: for example, `Write` does not confer `Delete`, `Admin` does not confer `Telemetry`, and `Restore` authorizes populating the target scope from a backup without a separate `Write` or `BulkLoad` grant.
 - **Effect** (`LatticeEffect`) is `Allow` or `Deny`.
+- **Condition** is an optional, opaque string reserved for a future claim / attribute predicate language. Nothing evaluates it in this version: a rule carrying a condition matches exactly as an unconditional rule would, so never rely on one to narrow a grant.
+
+`LatticeAuthOperations.All` is a convenience mask of every tree-scoped data-plane operation, `Read` through `SchemaAdmin`. It deliberately excludes `Telemetry`, `Replication`, and `TreeLifecycle`, so a whole-data-plane grant never confers them; each must be granted explicitly.
 
 Rules are authored through the policy store, resolved from the silo's service provider:
 
@@ -125,6 +128,25 @@ The authorization layer is opt-in. The core `AddLattice(...)` registration insta
 ## Observability
 
 Every authorization decision, the decision latency, and the compiled-snapshot epoch / age are published on a single meter, and an optional audit sink records a durable decision trail. See [Observability](observability.md) for the full instrument catalogue, the audit-sink seam, and the reserved subject-resolution-cache counters.
+
+## Public API
+
+Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocabulary (`LatticeOperation`) and the access-gate seam the package plugs into are core types.
+
+| Type | Purpose |
+|---|---|
+| `LatticeAuthServiceCollectionExtensions` | `AddLatticeAuth(configure)` installs the enforcing gate; `ConfigureLatticeAuth(configure)` layers a further `LatticeAuthOptions` delegate after registration. |
+| `LatticeAuthOptions` | Every knob; see [Configuration](configuration.md). |
+| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. |
+| `LatticeSubjectSelectorKind`, `LatticeScopeKind`, `LatticeEffect` | The discriminators: `User` or `Group`; `Tree`, `Key`, or `Prefix`; `Allow` or `Deny`. |
+| `LatticeAuthOperations` | `All`, the whole-data-plane operation mask. |
+| `ILatticeAuthorizationPolicyStore` | Durable rule storage: `PutRuleAsync`, `GetRuleAsync`, `RemoveRuleAsync`, `ListRulesForTreeAsync`, and `ListRulesAsync`. |
+| `ILatticeDecisionEngine` | Evaluates a request against the compiled policy snapshot, synchronously and in memory (`Evaluate`), and reports the snapshot's `CurrentEpoch`. It is the policy decision only: the enforcing gate layers the bootstrap-administrator bypass, the control-plane fail-closed rule, tenant isolation, and the strict epoch fence around it. |
+| `LatticeAuthReservedTrees` | The reserved `sys-auth-*` namespace guard: `Prefix`, `PolicyTreeId`, `IsReserved(treeId)`, and `ThrowIfReserved(treeId)`, which throws the same error the policy store enforces. |
+| `LatticePolicyEpochFenceContext` | The caller half of the strict epoch fence: `RequireAtLeast(epoch)` scopes a required policy-epoch floor onto the ambient request context (nesting never lowers an outer floor), and `RequiredEpoch` reads it. |
+| `ITenantGateEnforcer` | The tenant-isolation seam the gate consults only for a request the policy already allowed; a deny from either side denies. The default is an inactive allow-everything implementation, and `Orleans.Lattice.Tenancy` supplies the active one. |
+| `ILatticeAuthAuditSink`, `LatticeAuthDecisionEvent`, `LatticeAuthAuditVerbosity` | The audit seam, its value-free decision event, and its verbosity; see [Observability](observability.md#the-audit-sink). |
+| `LatticeAuthMetrics` | The `orleans.lattice.auth` meter and its instrument and tag names; see [Observability](observability.md). |
 
 ## Reference
 

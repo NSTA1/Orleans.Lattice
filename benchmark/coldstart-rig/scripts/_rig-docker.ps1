@@ -232,7 +232,7 @@ function Get-RigDockerImageId {
 	diverged, so a restart would silently swap what it runs.
 
 .DESCRIPTION
-	Purely read-only: two `docker inspect` calls and a comparison. It touches
+	Purely read-only: one `docker ps` lookup plus three `docker inspect` calls and a comparison. It touches
 	nothing, and it catches the hazard regardless of who moved the tag - a
 	deploy script, a manual build, or a rig operator - because it asks the
 	daemon what is true now rather than trusting anyone's intent.

@@ -3,8 +3,9 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Per-view tuning, resolved through the named-options pattern
 /// (<c>IOptionsMonitor&lt;LatticeViewOptions&gt;.Get(viewName)</c>), mirroring
-/// how replication resolves <c>LatticeReplicationOptions</c> per tree. The
-/// unnamed (default) instance applies to every view that has no named override.
+/// how replication resolves <c>LatticeReplicationOptions</c> per tree. Each named
+/// view gets this type's property defaults unless configured explicitly; only values
+/// registered through <c>ConfigureAll</c> would apply across view names.
 /// <para>
 /// <see cref="BatchSize"/> and <see cref="CoalesceWindow"/> apply to every view;
 /// <see cref="AggregationFanout"/> and <see cref="AggregationMaxGroupEntries"/>

@@ -7,7 +7,7 @@
 
 The **bootstrap-snapshot fallback** is the next line of defence for **both** cases: a strictly opt-in pass that re-derives the committed projection of *only* the divergent leaf range from the live tree (which is immune to both WAL trimming and the cursor filter) and re-ships those committed entries to the diverged peer.
 
-The repair travels the **same** replication transport and causal-stable apply path as ordinary replication. Re-shipped entries carry their committed-projection clock verbatim and are de-duplicated at the receiver on `(originClusterId, hlc)`, so re-sending is idempotent.
+The repair travels the **same** replication transport and causal-stable apply path as ordinary replication. Re-shipped entries carry their committed-projection clock verbatim, so re-sending is idempotent: the receiver suppresses a recently applied `(originClusterId, hlc, key, op)` identity and otherwise re-applies the entry to the same state under per-key last-writer-wins (a CRDT-mode tree folds the committed state through its state-based merge, which is equally idempotent).
 
 ## How the scope stays proportional to the drift
 

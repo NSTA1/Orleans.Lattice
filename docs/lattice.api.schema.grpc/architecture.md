@@ -12,7 +12,7 @@ The operations map to two gRPC shapes: unary for policy, count, versioning, reme
 
 ## Two-layer authorization
 
-Every protected call passes through two independent, fail-closed gates.
+Every protected call passes through two independent gates. The transport gate is closed by default; the facade gate is closed by default only once the `Orleans.Lattice.Auth` add-on is registered (see below).
 
 ### 1. Transport meta-authorizer
 
@@ -22,7 +22,7 @@ The interceptor decodes each protected call into a `LatticeSchemaApiAuthorizatio
 
 ### 2. Facade scope authorization
 
-Once past the transport gate, the service invokes the control facade. The facade then authorizes the operation's tree scope through the schema engine's internal authorization component, exactly as an in-process facade caller would. Reads require Read authority; mutations require SchemaAdmin authority. An anonymous or unauthorized caller is denied here even when the transport gate allowed the call.
+Once past the transport gate, the service invokes the control facade. The facade then authorizes the operation's tree scope through the schema engine's internal authorization component, exactly as an in-process facade caller would. Reads require Read authority; mutations require SchemaAdmin authority. With the `Orleans.Lattice.Auth` add-on registered (its `LatticeAuthOptions.DefaultEffect` defaults to `Deny`), an anonymous or unauthorized caller is denied here even when the transport gate allowed the call; without it the core no-op access gate allows every call (see [Credential bridging](#credential-bridging)).
 
 The two gates are complementary, not redundant: the transport gate is a coarse edge control keyed by headers, operation, and target, while the facade gate is the engine's own fine-grained, per-tree, fail-closed authorization. A deployment can run a permissive transport gate behind a trusted boundary and still get full per-tree enforcement from the facade, or tighten both.
 
@@ -69,4 +69,4 @@ No tenant id is echoed back: it is a server-side attribution decision, and the d
 
 ## Wire compatibility
 
-Wire messages live under `Model/*` and use Orleans aliases prefixed `oisg.`. Shared facade and abstractions records use aliases prefixed `ois.`. Contract evolution is additive-only: new fields use new `[Id(n)]` values, and aliases or field numbers are never renumbered. That lets a newer response decode under an older client while preserving the stable wire names.
+Wire messages live under `Model/*` and use Orleans aliases prefixed `oisg.`. The facade's shared abstractions record (`LatticeSchemaCapabilities`) uses the `ois.` prefix, and the schema engine's records carried on the wire keep the engine's own `ols.` aliases. Contract evolution is additive-only: new fields use new `[Id(n)]` values, and aliases or field numbers are never renumbered. That lets a newer response decode under an older client while preserving the stable wire names.

@@ -44,6 +44,12 @@ The picker and the Tenant administration list read from one source of truth, so
 they cannot diverge, and the list offers a "set as active tenant" action that
 drives the picker directly.
 
+Alongside whichever shape applies, a platform operator is also offered an **All
+tenants** toggle, which lists items across every tenant they can reach instead
+of only the active one. The setting is remembered (`shell.all-tenants`) and is
+re-applied on a later visit only for a caller who still validates as a platform
+operator.
+
 ## Switching is confirmed, refusals are explained
 
 A switch reports its outcome rather than appearing to work:

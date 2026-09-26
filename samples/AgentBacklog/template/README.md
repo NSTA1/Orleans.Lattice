@@ -23,10 +23,13 @@ step by hand.
 
 The claim surface ships in the `Orleans.Lattice.Api.Mcp.RepoContext` package and
 is exposed as MCP tools, not as a public C# API. Register it **with writes
-enabled**:
+enabled**, in workspace mode:
 
 ```csharp
-builder.Services.AddRepoContextTools(enableWrites: true);
+builder.Services.AddRepoContextTools(
+    enableWrites: true,
+    workspaceMode: true,
+    workspaceRoot: "/workspace");
 ```
 
 Without `enableWrites` the mutating tools are not contributed at all, so
@@ -34,8 +37,17 @@ Without `enableWrites` the mutating tools are not contributed at all, so
 will not appear in the tool list. That is the fail-closed gate working, not a
 fault. `repocontext_claim_status` is read-only and is always contributed.
 
-Your repository must also be indexed, so that `repocontext_list_repos` reports a
-`repoId`. See the [container quickstart](../../../docs/lattice.api.mcp.repocontext/container.md).
+`workspaceMode: true` is what contributes `repocontext_list_repos`, which every
+backlog agent reads its `{repoId}` from, and the `workspaceRoot` is what lets
+`repocontext_add_repo` onboard a repository: without a root, neither onboarding
+tool is contributed. The container host registers exactly this. Your repository
+must also be indexed, so that `repocontext_list_repos` reports a `repoId`. See
+the [container quickstart](../../../docs/lattice.api.mcp.repocontext/container.md).
+
+Leave `RepoContextTtlOptions.DefaultMemoryTtl` unset (its default) for your
+repository. When it is set, `repocontext_remember` applies it to every newly
+created entry that omits `ttlSeconds` - backlog items included - and the
+protocol forbids a TTL on an item.
 
 ## 2. Copy the template
 

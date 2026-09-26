@@ -18,7 +18,7 @@ flowchart LR
     Recovery -->|complete or remove interrupted batches| Manifest
 ```
 
-The provider keeps each `(tree, shard)` stream ordered while allowing append payloads to land in per-batch storage partitions. Commit metadata is ordered by start offset and advances the shard tail only when the contiguous prefix is committed.
+The provider keeps each `(tree, shard)` stream ordered while allowing append payloads to land in per-batch storage partitions. Each commit writes the metadata of the batches pending at that moment in ascending start-offset order, and the stored shard tail is the high-water mark of the batches committed so far, so it never moves backward.
 
 ## Storage layout
 
@@ -38,14 +38,16 @@ Tree ids are encoded for Azure Table key safety. The table is created on first u
 
 Every append preserves the public WAL invariants:
 
-1. The supplied offsets must be dense for one shard.
+1. The supplied offsets must be dense within each batch; across batches the producer allocates them densely, in allocation order.
 2. Entry payload rows for one batch are committed atomically by Azure Table Storage.
-3. Commit metadata advances in strict offset order.
-4. The visible tail never skips a gap.
+3. Each commit writes the pending batches' metadata in ascending start-offset order.
+4. The stored tail never moves backward. Batches whose entry writes finish out of order can commit out of order, so the tail can pass a lower batch that is still in flight; if that batch then fails, its offsets stay an honest gap beneath the tail, as the core WAL contract permits.
 5. A failed append does not expose a partial visible batch.
 6. Trim can remove old retained rows, but it never moves the committed tail backward.
 
-Azure Table transactions are limited to 100 actions and 4 MiB. The provider exposes `AzureTableWalStorageProvider.MaxEntriesPerBatch = 100`; replication defaults keep append batches below this ceiling. For throughput and pending-depth tuning, see [WAL tuning](../lattice/wal-tuning.md).
+Azure Table transactions are limited to 100 entities and a 4 MiB total payload. The provider exposes `AzureTableWalStorageProvider.MaxEntriesPerBatch = 100`, and the core WAL batch defaults use the same figures: `LatticeOptions.WalMaxBatchEntries` defaults to 100 entries and `WalMaxBatchBytes` to 4 MiB of encoded payload, measured before compression. For throughput and pending-depth tuning, see [WAL tuning](../lattice/wal-tuning.md).
+
+A single entry has a much smaller limit. Each entry is stored as one entity whose whole encoded record - after compression, when it applies - is a single binary property, and the Azure Table service data model limits a binary property to 64 KiB (and an entity to 1 MiB). The provider neither splits a payload across properties or rows nor checks its size, so an entry whose stored payload exceeds 64 KiB is rejected by the service. Because a batch commits in one transaction, the whole append fails with it, including every other entry in the same batch, and the rejection is not a transient fault, so it is not retried in place. Compression can bring a compressible payload under the limit; an incompressible payload, or any payload with `Compression` set to `LatticeCompression.None`, is stored verbatim.
 
 ## Commit pipeline
 
@@ -53,7 +55,7 @@ A normal append has three behavioural stages:
 
 1. **Prepare recovery state.** The provider records enough information to distinguish an interrupted append from a committed append during the next reconciliation pass. With `EliminateCandidateRowOnHotPath = true`, the normal path skips an extra recovery-marker write and relies on discoverable batch state plus the committed tail.
 2. **Write entries.** Entry payload rows are written in a single Azure Table transaction for that batch.
-3. **Complete in offset order.** Commit metadata and the shard tail are updated in strict ascending offset order. Under load, multiple completions can be coalesced into one transaction, bounded by Azure Table transaction limits.
+3. **Complete in offset order.** Each commit writes the metadata of the completions pending at that moment in ascending offset order and raises the shard tail to the highest end offset committed so far; the tail never moves backward. Under load, multiple completions can be coalesced into one transaction, bounded by Azure Table transaction limits.
 
 `PipelinePhaseTwoCommits = true` lets a caller return after durable entry write and observation of the previous pending completion for the shard. It does not change ordering, recovery, or all-or-nothing durability; it changes which append observes a completion fault, and it introduces a bounded read visibility lag. `PipelinedPhaseTwoFaultHandler` exists so an idle shard can still report a completion fault for observability.
 
@@ -95,7 +97,7 @@ When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both
 
 Reads enumerate committed batch metadata in offset order, then stream entry rows lazily from each overlapping batch. `GetHighestOffsetAsync` reads the stored tail and folds over it the contiguous run of already-durable batches the shard's live completion worker has accepted, so it never lags behind a completed append. `GetLowestOffsetAsync` finds the first retained batch after trim.
 
-The filtered replay read (`ReadFilteredAsync`, issue #3565) walks the same metadata, and bounds each batch query above by the window's last row key as well. It classifies each row from the routing prefix of its payload before decoding it: a compressed row is inflated into a pooled buffer rather than a new array, and a row the reader's filter excludes is neither decoded nor retained. The table service still returns every row in the window - the key lives inside the payload, so the service cannot select on it - which makes the saving the per-row decode and its allocations, not the transfer. The classification needs the routing reader `AddAzureTableWalStorage` supplies; a provider built through a public constructor decodes every row it examines, and returns the same rows.
+The filtered replay read (`ReadFilteredAsync`, issue #3565) walks the same metadata, and bounds each batch query above by the window's last row key as well. It classifies each row from the routing prefix of its payload before decoding it: a compressed row is inflated into a pooled buffer rather than a new array, and a row the reader's filter excludes is neither decoded nor retained - except the window's last examined row, which, when excluded, is projected routing-only at the end of the scan so a resuming reader moves past it. The table service still returns every row in the window - the key lives inside the payload, so the service cannot select on it - which makes the saving the per-row decode and its allocations, not the transfer. The classification needs the routing reader `AddAzureTableWalStorage` supplies; a provider built through a public constructor decodes every row it examines, and returns the same rows.
 
 Trim deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order. A crash during trim can leave a stale retained prefix, but not a gap in the live tail; a later trim can resume cleanup.
 
@@ -103,13 +105,14 @@ Capacity planning is shared with core WAL tuning:
 
 - Increase shard count to spread work across storage partitions.
 - Keep `WalMaxBatchEntries` at or below the provider batch limit.
+- Keep each entry's encoded record under 64 KiB after compression; an entry is never split across properties or rows.
 - Use `WalMaxPendingBatches` carefully; more pending batches increase pipeline depth and storage pressure.
 - Watch retry-attempt and retry-exhausted telemetry to distinguish transient retry storms from saturated storage.
 - Use the core [WAL saturation signal](../lattice/wal-saturation-signal.md) to coordinate admission and retry behaviour.
 
 ## Compression and retry policies
 
-Stored payload compression is per row. A row records enough metadata to decode itself, so changing `Compression`, `CompressionMinPayloadBytes`, or the registered compressor affects new rows only. Older rows remain readable.
+Stored payload compression is per row. A row records enough metadata to decode itself, so changing `Compression`, `CompressionMinPayloadBytes`, or the registered compressor affects new rows only. Older rows remain readable as long as a compressor for their recorded algorithm is still registered; a row whose algorithm has none fails its read with `NotSupportedException`. The Zstandard fallback that `AddAzureTableWalStorage` registers keeps Zstd rows readable.
 
 When the provider constructs its own Azure SDK client, it attaches `RetryAttemptTrackingPolicy` for retry telemetry. When `HonorSaturationSignal` is enabled and `IWalSaturationSignal` is available, it also attaches `SaturationAwareRetryPolicy` so retry attempts can short-circuit during saturated WAL pressure. A pre-built `TableServiceClient` bypasses provider-owned pipeline construction; the host owns any equivalent policies in that mode.
 

@@ -68,6 +68,21 @@ Implementing `IExplorerPlugin<TDomain>` rather than `IExplorerPlugin` declares
 the domain contract in the type system, so `DomainContract` is filled in for you
 and cannot drift from what the plugin actually resolves.
 
+Register the plugin with `AddExplorerPlugin<TPlugin>()`, or with
+`AddExplorerPlugin(plugin)` for an instance you built yourself. Either call also
+registers the host machinery (`AddExplorerPluginHost()`) and is idempotent, so a
+shipped plugin package wraps it in a helper of its own - `AddExplorerBackupsPlugin()`,
+for example - and a head calls that. The host context a plugin reads is backed by
+two adapters the head supplies, an `IExplorerPluginHostState` and an
+`IExplorerPluginPreferences`; the Explorer's shared UI registers both through
+`AddExplorerPluginAdapters()`.
+
+A view that another surface renders inline, rather than a tab of its own, is an
+`ISelectionNestedSurface` contributed with `AddExplorerSelectionNestedSurface<TSurface>()`
+and looked up by a stable id from `SelectionNestedSurfaceKeys`. That is how the
+per-key History timeline appears behind the Data surface's History button without
+either package referencing the other.
+
 ## Rules that are enforced by tests
 
 Each of these is guarded, because each has already been got wrong at least once.
@@ -152,7 +167,7 @@ The four states render differently, so pick the one that matches what you mean:
 
 **A denial must supply a remedy.** Declare the missing permission and the
 audience to ask as structured data on the gate result; the shell renders them as
-"Requires the Backup permission - ask a platform administrator". Do not compose
+"Requires the Backup permission - ask an operator." Do not compose
 that sentence yourself, and do not derive it from your own area label - naming
 the area tells the user something they can already see. A gate that declares no
 remedy falls back to a general one, which is weaker than the one you could have
@@ -221,8 +236,9 @@ and a row in each table, and neither table names a package that does not exist -
 so the omission fails the build rather than surfacing at release time.
 
 This still matters more than it looks. `Orleans.Lattice.Explorer.UI` is already
-published and depends on the plugin packages, so an unpublished dependency breaks
-restore for every consumer of the whole Explorer family.
+published, and its current source depends on the plugin packages, so releasing it
+with an unpublished dependency breaks restore for every consumer of the whole
+Explorer family.
 
 ## Styling
 
@@ -235,11 +251,12 @@ ships the token layer, the named breakpoints, and the adaptive primitives.
 |---|---|
 | Layout | `lx-root`, `lx-table` (+ `lx-table-caption`, `lx-cell-code`), `lx-cardlist` (+ `lx-card`, `lx-card-title`, `lx-card-fields`, `lx-card-field`, `lx-card-field-label`) |
 | Navigation | `lx-nav` family, including the drawer, bottom bar, sidebar and overflow variants |
-| Tabs | `lx-tabstrip`, `lx-tab`, `lx-tabpanel`, and their overflow variants |
+| Tabs | `lx-tabstrip`, `lx-tab`, `lx-tabpanel`, and their overflow, segmented, subordinate and vertical variants |
 | Buttons | `lx-btn` with `lx-btn-primary`, `lx-btn-danger`, `lx-btn-icon`, `lx-btn-link` |
 | Dialogs | `lx-modal`, `lx-modal-backdrop`, `lx-modal-actions` |
 | Status | `lx-badge`, `lx-badge-muted` |
 | Breakpoint visibility | `lx-only-compact`, `lx-only-medium`, `lx-only-expanded`, `lx-medium-up`, `lx-medium-down`, `lx-expanded-up` |
+| Accessibility | `lx-visually-hidden` (content exposed only to assistive technology) |
 
 `lx-tab` and `lx-btn` spend `--lx-target-min`, so they meet the compact touch-target
 size without a plugin doing anything. A hand-rolled button will not.
@@ -250,6 +267,10 @@ The `explorer-` class prefix is **retired**: a hygiene test fails the build on a
 in a `.razor.cs` code-behind, or declared as a stylesheet selector. If you find
 one in an old file you are copying, it is a leftover, not a pattern. Namespace a
 plugin-specific rule `lx-{plugin}-` instead; the shared shell owns `lx-shell-`.
+A sibling hygiene test covers the general case: any class in the Explorer's own
+namespaces (an `lx`-prefixed class, or an `is-` state modifier) that markup names
+but no Explorer stylesheet defines fails the build, so a class with no rule cannot
+ship silently unstyled.
 
 **Never write a width media query.** Branch on the cascaded
 `LatticeAdaptiveContext.Breakpoint` - `Compact`, `Medium`, or `Expanded` - which

@@ -8,8 +8,8 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 
 | Container         | Image                                        | Port | Purpose                                                  |
 |-------------------|----------------------------------------------|------|----------------------------------------------------------|
-| `vfs-history-vm`  | `victoriametrics/victoria-metrics:v1.103.0`  | 8428 | PromQL-compatible long-term store; accepts pushes via `/api/v1/import/prometheus`. |
-| `vfs-history-grafana` | `grafana/grafana:11.3.0`                  | 3001 | Dedicated Grafana hosting the **Orleans.Lattice - Benchmark History** persona dashboards (one per lattice-usage profile, see [Dashboards](#dashboards)). |
+| `vfs-history-vm`  | `victoriametrics/victoria-metrics:v1.103.0`  | 8428 | PromQL-compatible long-term store with 12-month retention (`-retentionPeriod=12`); accepts pushes via `/api/v1/import/prometheus`. |
+| `vfs-history-grafana` | `grafana/grafana:11.3.0`                  | 3001 | Dedicated Grafana hosting the benchmark-history persona dashboards, provisioned into its `Orleans.Lattice` folder (one per lattice-usage profile, see [Dashboards](#dashboards)). |
 
 `docker-compose.history.yml` declares two named volumes (`victoriametrics-data`,
 `grafana-history-data`) so data survives `down`. Use `down -v` to reset.
@@ -30,11 +30,17 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 ./benchmark.ps1 -ImportHistory
 
 # View trends.
-#   http://localhost:3001  (anonymous viewer, dashboard auto-loads)
+#   http://localhost:3001  (anonymous viewer; the dashboards are provisioned automatically)
 
 # Stop (named volumes preserved).
 ./benchmark.ps1 -CloseHistory
 ```
+
+`./start-history.ps1` is a stand-alone equivalent of `-OpenHistory` that also
+waits for Grafana to answer (up to `-TimeoutSeconds`, default 60) and then opens
+it in the browser; `-NoBrowser` skips the browser. `benchmark.ps1` reaches the
+stack at `BENCH_HISTORY_VM_URL` (default `http://localhost:8428`) and
+`BENCH_HISTORY_GRAFANA_URL` (default `http://localhost:3001`).
 
 ## Data model
 
@@ -45,7 +51,7 @@ plus every auto-discovered key. Every sample is tagged:
 | Label      | Example                | Source                                         |
 |------------|------------------------|------------------------------------------------|
 | `scenario` | `current-state-no-replication`                 | scenario id (the script argument)              |
-| `run_id`   | `2026-04-30T14-08-41Z` | UTC ISO8601 timestamp of run end (script-generated) |
+| `run_id`   | `2026-04-30T14-08-41Z` | UTC ISO8601 timestamp taken when the script starts the run, with `:` written as `-` (script-generated) |
 | `git_sha`  | `abc1234`              | `git rev-parse --short HEAD` at run time       |
 
 Sample timestamps are the run's `ended` time, so the trend chart's x-axis is
@@ -69,7 +75,10 @@ feed it:
    `_p95` / `_p99` keys without harness edits. Adding a new
    instrumentation site (e.g. the read-driver in `Bench.Sink`) just needs the
    meter registered with `WithMetrics(b => b.AddMeter(...))` in the silo and a
-   matching `__name__=~"bench_<prefix>_.*"` regex in a dashboard family.
+   matching `__name__=~"bench_<prefix>_.*"` regex in a dashboard family, as long
+   as its instrument names start with one of those prefixes; one that starts
+   with neither also needs its prefix added to `$AutoDiscoverPrefixes` in
+   `benchmark.ps1`.
 
 ## Dashboards
 
@@ -90,8 +99,8 @@ and per-run barcharts.
 | `lat-hist-read-heavy`                | `read-heavy-random`, `read-heavy-ordered`                                                                               | GetAsync-dominant load (95:5 read:write) across random and sequential keys.   |
 | `lat-hist-read-write-mix`            | `read-write-mix-random`, `read-write-mix-ordered`                                                                       | Balanced 50:50 read/write (YCSB-A shape) across random and sequential keys.   |
 | `lat-hist-microbench`                | `microbench`                                                                                                            | BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster).        |
-| `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Foreground commit path: WAL-append + in-memory Apply percentiles. The legacy shadow-write tile is retained for backwards comparison and reads zero on every recent run. |
-| `lat-hist-atomic-writes`             | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | `SetManyAtomicAsync` saga cost and saga health. Hand-maintained; `Generate-Dashboards.ps1` does not produce it. |
+| `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Foreground commit path: WAL-append + in-memory Apply percentiles. The legacy shadow-write tile is retained for backwards comparison, but the commit step it reads was removed in v3.4.0, so no run since pushes a value for it: it can show only pre-v3.4.0 history, never a fresh zero. |
+| `lat-hist-atomic-writes`             | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | `SetManyAtomicAsync` saga cost and saga health. Hand-maintained; `Generate-Dashboards.ps1` does not produce it. Its saga-health panels query the raw `orleans_lattice_atomic_write_completed_total` series, which the history push never writes (it imports only `bench_*` scalars), so they render empty on this stack. |
 
 ### Per-persona-dashboard layout (3 bands, top-to-bottom)
 
@@ -107,9 +116,11 @@ persona's scenarios).
 
 The dashboards are regenerated from `benchmark/history/Generate-Dashboards.ps1`.
 The script wipes `BenchmarkHistory*.json` first so deleted personas don't leak,
-then emits one JSON per persona under `grafana/dashboards/`. The wipe also removes
-the hand-maintained `BenchmarkHistory.atomic-writes.json`; restore it from git
-after regenerating. Adding or moving a
+then emits one JSON per persona under `grafana/dashboards/`, plus the Overview. The
+wipe also removes the hand-maintained `BenchmarkHistory.atomic-writes.json`, and
+the regenerated Overview drops the hand-added `Atomic Writes` row (the script's
+`$Personas` table has no atomic-writes entry); restore both from git after
+regenerating. Adding or moving a
 scenario between personas is a one-line edit to the `$Personas` table at the
 top of the script - re-run, wait ~30 s for Grafana's file-provider rescan,
 done.

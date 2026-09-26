@@ -21,9 +21,11 @@ public sealed class LatticeTenantAdminApiGrpcOptions
     /// The inbound request-header (gRPC metadata) name that carries the caller's
     /// credential token, bridged into the ambient Lattice credential so the
     /// composed access gate can resolve the caller's subject and authorize each
-    /// operation. Defaults to <c>authorization</c>. Only consulted when auth-backed
-    /// control is active (the <c>Orleans.Lattice.Auth</c> add-on is registered);
-    /// when it is not, no header is read.
+    /// operation when auth-backed control is active (the
+    /// <c>Orleans.Lattice.Auth</c> add-on is registered). Defaults to
+    /// <c>authorization</c>. The header is bridged on every call, including when
+    /// authorization is disabled or no auth add-on is present; without auth-backed
+    /// control the credential does not change facade behaviour.
     /// </summary>
     public string CredentialHeaderName { get; set; } = "authorization";
 

@@ -1456,9 +1456,8 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Producer-side filter: applies <see cref="LatticeReplicationOptions.KeyFilter"/> /
     /// <see cref="LatticeReplicationOptions.KeyPrefixes"/> and the
-    /// durable origin-based cycle-break (skip entries whose
-    /// <see cref="WalRecord.OriginClusterId"/> matches the peer's
-    /// own cluster id). Also drops entries whose
+    /// durable origin-based cycle-break: only entries authored by this local
+    /// cluster are eligible to ship. Also drops entries whose
     /// <see cref="WalRecord.OriginClusterId"/> is null or empty - these
     /// are durability-only WAL appends authored by the core
     /// <c>ICommitLogWriter</c> path on the same per-tree shard the
@@ -2716,9 +2715,9 @@ internal sealed class ReplicationShipperGrain(
         }
 
         // Resolve the tree's declared mode once (a cached dictionary read)
-        // and dispatch. A tree not declared replicated resolves to null,
-        // which collapses to the LWW default - but such a tree never
-        // activates a shipper, so the null case is unreachable here.
+        // and dispatch. A tree disabled or made ambiguous at runtime keeps its
+        // active shipper, so the null case is reachable and collapses to the LWW
+        // default.
         var mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister;
         if (mode == LatticeMergeMode.LwwRegister)
         {

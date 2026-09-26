@@ -477,9 +477,9 @@ public abstract class IntegrationCategoryHygieneTestsBase
     /// the operand of <c>call</c>, <c>callvirt</c>, <c>newobj</c> and
     /// <c>ldftn</c>. <see cref="OperandType.InlineTok"/> is deliberately
     /// excluded, and that exclusion was forced by a measured false positive:
-    /// <c>DocsSnippetCompilationTestsBase</c> writes <c>typeof(IHost)</c> to
+    /// <c>DocsSnippetCompilationTestsBase</c> writes <c>typeof(WebApplication)</c> to
     /// locate the ASP.NET shared framework for its metadata reference set,
-    /// which emits <c>ldtoken IHost</c>. Reading that token flagged a Roslyn
+    /// which emits <c>ldtoken WebApplication</c>. Reading that token flagged a Roslyn
     /// compilation fixture as a cluster fixture. A <c>ldtoken</c> names a type
     /// without ever instantiating one, so it is not evidence of a host and is
     /// not read.

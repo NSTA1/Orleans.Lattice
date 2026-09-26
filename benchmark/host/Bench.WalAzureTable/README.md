@@ -90,22 +90,28 @@ sweep point plus a top-level `success` flag.
 |---|---|
 | `burst_ms` | Wall-clock for the full 1024-entry burst at that concurrency. Dominated by Azurite's write loop locally. |
 | `entries_per_second` | Absolute throughput. Useful only in *relative* comparison across the sweep. |
+| `batches/s` | The same throughput counted in 8-entry batches (`entries/s` divided by 8), reported as `batches_per_second` in the JSON. |
 | `scale_vs_c1` | Throughput at concurrency `c` divided by throughput at `c = 1`. On Azurite this hovers near `1.0x`; on a real Azure Tables account this should grow with concurrency until partition-server count or per-shard supply runs out. |
-| `distinct batch-parts` | Observed-vs-expected count of `_b_|...` partition keys in the table after the burst. **Must equal `expected`** - if not, the schema-level precondition for partition-server parallelism is broken. |
+| `distinct batch-parts` | Observed-vs-expected count of `_b_\|...` partition keys in the table after the burst. **Must equal `expected`** - if not, the schema-level precondition for partition-server parallelism is broken. |
 | `monotonicity` | Either `STRICT (N samples)` or a violation count. Must be `STRICT`. |
+| `total_entries_read_back`, `final_heads_per_shard` (JSON only) | The read-back check: after the burst the probe reads every shard back, and the run exits with code `3` unless all 1024 entries come back and every shard's final head is offset 127. |
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Burst succeeded, monotonicity strict, distinct batch-partition count matches expected. |
+| `1` | The compile-time workload constants do not split evenly into shards x entries per batch. Unreachable with the shipped constants; the guard is kept against future parameter drift. |
 | `2` | Azurite is not reachable on `UseDevelopmentStorage=true`. |
 | `3` | At least one of: monotonicity violations, read-back mismatch, or distinct-batch-partition count mismatch. |
 
 ## Running it
 
-Start Azurite first (Docker is fine; the repo's `azurite` script also
-works). Then:
+Start Azurite first, on its default development-storage ports (10000-10002):
+the probe connects with the literal `UseDevelopmentStorage=true`. The container
+command under
+[Starting Azurite](../../../.github/instructions/testing.instructions.md#starting-azurite---and-why-a-green-run-without-it-is-a-false-green)
+in the testing instructions is the recommended way. Then:
 
 ```powershell
 dotnet run --project benchmark/host/Bench.WalAzureTable -c Release

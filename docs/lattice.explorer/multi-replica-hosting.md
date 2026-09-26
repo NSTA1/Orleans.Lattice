@@ -97,10 +97,9 @@ Even with a shared key ring and a shared token cache, a token can expire or be
 revoked while an operator is signed in (a conditional-access policy change, a
 password reset). When the credential provider latches into its revoked state,
 the Explorer no longer renders the raw gRPC error inside the circuit: it shows a
-small "Your session expired - sign in again" interstitial with an explicit
-button that does a full-page navigation to a forced-interactive sign-in, so a
-**new** authorization code is redeemed and the replica's token cache is
-repopulated.
+small "Your session expired" interstitial whose explicit **Sign in again** button
+does a full-page navigation to a forced-interactive sign-in, so a **new**
+authorization code is redeemed and the replica's token cache is repopulated.
 
 The interstitial is always present; what it navigates to is configurable. The
 [Entra hosted-web provider](../lattice.explorer.entra.web/configuration.md#forced-interactive-re-authentication)

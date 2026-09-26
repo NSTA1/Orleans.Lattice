@@ -44,7 +44,7 @@ services.AddTelemetryTools(o =>
 });
 ```
 
-A caller holding a cluster-wide `Telemetry` grant then discovers the four `lattice_telemetry_*` tools and asks PromQL questions such as `rate(lattice_wal_append_total[5m])` over MCP. Grant the capability with an ordinary Allow rule over the all-trees sentinel scope:
+A caller holding a cluster-wide `Telemetry` grant then discovers the four `lattice_telemetry_*` tools and asks PromQL questions such as `rate(orleans_lattice_shard_writes_total[5m])` over MCP. Grant the capability with an ordinary Allow rule over the all-trees sentinel scope:
 
 ```csharp verify
 using Orleans.Lattice.Auth;

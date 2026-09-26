@@ -44,6 +44,7 @@ path. The core is `internal` and exposed to the test assembly through
 |---|---|
 | `LockAdmissionCore.NextFencingToken` | The next fencing token is the strict successor of the last issued one; at `long.MaxValue` it throws `OverflowException` rather than wrapping. |
 | `LockAdmissionCore.Grant` | Mint the next fencing token, install the holder, and set the lease expiry - the only place a token is minted. |
+| `LockAdmissionCore.IsLeaseExpired` | A lease is expired (reclaimable) iff the lock is held and `now` has reached its expiry tick; a free lock is never expired. |
 | `LockAdmissionCore.Decide` | Grant iff the lock is free or its lease has expired; otherwise hold the current holder. |
 | `LockAdmissionCore.IsCurrentHolder` | A presented token is valid iff it equals the current holder's token (and the lock is held). |
 | `LockAdmissionCore.Renew` | Extend the lease iff the presented token is the current holder's; reject a stale token. |

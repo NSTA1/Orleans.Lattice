@@ -229,7 +229,7 @@ services:
       # Dev bypass: plaintext h2c to the silo, no Entra sign-in.
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
-      # Dev bypass: auto-sign-in the console as the bootstrap administrator. With
+      # Dev bypass: seed bootstrap administrator credentials when explicitly enabled. With
       # Entra off the console would otherwise connect ANONYMOUSLY, which the silo's
       # state-visibility filter fail-closes (empty tree catalog, denied Access
       # area). The host's DevBypassExplorerAuthMethod (registered only when Entra is

@@ -41,20 +41,25 @@ is a presentation-only aid to reading the rule set, not a second opinion.
 
 Everywhere the area needs a subject - adding a group member, targeting a policy
 rule, or naming the subject to explain - it offers the same **searchable subject
-picker** instead of a raw id box. As the operator types, the picker searches the
-configured [identity-directory provider](../lattice.membership/identity-directory-providers.md)
-across users and groups, coalescing keystrokes so a burst of typing issues a
-single search, and pages further matches with a *Load more* control. Each result
-shows the principal's friendly display name as its primary label, with the
-underlying id (for example the object id) available as a hover tooltip. Selecting a
-result fills in both the id and its kind, and the "Selected" line likewise leads
-with the friendly name and keeps the id on hover.
+picker** instead of a raw id box. A **User** / **Group** toggle chooses which kind
+of principal to look for, and changing it clears the current selection and searches
+again. As the operator types, the picker searches the configured
+[identity-directory provider](../lattice.membership/identity-directory-providers.md)
+for that kind, coalescing keystrokes so a burst of typing issues a single search,
+and pages further matches with a *Load more* control. Each result shows the
+principal's friendly display name as its label, and carries the underlying id (for
+example the object id) as visually hidden text for assistive technology rather than
+as a hover tooltip. Selecting a result fills in both the id and its kind, and the
+"Selected" line likewise leads with the friendly name, with the id again exposed
+only to assistive technology.
 
 The whole area follows the same convention: everywhere it renders a principal -
 the group list, a group's direct members, the member add and remove
 status messages, and the subject and group-closure lines in an Explain verdict or
 an Effective-permissions result - it leads with the friendly display name resolved
-from the directory and keeps the raw id on a hover tooltip. Names are resolved on
+from the directory and keeps the raw id available to assistive technology as
+visually hidden text; the add and remove status messages name the principal by its
+label alone. Names are resolved on
 load and cached, and every one falls back to the raw id when no directory is
 configured or an id does not resolve, so the display never blocks on the directory
 and never regresses to a broken label.
@@ -158,9 +163,10 @@ apart. The probe classifies its own failure:
 - If the server rejects the probe as **unauthenticated** (no valid token
   attached), or the probe is denied while the Explorer is **not signed in** to
   the cluster, the area resolves `AuthenticationRequired`: the entry stays
-  prominent and clickable and shows a distinct "You are not signed in to the
-  cluster" prompt - never the generic "not permitted" state. An anonymous caller
-  is never told a surface is unavailable for their account.
+  prominent and clickable, opens the sign-in dialog, and describes itself with
+  the sign-in copy ("This cluster serves Access only to a signed-in identity")
+  rather than the denial copy. An anonymous caller is never told a surface is
+  unavailable for their account.
 - If the probe is denied while the Explorer **is** signed in, that is a genuine
   authorization denial and the area resolves `Denied`, demoted with a remedy.
 

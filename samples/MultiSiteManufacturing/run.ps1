@@ -6,11 +6,12 @@
   The sample runs as two independent Orleans clusters ("us" +
   "eu"), each with two silos and its own Azurite, all inside
   Docker Compose. A per-cluster Traefik reverse proxy provides sticky-
-  session load balancing across the cluster's two silos. Only TWO host
+  session load balancing across the cluster's two silos. Three host
   ports are published:
 
     http://localhost:5001  traefik-us  -> silo-us-a | silo-us-b
     http://localhost:5002  traefik-eu  -> silo-eu-a | silo-eu-b
+    http://localhost:3000  grafana     -> observability dashboards
 
   Individual silo HTTP ports (:8080), Orleans silo (:11111) and gateway
   (:30000) ports, and Azurite endpoints live on internal Compose

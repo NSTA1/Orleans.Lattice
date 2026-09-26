@@ -73,11 +73,23 @@ access gate, no membership context, no tenant-context resolver. A constructor
 guard pins that, so adding a hidden dependency later fails loudly rather than
 silently raising the bar for every host.
 
+## Client
+
+`LatticeTelemetryApiGrpcClient.Create(CallInvoker, IServiceProvider)` builds the
+client over a caller-supplied `CallInvoker` and a service provider with Orleans
+serialization registered (`AddSerializer()`), so its marshallers match the
+server's. It exposes the three RPCs as `GetCatalogAsync`,
+`QueryAsync(TelemetryQueryRequest)`, and `GetAuthSchemeAsync`, and carries no
+transport policy of its own: address, TLS, retries, deadlines, and call
+credentials live on the `CallInvoker` / `GrpcChannel`. It forwards the visibility
+the caller requests and returns the facade's pinned `Scope` unchanged - render
+that scope, never the one that was asked for.
+
 ## Authorization
 
 | Seam | Default | Purpose |
 |---|---|---|
-| `ILatticeTelemetryApiAuthorizer` | `DenyTelemetryApiAuthorizer` | Fail-closed. Registered with `TryAdd`, so a host must deliberately replace it. |
+| `ILatticeTelemetryApiAuthorizer` | `DenyTelemetryApiAuthorizer` | Fail-closed. Registered with `TryAdd`, so a host must deliberately replace it - with a custom authorizer, or with the opt-in `AllowAllTelemetryApiAuthorizer` behind a separate authentication boundary. Permitting a call never widens what the facade scopes the caller to. |
 | `ILatticeTelemetryApiCredentialBridge` | header-based | Carries an opaque caller credential onto the ambient context for the duration of the call. |
 | `ILatticeTelemetryApiAuthSchemeSource` | options-based | Backs the unauthenticated `GetAuthScheme` probe. |
 
@@ -90,7 +102,7 @@ so a deny-by-default policy refuses it rather than falling through.
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces `ILatticeTelemetryApiAuthorizer` on every inbound call. Set `false` only when an outer authentication boundary already guards the endpoint. |
-| `CredentialHeaderName` | `string` | `authorization` | Request header carrying the caller's credential token, bridged into the ambient Lattice credential. Read only when auth-backed control (the `Orleans.Lattice.Auth` add-on) is active. |
+| `CredentialHeaderName` | `string` | `authorization` | Request header carrying the caller's credential token, bridged into the ambient Lattice credential. The default header bridge reads it on every `GetCatalog` and `Query` call, whether or not the `Orleans.Lattice.Auth` add-on is registered; the facade's own gate resolves the caller's subject from it. |
 | `CredentialScheme` | `string` | `Bearer` | Scheme stamped on the bridged credential; a matching case-insensitive prefix on the header value is stripped. |
 | `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | Request header carrying the tenant the caller is acting as, lifted onto the ambient active-tenant context per call. Only carried: it is re-validated downstream and the facade derives the effective tenant server-side, so it can never widen a caller's scope. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | Auth schemes the unauthenticated `GetAuthScheme` RPC advertises, in preference order; public configuration only. |

@@ -16,13 +16,15 @@ Every instrument on this meter carries a single tag, `tenant` (`LatticeTenantLab
 
 ## Instruments
 
-| Instrument | Name | Kind | Meaning |
-|---|---|---|---|
-| Resolution-cache hits | `orleans.lattice.membership.resolution_cache.hits` | Counter | One per subject resolution served warm from the per-silo resolution cache. |
-| Resolution-cache misses | `orleans.lattice.membership.resolution_cache.misses` | Counter | One per resolution that found no live cache entry and resolved the subject afresh. |
-| Directory search latency | `orleans.lattice.membership.directory.search.duration` | Histogram (ms) | One per identity-directory search, timing the provider call the access-administration facade issues. |
-| Directory search hits | `orleans.lattice.membership.directory.search.hits` | Counter | One per directory search that returned at least one matching principal. |
-| Directory search misses | `orleans.lattice.membership.directory.search.misses` | Counter | One per directory search that returned no matching principal. |
+| Instrument | Name | Kind | Unit | Meaning |
+|---|---|---|---|---|
+| Resolution-cache hits | `orleans.lattice.membership.resolution_cache.hits` | Counter | `{lookup}` | One per subject resolution served warm from the per-silo resolution cache. |
+| Resolution-cache misses | `orleans.lattice.membership.resolution_cache.misses` | Counter | `{lookup}` | One per resolution that found no live cache entry and resolved the subject afresh. |
+| Directory search latency | `orleans.lattice.membership.directory.search.duration` | Histogram | `ms` | One per identity-directory search, timing the provider call the access-administration facade issues. |
+| Directory search hits | `orleans.lattice.membership.directory.search.hits` | Counter | `{search}` | One per directory search that returned at least one matching principal. |
+| Directory search misses | `orleans.lattice.membership.directory.search.misses` | Counter | `{search}` | One per directory search that returned no matching principal. |
+
+Each instrument name is also a public constant on `LatticeMembershipMetrics` (`ResolutionCacheHitsName`, `ResolutionCacheMissesName`, `DirectorySearchDurationName`, `DirectorySearchHitsName`, `DirectorySearchMissesName`), and the `LatticeMembershipMetrics.Meter` instance is public so a listener can subscribe by reference rather than by name.
 
 ### What the hit / miss counters measure
 

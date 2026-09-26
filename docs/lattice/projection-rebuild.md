@@ -110,9 +110,11 @@ same mutation is a no-op - exactly the algebra LWW already provides
 for entry state.
 
 The public per-leaf digest is the XxHash128 of `(running_xor ||
-entryCount || checkpointOffset)`, so two silos at different replay
-positions report distinct digests even if their post-state happens to
-coincide. The shard-level aggregate then XOR-folds each descendant
+entryCount || checkpointOffset)`, where `checkpointOffset` is the leaf's
+partition-0 projection checkpoint (the legacy scalar slot), so two silos
+at different partition-0 replay positions report distinct digests even
+if their post-state happens to coincide; on a multi-partition tree the
+other partitions' positions are not folded in. The shard-level aggregate then XOR-folds each descendant
 leaf's `running_xor` directly (no per-leaf XxHash chaining step) and
 applies the same `(xor_subtree_hash || subtree_entry_count ||
 subtree_max_checkpoint)` framing at the root. The XOR-fold makes the
@@ -332,8 +334,10 @@ for what the stack provides and how to opt in.
 #### Disabling is a one-way operation per tree
 
 The first mutation that lands while maintenance is disabled stamps an
-irreversible registry latch
-(`TreeRegistryEntry.ProjectionDigestPermanentlyDisabled`) on the tree.
+irreversible registry latch on the tree, reported as
+`TreeConfigurationReport.ProjectionDigestPermanentlyDisabled` by
+`ILatticeTreeAdmin.GetTreeConfigAsync` (see
+[Orleans.Lattice.Api.TreeAdmin](../lattice.api.treeadmin/README.md)).
 Once the latch is set, every subsequent activation resolves
 `MaintainProjectionDigest` as `false` regardless of the per-tree
 override or the silo-wide default, and
@@ -367,11 +371,15 @@ Resolution order for `MaintainProjectionDigest`:
    overhead.
 2. **Registry latch.** If `ProjectionDigestPermanentlyDisabled` is
    set, the resolved value is `false`.
-3. **Per-tree override.** If `TreeRegistryEntry.MaintainProjectionDigest`
-   is set, that value wins over the silo-wide default. Operators can
+3. **Per-tree override.** If the tree's registry override
+   (`TreeConfigurationReport.MaintainProjectionDigest`, written through
+   `ILatticeTreeAdmin.SetTreeConfigAsync`) is set, that value wins over the
+   configured options of step 4. Operators can
    opt an individual tree out (or, while the latch is not yet set,
    back in) without flipping the silo-wide default.
-4. **Silo-wide default.** Falls back to `LatticeOptions.MaintainProjectionDigest`.
+4. **Configured options.** Falls back to `LatticeOptions.MaintainProjectionDigest`
+   as configured for the tree: a named `ConfigureLattice(treeName, ...)`
+   override when the host set one, otherwise the silo-wide value.
 
 Disabling the digest is recommended for **write-amplification-sensitive
 deployments that do not need cross-silo drift telemetry**. Keep it
@@ -419,31 +427,35 @@ the first is fatal:
    **This is the only trigger that routes to `ProjectionRebuildPolicy`.**
    The exact loss boundary is `tail > checkpoint + 1`: the entry *at*
    the checkpoint is already applied, so trimming it loses nothing.
-2. **Replay budget candidate.** The gap `walHead[p] - checkpoint[p]`
+2. **Replay budget.** The gap `walHead[p] - checkpoint[p]`
    exceeds `LatticeOptions.MaxLeafReplayEntries` (default `10 000`).
-   This is a **cost** signal, not a loss signal, and since issue #2149
-   it is explicitly only a **candidate**: the gap is measured across
-   the whole WAL partition, which every leaf pinned to that partition
-   shares, while `MaxLeafReplayEntries` is a **per-leaf, post-range-filter**
-   budget. The two are in different units, and on a partition carrying
-   ~1,350 leaves the gap overstates a leaf's real work by up to that
-   fan-out. What the comparison does establish is a sound **upper
-   bound**: every entry a leaf applies lies inside `(checkpoint, head]`,
-   so `applied <= gap` always holds. A gap at or under budget therefore
-   *proves* the leaf is under budget and is dismissed for free, while a
-   gap over budget proves nothing on its own and is carried into the
-   replay as a candidate (decision `TailReplayOverBudget`).
-   Confirming it in the classifier would mean reading
+   This is a **cost** signal, not a loss signal, and the gap is not the
+   leaf's work: it is measured across the whole WAL partition, which
+   every leaf pinned to that partition shares, while
+   `MaxLeafReplayEntries` is a **per-leaf, post-range-filter** budget.
+   The two are in different units, and on a partition carrying ~1,350
+   leaves the gap overstates a leaf's real work by up to that fan-out.
+   What the comparison does establish is a sound **upper bound**: every
+   entry a leaf applies lies inside `(checkpoint, head]`, so
+   `applied <= gap` always holds. Since issue #2275 nothing acts on the
+   comparison (it was once a candidate the replay confirmed): an
+   over-budget gap yields the decision `TailReplayOverBudget` and the
+   leaf tail-replays exactly as for `TailReplay`, and its only remaining
+   effect is that it suppresses the snapshot advisory described under
+   [Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net).
+   Confirming the gap in the classifier would mean reading
    `(checkpoint, head]` before the replay reads it again - doubling the
-   most expensive part of activation - so the **verdict** is taken
-   during the replay that happens anyway, by counting the entries that
-   actually pass the per-leaf range filter
+   most expensive part of activation - so the **verdict** is taken on
+   every replay path, during the replay that happens anyway, by counting
+   the entries that actually pass the per-leaf range filter
    (`ShouldApplyDuringReplay`). The warning and the
    `orleans.lattice.leaf.activation_replays_over_budget` counter are
-   emitted at that exact count, not at the candidate. Also skipped for
-   the -1 sentinel: a fresh leaf has nothing in cache to recover.
-   The per-slice `WalReplaySliceBudget` still bounds individual
-   coordinator reads on this path.
+   emitted at that exact count, whatever the comparison said. The
+   comparison is skipped for the -1 sentinel, whose gap would charge a
+   fresh leaf for every sibling's WAL; the count is not, because it
+   charges a fresh leaf only for its own range. The per-slice
+   `WalReplaySliceBudget` still bounds individual coordinator reads on
+   this path.
 3. **Cold past retention.** The persisted projection age exceeds
    `LatticeOptions.LeafProjectionRetention` (default 7 days). Also a
    cost signal only - an old checkpoint does not imply a trimmed WAL,
@@ -615,8 +627,13 @@ Eligibility starts with a successfully hydrated snapshot covering every
 configured partition. A successful replay retains its independently
 scanned, contiguous per-partition frontier; foreground checkpoint hints
 are never evidence for that frontier. Later hydration, reset, topology
-changes, failed or overlapping replay, and gaps in the observed WAL
-sequence invalidate the proof. Each partition's activation anchor must
+changes, failed or overlapping replay, and - for an unfiltered replay -
+gaps in the observed WAL sequence invalidate the proof. A filtered
+replay's slices omit other owners' records by design (issue #3565), so
+there only non-ascending offsets invalidate it, and the window is proven
+instead by checking, once the partition is read, that the oldest
+surviving WAL offset is still at or below the first offset the window
+needed. Each partition's activation anchor must
 be at or behind its persisted checkpoint, and its current checkpoint
 must not exceed the proven frontier. The live WAL must still cover
 everything after the proposed snapshot claim.
@@ -759,6 +776,10 @@ The capture path is **leaf-driven**, not maintenance-driven:
   budget that re-arms after a backoff (issue #2692). This is what gives
   a tree that has stopped taking writes snapshot coverage on its next
   activation.
+- A graceful deactivation also captures one for any checkpointed
+  partition that no snapshot covers yet, before it publishes its final
+  durable pin, so a short-lived activation that never reached the
+  periodic cadence still leaves coverage behind.
 - A single-flight guard suppresses overlapping captures: a slow
   `SaveAsync` does not pin a follow-on capture behind it; the
   follow-on is dropped and the next cadence tick re-evaluates.

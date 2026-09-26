@@ -14,16 +14,16 @@ Each cache entry is one **block blob** in the configured container:
 
 An internal expiry helper is pure and `TimeProvider`-driven - no I/O - so every expiry decision is unit-testable against an injected clock:
 
-- **Compute** turns a `DistributedCacheEntryOptions` (absolute, absolute-relative-to-now, or sliding) plus the current instant into the stored expiry values.
-- **FromMetadata / ToMetadata** round-trip those values through the blob's metadata dictionary.
-- **IsExpired** compares the effective instant to now.
-- **Slide** advances the effective expiry by the sliding window on each read, capped at the absolute expiration, and returns null when there is nothing to slide.
+- **Computing** turns a `DistributedCacheEntryOptions` (absolute, absolute-relative-to-now, or sliding) plus the current instant into the stored expiry values, capping an initial sliding expiry at the absolute expiration. `AbsoluteExpirationRelativeToNow` takes precedence over `AbsoluteExpiration`; when only the latter is set and it is not in the future, it is rejected with `ArgumentOutOfRangeException`, so `Set` fails rather than writing an already-expired entry.
+- **Metadata round-trip** writes only the populated values into the blob's metadata dictionary and reads them back; a missing or unparsable value reads back as absent, so a hand-edited or partially written blob degrades to never expiring rather than failing.
+- **Expiry test** treats an entry as expired once the current instant reaches its effective expiry; an entry with no effective expiry never expires on its own.
+- **Sliding** recomputes the effective expiry on each read as the read instant plus the sliding window, capped at the absolute expiration, and rewrites nothing when the entry is not sliding, carries no stored effective expiry, or the slide would not move it forward.
 
 Enforcement is **lazy on read**. `Get` downloads the entry (content and expiry metadata in one call) and `Refresh` reads only its properties; if the entry is expired, either best-effort deletes it and reports a miss, and otherwise a sliding entry has its effective expiry advanced. There is no background sweeper, so an entry written and never read again lingers until overwritten or removed. That is acceptable for the low-churn, per-subject workloads (a token cache) this backend targets, and it keeps the implementation free of a timer or lease.
 
 ## Container lifecycle
 
-The container is created on first use behind a one-shot async gate (`EnsureContainerAsync`): the first operation calls `CreateIfNotExists` under a `SemaphoreSlim`, flips a ready flag, and every subsequent operation skips straight through. Hosts therefore never provision the container out of band, and the create cost is paid once per process.
+The container is created on first use behind a one-shot async gate: the first operation calls `CreateIfNotExists` under a `SemaphoreSlim`, flips a ready flag, and every subsequent operation skips straight through. Hosts therefore never provision the container out of band, and the create cost is paid once per process.
 
 ## Concurrency and failure semantics
 

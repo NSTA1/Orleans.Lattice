@@ -12,12 +12,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// projection by replaying the per-shard write-ahead log up to the
 /// captured offset, then serves range-scan queries off that view.
 /// <para>
-/// Idle-evicts after
-/// <see cref="LatticeOptions.SnapshotLeafIdleTtl"/>; a subsequent
-/// access transparently rebuilds via
-/// <c>ILeafReplayCoordinatorGrain</c>. The underlying WAL prefix is
-/// kept alive by the snapshot's <c>IWalCursorRegistry</c> pin held
-/// by the owning <see cref="LatticeCursorGrain"/>.
+/// The runtime currently does not read <see cref="LatticeOptions.SnapshotLeafIdleTtl"/>;
+/// snapshot leaves idle-evict under Orleans activation collection. A subsequent
+/// access transparently rebuilds via <c>ILeafReplayCoordinatorGrain</c>. The
+/// underlying WAL prefix is kept alive by the snapshot's <c>IWalCursorRegistry</c>
+/// pin held by the owning <see cref="LatticeCursorGrain"/>.
 /// </para>
 /// </summary>
 internal sealed class SnapshotLeafGrain(

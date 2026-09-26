@@ -34,8 +34,8 @@ public sealed class ShardMap
     public int[] Slots { get; set; } = [];
 
     /// <summary>
-    /// Monotonically increasing version stamped by
-    /// <see cref="BPlusTree.ILatticeRegistry.SetShardMapAsync"/> on every persist.
+    /// Monotonically increasing version stamped by the registry on every persisted
+    /// shard-map update.
     /// Used by strongly-consistent scan APIs as a fast-path stability
     /// signal: when the version observed at the start of a scan equals the
     /// version observed at the end, no swap occurred during the scan and the
@@ -227,7 +227,7 @@ public sealed class ShardMap
     /// equivalent to the legacy <c>hash % physicalShardCount</c> formula.
     /// <para>
     /// Callers that need a fresh, mutable map (for example to hand to
-    /// <c>ILatticeRegistry.SetShardMapAsync</c>, which mutates <see cref="Version"/>)
+    /// the registry persist path, which mutates <see cref="Version"/>)
     /// must use this method. Read-only fallback callers should prefer
     /// <see cref="GetOrCreateDefaultShared"/> to amortise the per-call
     /// <c>int[virtualShardCount]</c> allocation across activations.
@@ -267,7 +267,7 @@ public sealed class ShardMap
     /// shape where the returned map is consumed read-only (typical callers
     /// invoke <see cref="Resolve"/>, <see cref="GetPhysicalShardIndices"/>,
     /// or <see cref="VirtualShardCount"/>). Never pass a shared instance to
-    /// <c>ILatticeRegistry.SetShardMapAsync</c>, which mutates
+    /// the registry persist path, which mutates
     /// <see cref="Version"/>; that path must keep using
     /// <see cref="CreateDefault"/> to obtain a fresh map.
     /// <para>

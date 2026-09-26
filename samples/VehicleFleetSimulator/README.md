@@ -1,6 +1,6 @@
 # Vehicle Fleet Simulator
 
-A simulated vehicle fleet that streams structured telemetry events over gRPC. Imported into this repo to drive forthcoming WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication`, and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree.
+A simulated vehicle fleet that streams structured telemetry events over gRPC. Imported into this repo to drive the WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication` (see [benchmark](../../benchmark/README.md), whose silo reuses the simulator's projects unmodified), and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree.
 
 [`samples/VehicleFleetSimulator`](../VehicleFleetSimulator/) (this folder)
 
@@ -21,7 +21,7 @@ The simulator stands up a four-tier local stack:
 | API | `VehicleFleetSimulator.Api` | ASP.NET Core gRPC + gRPC-Web frontend. Streams telemetry to subscribers; accepts admin commands. |
 | UI | `VehicleFleetSimulator.Ui` | Blazor WebAssembly dashboard - live map, simulation-speed slider, fleet controls. |
 
-A pluggable `ITelemetrySink` lets the silo route events to fan-out grains, a null sink, or (future) a Lattice-bridge sink. `VehicleSimulator` advances each vehicle along a city graph; `FuelModel` and `SpeedModel` are pure functions over each tick. Routes are generated on demand by `RouteGenerator`. All vehicle state is grain-resident; Azurite holds only Orleans plumbing.
+A pluggable `ITelemetrySink` lets the silo route events to fan-out grains or a null sink; the benchmark silo (`benchmark/host/Bench.Silo`) swaps in a Lattice-backed sink (`benchmark/host/Bench.Sink`) through the same seam. `VehicleSimulator` advances each vehicle along a city graph; `FuelModel` and `SpeedModel` are pure functions over each tick. Routes are generated on demand by `RouteGenerator`. All vehicle state is grain-resident; Azurite holds only Orleans plumbing.
 
 ## Running it
 

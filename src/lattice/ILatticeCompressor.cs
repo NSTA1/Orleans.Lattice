@@ -6,16 +6,17 @@ namespace Orleans.Lattice;
 /// Pluggable seam for compressing and decompressing arbitrary byte
 /// payloads inside the Orleans.Lattice stack. The seam was first
 /// introduced for the replication batch's framing tail
-/// (see the <c>Orleans.Lattice.Replication</c> wire-format docs) but
-/// is intentionally byte-shaped so other layers - WAL segment
-/// compression, snapshot compression, cold-storage tiers - can reuse
-/// the same DI registration without re-deriving the contract.
+/// (see the <c>Orleans.Lattice.Replication</c> wire-format docs) and is also used
+/// by storage providers such as the Azure Table WAL provider for per-row payload
+/// compression. It is intentionally byte-shaped so other layers - snapshot
+/// compression, cold-storage tiers - can reuse the same DI registration without
+/// re-deriving the contract.
 /// <para>
 /// Implementations are matched by <see cref="Algorithm"/> at the call
 /// site: replication looks the compressor up by the
 /// <see cref="LatticeCompression"/> value carried in the framing
-/// header; future layers will dispatch by their own per-segment
-/// header byte using the same enum. Hosts register one
+/// header; the Azure Table WAL provider dispatches by its configured compression
+/// option and persisted row tag. Hosts register one
 /// <see cref="ILatticeCompressor"/> singleton per algorithm via DI;
 /// duplicate registrations for the same <see cref="Algorithm"/>
 /// value are rejected at construction time by the consuming layer.

@@ -49,7 +49,8 @@ costs nothing until then.
 ## Acquire, renew, release
 
 `AcquireAsync` enqueues the caller FIFO and completes when the lock is granted to
-them, or faults with a `TimeoutException` if the caller's `MaxWait` elapses first.
+them, or faults with a `TimeoutException` if the caller's `MaxWait` elapses first
+(a negative `MaxWait` is rejected up front with `ArgumentOutOfRangeException`).
 The call never blocks the grain's activation turn: a contended caller is enqueued
 and its task completes from a later turn (a release, a lease expiry, or its own
 wait-timeout).

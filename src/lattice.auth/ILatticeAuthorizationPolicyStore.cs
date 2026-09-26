@@ -7,8 +7,8 @@ namespace Orleans.Lattice.Auth;
 /// single prefix scan, and every mutation runs through the standard write path so
 /// it is durably captured by the per-key history view (enabled by default when
 /// the authorization package is registered). This interface is the policy
-/// storage surface only; evaluating rules into a decision is the responsibility
-/// of a later feature.
+/// storage surface; the decision engine consumes the stored rules through the
+/// compiled snapshot maintained from this store.
 /// </summary>
 public interface ILatticeAuthorizationPolicyStore
 {

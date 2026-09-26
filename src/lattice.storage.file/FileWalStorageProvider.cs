@@ -25,8 +25,9 @@ namespace Orleans.Lattice.Storage.File;
 /// written with one <c>write</c> + fsync; a crash before the trailer is
 /// durable rolls the whole batch back on recovery.</description></item>
 /// <item><description><b>Monotonic durable tail.</b>
-/// <see cref="GetHighestOffsetAsync"/> returns the highest committed
-/// offset, which only advances as batches commit.</description></item>
+/// <see cref="GetHighestOffsetAsync"/> returns the highest offset known to the
+/// shard high-water mark after recovery, so a torn tail can be reported and
+/// reconciled without pretending an uncommitted record is committed.</description></item>
 /// <item><description><b>Verbatim, dense, non-overlapping offsets.</b>
 /// Caller-assigned offsets are stored verbatim; overlap with any
 /// persisted offset is rejected and contiguity with the tail is never

@@ -32,8 +32,8 @@
 	  * healing / index / WAL log counters, tallied from the container's own log
 	                              lines since the previous sample.
 
-	WHY THE LOG, AND NOT A METRIC. The RepoContext container exposes no metrics
-	endpoint, deliberately (epic decision D5: every mechanism is default-on and
+	WHY THE LOG, AND NOT ONLY A METRIC. The RepoContext container serves GET /metrics,
+	but this script still reads logs because epic decision D5 made healing default-on and
 	the compose file gains no knobs). Healing progress is therefore read from
 	the orchestrator's own Information-level lines, and the durable outcome is
 	read offline by inspect-state.ps1. Both are properties of what the box

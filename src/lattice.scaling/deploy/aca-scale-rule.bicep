@@ -36,9 +36,10 @@ var latticeScale = {
   ]
 }
 
-// pollingInterval (KEDA default 30s) should sit at or above the signal's
-// producer-side EWMA smoothing window so the autoscaler samples a settled
-// value. Scale-in stabilization (default 300s) can be shorter than usual
-// because scaleValue is already smoothed; avoid stacking a long stabilization
-// window on top of a long EWMA or scale-in lags twice.
+// pollingInterval (KEDA default 30s) should sit at or above
+// LatticeScalingSignalOptions.SampleInterval so repeated scrapes do not just read
+// the same cached sample. Scale-in stabilization (default 300s) should be chosen
+// deliberately: scaleValue is already EWMA-smoothed and gated on the producer
+// side, so stacking a long HPA window on top of a long Lattice scale-in gate makes
+// scale-in lag twice.
 output scale object = latticeScale

@@ -10,8 +10,9 @@ The host is a non-packable executable under `apps/`, so it is deliberately not
 discoverable by CI's `src/<pkg>` + `test/<pkg>` package globbing. Creating a
 `src/`-discovered package purely to host its tests would violate that boundary.
 Instead the host is added to this existing test project via a `ProjectReference`,
-and the host exposes its internals to it through
-`[assembly: InternalsVisibleTo("Orleans.Lattice.Api.Mcp.RepoContext.Tests")]`.
+and the host exposes its internals to it through an
+`<InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Tests" />` item in
+its project file.
 All host tests are grouped under the `Host/` folder here.
 
 ## Test tiers

@@ -95,8 +95,8 @@ public interface ILattice : IGrainWithStringKey
     Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Inserts or updates the value for <paramref name="key"/> with a time-to-live
-    ///. The entry is treated as tombstoned on all reads
+    /// Inserts or updates the value for <paramref name="key"/> with a time-to-live.
+    /// The entry is treated as tombstoned on all reads
     /// (<see cref="GetAsync"/>, <see cref="ExistsAsync"/>, <see cref="GetManyAsync"/>,
     /// <see cref="KeysAsync"/>, <see cref="EntriesAsync"/>, <see cref="CountAsync"/>, 
     /// etc.) once <paramref name="ttl"/> has elapsed since the server-side write.
@@ -502,7 +502,8 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <remarks>
     /// Raw stream: see <see cref="KeysAsync"/> for the aborts it surfaces.
-    /// Prefer <c>LatticeExtensions.ScanKeysWhereAsync</c>.
+    /// Prefer the public extension helper that returns scanned keys with predicate
+    /// evaluation and paging semantics.
     /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysWherePredicateAsync(LatticePredicateNode predicate, string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
@@ -558,10 +559,8 @@ public interface ILattice : IGrainWithStringKey
     /// contains data, so the second and subsequent calls fail once the first
     /// import has populated the tree. Streaming append-style ingestion
     /// must use <see cref="SetAsync(string, byte[], CancellationToken)"/>
-    /// or the streaming
-    /// <c>BulkLoadAsync(IAsyncEnumerable&lt;...&gt;, IGrainFactory, int)</c>
-    /// extension on <c>LatticeExtensions</c>, which routes to
-    /// <c>ShardRootGrain.BulkAppendAsync</c> instead.
+    /// or the streaming bulk-load extension, which appends sorted chunks to each
+    /// shard's right edge instead.
     /// </para>
     /// </summary>
     Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
@@ -680,8 +679,8 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="destinationTreeId">The ID for the new tree. Must not already exist.</param>
     /// <param name="mode">Whether to lock the source tree during the snapshot.</param>
-    /// <param name="maxLeafKeys">Optional leaf sizing for the destination. If <c>null</c>, uses the source tree's configured value.</param>
-    /// <param name="maxInternalChildren">Optional internal node sizing for the destination. If <c>null</c>, uses the source tree's configured value.</param>
+    /// <param name="maxLeafKeys">Optional leaf sizing for the destination. If <c>null</c>, uses the library default.</param>
+    /// <param name="maxInternalChildren">Optional internal node sizing for the destination. If <c>null</c>, uses the library default.</param>
     /// <param name="cancellationToken">Cancels orchestration before the snapshot coordinator is submitted. Once the coordinator accepts the request it runs to completion via reminders.</param>
     Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default);
 
@@ -885,8 +884,9 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="TreeDiagnosticReport.TotalTombstones"/> and the per-shard
     /// <see cref="ShardDiagnosticReport.Tombstones"/> /
     /// <see cref="ShardDiagnosticReport.TombstoneRatio"/> fields. Deep mode
-    /// is cached independently of shallow mode; the trade-off is one grain
-    /// call per leaf rather than one per shard.
+    /// is cached independently of shallow mode; both modes page through the leaf
+    /// chain, but deep mode asks each visited leaf to count tombstoned/expired rows
+    /// instead of relying only on live-count metadata.
     /// </para>
     /// <para>
     /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
@@ -898,7 +898,7 @@ public interface ILattice : IGrainWithStringKey
     /// </para>
     /// </summary>
     /// <param name="deep">Whether to compute tombstone counts (walks the leaf chain per shard).</param>
-    /// <param name="cancellationToken">Cancels the diagnostics fan-out before it begins.</param>
+    /// <param name="cancellationToken">Cancels the diagnostics fan-out between shard and leaf reads.</param>
     Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -994,8 +994,8 @@ public interface ILattice : IGrainWithStringKey
     /// <para>
     /// The shard's leaf chain is walked once and every leaf's digest is
     /// chained through XxHash128 so divergence at any leaf surfaces in the
-    /// shard total. Reports the summed entry count and the summed
-    /// projection-checkpoint offset across every leaf so a digest
+    /// shard total. Reports the summed entry count and the maximum
+    /// projection-checkpoint offset across descendant leaves so a digest
     /// mismatch can be triaged quickly.
     /// </para>
     /// <para>

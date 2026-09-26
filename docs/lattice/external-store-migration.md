@@ -114,8 +114,9 @@ await foreach (var (key, value) in ReadAscendingAsync())
     var ack = await admin.AppendBulkLoadAsync(
         treeId, operationId, chunkIndex, chunk, cancellationToken);
 
-    // A short count means an installed schema policy rejected or diverted
-    // entries in this chunk. Silence here is how a migration loses rows.
+    // A short count means a write interceptor diverted entries in this chunk
+    // to a dead-letter store instead of writing them. Silence here is how a
+    // migration loses rows.
     if (ack.AcceptedEntryCount != chunk.Count)
     {
         Console.WriteLine(
@@ -212,6 +213,11 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
   bulk-load path. A key or value you successfully bulk-load can therefore be
   rejected by a later `SetAsync` against the same tree. Check the bounds in the
   producer if you have configured them.
+- **It does not enforce the admission caps.** `LatticeOptions.MaxLiveKeys` and
+  `LatticeOptions.MaxEstimatedBytes` are likewise checked only on the point,
+  batch and CRDT write paths, so a bulk load can carry a tree past them;
+  ordinary writes are then refused with `LatticeQuotaExceededException` until
+  the tree is back under the cap.
 - **It does not merge.** `DataEntry` carries a `MergeMode` and a `Raw` flag, but
   both are read-side fields that the write path ignores: a chunk entry is
   projected down to its key and its value before it reaches the tree. Setting
@@ -224,12 +230,15 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
 
 The facade-hosted paths run the write interceptor when interception is active, so
 an installed [schema policy](../lattice.schema/README.md) validates bulk-loaded
-values and can divert them to the dead-letter store. The chunk acknowledgement's
-accepted-entry count is the count *after* interception, so comparing it against
-the number of entries you sent is how you detect that a schema policy quietly
-filtered your migration. The streaming extension uses the facade only to resolve
-routing and then writes to the shards directly, so it runs neither the access
-gate nor interception.
+values. A migration's chunks are local writes, so a value that fails the policy
+fails its whole chunk with `LatticeSchemaViolationException` before any of the
+chunk's entries is applied; the schema package reserves dead-lettering for
+ingested items such as a replication apply or a backup restore. The chunk
+acknowledgement's accepted-entry count is the count *after* interception, so a
+count below the number of entries you sent means an interceptor diverted
+entries to a dead-letter store rather than writing them. The streaming
+extension uses the facade only to resolve routing and then writes to the shards
+directly, so it runs neither the access gate nor interception.
 
 ### The write-ahead log and cross-cluster replication
 
@@ -237,7 +246,11 @@ Bulk-load writes are classified as user mutations, not maintenance, so on a
 replicated tree they ship to peer clusters exactly like any other user write. A
 migration into a replicated tree therefore pushes the whole dataset across every
 replication link; budget for that, or complete the load before the tree
-participates in replication.
+participates in replication. A tree declared for replication under a typed
+CRDT merge mode is single-shape, and a bulk-loaded value is a plain
+last-writer-wins write, so the facade-hosted paths - the one-shot load and the
+tree-administration session - refuse such a tree with
+`LatticeReplicationModeMismatchException`.
 
 Underneath, entries are batched per leaf into a single write-ahead-log append
 rather than one append per key. See
@@ -373,8 +386,9 @@ read-time upcasting, over the opaque-`byte[]` core.
 
 Because the facade-hosted bulk-load paths run write interception, a schema policy
 installed before the migration applies *during* it. That is usually what you
-want, since it catches malformed source rows at the door, but it does mean the
-accepted-entry count is the number that matters, not the number you sent.
+want, since it catches malformed source rows at the door - but a single
+malformed row fails its whole chunk with `LatticeSchemaViolationException`, so
+clean or validate rows in the producer if one bad row must not stop the load.
 
 ### Size
 
@@ -383,7 +397,11 @@ you, and an oversized value surfaces later as a storage-provider failure rather
 than an argument error at the call site.
 
 ```csharp verify
-const int maxValueBytes = 512 * 1024;
+// Keep the budget below the tightest per-entry limit in the deployment. On the
+// Azure Table WAL provider every encoded WAL entry must fit one binary
+// property, capped at 64 KiB, so this example leaves headroom below that for
+// the key and the record's metadata.
+const int maxValueBytes = 48 * 1024;
 
 static byte[] Encode(Order order) => JsonSerializer.SerializeToUtf8Bytes(order);
 
@@ -397,14 +415,21 @@ if (encoded.Length > maxValueBytes)
 ```
 
 [Tree Storage](tree-storage.md) carries the per-provider row limits that bound
-what a value can actually be. Choose a migration budget below the tightest limit
+what a value can actually be. On the Azure Table WAL provider the limit that
+binds first is the WAL entry: it stores each entry's encoded record - the key,
+the value and the record's metadata - in a single binary property, and Azure
+Table caps a binary property at 64 KiB. The provider neither splits a larger
+entry nor checks its size first, so such an entry fails at append with the
+Azure service's error. Its compression (Zstandard by default) is kept only when
+it shrinks the payload, so budget against the uncompressed size unless your
+values reliably compress. Choose a migration budget below the tightest limit
 in your deployment, and split or externalise the outliers before the load rather
 than discovering them at chunk 4,000.
 
 ### Compression
 
 `ILatticeCompressor` is a transport and storage-layer seam - replication framing
-and the durable write-ahead-log row payload - not a per-value hook. If you want
+and the Azure Table write-ahead-log provider's row payload - not a per-value hook. If you want
 stored values compressed, compress inside your `ILatticeSerializer<T>` and accept
 that every read pays the decompression. See [Compression](compression.md) for the
 seam that does exist and where it applies.

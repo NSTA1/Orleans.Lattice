@@ -19,9 +19,11 @@ transports bind over it, and it costs nothing until it is registered.
 - **Bounded-memory enumeration.** Catalog listing is cursor-resumable and
   page-bounded; whole-catalog draining and artifact export are streamed, so a
   large catalog or artifact enumerates with bounded memory.
-- **Safe deletion.** Deleting a backup removes its manifest and only the
-  artifacts it owns that no other retained manifest still references, so a shared
-  base artifact is never orphaned out from under a retained increment.
+- **Safe deletion, by artifact.** Deleting a backup removes its manifest and only
+  the artifacts it owns that no other retained manifest still references. The
+  check is by artifact id, not by chain: an increment references its base by
+  `BaseBackupId`, so deleting a base that a retained increment is layered on
+  breaks that increment's restore chain - delete an incremental chain tip-first.
 
 ## Security
 

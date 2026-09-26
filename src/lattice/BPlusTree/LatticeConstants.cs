@@ -185,9 +185,9 @@ internal static class LatticeConstants
     /// This value is a hard-coded constant because changing it would invalidate
     /// every persisted <c>ShardMap</c> (slots are referenced by integer index).
     /// The virtual shard space must be greater than or equal to the pinned
-    /// physical shard count and an integer multiple of it for the default
-    /// identity map to preserve <c>hash % shardCount</c> routing; both
-    /// invariants are enforced by <c>ShardMap.CreateDefault</c> at use time.
+    /// physical shard count; <c>ShardMap.CreateDefault</c> enforces that lower
+    /// bound at use time. Choosing an integer multiple of the physical shard count
+    /// preserves <c>hash % shardCount</c> routing exactly.
     /// </para>
     /// </summary>
     public const int DefaultVirtualShardCount = 4096;

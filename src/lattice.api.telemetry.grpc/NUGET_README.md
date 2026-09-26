@@ -40,9 +40,11 @@ Until the host registers a permissive `ILatticeTelemetryApiAuthorizer` (or turns
 enforcement off behind an outer authentication boundary), every call is
 rejected. The unauthenticated `GetAuthScheme` discovery RPC is the single
 exemption, so a client can learn how to sign in before it holds a credential.
-The facade itself re-derives and authorizes the caller server-side, so the
-surface still fails closed for an unauthenticated caller even when the transport
-gate is disabled.
+The facade itself re-derives and authorizes the caller server-side, so on a
+cluster running the `Orleans.Lattice.Auth` add-on the surface still fails closed
+for an unauthenticated caller even when the transport gate is disabled. Without
+that add-on the core no-op access gate admits every caller, and each query is
+pinned to the reserved default tenant.
 
 ## Client-safe by construction
 

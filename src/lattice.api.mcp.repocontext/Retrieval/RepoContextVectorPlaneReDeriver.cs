@@ -18,9 +18,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// source from the store-of-record structural, symbol, and memory trees plus the
 /// working files.
 /// <para>
-/// <b>Fail-closed.</b> Re-derivation applies only to the two rebuildable vector
-/// projections (<see cref="RepoContextTrees.VectorMetadata"/> and
-/// <see cref="RepoContextTrees.VectorMembership"/>), classified through the single
+/// <b>Fail-closed.</b> Re-derivation applies only to the rebuildable vector
+/// projections (<see cref="RepoContextTrees.VectorMetadata"/>,
+/// <see cref="RepoContextTrees.VectorMembership"/>, and
+/// <see cref="RepoContextTrees.VectorCoverage"/>), classified through the single
 /// authoritative <see cref="RepoContextTrees.IsRebuildableVectorTree(string?)"/>
 /// allow-list. Every other tree - a store-of-record structural, symbol, or memory
 /// tree (real data loss) or the write-once content-addressed

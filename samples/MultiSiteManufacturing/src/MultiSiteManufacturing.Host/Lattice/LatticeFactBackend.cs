@@ -64,7 +64,8 @@ public sealed class LatticeFactBackend(
     /// fold). Only the default <see cref="FactTreeId"/> tree has a registered
     /// view; a per-test isolated tree, a host without the view subsystem, or a
     /// cold/unpopulated group all fall through to the authoritative scan + fold
-    /// below, so the read is always self-healing and read-your-writes safe.
+    /// below, so the read is self-healing; an existing view row can still lag a
+    /// just-written fact until the view catches up.
     /// </remarks>
     public async Task<ComplianceState> GetStateAsync(PartSerialNumber serial, CancellationToken cancellationToken = default)
     {

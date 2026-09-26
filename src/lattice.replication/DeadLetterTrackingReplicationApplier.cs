@@ -14,10 +14,11 @@ namespace Orleans.Lattice.Replication;
 /// process-local <see cref="ConcurrentDictionary{TKey, TValue}"/>.
 /// When the failure count reaches
 /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> the entry
-/// is parked on the per-tree dead-letter queue, the per-origin
-/// high-water-mark is advanced past the entry so subsequent apply
-/// attempts dedupe it, and a non-applied <see cref="ApplyResult"/> is
-/// returned to the caller. A successful apply clears the counter for
+/// is parked on the per-tree dead-letter queue and a non-applied
+/// <see cref="ApplyResult"/> is returned to the caller. For point writes only,
+/// the per-origin high-water-mark is advanced to at least the entry timestamp so
+/// the canonical apply path can suppress later point-write re-deliveries; ranges
+/// and saga terminals rely on their own idempotency seams. A successful apply clears the counter for
 /// that tuple so later transient failures get a fresh budget.
 /// <para>
 /// The retry counter is intentionally in-memory: the decorator is

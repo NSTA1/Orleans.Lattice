@@ -468,7 +468,16 @@ replay admission gate sizes its queue from the host's CPU grant, which on a
 read queueing behind a background corpus walk, and the benchmark has no
 foreground reader to protect. The harness raises
 `LatticeOptions.WalReplayPermitQueueDepthPerPermit` on the Layer 3 silos
-accordingly. The single-silo tiers do not set it and are unaffected.
+accordingly, to 64 against a library default of 4. The single-silo tiers do
+not set it and are unaffected.
+
+**Two saturation budgets are finite on this tier.** The library ships
+`LatticeOptions.SetManyFanOutBudget` and
+`LatticeOptions.WalAdmissionSaturationCallBudget` disabled (infinite). The
+Layer 3 harness opts its silos into finite values - 30 s and 15 s by default,
+set with `-SetManyFanOutBudgetSec` and `-WalAdmissionCallBudgetSec` - so a
+sweep measures the bounded configuration. Pass `0` for both to measure the
+out-of-the-box configuration instead.
 
 ## Re-running it yourself
 
@@ -488,6 +497,8 @@ The switches that matter for a partial or resumed run:
 
 - `-ReuseAca <prefix>` runs against an already deployed rig instead of
   provisioning one, and leaves it in place (parked) afterwards.
+- `-KeepAca` keeps a rig the sweep provisioned itself: the resource group is
+  preserved with the silos parked at zero, ready for a later `-ReuseAca` run.
 - `-Workloads` and `-SiloCounts` restrict the sweep. `pwsh -File` passes an
   array argument as a single string, so to pass a list use `pwsh -Command "&
   ./benchmark/performance-report.ps1 -Layer3 -SiloCounts 6,8"`.

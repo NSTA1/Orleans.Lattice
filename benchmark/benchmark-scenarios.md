@@ -34,10 +34,11 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 
 - [x] **current-state-no-replication: Current-state tree, replication off.**
   Wire a `LatticeSink` that maps `key = vehicleId.ToString("N")` and
-  `value = serialize(VehicleSnapshot)` against a single tree, single cluster,
-  replication disabled. Each tick is one `SetAsync`. Measures Lattice''s
+  `value = serialize(VehicleTelemetryEvent)` against a single tree, single cluster,
+  replication disabled. Each tick is one key write, which the sink batches into
+  `SetManyAsync` calls. Measures Lattice's
   steady-state write throughput and latency under uniform key distribution
-  (Guid hashing) at the simulator''s offered load.
+  (Guid hashing) at the simulator's offered load.
 
 - [x] **current-state-single-peer: Current-state tree, replication on, single peer.**
   Same wiring as `current-state-no-replication` with
@@ -51,8 +52,8 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 - [x] **skewed-key-shard-splits: Skewed-key variant to force adaptive shard splits.**
   Re-run `current-state-no-replication` with keys prefixed by a deliberately
   oversubscribed bucket (`region/vehicleId` with one region holding the
-  majority of the fleet) so a single shard goes hot. Watch for F-011
-  autonomic splits firing online, and confirm reads/writes/scans remain
+  majority of the fleet) so a single shard goes hot. Watch for autonomic
+  (hot-shard) splits firing online, and confirm reads/writes/scans remain
   consistent across the split (the property the chaos suite asserts).
   Without skew, default `ShardCount = 64` plus Guid hashing keeps load
   uniform and the split monitor never engages.
@@ -71,21 +72,26 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 
 - [x] **bidirectional-replication: Two-cluster bidirectional replication.**
   Split the fleet across two clusters, each replicating to the other.
-  Probes `OriginClusterId` cycle-break (F-036) by confirming writes do not
+  Probes the origin-cluster-id cycle-break by confirming writes do not
   echo back to their origin and HLC cursors stabilize on both sides.
 
 - [x] **replication-key-filter: Per-key replication filter cost.**
   Re-run `current-state-single-peer` with a non-trivial per-key filter
-  (R-012) on the producer side. Measures the inline filter''s contribution
-  to write-path latency. If the core observer-latency histogram (G-013) is
-  shipped, capture it; if not, this run motivates landing it.
+  on the producer side. Measures the inline filter's contribution
+  to write-path latency: the filter runs in the replication commit
+  observer, so its cost shows in the `observer` step of the core
+  `orleans.lattice.leaf.commit.duration` histogram.
 
 - [x] **event-log-with-ttl: Event-log tree with TTL (separate run).**
   Alternative key shape: `key = vehicleId/yyyyMMddTHHmmssfffZ`,
-  `value = VehicleTelemetryEvent`, with a TTL of e.g. 1 hour via the F-016
-  `SetAsync(ttl)` overload. Stresses ordered scans (`ScanKeysAsync` /
-  `EntriesAsync`), continuous tombstone compaction, and the read-path
-  expiry filter. Run independently of throughput experiments - compaction
+  `value = VehicleTelemetryEvent`, with a TTL of e.g. 1 hour via the
+  `SetAsync(key, value, ttl)` overload, which the sink calls key by key (there is
+  no batched TTL write). Stresses the TTL write path on an append-only, key-ordered
+  keyspace. As shipped the scenario enables no reader, so ordered scans
+  (`ScanKeysAsync` / `EntriesAsync`) and the read-path expiry filter go
+  unexercised, and its 1 hour TTL outlasts the run, so no entry expires and
+  TTL-driven tombstone compaction has nothing to reap. Run independently of
+  throughput experiments - compaction
   will distort the latency tail and conflate signals if mixed with
   `current-state-no-replication` / `current-state-single-peer`.
 
@@ -105,14 +111,14 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 
 - [x] **read-heavy-ordered: 95:5 read:write, sequential keyspace walk.**
   Same write topology as `read-heavy-random` but the read-driver walks the
-  keyspace sequentially via `ScanKeysAsync`. Captures the cache/prefetch
+  discovered keyspace in key order, still one `GetAsync` per key. Captures the cache/prefetch
   signal that random access cannot - sequential reads should hit the leaf
   block cache more often, so the gap between this run and
   `read-heavy-random` is itself a regression metric.
 
 - [x] **read-write-mix-random: 50:50 read/write, random keys.**
-  Balanced YCSB-A-shape mix. Drives a fixed-rate `SetAsync` from the
-  simulator and an equal-rate `GetAsync` from the read-driver against
+  Balanced YCSB-A-shape mix. Drives fixed-rate writes (batched `SetManyAsync`)
+  from the simulator and an equal-rate `GetAsync` from the read-driver against
   random keys. Stresses the contention between the read fast path and the
   commit path on the same shard, which neither pure-write nor pure-read
   scenarios isolate.
@@ -130,13 +136,17 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   the per-commit cost of one `TableClient.SubmitTransactionAsync` versus the
   in-memory baseline. Compare commit p99 / commits-per-second against
   `current-state-no-replication` to read the durability tax in isolation.
+  Both Azure Table WAL optimisation toggles (`BENCH_WAL_ELIMINATE_CANDIDATE_ROW`,
+  `BENCH_WAL_PIPELINE_PHASE_TWO`) stay off here, although the provider defaults
+  both to on; the `-no-crow` and `-pipelined` variants below each turn one back on.
 
 - [x] **bidirectional-replication-azuretable: Two-cluster bidirectional replication, Azure Table WAL.**
   Mirror of `bidirectional-replication` with `Lattice:Wal:Provider=azuretable`
   set on both silos. Each side writes its WAL to its own dedicated Azurite
   instance (`vfs-azurite` / `vfs-azurite-replica`), so the durable-WAL append
   cost is paid symmetrically under LWW-conflict load. Compare ship/apply
-  histograms and `replication_wal_entries_appended_per_second` against
+  histograms and the leaf commit's WAL-append step (`lattice_wal_append_p99_ms`,
+  `lattice_wal_appends_per_second`) against
   `bidirectional-replication` to attribute any throughput regression between
   the WAL append path and the ship/apply pipeline.
 
@@ -180,10 +190,11 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 These apply to every benchmark above and should be verified before kicking off a run.
 
 - OpenTelemetry wired to the `orleans.lattice` meter (shard counters,
-  leaf-latency histograms, cache hit/miss, replication WAL/HWM gauges) and
-  the `vehicle_fleet_simulator.*` meters (`vehicle_fleet_simulator.sink`
-  for the LatticeSink, `vehicle_fleet_simulator.read_driver` for the
-  read-driver).
+  leaf-latency histograms, cache hit/miss), the `orleans.lattice.replication`
+  meter (WAL-shipping, HWM and ack-latency instruments) and the
+  `vehicle_fleet_simulator.*` meters (`vehicle_fleet_simulator.sink`
+  for the LatticeSink, and the `read_driver`, `write_driver` and
+  `atomic_saga_driver` meters for the three drivers).
 - Warm-up window excluded from measurement: `AddVehicleBatch` fan-out at
   full fleet size takes meaningful time; capture steady state only.
   Configured via `BENCH_WARMUP_SECONDS` in each `.env`.
@@ -241,15 +252,15 @@ own batching, off-turn dispatch, and failure handling, because:
 
 ### 2. Sink selection at silo startup
 
-Sinks are registered as a DI singleton in the silo''s service collection.
+Sinks are registered as a DI singleton in the silo's service collection.
 There is no configuration-driven sink switching at runtime; the benchmark
 silo (`benchmark/host/Bench.Silo/`) reads `BENCH_TELEMETRY_SINK` from the
 `.env` and registers exactly one sink at startup.
 
 | `BENCH_TELEMETRY_SINK` | Registration                                                                                | Used by |
 |---|---|---|
-| `null`   | `services.AddSingleton<ITelemetrySink>(_ => NullTelemetrySink.Instance);` | (rare; observer-off A/B half) |
-| `fanout` | `services.AddSingleton<ITelemetrySink, FanOutTelemetrySink>();`                              | non-Lattice control runs       |
+| `null`   | `services.AddSingleton<ITelemetrySink>(_ => NullTelemetrySink.Instance);` | the replica silo in the one-way replication scenarios (`current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `replication-key-filter`), via `BENCH_REPLICA_TELEMETRY_SINK=null` |
+| `fanout` | `services.AddSingleton<ITelemetrySink, FanOutTelemetrySink>();`                              | the default when `BENCH_TELEMETRY_SINK` is unset; no shipped scenario selects it |
 | `lattice`| `services.AddLatticeSink(configuration.GetSection("LatticeSink"));` (registers `LatticeSink` as the `ITelemetrySink` and as a hosted service) | every Lattice scenario above   |
 
 `Program.cs` in `benchmark/host/Bench.Silo/` is the single registration
@@ -260,7 +271,7 @@ point. The replacement must be exclusive - registering a second
 ### 3. The `LatticeSink` shape
 
 `LatticeSink` lives in `benchmark/host/Bench.Sink/` so the
-`Orleans.Lattice` package dependency is opt-in and doesn''t land in
+`Orleans.Lattice` package dependency is opt-in and doesn't land in
 non-Lattice deployments of the simulator. The minimum surface:
 
 ```csharp
@@ -306,13 +317,13 @@ key-agnostic.
 ### 4. Off-turn dispatch requirement
 
 `VehicleGrain.TickAsync` is a turn-based grain method. A sink that calls
-`ILattice.SetAsync` inline will couple grain-tick latency to Lattice''s
+`ILattice.SetAsync` inline will couple grain-tick latency to Lattice's
 write latency, contaminating every scenario. Implementations MUST:
 
 - Enqueue into a bounded `Channel<T>` (or equivalent) inside
   `PublishTelemetryAsync`.
-- Drain the channel from a long-running background `Task` started in the
-  sink''s constructor (or on first publish), not from the grain turn.
+- Drain the channel from a long-running background `Task` (the shipped sink
+  starts it in its hosted-service `StartAsync`), not from the grain turn.
 - Apply backpressure by either bounding the channel and recording drops
   via a metric, or by using `BoundedChannelFullMode.Wait` with a hard
   timeout. Silently blocking the producer is a benchmark contamination
@@ -327,25 +338,27 @@ of the sink. Per the package's replication model:
 
 - Replication is per-tree opt-in. The `LatticeSink` decides which `TreeId`
   it writes to, and the silo opts that tree into replication via
-  `Orleans.Lattice.Replication`''s configuration surface.
-- The `OriginClusterId` MUST be unique per cluster in the deployment
-  topology - the `IConfiguration` value `Orleans:ClusterId` already used
-  by `Program.cs` is a natural source.
-- Per-key replication filters (R-012) are configured against the
+  `Orleans.Lattice.Replication`'s configuration surface.
+- The replication cluster id (`LatticeReplicationOptions.ClusterId`, which
+  every local write carries as its `OriginClusterId`) MUST be unique per
+  cluster in the deployment topology - the benchmark silo binds it from
+  `Replication:OriginClusterId` and falls back to the `Orleans:ClusterId`
+  its `Program.cs` already uses.
+- Per-key replication filters are configured against the
   replicator, not the sink. Scenario `replication-key-filter` enables a
   non-trivial filter; sink code is unchanged.
 - Scenario `bidirectional-replication` requires both clusters to register
   the replicator with each other as peers and to advertise distinct
-  `OriginClusterId`s, otherwise echo cycles will form.
+  cluster ids, otherwise echo cycles will form.
 
 ### 6. Lifecycle and graceful shutdown
 
-The silo''s hosted lifetime governs sink shutdown.
+The silo's hosted lifetime governs sink shutdown.
 `LatticeSink : IAsyncDisposable` must be registered such that
 `DisposeAsync` runs before the cluster client disposes:
 
 - Register the sink as both `ITelemetrySink` and a hosted service (or via
-  `AddSingleton` with the silo''s `IHostApplicationLifetime` to drain on
+  `AddSingleton` with the silo's `IHostApplicationLifetime` to drain on
   `ApplicationStopping`).
 - On shutdown: complete the channel writer, await the drain task with a
   bounded timeout, then flush metrics. Pending writes that cannot drain
@@ -359,19 +372,20 @@ Read-dominant scenarios add a `LatticeReadDriver`
 (`benchmark/host/Bench.Sink/`) registered as a hosted service alongside
 the sink. The read-driver:
 
-- Issues `GetAsync` (random) or `ScanKeysAsync` (ordered) against the same
-  `TreeId` the `LatticeSink` writes to, at a fixed
-  `BENCH_READ_RATE_PER_SECOND`.
+- Issues one `GetAsync` per read against the same `TreeId` the
+  `LatticeSink` writes to, at a fixed `BENCH_READ_RATE_PER_SECOND`, picking
+  keys at random (`Random`) or walking them in key order (`Sequential`) from
+  a keyspace sample it refreshes by cursor-paging the tree.
 - Bounds concurrency via `BENCH_READ_CONCURRENCY` so the offered read
   load is reproducible.
 - Publishes the `vehicle_fleet_simulator.read_driver` meter (`reads`,
   `misses`, and `errors` counters - `*_total` once exported to Prometheus -
-  and the `duration_ms` histogram). The benchmark script promotes the histogram
-  to `bench_vehicle_fleet_simulator_read_driver_*` aliases so the
-  history dashboards bind to short, stable names.
+  and the `duration_ms` histogram). The benchmark script's auto-discovery
+  picks the meter up and the history push prefixes every key with `bench_`,
+  so the history dashboards bind to `bench_vehicle_fleet_simulator_read_driver_*`.
 
 The read-driver is a separate component from the sink so the four read
-scenarios can reuse `current-state-no-replication`''s exact write
+scenarios can reuse `current-state-no-replication`'s exact write
 configuration without forking the sink contract.
 
 ### 8. Metrics wiring
@@ -409,9 +423,12 @@ in a single dashboard.
 >   If it widens, every producer is paying the price; sink drops are usually
 >   close behind.
 > - `flush_duration_ms` is the cost of the async drain loop. Under replication
->   it widens noticeably (typical observation: ~100 ms p99 without replication,
->   ~200 ms p99 with replication enabled, both at calibrated fleet) because
->   each commit ripples through `WAL append → in-memory apply → ship to peer`.
+>   it widened noticeably when this note was written (typical observation: ~100 ms
+>   p99 without replication, ~200 ms p99 with replication enabled, both at
+>   calibrated fleet), before the log-first replication producer (#941) moved the
+>   ship to the peer onto a background log-tailing shipper, off the commit path:
+>   each commit now pays only the replication commit observer's per-key filter and
+>   a nudge to that shipper.
 >   This widening is **expected** and does not surface as drops as long as the
 >   bounded channel has spare depth - the queue absorbs it. A flush p99 that
 >   keeps climbing run-over-run _without_ a corresponding drop in the
@@ -427,7 +444,7 @@ for any future change to the simulator integration:
   true no-op, completes synchronously, and tolerates a representative
   burst without throwing.
 - `FanOutTelemetrySinkRoutingTests.Telemetry_lands_on_the_shard_chosen_by_ShardForVehicle` -
-  guarantees the default sink''s per-vehicle shard mapping has not
+  guarantees the default sink's per-vehicle shard mapping has not
   regressed (so the existing `FleetStreamHub` consumers continue to work
   in non-Lattice runs).
 - `FanOutTelemetrySinkRoutingTests.Events_land_on_the_dedicated_events_activation_and_never_on_a_telemetry_shard` -

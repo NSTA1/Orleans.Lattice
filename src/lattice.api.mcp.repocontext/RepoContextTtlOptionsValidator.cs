@@ -8,9 +8,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <see cref="RepoContextTtlOptions.DefaultMemoryTtl"/> must be strictly positive
 /// and finite, because the core write path
 /// (<see cref="ILattice.SetAsync(string, byte[], System.TimeSpan, System.Threading.CancellationToken)"/>)
-/// rejects a non-positive TTL - catching a misconfiguration at startup rather
-/// than on the first ephemeral write. Mirrors how the view and replication
-/// options are validated.
+/// rejects a non-positive TTL - catching a misconfiguration when the options value
+/// is resolved rather than on the first ephemeral write. Mirrors how the view and
+/// replication options are validated.
 /// </summary>
 internal sealed class RepoContextTtlOptionsValidator : IValidateOptions<RepoContextTtlOptions>
 {

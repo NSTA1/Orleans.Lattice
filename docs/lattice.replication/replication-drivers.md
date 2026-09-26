@@ -33,11 +33,23 @@ N-fold-redundant work that scales with peer count.
 
 ### Activation
 
-A hosted background service (a `BackgroundService`) calls `EnsureActiveAsync` on the cluster-singleton
-grain for every replicated tree on startup. Calls are idempotent - Orleans
-deduplicates concurrent activations via grain identity, and
-`StartCoordinatorAsync` short-circuits when a reminder + phase timer are
-already wired.
+A hosted background service (a `BackgroundService`) activates the driver
+grains for every replicated tree on startup: the per-tree maintenance
+grain, one shipper per current peer, and - only when `DigestProbeEnabled`
+is set for the tree - the per-tree
+[anti-entropy digest probe](anti-entropy-digest-probe.md) scheduler.
+Activation is idempotent - Orleans deduplicates concurrent activations
+via grain identity, and a grain whose keepalive reminder and phase timer
+are already wired treats a repeat activation as a no-op.
+
+The replicated-tree set comes from `IReplicatedTreeMembership` rather
+than the raw `ReplicatedTrees` map. On a host that opts into
+[runtime replication configuration](runtime-config.md) it is the union
+of the static map and the trees enabled at runtime, and a lightweight
+poll of the compiled configuration snapshot (every 2 seconds, doing work
+only when the snapshot has rebuilt) enrols the driver grains of any tree
+enabled after startup without a silo restart. Enrolment is additive
+only: disabling a tree at runtime does not tear its driver grains down.
 
 The activation loop is **retry-with-backoff**: a freshly-started silo may
 race the Orleans runtime's own `IHostedService` ordering, so the first
@@ -297,8 +309,9 @@ the backoff budget.
 **Continuous drain within a tick.** A tick does not stop after shipping a
 single batch. Once a partition has been primed (step 2 onwards), steps 2-6
 repeat in a loop, shipping batch after batch back-to-back until the backlog
-is exhausted - a merge that yields fewer than `ShipBatchSize` entries (the
-final short tail) ends the tick, as does a receiver flow-control signal (a
+is exhausted - a merge that yields fewer entries than the tick's effective
+batch cap (`ShipBatchSize`, lowered by the adaptive controller or a receiver
+hint; the final short tail) ends the tick, as does a receiver flow-control signal (a
 positive `SuggestedBatchSize` hint or a just-applied `PauseForMs`) or a
 transport / ack failure. This mirrors the pipelined path (`ShipMaxInFlight
 > 1`), which already drained to exhaustion per tick, and prevents a backlog
@@ -475,10 +488,12 @@ the DLQ is unavailable.
 The shipper maintains activation-scoped buffers reused across pump
 ticks:
 
-- `_drainBuffer` (`List<WalRecord>`) - cleared in place at the start
-  of every `PumpOnceAsync`. The framing encoder consumes the list
-  synchronously inside `EncodeFraming`, so reuse is safe (no aliasing
-  past the call).
+- `_drainBuffer` (`List<WalRecord>`) - cleared in place before every
+  drained batch (a tick can drain several - see *Continuous drain within
+  a tick* above). The list drives the shipper's own filtering,
+  coalescing, and cursor bookkeeping and is never handed to the
+  transport, which receives only the framing header and the pre-encoded
+  segments below, so reuse is safe (no aliasing past the call).
 - `_drainEncodedSegments` (`List<ArraySegment<byte>>`) - cleared in
   lockstep with `_drainBuffer`. Holds the pre-encoded payload bytes
   the shard grain returned from `ReadShippingAsync`; the segments are
@@ -598,8 +613,8 @@ activation tears down so a clean shutdown (e.g. operator silo drain)
 eliminates the deferred-persist replay window entirely. A storage
 failure during the flush is logged and swallowed - deactivation must
 not block - and the next activation recovers by re-shipping at most
-`ShipCursorWriteInterval × ShipBatchSize` entries the receiver
-dedupes.
+`ShipCursorWriteInterval x ShipBatchSize` entries, which the receiver
+absorbs idempotently.
 
 ### Content-hash dedup measurement
 
@@ -796,8 +811,17 @@ condition clears.
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
 | `ShipDoorbellEnabled` | `true` | - | Master switch for the writer-side doorbell. |
 | `PreShipCoalescingEnabled` | `true` | - | On by default; set to `false` per tree to opt out. Collapse a drained batch's redundant per-key versions before they ship: latest-wins elision on LWW trees, delta-merge folding on recognised CRDT trees (an unregistered OR-Map shape or an opaque delta ships individually). |
+| `ShipPartitionPageSize` | 256 | `>= 1` | Entries read from each WAL partition per pump tick before the HLC merge. See [Partition resume cursor](#partition-resume-cursor). |
+| `ShipCursorWriteInterval` | 16 | `>= 1` | Successful acks per durable cursor write; `1` persists every ack. See [Deferred cursor persistence](#deferred-cursor-persistence). |
+| `ShipCursorWriteMaxDelay` | 2 s | `> TimeSpan.Zero` or `Timeout.InfiniteTimeSpan` | Longest an un-flushed cursor advance waits for a durable write; `Timeout.InfiniteTimeSpan` coalesces purely by batch count. |
+| `ShipPhaseTimerPeriod` | 100 ms | `> TimeSpan.Zero` | Cadence of the shipper's phase timer, the single authority that drains and ships. |
+| `ShipSourceIdentityBackstopInterval` | 30 s | `> TimeSpan.Zero` | Backstop re-resolve of the source tree's physical identity. See [Source-identity rebind](#source-identity-rebind). |
+| `LivenessProbeInterval` | 30 s | `> TimeSpan.Zero` or `Timeout.InfiniteTimeSpan` | When a tick finds nothing to ship and this long has passed since the last successful contact, the shipper sends an empty batch as a liveness probe, so the outbound `peer.last_contact_seconds` gauge keeps resetting on a healthy idle link. `Timeout.InfiniteTimeSpan` disables the probe. |
+| `ContentHashDedupEnabled` | `true` | - | Measures the payload re-send rate. See [Content-hash dedup measurement](#content-hash-dedup-measurement). |
+| `ContentHashDedupCacheSize` | 4096 | `>= 64` | Per-activation, per-key LRU size for the last-shipped content hash. |
+| `ContentHashDedupElisionEnabled` | `false` | Requires `ContentHashDedupEnabled` | Opt-in content-manifest exchange that elides payloads the receiver already holds. |
 
-Every option in the table except `ShipDoorbellEnabled` resolves via
+Every option in the table except `ShipDoorbellEnabled` and `ShipPhaseTimerPeriod` resolves via
 `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`, so per-tree
 overrides are honoured. `ShipDoorbellEnabled` (read by the commit-time
 doorbell sink) and `ShipPhaseTimerPeriod` (read when a shipper

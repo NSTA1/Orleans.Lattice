@@ -12,11 +12,10 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The contract is deliberately neutral: there is no peer id, no
 /// per-call ack envelope, no notion of "live" vs. "snapshot" mode.
-/// Consumers pass an <see cref="HybridLogicalClock"/> cursor on each
-/// call and receive every entry they have not yet seen, in HLC
-/// ascending order. To stream forward, a consumer remembers the
-/// timestamp of the last entry it observed and re-subscribes with
-/// that value as the new cursor.
+/// The public cursor parameter is an HLC-shaped compatibility seam. The current
+/// implementation snapshots the locally authored feed without applying that cursor;
+/// consumers that need durable resume use the shipper's per-partition WAL cursors
+/// rather than this low-level API.
 /// </para>
 /// <para>
 /// <b>Scope: locally-authored writes only.</b> Consumers see only

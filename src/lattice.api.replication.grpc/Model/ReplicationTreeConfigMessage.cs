@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Api.Replication.Grpc;
 /// One tree's effective replication configuration on the wire: the target tree
 /// id, whether it is enrolled, the single unambiguous merge mode in force
 /// (absent when unassigned or ambiguous), whether the merge mode is currently
-/// ambiguous (so shipping is paused fail-closed), and which enrollment source
+/// ambiguous (so receivers fail closed on that tree), and which enrollment source
 /// put the tree in force.
 /// </summary>
 [GenerateSerializer]
@@ -38,7 +38,7 @@ public sealed record ReplicationTreeConfigMessage
 
     /// <summary>
     /// <see langword="true"/> when the tree's merge-mode register carries more
-    /// than one live value, so shipping is paused fail-closed until an operator
+    /// than one live value, so the resolver returns no mode until an operator
     /// resolves it.
     /// </summary>
     [Id(4)] public bool Ambiguous { get; init; }

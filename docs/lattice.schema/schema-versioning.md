@@ -113,8 +113,10 @@ version to read it.
 
 Advancing a tree's target version is an admin action allowed at any time. The new
 target applies to new writes immediately; existing values are lifted lazily at read
-time by the upcaster chain. The target version is **monotonic** - it can only
-advance:
+time by the upcaster chain. The advance is **monotonic**: `AdvanceTargetVersionAsync`
+rejects an unversioned tree, and a target that is not strictly greater than the
+current one, with `InvalidOperationException`. (`SetVersionConfigAsync` replaces the
+whole config and does not apply that check.)
 
 ```csharp verify
 using Orleans.Lattice.Schema;
@@ -206,9 +208,13 @@ switch is on (see the caveat under
 ## Composition with enforcement
 
 When a tree uses both versioning and [enforcement](schema-enforcement.md), values
-are validated against the **target (post-upcast) shape**. Advancing the target
-version and tightening the policy is a single shadow build: upcast, validate
-against the new policy, cut over, aborting on the first offending key.
+are validated against the **target (post-upcast) shape**: a write is validated as a
+plain document before its envelope is applied. Advancing the target version and
+re-stamping existing values (`AdvanceAndMigrateAsync`) is a single shadow build:
+upcast each value, validate it against the tree's **existing** policy, cut over,
+aborting on the first offending key. The migration never changes the policy;
+tightening it is the separate enforcement
+[remediation](schema-enforcement.md#bringing-existing-data-into-compliance).
 
 ## Current scope
 

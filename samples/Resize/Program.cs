@@ -40,7 +40,7 @@ Console.WriteLine("== Resize sample ==");
 Console.WriteLine();
 
 // Populate the tree with more entries than the default 128 keys-per-leaf so the
-// tree is genuinely multi-leaf and the resize has real structure to rebuild.
+// tree must split into multiple leaves and the resize has real structure to rebuild.
 const int count = 500;
 var tree = grainFactory.GetGrain<ILattice>("catalog");
 var entries = new List<KeyValuePair<string, byte[]>>(count);

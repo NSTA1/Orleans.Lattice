@@ -50,7 +50,7 @@ Behavior:
 
 ### Replication and cold rebuild
 
-The resolved absolute expiry ships on the wire with each replicated CRDT delta (`ApplyCrdtDeltaItem.ExpiresAtTicks`) and is applied verbatim by the receiver - the absolute tick is never re-resolved from a relative TTL on receive, so inter-cluster clock skew cannot shift a replicated entry's lifetime. The batched receive path threads the same per-entry absolute expiry into each coalesced dispatch item. On a cold projection rebuild, each WAL record carries the cumulative-max expiry and replay re-applies the same `max(priorExpiry, recordExpiry)` join, so the rebuilt entry's expiry is reconstructed independently of HLC replay order.
+The resolved absolute expiry ships on the wire with each replicated CRDT delta (`WalRecord.ExpiresAtTicks`) and is applied verbatim by the receiver - the absolute tick is never re-resolved from a relative TTL on receive, so inter-cluster clock skew cannot shift a replicated entry's lifetime. The batched receive path threads the same per-entry absolute expiry into each coalesced dispatch item. On a cold projection rebuild, each WAL record carries the cumulative-max expiry and replay re-applies the same `max(priorExpiry, recordExpiry)` join, so the rebuilt entry's expiry is reconstructed independently of HLC replay order.
 
 Read filtering, scans, counts, cursors, caching, and tombstone compaction treat a TTL'd CRDT entry exactly like a TTL'd `SetAsync` entry - the expiry lives on the stored row (`LwwValue.ExpiresAtTicks`), not on the value shape, so all the [read-path](#read-paths) and [tombstone-compaction](#tombstone-compaction) rules below apply unchanged.
 

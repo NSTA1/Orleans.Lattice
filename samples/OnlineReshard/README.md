@@ -44,6 +44,10 @@ Final physical shard count: 72
 migration progresses; the start count, final count, and data-intact result are
 stable.)
 
+The sample raises `LatticeOptions.MaxConcurrentMigrations` - how many shard
+splits an online reshard drives at once - from its default of 4 to 16, so the
+demo finishes sooner at the cost of proportionally more background drain I/O.
+
 ## When to use
 
 - Scaling a hot tree horizontally: spread its key space over more shards to

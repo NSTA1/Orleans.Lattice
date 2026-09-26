@@ -43,9 +43,12 @@ public enum ReplicationEnrollmentSource
     Static = 1,
 
     /// <summary>
-    /// Both sources declare this tree and the runtime config entry is in force,
-    /// so the reported mode is the runtime-fixed mode. Disabling at runtime falls
-    /// back to the static declaration rather than stopping replication.
+    /// Both sources declare this tree and the runtime config entry is in force.
+    /// When the runtime entry is unambiguous, the reported mode is the
+    /// runtime-fixed mode; when the runtime entry is ambiguous, the report carries
+    /// <c>null</c> mode and receivers fail closed rather than falling back to
+    /// the static declaration. Disabling at runtime falls back to the static
+    /// declaration rather than stopping replication.
     /// </summary>
     RuntimeAndStatic = 2,
 }

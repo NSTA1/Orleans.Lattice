@@ -43,6 +43,12 @@ services.AddExplorerPlugin<MyAreaPlugin>(); // your IExplorerPlugin implementati
 registration is idempotent. A shipped plugin package wraps this call in its own
 helper - for example `AddExplorerBackupsPlugin()` - so a head calls that instead.
 
+The host context is backed by two adapters this package deliberately does not
+supply, because they sit on the shell's side of the seam: the head registers an
+`IExplorerPluginHostState` and an `IExplorerPluginPreferences`. The Explorer's
+shared UI (`Orleans.Lattice.Explorer.UI`) registers both through
+`AddExplorerPluginAdapters()`.
+
 Access gating is advisory on the client. The server remains the sole
 enforcement point, so every plugin action must still handle a runtime denial.
 

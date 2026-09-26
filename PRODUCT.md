@@ -52,7 +52,7 @@ table- and code-dense reference pages stay comfortable to read and navigate.
 
 Three positions, taken from the README's "Why it exists":
 
-- **The store lives in the cluster.** State is held by grains in the same process
+- **The store lives in the cluster.** State is held by grains in the same cluster
   as the code using it, so a read is a grain call, not a network round trip to a
   separate tier.
 - **Conflict resolution is algebraic.** Merges are commutative, associative, and
@@ -69,8 +69,8 @@ Three positions, taken from the README's "Why it exists":
   directories, plus `docs/RELEASING.md`, the video companion pages under
   `docs/videos/`, root pages (README, FEATURES, PACKAGES,
   reference-architecture, CHANGELOG) and sample, spec, and benchmark READMEs.
-  The `docs/` tree is about 4 MB of markdown containing roughly 690 tables, 446
-  compiled C# snippets (` ```csharp verify ` fences checked by a Roslyn
+  The `docs/` tree is about 4.8 MB of markdown containing roughly 750 tables, some
+  440 compiled C# snippets (` ```csharp verify ` fences checked by a Roslyn
   harness), 44 mermaid diagrams, about 60 blockquotes and callouts, and no
   images.
 - The pipeline: `docs-site/stage.ps1` stages the untouched repository markdown

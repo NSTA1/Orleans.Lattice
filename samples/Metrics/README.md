@@ -21,7 +21,11 @@ dotnet run --project samples/Metrics
 Counter totals (for example `orleans.lattice.shard.writes`) are exact and reflect
 the operations this sample performs. Histogram and gauge `total` sums are timing- and
 scheduler-dependent, so their values vary from run to run. The exact set of
-instruments can also shift slightly as background maintenance fires.
+instruments can also shift slightly as background maintenance fires. The capture
+below also predates instruments added since - for example
+`orleans.lattice.shard.records_written`, the per-record companion to
+`orleans.lattice.shard.writes`, which each of this sample's writes also records -
+so a current run lists more instruments than shown.
 
 ```
 Silo starting... ready.

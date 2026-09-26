@@ -61,8 +61,9 @@ place instead of creating a near-duplicate. The id is the mirrored issue number,
 which makes identity and mirroring the same act (see
 [Entry gating](#entry-gating---mirror-first-admit-by-label)).
 
-**A memory record has exactly four author-settable scalars**, and this is the
-constraint the whole schema is built around. `repocontext_update` accepts
+**A memory record has exactly four author-settable scalars** besides the
+`kind` that `repocontext_remember` fixes at creation (`Decision`, `Note` or
+`Memory`), and this is the constraint the whole schema is built around. `repocontext_update` accepts
 `title`, `body`, `author` and `provenance` on a memory record and **rejects
 every other name** - `update(fields: { "priority": "P0" })` fails with *"The
 field 'priority' is not a settable scalar on a Memory record"*. There is no
@@ -396,7 +397,11 @@ with `forget`. This is no longer an exception to the coordination rule: the
 [Coordination](../../../.github/instructions/repocontext.instructions.md#coordination---memory-as-a-cross-session-bus)
 section now forbids a TTL on coordination entries generally, on the same
 reasoning. A backlog item - a ledger entry, not a handoff - is simply the case
-where the harm is most concrete.
+where the harm is most concrete. Omitting `ttlSeconds` is not enough on its
+own: `repocontext_remember` gives a newly created entry the repository's default
+memory TTL whenever the host configures one (`RepoContextTtlOptions.DefaultMemoryTtl`,
+unset by default), and `ttlSeconds` accepts only a positive value, so no call
+can opt an item out. A repository that hosts a backlog leaves that default unset.
 
 **Recording `baseBranch:` on the item is what makes a retry land correctly.**
 Leaving it to worker convention means a resumed or reassigned attempt targets
@@ -459,7 +464,8 @@ Two rules follow from the store's semantics rather than from taste:
   grows a long-lived record without bound.
 - **Edges make a collision detectable, not preventable.** There is no
   compare-and-swap anywhere in this surface: `repocontext_update` preconditions
-  on record *existence* only, never on value. A `claims` edge is therefore an
+  on record *existence* and, once the record is claimed, on the fencing token -
+  never on a field's value. A `claims` edge is therefore an
   audit record of who tried, not a lock. Mutual exclusion comes from the fenced
   claim/lease surface, whose monotonic fencing tokens and bounded,
   expiry-reclaimed leases give real exclusion and a real stale-claim reaper.
@@ -542,9 +548,13 @@ waiting, not satisfied, until that blocker actually completes.
 
 Linking an item to the files it concerns captures those targets' content digests
 at link time, so `repocontext_recall` reports the item `stale` once the code
-drifts. An item whose anchor moved auto-flags "re-validate the spec before
+drifts - measured against the index, so an edit counts once it is re-ingested.
+An item whose anchor moved auto-flags "re-validate the spec before
 spending a run on it". This is the one capability GitHub issues cannot provide,
-and it doubles as the poison-item mitigation.
+and it doubles as the poison-item mitigation. An anchor whose target is not in
+the index - deleted, or not created yet - also reads `stale`, and so does an
+edge written before its target was indexed: it captured no digest, and stays
+`stale` until the edge is written again.
 
 Combined with `repocontext_related`, anchors also give each item a **blast
 radius**, so two items touching the same code can be serialised at selection
@@ -967,9 +977,13 @@ shorter than the shortest useful unit of work**, which turns a safety property
 into a routine occurrence.
 
 Why that matters more than a retry: during the lapse the item is, to any other
-worker computing the ready set, simply **unclaimed**. Step 2 drops items "held
-under a live fenced claim" and there is no live claim, so there is no state
-distinguishable from never-started. A sibling recomputing in that window would
+worker computing the ready set, simply **available**. Step 2 drops items "held
+under a live fenced claim", and nothing holds this one: the lease has lapsed, so
+`repocontext_claim_status` reports `isHeld: false` and a `repocontext_claim` would
+be granted. The record still reports `claimed: true` with the last fencing token,
+which is what separates a lapse from an item nobody has started (`claimed: false`,
+no `fencingToken`), but a ready set that goes by the lock cannot see the
+difference. A sibling recomputing in that window would
 have found the item available and begun duplicate work on an item another worker
 was mid-build on. Nothing prevented that. Only the timing did.
 
@@ -1003,7 +1017,10 @@ per-phase, since a research item and a build item have very different natural
 durations; auto-renew on a timer for the lifetime of a long child process rather
 than asking a worker to predict its duration; and distinguish "lease expired
 while work was in progress" from "never claimed" in the ready set, so a lapse
-degrades to a warning rather than to availability.
+degrades to a warning rather than to availability. That last needs no change to
+the surface, only to the ready-set computation: `repocontext_claim_status`
+already separates the two (`claimed: true` with `isHeld: false`, against no
+`fencingToken` at all).
 
 This was surfaced only because a worker volunteered an unflattering detail it
 had already recovered from. A protocol that discourages that reporting would
@@ -1022,7 +1039,8 @@ them apart.** An expired lease means either
    and the item genuinely needs picking up; or
 2. the holder is **alive and working**, and merely failed to renew in time.
 
-Both present identically: no live claim. Nothing in the lock, the item record, or
+Both present identically: no live lease (`isHeld: false`) on a record that still
+reports `claimed: true`. Nothing in the lock, the item record, or
 the ready set distinguishes them, and there is no liveness signal independent of
 the renewal itself. Treating every lapse as case 1 duplicates live work; treating
 every lapse as case 2 leaks items permanently to dead agents. Neither default is
@@ -1259,8 +1277,9 @@ Reading it back:
   index; it is observed by the next scan-plus-check pass.
 - Deleting `issue-2100` instead makes `issue-2101`'s `blockedBy` target return
   `exists: false`. That is reported as a **defect**, not treated as satisfied.
-- Editing `IWalShardGrain.cs` makes `recall` report both items `stale`, because
-  their `anchoredTo` target's digest drifted. Both are re-validated before a run
-  is spent on them.
+- Once an edit to the anchored file is re-ingested into the index, `recall`
+  reports both items `stale`, because their `anchoredTo` target's digest no
+  longer matches the one captured when the edge was written. Both are
+  re-validated before a run is spent on them.
 - Epic `issue-2099` stays open until the item carrying `integrates` to it
   completes, even once `issue-2100` and `issue-2101` are both merged.

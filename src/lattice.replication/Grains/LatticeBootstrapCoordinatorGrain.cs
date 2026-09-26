@@ -59,8 +59,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// <c>WriteStateAsync</c> calls
     /// during the <see cref="LatticeBootstrapState.ApplyingSnapshot"/>
     /// phase. A silo crash may cost up to this many re-applied entries
-    /// on resume; the per-origin HWM dedupe makes the replay
-    /// idempotent so the cost is bandwidth, not correctness.
+    /// on resume; snapshot-pinned floors, recent exact-identity dedupe, and
+    /// per-key LWW idempotency make the replay safe so the cost is bandwidth, not correctness.
     /// </summary>
     private const int CursorPersistEntryInterval = 100;
 
@@ -337,8 +337,9 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// <c>StatusCode.Unavailable</c> from
     /// <c>RemoteSnapshotProvider</c>) consumes one retry slot and
     /// re-opens the snapshot from the persisted cursor; the per-origin
-    /// HWM dedupe makes the overlap a no-op, so replay is bounded by
-    /// <see cref="CursorPersistEntryInterval"/> × consumed retries.
+    /// snapshot-pinned floors, recent exact-identity dedupe, and per-key LWW merge
+    /// make the overlap safe, so replay is bounded by
+    /// <see cref="CursorPersistEntryInterval"/> x consumed retries.
     /// Non-transient faults pivot to <see cref="LatticeBootstrapState.Failed"/>
     /// on the first failure via the catch block in
     /// <see cref="ProcessNextPhaseAsync"/>. Budget exhaustion re-throws
@@ -500,7 +501,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // export's metadata - safe because the receiver will have
         // applied every entry up through the new export's AsOfHlc by
         // the time it reaches IncrementalHandoff, and the per-origin
-        // HWM dedupe makes any overlap a no-op.
+        // Snapshot-pinned floors, recent exact-identity dedupe, and per-key LWW merge make any overlap safe.
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
         var pivotedToApplying = false;
@@ -652,9 +653,9 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 LatticeTenantLabel.ForTree(treeName));
 
             // Track the highest source HLC observed so a resume can
-            // re-export from this point. The per-origin HWM dedupe
-            // tolerates a stale cursor, so persisting in batches is
-            // safe.
+            // re-export from this point. Snapshot-pinned floors, exact-identity
+            // dedupe, and per-key LWW idempotency tolerate a stale cursor, so
+            // persisting in batches is safe.
             if (entry.Timestamp.CompareTo(state.State.LastAppliedHlc) > 0)
             {
                 state.State.LastAppliedHlc = entry.Timestamp;
@@ -678,10 +679,10 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// <summary>
     /// Pins the snapshot's as-of HLC and causal-stable frontier on
     /// the per-tree <see cref="IReplicationHighWaterMarkGrain"/> and
-    /// completes the bootstrap. The HWM pin is the snapshot/incremental
-    /// handoff seam: the per-origin HWM dedupe makes any incremental
-    /// entry whose timestamp is at or below the pinned frontier a
-    /// no-op, so the boundary is exactly-once regardless of overlap.
+    /// completes the bootstrap. The pin is the snapshot/incremental handoff seam:
+    /// the snapshot-pinned floor makes point writes at or below the pinned frontier
+    /// no-ops, while recent exact-identity dedupe and per-key LWW idempotency absorb
+    /// any remaining overlap.
     /// </summary>
     private async Task PinAndCompleteAsync()
     {
@@ -705,7 +706,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // baselines). The snapshot's AsOfHlc cannot be used as the seal:
         // the export echoes it back from the resume lower-bound (the
         // receiver's LastAppliedHlc), so it is zero for a cold bootstrap.
-        // Pinning HWM[source] at the cut (monotonic max) restores the
+        // Pinning the snapshot floor for source at the cut restores the
         // invariant that HWM[source] covers every locally-retained
         // source-origin entry and makes incremental entries at or below the
         // cut proper dedupe no-ops.
@@ -780,8 +781,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             frontier.Entries[sourceClusterId] = cut;
         }
 
-        // Idempotent: PinSnapshotAsync is a monotonic max + frontier
-        // merge, so a crash between this call and the WriteStateAsync
+        // Idempotent: PinSnapshotAsync raises the snapshot floor and merges the
+        // frontier, so a crash between this call and the WriteStateAsync
         // below replays safely on reactivation - the second pin with
         // identical (asOfHlc, frontier) is a no-op.
         await hwm

@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LatticeOptions.WalMaterialiserPinShards"/> durable
 /// <see cref="IWalMaterialiserPinGrain"/> activations, spreading the per-tree
 /// pin-store write fan-in (previously a single hot grain) across a deterministic
-/// set of shard grains. The grain key is <c>{treeName}#s{shard}</c>; when the
+/// set of shard grains. The grain key is <c>{treeName}~s{shard}</c>; when the
 /// shard count is <c>1</c> the legacy unsuffixed <c>{treeName}</c> key is used so
 /// a host that pins the shard count to one stays byte-for-byte wire compatible
 /// with the pre-sharding layout.
@@ -24,10 +24,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal static class WalMaterialiserPinRouting
 {
     /// <summary>
-    /// Separates a pin grain key from its shard suffix. Storage-safe: a pin grain
-    /// is persistent, and keyed storage backends reject <c>/</c>, <c>\</c>,
-    /// <c>#</c> and <c>?</c> in a grain key because it is carried into the
-    /// Partition/Row key columns and the request URL.
+    /// Separates a pin grain key from its shard suffix. Storage-safe and
+    /// unambiguous: current Orleans table sanitization can map several punctuation
+    /// characters to the same storage key, while control characters remain invalid.
     /// </summary>
     public const string ShardSeparator = "~s";
 

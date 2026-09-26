@@ -106,8 +106,8 @@ public static class RepoContextReplayConcurrency
 
     /// <summary>
     /// The largest accepted ceiling. Each permit admits one whole-readable-window
-    /// WAL replay, which is CPU bound, so a value far above any plausible host's
-    /// core count does not bound a reactivation storm at all - it merely restates
+    /// WAL replay, which is admitted primarily to bound memory pressure, so a value
+    /// far above any plausible host's capacity does not bound a reactivation storm at all - it merely restates
     /// "unbounded" in a way that reads as configured.
     /// </summary>
     public const int MaxConcurrentReplaysCeiling = 256;

@@ -11,6 +11,16 @@ tenant, Telemetry) ship in their own plugin packages.
 
 - The `Routes` root router and all routable explorer pages.
 - The shared layout and reusable UI components.
+- The shell-side registration helpers: `AddExplorerPluginAdapters()` (the host
+  state and preference adapters every plugin needs), `AddExplorerSelectionPlugins()`
+  (the one-call composite over the per-selection surfaces), `AddExplorerAppearance()`
+  (theme, contrast and density), and `AddExplorerChromeSlot<TComponent>()` (a
+  component contributed to a banner region).
+- Dependencies on the per-selection surface packages - `Orleans.Lattice.Explorer.Plugins.Data`,
+  `.Topology`, `.Metrics`, `.DeadLetter`, `.TagIndex`, and `.History` - on their
+  shared kernel `Orleans.Lattice.Explorer.Plugins.Selection`, and on
+  `Orleans.Lattice.Explorer.Plugins.Abstractions`, so the composite registration
+  can reach every surface.
 - `lattice-shell.css`, the stylesheet for the shell chrome those components
   render: the brand bar, the navigation rail, the detail panel, the area strip,
   and the authentication, tenant, and configuration surfaces. Shared UI

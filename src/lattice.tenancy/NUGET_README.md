@@ -41,8 +41,8 @@ makes a host that never calls `AddLatticeTenancy()` unchanged.
 Usage metering samples each tenant's live keys, bytes, memory, and tree count
 into a durable per-tenant usage store, and quota admission refuses a write once
 the tenant's metered usage is beyond its quota and burst allowance, with a
-`LatticeQuotaExceededException` (surfaced over gRPC as `ResourceExhausted`
-carrying the breached dimension). A cluster-wide operations-per-second budget is
+`LatticeQuotaExceededException` (surfaced over the data gRPC binding as
+`ResourceExhausted` carrying the breached dimension). A cluster-wide operations-per-second budget is
 apportioned across live silos and enforced silo-locally by a token bucket, so
 rate limiting needs no per-request cross-silo hop. Usage above a steady-state cap
 that the burst allowance still admits is accrued as billable overage on every
@@ -50,8 +50,10 @@ metering tick.
 
 ## Region residency and observability
 
-An optional per-tenant residency policy binds a tenant's data to an allowed set
-of regions, steering WAL placement and refusing an out-of-region crossing. Every
+An optional per-tenant residency policy confines a tenant's data to a residency
+set within an operator-authorized set of regions, refusing a replicated write for a
+region the tenant is not resident in; a separate placement binding on the tenant
+record can pin its trees to a dedicated WAL provider. Every
 tenant is observable through the `orleans.lattice.tenancy` OpenTelemetry meter,
 which publishes per-tenant usage, quota, and overage gauges tagged by tenant.
 

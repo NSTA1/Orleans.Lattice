@@ -83,8 +83,9 @@ change silently.
 
 ## Contract
 
-Identical to the Onyx companion, on the same port, so the
-`OnyxEmbeddingProvider` client needs no change:
+Identical to the Onyx companion, on the same port, so the repository-context
+host's default embedding client (registered by `AddOnyxEmbeddingProvider`) needs
+no change:
 
 | Property | Value |
 | --- | --- |
@@ -139,7 +140,9 @@ against 2.91 measured. Because ONNX Runtime synchronises intra-op threads at
 every operator boundary and a transformer crosses hundreds per inference, a
 freeze landing mid-barrier stalls the whole operator rather than one thread.
 
-So this server derives the count from `/sys/fs/cgroup/cpu.max` itself. It reads
+So this server derives the count from the cgroup CPU quota itself -
+`/sys/fs/cgroup/cpu.max` on cgroup v2, falling back to `cpu.cfs_quota_us` and
+`cpu.cfs_period_us` on cgroup v1, with a fractional grant rounded up. It reads
 the quota rather than `Environment.ProcessorCount` because `DOTNET_PROCESSOR_COUNT`
 overrides the latter and wins over the quota, and that variable can be set on the
 sibling repository-context service for an unrelated purpose (the sample's tuning
@@ -190,16 +193,22 @@ confirm the GPU was picked up without reading logs:
 
 ## Using it from the RepoContext sample
 
-This is the sample's default embedder, so there is nothing to do:
+This is the sample's default embedder, so there is nothing to do beyond the
+sample's own setup - copy `.env.example` to `.env` first, because compose refuses
+every command until `REPOCONTEXT_MEMORY_ARCHIVE_PATH` is set:
 
 ```bash
 cd samples/RepoContextContainer
 docker compose up -d
 ```
 
-To fall back to the Onyx companion instead, layer its override file:
+To fall back to the Onyx companion instead, layer its override file and build
+the embedder. Both companions build under the same compose image name, so a
+plain `up -d` would reuse the cached ONNX image rather than build the Onyx one
+(and switching back needs the same rebuild):
 
 ```bash
+docker compose -f docker-compose.yml -f docker-compose.onyx.yml build embedder
 docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
 ```
 

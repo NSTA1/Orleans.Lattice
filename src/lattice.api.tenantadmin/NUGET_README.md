@@ -32,8 +32,8 @@ tenant am I acting as", `ListAccessibleTenantsAsync` enumerates only the tenants
 the caller may see, and `GetTenantAsync` reports one such tenant's status.
 
 `ILatticeTenantScopedTreeAdmin` is an optional tenant-local tree-administration
-surface. It takes an unqualified tree name, resolves it into the caller's own
-tenant namespace, and exposes tree create, existence check, delete, recover,
+surface. It takes an unqualified tree name, composes it into the active tenant's
+namespace, and exposes tree create, existence check, delete, recover,
 purge, deletion status, and schema-policy get / set / clear - so a tenant
 administers its own trees without ever naming another tenant's.
 
@@ -46,8 +46,8 @@ quota ceilings.
 
 ## Fail-closed by design
 
-Every administrative operation authorizes the caller through the Lattice access
-gate **before** it reads or writes the registry - the tenant lifecycle and the
+Every administrative operation authorizes the caller **before** it changes
+anything (the tenant-tier gate reads only the target tenant's record to decide) - the tenant lifecycle and the
 allowed-region set as a cluster-wide administrative operation, the tenant-tier
 operations (residency, admin subjects, cross-tenant grants, usage) for the platform
 operator or a live admin subject of the tenant - and an explicitly supplied admin
@@ -65,7 +65,13 @@ administration and behaves exactly as before.
 ```csharp
 siloBuilder
     .AddLatticeTenancy(/* ... */)
-    .AddLatticeTenantAdminApi()
+    .AddLatticeTenantAdminApi();
+
+// Optional: tenant-local tree administration, composing the tree-admin facade.
+siloBuilder
+    .AddLatticeSchemaEnforcement()
+    .AddLatticeSchemaApi()
+    .AddLatticeTreeAdminApi()
     .AddLatticeTenantScopedTreeAdminApi();
 ```
 
@@ -73,7 +79,9 @@ siloBuilder
 facade operates on the tenancy engine's tenant registry, so that store must be
 registered first. Calling it out of order fails fast with an actionable message.
 `AddLatticeTenantScopedTreeAdminApi()` is an independent opt-in - add it only if
-you want tenants to administer their own trees.
+you want tenants to administer their own trees. It must be called after
+`AddLatticeTreeAdminApi()` and `AddLatticeSchemaEnforcement(...)`, whose surfaces it
+composes, and likewise fails fast when called out of order.
 
 This package adds no transport behaviour of its own. Add the gRPC or MCP binding
 package to expose the facade over the wire.

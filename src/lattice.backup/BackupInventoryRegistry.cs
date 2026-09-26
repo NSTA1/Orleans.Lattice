@@ -143,7 +143,7 @@ internal sealed class BackupInventoryRegistry
     /// <summary>The aggregate number of restore failures observed this process lifetime.</summary>
     public long RestoreFailureCount => Interlocked.Read(ref _restoreFailures);
 
-    /// <summary>The cumulative bytes reclaimed by retention / deletion this process lifetime.</summary>
+    /// <summary>The cumulative bytes reclaimed by retention pruning this process lifetime.</summary>
     public long BytesReclaimed => Interlocked.Read(ref _bytesReclaimed);
 
     /// <summary>Computes a point-in-time inventory snapshot from the tracked backups.</summary>

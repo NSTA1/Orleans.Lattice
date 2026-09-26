@@ -32,7 +32,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// pass to capture any post-shadow tombstones, clear the source's
 /// <c>SplitInProgress</c> state, and deactivate.</description></item>
 /// </list>
-/// Key format: <c>{treeId}</c>.
+/// Key format: <c>{treeId}/{sourceShardIndex}</c>.
 /// </summary>
 internal sealed class TreeShardSplitGrain(
     IGrainContext context,

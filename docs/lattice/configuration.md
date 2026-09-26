@@ -1,6 +1,6 @@
 # Configuration
 
-> **Compression** has no core `LatticeOptions` knobs. The seam itself - the `ILatticeCompressor` contract, the registration helpers, the tag-space partitioning, and the shared-dictionary opt-in - is documented in [`compression.md`](compression.md). The per-consumer option keys live in their owning project's configuration doc: replication framing-tail compression in [Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#efficiency-bundle-dedup-and-compression), and stored WAL payload compression in [Orleans.Lattice.Storage.AzureTable configuration](../lattice.storage.azuretable/configuration.md#compression-options). The compression **algorithm and Zstd level are safe to change after data already exists**: stored payloads are self-describing and read back by their own per-row tag, so a level/algorithm change applies only to newly written data while existing rows decode unchanged.
+> **Compression** has no core `LatticeOptions` knobs. The seam itself - the `ILatticeCompressor` contract, the registration helpers, the tag-space partitioning, and the shared-dictionary opt-in - is documented in [`compression.md`](compression.md); the knobs of its opt-in auto-trained dictionary are listed under [Compression dictionary training options](#compression-dictionary-training-options) below. The per-consumer option keys live in their owning project's configuration doc: replication framing-tail compression in [Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#efficiency-bundle-dedup-and-compression), and stored WAL payload compression in [Orleans.Lattice.Storage.AzureTable configuration](../lattice.storage.azuretable/configuration.md#compression-options). The compression **algorithm and Zstd level are safe to change after data already exists**: stored payloads are self-describing and read back by their own per-row tag, so a level/algorithm change applies only to newly written data while existing rows decode unchanged.
 
 ## Registering Lattice
 
@@ -45,11 +45,15 @@ siloBuilder.ConfigureLattice("archive-tree", o =>
 });
 ```
 
-Per-tree overrides are layered on top of the global defaults. Only the properties you set in the override are changed; everything else inherits from the global configuration.
+Per-tree overrides are layered on top of the global defaults. Only the properties you set in the override are changed; everything else inherits from the global configuration. Configure actions run in registration order, so register the global `ConfigureLattice` call before the per-tree ones: a global call registered later overwrites every property it sets on every tree, per-tree overrides included.
+
+Options are validated when an instance is first built. The global (unnamed) instance is built while the silo starts, so an invalid global value fails silo start. A per-tree instance is built the first time that tree's options are resolved, so an invalid per-tree value does not fail silo start: that tree's operations fail with an `OptionsValidationException` instead.
+
+Not every option is read per tree, and not every option is re-read on every use. Some are read only from the global (unnamed) instance, so a per-tree override of them has no effect, and many are resolved once by the grain that uses them when it activates - a leaf, for example, resolves its tree's options when it activates and keeps them for the life of that activation, so a change reaches it on its next activation. Where it matters, an option's section below says which applies.
 
 > **Structural sizing is pinned per-tree in the registry, not in `LatticeOptions`.** `MaxLeafKeys`, `MaxInternalChildren`, and `ShardCount` are seeded into the `TreeRegistryEntry` on first tree use from canonical defaults in `LatticeConstants` (128 / 128 / 64) and are mutable only through [`ILattice.ResizeAsync`](tree-sizing.md#resizing-an-existing-tree) and `ILattice.ReshardAsync`. This prevents accidental divergence between the layout a tree was built with and a later configuration change. For capacity-planning guidance and per-provider limits see [Tree Storage](tree-storage.md).
 
-> **The virtual shard space is a hard-coded constant** (`LatticeConstants.DefaultVirtualShardCount = 4096`). It is not a `LatticeOptions` property because changing it would invalidate every persisted `ShardMap` (slots are referenced by integer index). The virtual space is deliberately generous; the real ceiling on useful shard counts is scan fan-out and activation cost.
+> **The virtual shard space is a hard-coded constant** of 4096 virtual slots. It is not a `LatticeOptions` property because changing it would invalidate every persisted `ShardMap` (slots are referenced by integer index). The virtual space is deliberately generous; the real ceiling on useful shard counts is scan fan-out and activation cost.
 
 ## Cold-start and healing defaults
 
@@ -98,23 +102,23 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`ActivationReadyTimeout`](#activationreadytimeout) | `TimeSpan` | 15 seconds | Yes (on next seed) |
 | [`AdmissionAdvisoryBytes`](#admissionadvisorybytes) | `long?` | `null` (advisory dry-run off) | Yes |
 | [`AdmissionAdvisoryLiveKeys`](#admissionadvisorylivekeys) | `long?` | `null` (advisory dry-run off) | Yes |
-| [`AtomicActionRetention`](#atomicactionretention) | `TimeSpan` | 48 hours | Yes |
+| [`AtomicActionRetention`](#atomicactionretention) | `TimeSpan` | 48 hours | Yes (global; read from the default options) |
 | [`AtomicWriteRetention`](#atomicwriteretention) | `TimeSpan` | 48 hours | Yes |
 | [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
 | [`BackgroundDrainLeavesPerPass`](#backgrounddrainleavesperpass) | `int` | 64 | Yes |
 | [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration) | `TimeSpan` | 10 seconds | Yes |
-| [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
+| [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every cross-silo read) | Yes |
 | [`CompactionLeafBatchSize`](#compactionleafbatchsize) | `int` | 64 | Yes |
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
 | [`CompactionTriggerCooldown`](tombstone-compaction.md) | `TimeSpan` | 5 minutes | Yes |
 | [`ConsolidationDrainBatchSize`](#consolidationdrainbatchsize) | `int` | 1024 | Yes |
 | [`ConsolidationDrainLeavesPerPass`](#consolidationdrainleavesperpass) | `int` | 16 | Yes |
 | [`CursorIdleTtl`](#cursoridlettl) | `TimeSpan` | 48 hours | Yes |
-| [`DefaultLockLeaseDuration`](#defaultlockleaseduration) | `TimeSpan` | 30 seconds | Yes |
+| [`DefaultLockLeaseDuration`](#defaultlockleaseduration) | `TimeSpan` | 30 seconds | Yes (global; read from the default options) |
 | [`DiagnosticsCacheTtl`](#diagnosticscachettl) | `TimeSpan` | 5 seconds | Yes |
-| [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes |
-| [`DigestPublishTimeout`](#digestpublishtimeout) | `TimeSpan` | 15 seconds | Yes (on next publish) |
+| [`DigestCoalescingWindowMs`](#digestcoalescingwindowms) | `int` | 5 (measured sweet spot) | Yes (on each leaf's next activation) |
+| [`DigestPublishTimeout`](#digestpublishtimeout) | `TimeSpan` | 15 seconds | Yes (on each node's next activation) |
 | [`DirtyLeafFlushIntervalMs`](tombstone-compaction.md#dirtyleafflushintervalms) | `int` | 50 (ms) | Yes |
 | [`EventStreamProviderName`](#eventstreamprovidername) | `string` | `"Default"` | Yes (on next publish) |
 | [`HotShardConsolidationSkewRatio`](#hotshardconsolidationskewratio) | `double` | 1.15 | Yes |
@@ -134,12 +138,12 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`LeafSnapshotMargin`](projection-rebuild.md) | `double` | 0.30 | Yes |
 | [`LeafSnapshotMaxCoverageLagSeconds`](#leafsnapshotmaxcoveragelagseconds) | `int` | 300 | Yes |
 | [`LeafSnapshotReClassifyEveryNCheckpoints`](projection-rebuild.md) | `int` | 64 | Yes |
-| [`LeafSnapshotSegmentBytes`](#leafsnapshotsegmentbytes) | `long` | 4 MiB | Yes (next capture) |
+| [`LeafSnapshotSegmentBytes`](#leafsnapshotsegmentbytes) | `long` | 4 MiB | Yes (next capture; global - read from the default options) |
 | [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
 | [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 5000 | Yes |
 | [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
-| [`MaxAtomicActionArgsBytes`](#maxatomicactionargsbytes) | `int` | 32 KiB (32 768) | Yes |
-| [`MaxAtomicActionSteps`](#maxatomicactionsteps) | `int` | 64 | Yes |
+| [`MaxAtomicActionArgsBytes`](#maxatomicactionargsbytes) | `int` | 32 KiB (32 768) | Yes (global; read from the default options) |
+| [`MaxAtomicActionSteps`](#maxatomicactionsteps) | `int` | 64 | Yes (global; read from the default options) |
 | [`MaxCacheValueBytes`](#maxcachevaluebytes) | `long?` | `null` (unbounded mirror) | Yes |
 | [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
 | [`MaxClusterConcurrentAutoSplits`](#maxclusterconcurrentautosplits) | `int?` | `null` (gate disabled) | Yes |
@@ -158,7 +162,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxLeafEntriesBeforeForcedCompaction`](#maxleafentriesbeforeforcedcompaction) | `int` | 0 (disabled) | Yes |
 | [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
 | [`MaxLiveKeys`](#maxlivekeys) | `long?` | `null` (unbounded) | Yes |
-| [`MaxLockLeaseDuration`](#maxlockleaseduration) | `TimeSpan` | 5 minutes | Yes |
+| [`MaxLockLeaseDuration`](#maxlockleaseduration) | `TimeSpan` | 5 minutes | Yes (global; read from the default options) |
 | [`MaxLeavesPerScanPage`](#maxleavesperscanpage) | `int` | 64 | Yes |
 | [`MaxPhysicalShardsPerTree`](#maxphysicalshardspertree) | `int` | 256 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
@@ -173,8 +177,8 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`ProjectionRebuildPolicy`](#projectionrebuildpolicy) | enum | `SnapshotThenWal` | Yes |
 | [`PublishEvents`](#publishevents) | `bool` | `false` | Yes |
 | [`QueueCapacity`](queues.md) | `int?` | `null` (unbounded) | Yes |
-| [`RetryPolicy`](retry-policy.md) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
-| [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on next forward) |
+| [`RetryPolicy`](#retry-policy-options) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
+| [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on each shard root's next activation) |
 | [`ShardHealingBackpressureOpsPerSecond`](#shardhealingbackpressureopspersecond) | `double` | 200.0 | Yes (on next sweep) |
 | [`ShardHealingCooldown`](#shardhealingcooldown) | `TimeSpan` | 5 minutes | Yes (on next sweep) |
 | [`ShardHealingEnabled`](#shardhealingenabled) | `bool` | `true` | Yes (off on next sweep; on at the next healing bootstrap) |
@@ -182,10 +186,10 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`EmptyTreeProbeBudget`](#emptytreeprobebudget) | `TimeSpan` | 10 seconds | Yes (on next reshard or resize) |
 | [`ShedSnapshotOpensWhenSaturated`](#shedsnapshotopenswhensaturated) | `bool` | `true` | Yes |
 | [`SnapshotBaselineTtl`](snapshot-cursors.md#baseline-ttl-leak-guard) | `TimeSpan` | 6 hours | Yes |
-| [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
+| [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes (currently inert: no code path reads it) |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
 | [`SplitDrainBatchSize`](#splitdrainbatchsize) | `int` | 1024 | Yes |
-| [`StarvationDriveBudget`](#starvationdrivebudget) | `TimeSpan` | 5 minutes | Yes (on the next drive) |
+| [`StarvationDriveBudget`](#starvationdrivebudget) | `TimeSpan` | 5 minutes | Yes (on each leaf's next activation) |
 | [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
 | [`StorageUsagePollInterval`](#storageusagepollinterval) | `TimeSpan` | 15 seconds | No (global; read from the default options) |
 | [`StorageUsageDeepPollInterval`](#storageusagedeeppollinterval) | `TimeSpan` | `TimeSpan.Zero` (disabled) | No (global; read from the default options) |
@@ -204,10 +208,10 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalGcMinInterval`](#walgcmininterval) | `TimeSpan` | 30 seconds (band floor) | No (global; read from the default options) |
 | [`WalGcStartupDelay`](#walgcstartupdelay) | `TimeSpan` | 30 seconds | No (global; read at silo start) |
 | [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = the lesser of `Environment.ProcessorCount` and the container CPU grant) | Yes |
-| [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes |
+| [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes (global; read from the default options) |
 | [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
-| [`WalMaterialiserPinShedCeiling`](#walmaterialiserpinshedceiling) | `TimeSpan?` | `null` (disarmed) | Yes |
+| [`WalMaterialiserPinShedCeiling`](#walmaterialiserpinshedceiling) | `TimeSpan?` | `null` (disarmed) | Yes (global; read from the default options) |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
 | [`WalAppendCoalescingInFlightThreshold`](#walappendcoalescinginflightthreshold) | `int` | 4 | Yes |
 | [`WalBatchedSingleEntryAppends`](#walbatchedsingleentryappends) | `bool` | `true` | Yes |
@@ -249,13 +253,13 @@ leave it off until every leaf has captured at least once, and only then roll bac
 
 ### Virtual shard space (constant)
 
-The virtual shard space is fixed at `LatticeConstants.DefaultVirtualShardCount = 4096` for every tree. Keys hash into `[0, 4096)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys.
+The virtual shard space is fixed at 4096 virtual slots for every tree. Keys hash into `[0, 4096)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys.
 
-The pinned `ShardCount` must divide 4096 evenly for the default identity map to preserve `hash % ShardCount` routing exactly; this invariant is validated at use time by `ShardMap.CreateDefault`. The value is a compile-time constant - changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
+The default identity map (virtual slot `i` routed to physical shard `i % ShardCount`) reproduces the legacy `hash % ShardCount` routing exactly only when the pinned `ShardCount` divides 4096 evenly. That is a property of the arithmetic, not a checked invariant: `ShardMap.CreateDefault` rejects only a shard count larger than the virtual space, so a count that does not divide 4096 still routes every slot to a shard but no longer reproduces `hash % ShardCount`. The virtual shard count is a compile-time constant - changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
 
 ### `AdmissionAdvisoryBytes`
 
-Optional non-enforcing advisory ceiling, in bytes, on a tree's estimated retained storage, used to right-size [`MaxEstimatedBytes`](#maxestimatedbytes) before turning enforcement on. `null` (the default) disables the byte advisory dry-run signal. When set it must be at least `1` (validated at startup). A tree over this ceiling is flagged by the `orleans.lattice.admission.over_advisory` gauge, and every write that *would* have been rejected at this ceiling increments `orleans.lattice.admission.would_reject` (dimension `bytes`) - but no write is ever rejected. Resolvable per tree.
+Optional non-enforcing advisory ceiling, in bytes, on a tree's estimated retained storage, used to right-size [`MaxEstimatedBytes`](#maxestimatedbytes) before turning enforcement on. `null` (the default) disables the byte advisory dry-run signal. When set it must be at least `1` (enforced by the options validator). A tree over this ceiling is flagged by the `orleans.lattice.admission.over_advisory` gauge, and every write that *would* have been rejected at this ceiling increments `orleans.lattice.admission.would_reject` (dimension `bytes`) - but no write is ever rejected. Resolvable per tree.
 
 ```csharp verify
 // Dry-run a 512 MiB byte ceiling: no rejections, just the would-reject signal.
@@ -266,7 +270,7 @@ See [Metrics](metrics.md#per-tree-admission-control) for the advisory-first-then
 
 ### `AdmissionAdvisoryLiveKeys`
 
-Optional non-enforcing advisory ceiling on a tree's live (non-tombstone) key count, used to right-size [`MaxLiveKeys`](#maxlivekeys) before turning enforcement on. `null` (the default) disables the live-key advisory dry-run signal. When set it must be at least `1` (validated at startup). Drives the same non-rejecting `orleans.lattice.admission.over_advisory` and `orleans.lattice.admission.would_reject` (dimension `keys`) signals as [`AdmissionAdvisoryBytes`](#admissionadvisorybytes), for the key dimension. Resolvable per tree.
+Optional non-enforcing advisory ceiling on a tree's live (non-tombstone) key count, used to right-size [`MaxLiveKeys`](#maxlivekeys) before turning enforcement on. `null` (the default) disables the live-key advisory dry-run signal. When set it must be at least `1` (enforced by the options validator). Drives the same non-rejecting `orleans.lattice.admission.over_advisory` and `orleans.lattice.admission.would_reject` (dimension `keys`) signals as [`AdmissionAdvisoryBytes`](#admissionadvisorybytes), for the key dimension. Resolvable per tree.
 
 ```csharp verify
 // Dry-run a 1,000,000 live-key ceiling before enforcing it.
@@ -275,19 +279,19 @@ siloBuilder.ConfigureLattice("bulk-ingest", o => o.AdmissionAdvisoryLiveKeys = 1
 
 ### `AtomicActionRetention`
 
-Retention window for a terminal atomic-action saga's coordinator state (default: 48 hours). Once an `IAtomicActionGrain.ExecuteAsync` plan reaches a terminal outcome, the coordinator retains its persisted progress for this window so that re-issuing the same operation id returns the memoized outcome rather than re-running the plan. After the window expires the coordinator clears its state and a re-issue starts a fresh saga. Minimum effective interval is **1 minute** (Orleans reminder granularity). Set `Timeout.InfiniteTimeSpan` to retain saga state indefinitely. This is the atomic-*action* analogue of the atomic-*write* retention below and is configured independently of it. See [Atomic Actions](atomic-action.md).
+Retention window for a terminal atomic-action saga's coordinator state (default: 48 hours). Once an `IAtomicActionGrain.ExecuteAsync` plan reaches a terminal outcome, the coordinator retains its persisted progress for this window so that re-issuing the same operation id returns the memoized outcome rather than re-running the plan. After the window expires the coordinator clears its state and a re-issue starts a fresh saga. Minimum effective interval is **1 minute** (Orleans reminder granularity). Set `Timeout.InfiniteTimeSpan` to retain saga state indefinitely. This is the atomic-*action* analogue of the atomic-*write* retention below and is configured independently of it. It is read from the default (unnamed) options, so per-tree overrides do not apply. See [Atomic Actions](atomic-action.md).
 
 ### `AtomicWriteRetention`
 
-Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller non-infinite values are effectively floored at that granularity. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. See [Atomic Writes](atomic-writes.md).
+Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller non-infinite values are effectively floored at that granularity. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. A single-tree saga resolves the window per tree; the cross-tree transaction coordinators read it from the default (unnamed) options. See [Atomic Writes](atomic-writes.md).
 
 This option can be changed freely at any time.
 
 ### `AutoSplitEnabled`
 
-Master switch for [adaptive shard splitting](shard-splitting.md). When `true` (the default), `HotShardMonitorGrain` periodically polls shard hotness counters and triggers splits when a shard's ops/sec exceeds `HotShardOpsPerSecondThreshold`. When `false`, no autonomic splits occur; the shard count remains fixed at `ShardCount`.
+Master switch for [adaptive shard splitting](shard-splitting.md). When `true` (the default), the tree's hot-shard monitor periodically polls shard hotness counters and triggers splits when a shard's ops/sec exceeds `HotShardOpsPerSecondThreshold`. When `false`, no autonomic splits occur; the physical shard count then changes only through an explicit `ILattice.ReshardAsync` or [automatic over-split healing](#shardhealingenabled), which is deliberately not gated on this switch.
 
-This option can be changed freely at any time. The change takes effect on the next `HotShardMonitorGrain` reminder tick.
+This option can be changed freely at any time. Turning it off takes effect on the monitor's next sampling pass. Turning it back on resumes a monitor that has run before - on its next sampling pass if its timer is still armed, otherwise on its next one-minute keepalive reminder - but a tree whose monitor has never started, because the tree's grains have only activated while the switch was off, does not start one until those grains next activate.
 
 ### `AutoSplitMinTreeAge`
 
@@ -297,7 +301,9 @@ This option can be changed freely at any time.
 
 ### `CacheTtl`
 
-Minimum time between consecutive delta refreshes from the primary leaf in the `LeafCacheGrain`. When set to `TimeSpan.Zero` (the default), every read triggers a delta refresh - the version-vector comparison on the primary is cheap but the RPC overhead remains. Setting a non-zero value allows the cache to serve reads from its local dictionary without contacting the primary, trading freshness for lower read latency.
+Minimum time between consecutive delta refreshes from the primary leaf in a leaf's read-through cache, when that primary leaf is activated on another silo. When set to `TimeSpan.Zero` (the default), every such read triggers a delta refresh - the version-vector comparison on the primary is cheap but the RPC overhead remains. Setting a non-zero value allows the cache to serve reads from its local dictionary without contacting the primary, trading freshness for lower read latency.
+
+The TTL does not govern a cache whose primary leaf is activated on the same silo. After its first refresh such a cache compares a revision cookie the primary advances on every state change: while the revision is unchanged it serves from its local dictionary with no refresh at all, and when the revision has moved it refreshes immediately, whatever the TTL. The TTL is therefore a bound on cross-silo refresh traffic.
 
 ```csharp verify
 // Allow up to 100 ms of staleness for lower read latency
@@ -306,11 +312,11 @@ siloBuilder.ConfigureLattice(o => o.CacheTtl = TimeSpan.FromMilliseconds(100));
 // Per-tree: aggressive freshness for a real-time tree
 siloBuilder.ConfigureLattice("realtime", o =>
 {
-    o.CacheTtl = TimeSpan.Zero; // refresh on every read (default)
+    o.CacheTtl = TimeSpan.Zero; // refresh on every cross-silo read (default)
 });
 ```
 
-This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original behaviour (refresh on every read).
+This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original cross-silo behaviour (refresh on every read).
 
 ### `BackgroundDrainLeavesPerPass`
 
@@ -405,7 +411,7 @@ This option can be changed freely at any time.
 
 ### `DefaultLockLeaseDuration`
 
-The lease `ILatticeLockGrain` grants when an acquire supplies a non-positive `LockAcquireRequest.LeaseDuration`, or passes a non-positive duration to `TryAcquireAsync` - that is, when the caller defers to the server default (default: 30 seconds). A holder that neither renews nor releases before its lease elapses has the lock reclaimed and handed to the next FIFO waiter, so this value bounds how long a crashed holder can wedge a lock. The validator requires it to be positive. See [Distributed lock](distributed-lock.md).
+The lease `ILatticeLockGrain` grants when an acquire supplies a non-positive `LockAcquireRequest.LeaseDuration`, or passes a non-positive duration to `TryAcquireAsync` - that is, when the caller defers to the server default (default: 30 seconds). A holder that neither renews nor releases before its lease elapses has the lock reclaimed and handed to the next FIFO waiter, so this value bounds how long a crashed holder can wedge a lock. The validator requires it to be positive. Both lock options are read from the default (unnamed) options, so per-tree overrides do not apply. See [Distributed lock](distributed-lock.md).
 
 ### `MaxLockLeaseDuration`
 
@@ -432,6 +438,8 @@ How long (in milliseconds) a `BPlusLeafGrain` defers a pending cross-grain proje
 
 Coalescing is scoped to the per-write hot path (`SetAsync`, `SetManyAsync`, `DeleteAsync`, `DeleteRangeAsync`); structural events (leaf split, projection rebuild, saga terminal apply, tombstone-reap compaction, CRDT merge, checkpoint flush) bypass the window and publish synchronously so operator-tooling oracles (e.g. `RebuildLeafProjectionAsync` followed by `GetLeafProjectionDigestAsync`) observe post-publish state without a settle delay.
 
+The window is ignored on a leaf whose resolved [`MaintainProjectionDigest`](#maintainprojectiondigest) is `false`, because there is then no upward publish to coalesce.
+
 Set to `0` to restore the synchronous-publish shape on every path - useful for tests that issue read-after-write digest oracles against a parent internal node within the same task continuation, or for operators whose downstream consumers depend on bit-exact synchronous publish timing.
 
 ```csharp verify
@@ -439,7 +447,7 @@ Set to `0` to restore the synchronous-publish shape on every path - useful for t
 siloBuilder.ConfigureLattice("test-tree", o => o.DigestCoalescingWindowMs = 0);
 ```
 
-This option can be changed freely at any time. The new value takes effect on the next mutation on each leaf; pending timers from the prior value drain at the prior cadence.
+This option can be changed freely at any time. A leaf reads the window with the rest of its resolved options when it activates, so a new value takes effect on each leaf's next activation.
 
 ### `EventStreamProviderName`
 
@@ -489,9 +497,9 @@ This option can be changed freely at any time.
 
 ### `HotShardSampleInterval`
 
-How often `HotShardMonitorGrain` polls every shard's hotness counters (default: 30 seconds). Shorter intervals increase detection responsiveness at the cost of more grain calls.
+How often `HotShardMonitorGrain` polls every shard's hotness counters (default: 30 seconds). Shorter intervals increase detection responsiveness at the cost of more grain calls. A non-positive value falls back to the 30-second default.
 
-This option can be changed freely at any time.
+This option can be changed freely at any time. The monitor arms its sampling timer with this value when it starts, so a new cadence takes effect when the monitor next activates.
 
 ### `HotShardSplitCooldown`
 
@@ -501,9 +509,9 @@ This option can be changed freely at any time.
 
 ### `KeysPageSize`
 
-The number of keys returned per page during ordered key scans (`ScanKeysAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
+The number of keys (or entries) requested from each shard per page during ordered key scans (`ScanKeysAsync`) and entry scans (`ScanEntriesAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
 
-This option can be changed freely at any time. It takes effect on the next `ScanKeysAsync` call.
+This option can be changed freely at any time. It takes effect on the next scan.
 
 ### `LeafCachePreWarmCount`
 
@@ -558,16 +566,17 @@ Operational characteristics:
 - **On by default, with `0` as the kill switch.** At `0` no access is tracked,
   nothing is persisted, and warm-up behaves exactly as it did before the option
   existed. Valid values are `0` to `64` inclusive; a value outside that range
-  fails options validation at startup. An operator would turn it off to remove
+  fails options validation. An operator would turn it off to remove
   the per-shard-root model write from a read-saturated box, or to isolate the
   feature while diagnosing a warm-up fault.
 - **Zero read-path cost when disabled**, and an O(1) allocation-free record when
   enabled. The read path never awaits a storage write: a grain timer persists the
   model at most once per `LeafAccessModelFlushIntervalMs`, and only when it has
   changed. Clean deactivation flushes once more.
-- **Best-effort.** A failure to prime any individual leaf is swallowed and
-  counted in `orleans.lattice.warmup.leaf_cache.prewarmed`; pre-warm can never
-  fail `WarmUpAsync`.
+- **Best-effort.** A failure to prime any individual leaf is swallowed, so
+  pre-warm can never fail `WarmUpAsync`. `orleans.lattice.warmup.leaf_cache.prewarmed`
+  counts the leaves primed successfully, so a failure shows only as a shortfall
+  there.
 - **Correct silo locality.** The shard root is the only caller of the leaf cache,
   so the stateless-worker activations warm-up creates land on the silo that will
   serve the subsequent reads.
@@ -612,7 +621,7 @@ This is what stops activation cost being a function of blob size. The cache repo
 
 ### `LeafProjectionRetention`
 
-Maximum age beyond which a cold leaf's persisted projection is treated as stale, forcing the snapshot-then-WAL recovery path on activation (default: 7 days). Defends against a leaf that has been silent long enough for the WAL to be trimmed past its persisted checkpoint without explicit detection. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger; the offset-gap trigger (`MaxLeafReplayEntries`) and the WAL-trim trigger continue to apply.
+Age beyond which a leaf's persisted projection checkpoint counts as stale at activation (default: 7 days). It is an advisory cost signal, like [`MaxLeafReplayEntries`](#maxleafreplayentries), not a recovery trigger: an old checkpoint does not imply the WAL has been trimmed, so when the log still covers the window the leaf needs it tail-replays and converges normally, and only a genuine trim past the checkpoint consults [`ProjectionRebuildPolicy`](#projectionrebuildpolicy). The activation path currently supplies no checkpoint age - the persisted checkpoint carries no capture timestamp - so this trigger never fires from activation today; the option is retained because it is public API and the detector honours it for any caller that does supply an age. Set to `Timeout.InfiniteTimeSpan` to disable the age-based trigger.
 
 This option can be changed freely at any time.
 
@@ -638,6 +647,7 @@ siloBuilder.ConfigureLattice("latency-sensitive-tree", o => o.LeafRetirementRetr
 ```
 
 Lower this only to make a test suite fail fast; raising it trades caller latency under a slow fold for fewer surfaced faults. This option can be changed freely at any time.
+
 ### `LeafSnapshotBinaryEncodingEnabled`
 
 Whether a leaf snapshot capture persists its rows as a compact binary frame rather than as the legacy object graph (default: `true`).
@@ -658,7 +668,7 @@ Upper bound, in seconds, on how long an active leaf may leave its durable snapsh
 
 ### `LeafSnapshotSegmentBytes`
 
-Largest encoded snapshot frame, in bytes, persisted as a single BLOB column (default: 4 MiB). A capture whose frame exceeds it is split into row-aligned segments of at most this size, each in its own `leaf-snapshot-segment` grain-state row, and hydration decodes one segment at a time. This bounds the contiguous allocation on the hydration read path - the storage provider materialises a BLOB column as one array before lattice code runs - rather than the total bytes a leaf holds. The default sits above the Large Object Heap threshold, so ordinary leaves are never segmented. Values below 64 KiB are clamped up rather than rejected. See [Tree storage](tree-storage.md#sizing-surface-3---leaf-snapshot-blob).
+Largest encoded snapshot frame, in bytes, persisted as a single BLOB column (default: 4 MiB). A capture whose frame exceeds it is split into row-aligned segments of at most this size, each in its own `leaf-snapshot-segment` grain-state row, and hydration decodes one segment at a time. This bounds the contiguous allocation on the hydration read path - the storage provider materialises a BLOB column as one array before lattice code runs - rather than the total bytes a leaf holds. The default sits above the Large Object Heap threshold, so ordinary leaves are never segmented. Values below 64 KiB are clamped up rather than rejected. The snapshot store that writes and reads the segments is addressed by leaf and carries no tree name, so it reads this value from the default (unnamed) options and a per-tree override does not reach it; set it globally. See [Tree storage](tree-storage.md#sizing-surface-3---leaf-snapshot-blob).
 
 ### `MaintainProjectionDigest`
 
@@ -679,11 +689,11 @@ siloBuilder.ConfigureLattice("audited-tree", opts =>
 });
 ```
 
-**Disabling is a one-way operation per tree.** The first mutation that lands while maintenance is disabled stamps an irreversible registry latch (`TreeRegistryEntry.ProjectionDigestPermanentlyDisabled`) on the tree. Once the latch is set, every subsequent activation resolves `MaintainProjectionDigest` as `false` regardless of the per-tree override or the silo-wide default, and `ILattice.GetLeafProjectionDigestAsync` keeps throwing. The latch exists because the digest is an XOR-fold aggregate: any mutation accepted while maintenance was off permanently invalidates the persisted aggregate, and silently re-engaging maintenance would publish a known-stale digest as if it were authoritative. The only way to re-engage digest maintenance for a latched tree is to rebuild it (or its leaf range) from scratch under a fresh registry entry.
+**Disabling is a one-way operation per tree.** The first mutation that lands while maintenance is disabled stamps an irreversible latch on the tree's registry entry (reported as `TreeConfigurationReport.ProjectionDigestPermanentlyDisabled` by the tree-admin configuration read). Once the latch is set, every subsequent activation resolves `MaintainProjectionDigest` as `false` regardless of the per-tree override or the silo-wide default, and `ILattice.GetLeafProjectionDigestAsync` keeps throwing. The latch exists because the digest is an XOR-fold aggregate: any mutation accepted while maintenance was off permanently invalidates the persisted aggregate, and silently re-engaging maintenance would publish a known-stale digest as if it were authoritative. The only way to re-engage digest maintenance for a latched tree is to rebuild it (or its leaf range) from scratch under a fresh registry entry.
 
 **System trees (those whose id begins with `_lattice_`) are always resolved as `false`** regardless of configuration, because system trees are not replicated and have no cross-silo drift-detection consumer.
 
-**Per-tree precedence.** When a per-tree override is set on the registry entry (`TreeRegistryEntry.MaintainProjectionDigest`), it overrides the silo-wide default; the latch overrides both.
+**Per-tree precedence.** A runtime override persisted on the tree's registry entry - set through `ILatticeTreeAdmin.SetTreeConfigAsync` with `TreeConfigurationUpdate.ApplyMaintainProjectionDigest` - overrides the configured value, whether that comes from a per-tree `ConfigureLattice` override or the silo-wide default; the latch overrides all of them.
 
 See [Projection Rebuild](projection-rebuild.md#opting-out-of-digest-maintenance) for the cost model and the WAL-storage rationale.
 
@@ -697,7 +707,7 @@ This option can be changed freely at any time.
 
 How long the leaf-projection materialiser may defer persisting an advancing checkpoint offset before flushing it to durable storage (default: 5 seconds). Combined with `MaterialiserCheckpointEntries`, this controls coalescing of materialiser-side high-water-mark writes: the checkpoint is persisted as soon as **either** threshold is met. Set to `TimeSpan.Zero` to persist on every advance (every-entry mode - strict RTO at the cost of one extra storage write per commit). Set to `Timeout.InfiniteTimeSpan` to disable time-based flushing and rely solely on the entry-count threshold.
 
-A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` × steady-state apply rate of replay work on restart.
+A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` x steady-state apply rate of replay work on restart.
 
 ```csharp verify
 // Strict RTO: checkpoint on every advance.
@@ -708,11 +718,11 @@ This option can be changed freely at any time.
 
 ### `MaxAtomicActionArgsBytes`
 
-The maximum size, in bytes, of a single custom step's argument payload within an atomic-action plan (default: 32 KiB). A step whose payload exceeds the bound is rejected before the saga starts, so a wire- or storage-supplied payload cannot bloat persisted saga state without bound. Must be positive. See [Atomic Actions](atomic-action.md).
+The maximum size, in bytes, of a single custom step's argument payload within an atomic-action plan (default: 32 KiB). A step whose payload exceeds the bound is rejected before the saga starts, so a wire- or storage-supplied payload cannot bloat persisted saga state without bound. Must be positive; the options validator does not check it. It is read from the default (unnamed) options, so per-tree overrides do not apply. See [Atomic Actions](atomic-action.md).
 
 ### `MaxAtomicActionSteps`
 
-The maximum number of steps an atomic-action plan submitted to `IAtomicActionGrain.ExecuteAsync` may contain (default: 64). A plan exceeding the bound is rejected before the saga starts, so a pathological plan cannot pin an activation for an unbounded time. Must be positive. See [Atomic Actions](atomic-action.md).
+The maximum number of steps an atomic-action plan submitted to `IAtomicActionGrain.ExecuteAsync` may contain (default: 64). A plan exceeding the bound is rejected before the saga starts, so a pathological plan cannot pin an activation for an unbounded time. Must be positive; the options validator does not check it. It is read from the default (unnamed) options, so per-tree overrides do not apply. See [Atomic Actions](atomic-action.md).
 
 ### `MaxCacheValueBytes`
 
@@ -742,7 +752,7 @@ This option can be changed freely at any time.
 
 Optional cluster-wide ceiling on the total number of autonomic splits that may be in flight concurrently across **all** trees (default: `null` - disabled). Because `HotShardMonitorGrain` is keyed per tree, `MaxConcurrentAutoSplits` only bounds one tree's splits; in a multi-tenant or many-tree cluster the summed drain I/O from every tree splitting at once can saturate the storage provider even though no single tree exceeds its own cap. Set a positive value to opt in to a singleton admission gate that caps the aggregate concurrent split count.
 
-The cluster ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When left at its `null` default the gate is entirely off the path: no cluster singleton activates and the monitor issues no extra RPC per tick, so behaviour is identical to running without the option. Admission uses a per-tree heartbeat model: each monitor re-reports its tree's authoritative in-flight split count every pass and the gate expires any footprint that stops being refreshed, so a silo that crashes mid-split has its share of the ceiling reclaimed at expiry instead of wedging splitting cluster-wide.
+The cluster ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When left at its `null` default the gate makes no admission decision, so splitting behaves exactly as it would without the option. The monitor still reports its tree's in-flight split count to the cluster gate while splits are in flight, plus one final call to clear that count once they finish, because the gate is also the cluster's split-activity source - the one `ILatticeAdmin.GetSplitActivityAsync` reads; a tree with no split in flight issues no extra RPC. Admission uses a per-tree heartbeat model: each monitor re-reports its tree's authoritative in-flight split count every pass and the gate expires any footprint that stops being refreshed, so a silo that crashes mid-split has its share of the ceiling reclaimed at expiry instead of wedging splitting cluster-wide.
 
 Per-group tuning composes naturally: low-traffic tree groups clamp their own `MaxConcurrentAutoSplits` down through named options, while a single global `MaxClusterConcurrentAutoSplits` bounds the aggregate.
 
@@ -756,17 +766,17 @@ siloBuilder.ConfigureLattice(o => o.MaxClusterConcurrentAutoSplits = 4);
 siloBuilder.ConfigureLattice("cold-archive", o => o.MaxConcurrentAutoSplits = 1);
 ```
 
-Watch `orleans.lattice.split.in_flight` (summed across the `tree` tag) to size the ceiling, and `orleans.lattice.split.admission.deferred` to see whether it is binding. This option can be changed freely at any time.
+Watch `orleans.lattice.split.in_flight` (summed across the `tree` tag) to size the ceiling, and `orleans.lattice.split.admission.deferred{reason=cluster_cap}` to see whether it is binding (the counter's other reasons fire whether or not the gate is on). This option can be changed freely at any time.
 
 ### `MaxConcurrentDrains`
 
-Maximum number of concurrent shadow-write drains per tree (default: 4). Helps limit the burst I/O load during adaptive splits. Each drain transfers a split shard's data to the new location in the background.
+Maximum number of per-shard drains an online snapshot (`ILattice.SnapshotAsync` in `SnapshotMode.Online`) may run concurrently (default: 4). Each drain reads one source shard's leaf chain and bulk-loads it into the corresponding destination shard while live writes keep mirroring onto the destination through shadow-forwarding. Higher values shorten the snapshot at the cost of proportionally more background drain I/O and coordinator memory; values below 1 are treated as 1. The snapshot stays crash-safe and idempotent under any cap, because re-running it converges by last-writer-wins.
 
 This option can be changed freely at any time.
 
 ### `MaxConcurrentMigrations`
 
-Maximum number of concurrent active-tombstone migrations per tree (default: 4). Helps limit the burst I/O load during bulk-deletes. Each migration drains a tombstone's shadow-write in the background.
+Maximum number of shard splits an online reshard (`ILattice.ReshardAsync`) may drive concurrently (default: 4). Each split drains one physical shard's upper-half virtual slots into a newly allocated target shard; running several in parallel shortens the reshard at the cost of proportionally more background drain I/O. Values below 1 are treated as 1. Splits driven by a reshard are independent of autonomic splits, so this cap and [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) compose additively.
 
 This option can be changed freely at any time.
 
@@ -778,15 +788,15 @@ Automatic over-split healing admits at most one new fold per sweep and never mor
 
 **Cost:** each admitted fold drains a donor shard's entries into its survivor in bounded background passes. Raising the cap multiplies that background traffic.
 
-**When off:** `0` is legal and admits nothing. It pauses **admission** while leaving the observer running, so the tree keeps publishing its healing backlog and an operator can watch the damage without acting on it. That is a different question from [`ShardHealingEnabled`](#shardhealingenabled), which stops the mechanism outright - no reminder, no timer, and no shard polling.
+**When off:** `0` is legal and admits nothing. It pauses **admission** while leaving the observer running, so the tree keeps publishing its healing backlog and an operator can watch the damage without acting on it. That is a different question from [`ShardHealingEnabled`](#shardhealingenabled), which switches the mechanism off: no fold is admitted and no shard is polled, and a tree whose healing never started arms no reminder or timer at all.
 
 **When an operator would change it:** raise it to drain a large backlog faster on a box with spare I/O; set it to `0` to freeze healing while keeping the backlog measurement.
 
 ### `MaxConcurrentSnapshotBaselineFolds`
 
-Maximum number of per-leaf WAL tail folds that a **single** shard's baseline capture may have in flight at once (default: 4). Applies inside `IShardRootGrain.CaptureSnapshotBaselineAsync`, the per-shard step of a snapshot-isolated cursor open.
+Maximum number of per-leaf WAL tail folds that a **single** shard's baseline capture may have in flight at once (default: 4). Applies inside a shard root's baseline capture, the per-shard step of a snapshot-isolated cursor open.
 
-The capture runs in two passes over the shard's leaf chain. The first freezes each leaf's committed projection and must stay sequential, because the chain is discovered one `GetNextSibling` hop at a time. The second folds each frozen leaf's `(leaf_frontier, capturedHead]` WAL tail, and is the dominant cost on a shard whose leaves carry a deep tail. That second pass is safe to overlap: point-in-time consistency comes from the uniform `capturedHead` dominating every leaf's frozen frontier, not from the order the folds run in, so folding several leaves at once cannot change what is captured.
+The capture runs in two passes over the shard's leaf chain. The first freezes each leaf's committed projection and must stay sequential, because the chain is discovered one sibling hop at a time. The second folds each frozen leaf's `(leaf_frontier, capturedHead]` WAL tail, and is the dominant cost on a shard whose leaves carry a deep tail. That second pass is safe to overlap: point-in-time consistency comes from the uniform `capturedHead` dominating every leaf's frozen frontier, not from the order the folds run in, so folding several leaves at once cannot change what is captured.
 
 The captured baseline is **byte-identical under any value**, including `1`. Results are consumed in strict leaf-chain order regardless of the order the folds complete, so a key present on more than one leaf resolves exactly as it would under a serial fold. Only the dispatch schedule changes.
 
@@ -858,7 +868,7 @@ This option can be changed freely at any time; a new value applies to the next s
 
 ### `MaxCursorSnapshotPinTtl`
 
-Hard upper bound on how long the per-tree `ITxRegistryGrain` will retain the saga-decision snapshot captured by a point-in-time durable cursor (default: 7 days). A live point-in-time cursor slides this TTL on every `Next*Async`; a stalled cursor that misses the slide will eventually have its pin reaped by the registry, after which the next call surfaces `LatticeCursorSnapshotExpiredException` and the cursor must be reopened.
+Hard upper bound on how long the per-tree transaction registry will retain the saga-decision snapshot captured by a point-in-time durable cursor (default: 7 days). A live point-in-time cursor slides this TTL on every `Next*Async`; a stalled cursor that misses the slide will eventually have its pin reaped by the registry, after which the next call surfaces `LatticeCursorSnapshotExpiredException` and the cursor must be reopened.
 
 The cap exists so a forgotten point-in-time cursor cannot stall registry-tombstone pruning forever. Set `Timeout.InfiniteTimeSpan` to disable the registry-side cap entirely - cursor lifetime then depends solely on `CursorIdleTtl` and on `MaxPinnedSagaDecisions`. See [Durable Cursors - Point-in-time cursors](durable-cursors.md#point-in-time-cursors).
 
@@ -876,7 +886,7 @@ This option can be changed freely at any time.
 
 ### `MaxEstimatedBytes`
 
-Optional enforcing cap, in bytes, on a tree's estimated retained storage (the same figure the `orleans.lattice.storage.total_bytes` gauge reports: WAL rows plus snapshot blobs plus leaf/shard-root state). `null` (the default) leaves estimated bytes unbounded; enforcement is strictly **opt-in**. When set it must be at least `1` (validated at startup). Once the tree's cached estimated-byte footprint reaches the cap, a locally-authored write is rejected with a `LatticeQuotaExceededException` carrying the `bytes` dimension.
+Optional enforcing cap, in bytes, on a tree's estimated retained storage (the same figure the `orleans.lattice.storage.total_bytes` gauge reports: WAL rows plus snapshot blobs plus leaf/shard-root state). `null` (the default) leaves estimated bytes unbounded; enforcement is strictly **opt-in**. When set it must be at least `1` (enforced by the options validator). Once the tree's cached estimated-byte footprint reaches the cap, a locally-authored write is rejected with a `LatticeQuotaExceededException` carrying the `bytes` dimension.
 
 The cap is **best-effort and approximate**: it is evaluated against a cached, eventually-consistent per-tree aggregate (the same TTL-coalesced aggregator that backs the storage-usage gauges), never a per-write fan-out, so concurrent cross-shard writes can overshoot it slightly before the aggregate refreshes, and a freshly-activated tree **fails open** (accepts writes) until its first sample lands. Replication and atomic-write-saga apply paths bypass the cap, so an incoming replicated write is never rejected. Resolvable per tree.
 
@@ -913,10 +923,9 @@ This option can be changed freely at any time. A leaf reads it with the rest of 
 
 Maximum total entry count (live plus tombstones) on a single leaf before the leaf requests an out-of-cycle compaction pass for its shard (default: `0`, disabled). It complements [`MinTombstoneRatioForCompaction`](tombstone-compaction.md): a small leaf at a high tombstone ratio is reaped through the ratio trigger, while a large leaf that has accumulated tombstones at a low ratio is reaped through this one. It only fires when the leaf actually holds at least one tombstone or expired entry, and the compaction grain enforces a per-shard [`CompactionTriggerCooldown`](tombstone-compaction.md) so a hot leaf cannot monopolise the compactor.
 
-**This default was re-examined during the bounded-cold-start work and deliberately left disabled**, for two reasons that a host is better placed than the library to accept:
+**This default was re-examined during the bounded-cold-start work and deliberately left disabled**, for a reason a host is better placed than the library to accept: the compaction grain opens the `trigger` metric-tag scope only when this knob or `MinTombstoneRatioForCompaction` is non-default, so arming it cluster-wide would start tagging previously untagged per-leaf instruments and silently break any dashboard filtering on the empty trigger label.
 
-- The compaction grain opens the `trigger` metric-tag scope only when this knob or `MinTombstoneRatioForCompaction` is non-default. Arming it cluster-wide would start tagging previously untagged per-leaf instruments and silently break any dashboard filtering on the empty trigger label.
-- The leaf evaluates the trigger by walking its whole entry table on every successful foreground commit, which forces a partially hydrated leaf to materialise in full and works against [`LeafPartialHydrationEnabled`](#leafpartialhydrationenabled).
+Evaluating the trigger is cheap. The leaf evaluates it only after a point or range delete, and reads its entry and live counts in O(1) without materialising any rows, so it does not force a partially hydrated leaf (see [`LeafPartialHydrationEnabled`](#leafpartialhydrationenabled)) to hydrate in full.
 
 Nothing is lost by leaving it off: the reminder-driven compaction pass still reaps tombstones on its regular cadence.
 
@@ -926,7 +935,7 @@ See [Tombstone Compaction](tombstone-compaction.md) for the full trigger model.
 
 ### `MaxLeafReplayEntries`
 
-Maximum number of WAL entries a cold leaf is permitted to replay against its projection at activation time before the leaf falls back to the snapshot-then-WAL recovery path indicated by `ProjectionRebuildPolicy` (default: 10 000). Bounds activation latency for a leaf whose persisted checkpoint has fallen far behind the WAL head; see [Projection Rebuild](projection-rebuild.md) for the full trigger set.
+Soft budget on the number of WAL entries a leaf expects to replay against its projection at activation time (default: 10 000). **Exceeding it is not an error**: when the WAL still covers every offset the leaf needs, the leaf replays anyway - the result is identical, just slower - and the overrun is reported as a warning plus the `orleans.lattice.leaf.activation_replays_over_budget` counter. The budget is counted per leaf, after the per-leaf key-range filter, and it never consults [`ProjectionRebuildPolicy`](#projectionrebuildpolicy); only a WAL trimmed past the leaf's checkpoint does. Persistent overruns mean the materialiser is checkpointing too slowly for the write rate - tune [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) / [`MaterialiserCheckpointEntries`](#materialisercheckpointentries), or raise this budget. See [Projection Rebuild](projection-rebuild.md) for the full trigger set.
 
 ```csharp verify
 siloBuilder.ConfigureLattice(o => o.MaxLeafReplayEntries = 100_000);
@@ -936,7 +945,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `MaxLiveKeys`
 
-Optional enforcing cap on the number of live (non-tombstone) keys a single tree may hold. `null` (the default) leaves the live-key count unbounded; enforcement is strictly **opt-in**. When set it must be at least `1` (validated at startup). Once the tree's cached live-key count reaches the cap, a locally-authored write is rejected with a `LatticeQuotaExceededException` carrying the `keys` dimension.
+Optional enforcing cap on the number of live (non-tombstone) keys a single tree may hold. `null` (the default) leaves the live-key count unbounded; enforcement is strictly **opt-in**. When set it must be at least `1` (enforced by the options validator). Once the tree's cached live-key count reaches the cap, a locally-authored write is rejected with a `LatticeQuotaExceededException` carrying the `keys` dimension.
 
 Shares the **best-effort / approximate**, fail-open, replication-bypassing semantics of [`MaxEstimatedBytes`](#maxestimatedbytes): the cap is compared against the cached, eventually-consistent per-tree aggregate (never a per-write fan-out), so concurrent cross-shard writes can overshoot it slightly, a freshly-activated tree accepts writes until its first sample lands, and replicated / saga-applied writes are never rejected. A time-expired entry that compaction has not yet reaped counts as live until the next deep re-anchor, so the cap can bite slightly early - never late. Resolvable per tree.
 
@@ -969,7 +978,7 @@ This option can be changed freely at any time.
 
 ### `MaxScanRetries`
 
-Maximum bounded-retry passes for `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
+Maximum bounded-retry passes for `CountAsync`, `CountPerShardAsync`, `GetManyAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-operation (default: 3); `GetManyAsync` also spends a pass when a saga commits while its fan-out is in flight. If the topology keeps mutating after every reconciliation step, the operation throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
 
 This option can be changed freely at any time.
 
@@ -1092,13 +1101,15 @@ This option can be changed freely at any time.
 
 ### `ProjectionRebuildPolicy`
 
-Selects the recovery strategy a leaf grain takes when one of the fall-off-log triggers fires (default: `SnapshotThenWal`):
+Selects the recovery strategy a leaf takes on **genuine loss**: when the WAL has been trimmed past the leaf's persisted projection checkpoint and no snapshot covers the gap (default: `SnapshotThenWal`). It is never consulted for the cost signals [`MaxLeafReplayEntries`](#maxleafreplayentries) and [`LeafProjectionRetention`](#leafprojectionretention), which indicate a long or stale replay rather than missing data; on those the leaf tail-replays and converges normally.
 
 | Value | Behaviour |
 |---|---|
-| `SnapshotThenWal` | Drains the per-leaf snapshot, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL slice. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
-| `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
+| `SnapshotThenWal` | Uses the per-leaf snapshot as the recovery base, then tail-replays the WAL since it. The snapshot-rehydrate half is live and runs at every activation before this policy is ever consulted. What is not integrated is a recovery after that rehydrate has declined, so on genuine loss the leaf currently surfaces `LeafProjectionStaleException` rather than rebuild over the lost prefix. |
+| `FullRebuildFromWal` | Diagnostic. Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. |
 | `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
+
+Because the policy is consulted only when the missing prefix is genuinely gone, every value currently fails closed with `LeafProjectionStaleException` in that case: replaying only the surviving suffix would rebuild the leaf over the lost prefix and advance the materialiser pin past unrecoverable data.
 
 This option can be changed freely at any time.
 
@@ -1115,6 +1126,8 @@ Hard ceiling on how long a single outbound shard-to-shard write forward may run 
 During a reshard swap the destination shard's ownership is changing, and Orleans can reject the outbound forward message and leave the caller-side `await` neither completing nor faulting. Without a ceiling the forwarding turn never returns, the lattice grain's per-shard fan-out saturates at its in-flight limit, and the whole write pipeline wedges with no fault and no activation recycle. With the ceiling the parked forward is abandoned and the turn faults cleanly with a `TimeoutException`, which the existing transient-exception retry envelope on every mutation path catches and re-runs against refreshed routing once the swap has settled. Abandoning a forward never loses data: convergence on the destination shard is independently guaranteed by last-writer-wins plus the split coordinator's authoritative leaf-chain drain (the Drain phase and the Complete-phase final drain).
 
 Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. A shard root resolves its tree's options once per activation, so a new value takes effect on each shard root's next activation.
 
 ### `ShardHealingBackpressureOpsPerSecond`
 
@@ -1152,7 +1165,7 @@ A tree that a bulk ingest shattered stays shattered forever without this: shard 
 
 Healing is deliberately **not** gated on [`AutoSplitEnabled`](#autosplitenabled). Disabling the splitter on an already-shattered deployment is precisely the configuration that most needs healing, and coupling them would leave such a tree damaged forever.
 
-**When off:** no reminder, no timer, and no shard polling. An in-flight fold is left to its own resumable coordinator and is never cancelled, so the tree stays consistent.
+**When off:** no fold is admitted and no shard is polled. A tree whose healing orchestrator has never started registers no reminder and starts no timer. One that is already running keeps sweeping on its timer until it deactivates, but each sweep now only reads the tree's shard map and records a `disabled` decision (still publishing the backlog), and its once-a-minute keepalive reminder stays registered - every later tick of it returns without doing anything. An in-flight fold is left to its own resumable coordinator and is never cancelled, so the tree stays consistent.
 
 The switch is deliberately **asymmetric**, and it is worth knowing which direction is fast. Turning it **off** takes effect on the next sweep, because every sweep re-reads the option. Turning it back **on** takes effect at the tree's next healing bootstrap: the orchestrator does not latch itself while disabled, so it will start on the next bootstrap call, and the tree's `LatticeGrain` issues that call when it activates - so in practice re-enabling is picked up the next time the tree activates, whether or not anything writes to it. No redeploy is needed either way. Off-fast, on-slower is the correct direction for a kill switch, and it is not a defect to be filed away as a symmetric latch.
 
@@ -1204,13 +1217,13 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `DigestPublishTimeout`
 
-Hard ceiling on how long a single internal-node upward digest publish may run before it is abandoned and surfaced to the holding turn as a `TimeoutException` (default: 15 seconds). It bounds the `ChildDigestSnapshot` propagation that a `BPlusInternalGrain` issues to its parent after folding a child's digest.
+Hard ceiling on how long a single upward digest publish may run before it is abandoned and surfaced to the publishing turn as a `TimeoutException` (default: 15 seconds). It bounds the child-digest propagation an internal node issues to its parent after folding a child's digest, and the same publish from a leaf to its parent.
 
-The publish is a cross-grain RPC awaited while the internal node holds its non-reentrant split gate, and it recurses up the internal-node chain toward the shard root. A parent that is itself mid-mutation can leave the await neither completing nor faulting, pinning the gate on that activation with no ceiling so every subsequent mutating turn back-pressures behind it. With the ceiling the parked publish is abandoned and the turn faults with a `TimeoutException`, releasing the gate. Abandoning a publish never drifts the digest count: the publish never partially applied at the parent, the digest is staleness-tolerant, and the next mutation's dirty-flag publish re-drives convergence. A non-zero `orleans.lattice.internal.digest_publish.timeouts` counter surfaces the condition.
+The publish is a cross-grain RPC that recurses up the internal-node chain toward the shard root. An internal node sends it only after releasing its non-reentrant split gate, and a parent whose gate is busy parks the incoming snapshot for the gate holder to fold rather than waiting for the gate, but an upward await can still be left neither completing nor faulting - a parent that is itself mid-mutation can hold it until the Orleans response timeout. With the ceiling the parked publish is abandoned and the turn faults with a `TimeoutException`. Abandoning a publish never drifts the digest count: the publish never partially applied at the parent, the digest is staleness-tolerant, and the next mutation's dirty-flag publish re-drives convergence. A non-zero `orleans.lattice.internal.digest_publish.timeouts` counter surfaces the condition for internal-node publishes.
 
 Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
 
-This option can be changed freely at any time. The new value takes effect on the next publish.
+This option can be changed freely at any time. Leaves and internal nodes resolve their tree's options once per activation, so a new value takes effect on each node's next activation.
 
 ### `SoftDeleteDuration`
 
@@ -1229,11 +1242,11 @@ siloBuilder.ConfigureLattice("ephemeral-tree", o =>
 });
 ```
 
-This option can be changed freely at any time. The new duration takes effect on the next deletion. Changing it does not affect trees that have already been deleted.
+This option can be changed freely at any time. A deleted tree's purge reminder fires on the cadence of the value in force when it was deleted, but each tick compares the elapsed time against the current value, and the reported recovery deadline is computed from the current value too. A change therefore also reaches trees that are already soft-deleted: lengthening it defers their purge to the first reminder tick at or after the new deadline, while shortening it cannot purge one before its first reminder tick.
 
 ### `SplitDrainBatchSize`
 
-Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O.
+Number of entries per batch during the shadow-write drain phase of an adaptive split (default: 1024). Larger batches reduce the number of drain rounds but increase per-round memory and storage I/O. The options validator does not check it; a value of `0` or less falls back to the 1024 default.
 
 This option can be changed freely at any time.
 
@@ -1253,7 +1266,7 @@ A caller-side timeout does not help and is not what this option is. The sweep's 
 
 **Observability.** An abandoned drive increments `orleans.lattice.wal.replay.starvation_drive_abandonments` (tagged `tree`), zero-primed per tree beside the sweep's `attempted` arm so an absent series proves the build is not deployed rather than that no drive has run, and emits a warning log carrying the leaf, the tree, the budget and how long the drive actually ran. The warning takes one of two forms, split at the moment the drive acquired its replay permit (issue #3479). A drive that **was replaying** reports the time it spent being admitted to the replay gate, the time it spent replaying, and how far the replay advanced the leaf's checkpoint (in memory and persisted) before it was abandoned; only this form points at the storage provider and the leaf's replay gap. A drive that was abandoned **before it was admitted** never read storage, so its warning says so and says to raise the budget. GC drives never queue for a replay permit - one that finds no capacity is refused at once with a `ReplayPermitAdmission` saturation rather than abandoned - so this form arises only when admission itself outlasts the budget: a budget far too small, or a stall of the drive's thread while it is admitted. It also records the `drove_timed_out` verdict on `orleans.lattice.wal.gc.blocked_leaf_reactivations` - but that arm is near-silent in practice, because the caller has usually already timed out, so read the counter and not the verdict. See [Metrics](metrics.md).
 
-This option can be changed freely at any time. The new value takes effect on the next drive.
+This option can be changed freely at any time. A drive reads the budget from its leaf's resolved options, which a leaf resolves when it activates, so a new value reaches each leaf on its next activation.
 
 ### `StorageUsageCacheTtl`
 
@@ -1318,6 +1331,7 @@ siloBuilder.ConfigureLattice(o => o.StorageUsageRollupBudget = TimeSpan.Zero);
 ```
 
 This option can be changed freely at any time; a new value applies to the next roll-up.
+
 ### `TombstoneGracePeriod`
 
 How long a deleted key's tombstone is retained before it becomes eligible for permanent removal by the compaction process. The grace period exists so that all cache replicas (`LeafCacheGrain` activations across silos) have time to observe the delete via delta replication before the tombstone disappears.
@@ -1339,13 +1353,13 @@ This option can be changed freely at any time. The new grace period takes effect
 
 ### `TxDecisionRetention`
 
-Retention window for a completed saga's commit/abort decision in the per-tree `ITxRegistryGrain` after the saga calls `ForgetAsync` (default: 60 seconds). The registry stamps a `ForgottenAt` tombstone instead of evicting the decision; for the duration of the window `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to surface the decision so that a process which installs a *new* pending bucket on that txid *after* the saga's terminal fan-out can still resolve the verdict and apply the terminal directly.
+Retention window for a completed saga's commit/abort decision in the per-tree transaction registry after the saga asks the registry to forget it (default: 60 seconds). The registry stamps a forgotten-at tombstone instead of evicting the decision; for the duration of the window the registry's status and snapshot reads continue to surface the decision so that a process which installs a *new* pending bucket on that txid *after* the saga's terminal fan-out can still resolve the verdict and apply the terminal directly.
 
-The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's `_pendingTx` buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
+The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's pending-saga buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
 
-Once the window elapses the decision is *masked* rather than deleted: `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` report the saga as `Indeterminate` ("a decision exists, and this tree is no longer entitled to report it") rather than as `InFlight`. A txid the tree never recorded at all still reports `InFlight`. Read paths hide a prepared key whose saga is `Indeterminate` instead of falling through to its pre-saga value, because absence asserts nothing while `InFlight` would be an affirmative and possibly wrong claim that the saga did not commit.
+Once the window elapses the decision is *masked* rather than deleted: the registry's status and snapshot reads report the saga as indeterminate ("a decision exists, and this tree is no longer entitled to report it") rather than as in flight. A txid the tree never recorded at all still reports in flight. Read paths hide a prepared key whose saga is indeterminate instead of falling through to its pre-saga value, because absence asserts nothing while in flight would be an affirmative and possibly wrong claim that the saga did not commit.
 
-Expired tombstones are physically purged by the next `ForgetAsync` call against the registry (an inline prune pass); a `MarkCommittedAsync` / `MarkAbortedAsync` carrying the *same* outcome is recognised as idempotent and deliberately leaves the tombstone in place, so it can never resurrect a decision the tree already retired. A tombstone held by a live point-in-time cursor pin is skipped by both the purge and the read-side mask, so a pinned snapshot keeps reading its decisions for as long as the pin lives. Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
+Expired tombstones are physically purged by the next forget call against the registry (an inline prune pass); a repeated commit or abort mark carrying the *same* outcome is recognised as idempotent and deliberately leaves the tombstone in place, so it can never resurrect a decision the tree already retired. A tombstone held by a live point-in-time cursor pin is skipped by both the purge and the read-side mask, so a pinned snapshot keeps reading its decisions for as long as the pin lives. Set `TimeSpan.Zero` to restore the pre-tombstone immediate-evict semantic (legacy behaviour; reintroduces the orphan risk - reserved for tests or trees with `AutoSplitEnabled = false`). Increase beyond 60 s only if your operational profile produces sweep durations longer than that (very large shards under sustained write load, cascading split storms).
 
 This option can be changed freely at any time.
 
@@ -1385,7 +1399,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalAppendDispatchTimeout`
 
-Hard ceiling on how long the per-tree WAL writer (`WalCommitLogWriter`) will wait on a single outbound `IWalShardGrain.AppendBatchAsync` / `AppendAsync` dispatch before abandoning the await and surfacing a `TimeoutException` to the caller (default: 30 seconds).
+Hard ceiling on how long the per-tree WAL writer will wait on a single outbound append dispatch to a per-shard WAL grain before abandoning the await and surfacing a `TimeoutException` to the caller (default: 30 seconds).
 
 The dispatch is the writer-side cross-grain RPC into the per-shard WAL grain - it is the outermost observable seam on the write pipeline and was historically unbounded on the writer side, so a wedged shard activation would hold every caller's dispatch parked until the Orleans response deadline (30 seconds by default) expired - a blind hang with no per-shard attribution. Bounding the dispatch converts that blind hang into a structured fault with per-shard counter attribution (the `orleans.lattice.wal.append_dispatch.timeouts` counter, tagged `tree` and `shard`), so a wedged shard surfaces immediately and the request pipeline releases its slot rather than back-filling behind the wedge.
 
@@ -1435,13 +1449,13 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalSaturationDispatchTimeoutThreshold`
 
-Minimum number of `orleans.lattice.wal.append_dispatch.timeouts` trips observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth (default: 1). Captures the dispatch-deadline failure-tail of the saturation regime (parked dispatches abandoned because a downstream shard wedged) in addition to the admission-depth fast signal. Raise it on dashboards where occasional single trips are expected without operator concern; the value is per-window, so `WalSaturationDispatchTimeoutThreshold = 3` with a 200 ms sample interval permits up to 14 trips/second steady-state before flagging Saturated. Must be greater than or equal to 1.
+Minimum number of `orleans.lattice.wal.append_dispatch.timeouts` trips observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth (default: 1). Captures the dispatch-deadline failure-tail of the saturation regime (parked dispatches abandoned because a downstream shard wedged) in addition to the admission-depth fast signal. Raise it on dashboards where occasional single trips are expected without operator concern; the value is per-window, so `WalSaturationDispatchTimeoutThreshold = 3` with a 200 ms sample interval permits up to 2 trips per window - 10 trips/second - steady-state before flagging Saturated. Must be greater than or equal to 1.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
 ### `WalSaturationProviderFailureRateThreshold`
 
-Minimum number of provider-side commit failures (any exception surfaced from a downstream `IWalShardGrain.AppendAsync` / `AppendBatchAsync` dispatch other than the writer-side `TimeoutException` already captured by `WalSaturationDispatchTimeoutThreshold`) observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth and dispatch-timeout trips (default: 1). Captures the third saturation regime the writer side cannot otherwise surface: a downstream storage provider whose commit calls return quickly (so neither the admission depth nor the dispatch deadline crosses the threshold) but terminally fail at a high rate, e.g. an Azure Tables single-account 409-Conflict burst where the SDK retry races a server-side-already-committed transaction.
+Minimum number of provider-side commit failures (any exception surfaced from a downstream WAL shard append dispatch other than the writer-side `TimeoutException` already captured by `WalSaturationDispatchTimeoutThreshold`) observed within a single `WalSaturationSampleInterval` window that raises a tree to `WalSaturationState.Saturated` regardless of admission-semaphore depth and dispatch-timeout trips (default: 1). Captures the third saturation regime the writer side cannot otherwise surface: a downstream storage provider whose commit calls return quickly (so neither the admission depth nor the dispatch deadline crosses the threshold) but terminally fail at a high rate, e.g. an Azure Tables single-account 409-Conflict burst where the SDK retry races a server-side-already-committed transaction.
 
 Without this input the caller saw the failure tail (a `SetAsync` / `SetManyAsync` faulted) but the per-tree saturation signal stayed `Healthy` and any back-pressure consumer (the bench TCP reader, an upstream load balancer) had no leading-edge surface to slow down before the leak became visible at the operator level. Caller-driven cancellation paths are excluded from the counter (an `OperationCanceledException` whose token matches the caller's cancellation token is not counted) so a healthy caller-side abandonment never inflates the saturation signal.
 
@@ -1471,7 +1485,7 @@ Leaf-materialiser drain-lag duration at or above which the saturation sampler re
 
 Captures the **drain-path blind spot** the flush-latency and admission inputs cannot see: a write burst can be accepted and flushed quickly (healthy flush latency, shallow admission depth) yet outrun the rate at which leaf materialisers project committed WAL entries into the tree, so the durable backlog and its pin floor grow while every other saturation input reads healthy. Sizing guidance: pick a threshold a few times your steady-state materialiser drain lag so the observation stays quiet during healthy traffic and only fires when projection genuinely falls behind ingest.
 
-The input is purely additive. Leaving the threshold at its default `null` is a zero-cost no-op: the sampler skips the lag computation and the classifier behaves exactly as before. Must be positive when set; the validator rejects `TimeSpan.Zero` and any negative value.
+The input is on by default, at the 30-second threshold above. Setting the threshold to `null` disables it at zero cost: the sampler skips the lag computation and the classifier behaves exactly as it did before the input existed. Must be positive when set; the validator rejects `TimeSpan.Zero` and any negative value.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
@@ -1508,6 +1522,7 @@ Number of consecutive saturation-sampler windows that must each observe at least
 Set lower (minimum 1) to make the input more sensitive at the cost of more transient classifier flaps; set higher to lengthen the sustained-slow regime the classifier requires before flagging. Has no effect when `WalSaturationMaterialiserPinLatencyThreshold` is left at its default `null`. The validator rejects values less than 1.
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
 ### `WalSaturationRecoveryWindow`
 
 Window after the most-recently observed `WalSaturationState.Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's per-partition depth observation would otherwise classify it as `Healthy` (default: 1 second). Defends against bursty per-partition WAL drain where one partition fills to cap, drains entirely in the next tick, and the next partition fills - the per-tick `max(depth_ratio)` across partitions oscillates between `~1.0` and `~0.0` within a single sampler period and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. Under the default [`WalSaturationAcuteOnly`](#walsaturationacuteonly) classification an at-cap partition already reads `Throttled`, so that depth-driven flap arises only with `WalSaturationAcuteOnly = false`; the window still holds a tree at `Throttled` after the acute causes that raise `Saturated`. With the window in effect, callers see `Throttled` persist as the natural lead-up and fall-back regime around saturation episodes; the canonical TCP / queue ingest reader pattern can take the advisory `Throttled` action (yield-per-line, lower-priority dispatch) for measurable durations rather than seeing only the binary pause-or-go pattern.
@@ -1536,7 +1551,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 When `true`, only *acute* causes - dispatch-timeout trips, provider failures, and sustained flush latency - classify a WAL partition as `Saturated` (default: `true`). A partition whose admission semaphore is merely at its cap then reads `Throttled`, and a caller parked at the writer's admission gate resumes as soon as its partition leaves `Saturated` instead of waiting for `Healthy`.
 
-At-cap is the steady state of a well-pipelined partition, not a fault: the admission semaphore already bounds in-flight work at the cap, and that bound is the back-pressure. Classifying it `Saturated` closes the admission gate on healthy traffic, and the gate then holds each parked append until `Healthy` - a condition the [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) hysteresis and the paced [`WalSaturationRecoveryReleaseBatch`](#walsaturationrecoveryreleasebatch) release both defer. A caller arriving during that same `Throttled` window passes the gate without waiting, so the parked caller was held on a stricter condition than the one that admits a newcomer. On the eight-silo `set-many` rig this gate wait was the dominant per-append cost (see issue #3348).
+At-cap is the steady state of a well-pipelined partition, not a fault: the admission semaphore already bounds in-flight work at the cap, and that bound is the back-pressure. Classifying it `Saturated` closes the admission gate on healthy traffic, and the gate then holds each parked append until `Healthy` - a condition the [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) hysteresis and the paced [`WalSaturationRecoveryReleaseBatch`](#walsaturationrecoveryreleasebatch) release both defer. A caller arriving during that same `Throttled` window passes the gate without parking - it pays only the [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) delay - so the parked caller was held on a stricter condition than the one that admits a newcomer. On the eight-silo `set-many` rig this gate wait was the dominant per-append cost (see issue #3348).
 
 The historical at-cap classification is that defect, so the corrected verdict is the default. It changes when `IWalSaturationSignal` reports `Saturated` to every consumer (replication flow control, the atomic-write quiesce, cursors, view back-pressure, scaling pressure and the `UnhealthyOnWalSaturated` health check, dashboards): an at-cap partition now reads `Throttled`. It only ever reports `Saturated` less often, so callers observe `LatticeSaturatedException` less often and never in a new place. Set it to `false` to restore the historical classification exactly. The sampler reads this value silo-wide, like the other `WalSaturation*` classifier options, so set it globally rather than per tree.
 
@@ -1546,7 +1561,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 Wall-clock budget the WAL writer's pre-admission saturation gate spends parked, before an append enters its WAL partition's admission semaphore, while that partition's saturation verdict stays `Saturated`; when it expires the dispatch is refused with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) (default: 5 seconds). Closes the consumer-coverage gap where the admission semaphore was previously signal-blind: under the storage-account 409-Conflict regime the classifier raised `Saturated` many times before the first observable failure, but every new dispatch still admitted into the semaphore and parked at the cap, taking the full `WalAppendDispatchTimeout` (default 30 seconds) to surface as `TimeoutException` instead of the configured shorter budget.
 
-Mechanically: before each append acquires its partition's admission slot, the writer reads the saturation verdict for **that WAL partition** rather than the tree-wide roll-up (issue #3348), so one partition at its cap cannot refuse appends routed to its idle siblings; genuinely tree-wide causes still reach every partition's verdict. (A replacement `IWalSaturationSignal` that cannot answer per partition falls back to the tree-wide verdict and to waiting for `Healthy`.) On `Healthy` / `Throttled` the check is a single concurrent-dictionary lookup and the caller proceeds directly into the semaphore (no allocation, no extra await). On `Saturated` the writer parks for at most this budget, or for whatever remains of the enclosing call's [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) if that is smaller. With [`WalSaturationAcuteOnly`](#walsaturationacuteonly) at its default `true` the parked caller resumes as soon as its partition leaves `Saturated`; with it `false` the caller waits for `Healthy`. If the budget expires with the partition still `Saturated`, the writer throws `LatticeSaturatedException` carrying the originating tree id, so the caller can detect the saturation regime via a single `is` check instead of waiting out the full `WalAppendDispatchTimeout`. A borderline-recovery race (the wait expires AND the partition recovered between the wait expiring and the re-check firing) is suppressed: the writer re-reads the verdict once after budget expiry and proceeds without refusal when the partition is no longer `Saturated`.
+Mechanically: before each append acquires its partition's admission slot, the writer reads the saturation verdict for **that WAL partition** rather than the tree-wide roll-up (issue #3348), so one partition at its cap cannot refuse appends routed to its idle siblings; genuinely tree-wide causes still reach every partition's verdict. (A replacement `IWalSaturationSignal` that cannot answer per partition falls back to the tree-wide verdict and to waiting for `Healthy`.) On `Healthy` / `Throttled` the gate check is a single concurrent-dictionary lookup and the gate never parks: a `Healthy` caller proceeds directly into the semaphore (no allocation, no extra await), while a `Throttled` caller first pays the separate local pace, [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) (25 ms by default). On `Saturated` the writer parks for at most this budget, or for whatever remains of the enclosing call's [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) if that is smaller. With [`WalSaturationAcuteOnly`](#walsaturationacuteonly) at its default `true` the parked caller resumes as soon as its partition leaves `Saturated`; with it `false` the caller waits for `Healthy`. If the budget expires with the partition still `Saturated`, the writer throws `LatticeSaturatedException` carrying the originating tree id, so the caller can detect the saturation regime via a single `is` check instead of waiting out the full `WalAppendDispatchTimeout`. A borderline-recovery race (the wait expires AND the partition recovered between the wait expiring and the re-check firing) is suppressed: the writer re-reads the verdict once after budget expiry and proceeds without refusal when the partition is no longer `Saturated`.
 
 The budget should be shorter than `WalAppendDispatchTimeout` (so the saturation refusal wins over the dispatch timeout) and longer than one `WalSaturationSampleInterval` (so a transient classifier flap does not surface as a refusal). The default (5 seconds) leaves `WalAppendDispatchTimeout`'s 30-second default as a strict outer bound and gives the storage account a realistic recovery window for the canonical 409-Conflict burst (typical recovery 1-3 seconds once offered load drops). Refusals are counted on the `orleans.lattice.wal.writer.append.admission_saturation_refusals` counter (tagged `tree`, `partition`), distinct from the dispatch-timeout counter (`admission_timeouts`) and the drain-release counter (`drain.releases`).
 
@@ -1556,7 +1571,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `SetManyFanOutBudget`
 
-Wall-clock budget `LatticeGrain.SetManyAsync` spends awaiting its shard fan-out before refusing the call with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) carrying `LatticeSaturationSource.SetManyFanOut` (default: `Timeout.InfiniteTimeSpan`, i.e. unbounded - the bound is opt-in).
+Wall-clock budget `ILattice.SetManyAsync` spends awaiting its shard fan-out before refusing the call with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) carrying `LatticeSaturationSource.SetManyFanOut` (default: `Timeout.InfiniteTimeSpan`, i.e. unbounded - the bound is opt-in).
 
 `SetManyAsync` splits a batch across the shards its keys route to and awaits every branch, so the call costs the *slowest* branch rather than the typical one. As the shard count rises the probability that at least one branch is in its slow tail rises with it, so the call tracks the branch p99 and can degrade even as branch-level latency improves. That is the collapse measured in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348): widening a cluster from four silos to eight *improved* the branch median 7.7x to 386 ms while the branch p99 degraded 11x to 94 s, and the batch tracked the p99.
 
@@ -1576,9 +1591,9 @@ This option can be changed freely at any time. The new value takes effect on the
 
 Wall-clock budget **one top-level call** may spend waiting at the WAL admission saturation gate, summed across every append that call makes and every retry layer it passes through (default: `Timeout.InfiniteTimeSpan`, i.e. unbounded - the bound is opt-in).
 
-`WalAdmissionSaturationWaitBudget` bounds **one** wait. It does not bound a call, because the write path holds three nested retry layers - `LatticeGrain.RetryOnStaleRoutingAsync`, `ShardActivationRetry.RunAsync`, and `ShardRootGrain.DispatchLeafBatchWithRetryAsync` - and each re-dispatch opens a fresh per-append budget. A call can therefore accumulate a multiple of the configured budget while every individual wait is correctly bounded, which is why a per-append assertion never caught it. The Layer 3 cohort logs for [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) record the consequence directly: `flush of 4096 failed after 5 retry attempts against LatticeSaturatedException; 10488ms of that was saturation back-off`, against a 5-second per-append budget. This option is the issue's own remedy 3 ("cap the total gate wait per top-level call"), and it subsumes remedy 4 ("reconsider whether all three retry layers may wait at the gate") by making the answer *yes, but out of one shared allowance*.
+`WalAdmissionSaturationWaitBudget` bounds **one** wait. It does not bound a call, because the write path holds three nested retry layers - the tree grain's stale-routing retry, the shard-activation retry, and the shard root's leaf-batch dispatch retry - and each re-dispatch opens a fresh per-append budget. A call can therefore accumulate a multiple of the configured budget while every individual wait is correctly bounded, which is why a per-append assertion never caught it. The Layer 3 cohort logs for [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) record the consequence directly: `flush of 4096 failed after 5 retry attempts against LatticeSaturatedException; 10488ms of that was saturation back-off`, against a 5-second per-append budget. This option is the issue's own remedy 3 ("cap the total gate wait per top-level call"), and it subsumes remedy 4 ("reconsider whether all three retry layers may wait at the gate") by making the answer *yes, but out of one shared allowance*.
 
-**How the call is identified.** Every public write entry point calls `LatticeTransactionContext.EnsureCurrent()`, which now also stamps a call-start instant into `RequestContext` if one is not already present. Nested entry points inherit the outermost stamp rather than re-stamping, so the budget measures the whole call and not each layer of it. The instant is stored as `DateTimeOffset.UtcNow.UtcTicks` rather than a `Stopwatch` timestamp because `RequestContext` values cross silos, where monotonic tick origins are not comparable; NTP skew is small against a multi-second budget, and this bounds back-pressure rather than enforcing a correctness invariant, so the wall-clock reading is sufficient.
+**How the call is identified.** Every public write entry point establishes its ambient transaction context, which also stamps a call-start instant into `RequestContext` if one is not already present. Nested entry points inherit the outermost stamp rather than re-stamping, so the budget measures the whole call and not each layer of it. The instant is stored as `DateTimeOffset.UtcNow.UtcTicks` rather than a `Stopwatch` timestamp because `RequestContext` values cross silos, where monotonic tick origins are not comparable; NTP skew is small against a multi-second budget, and this bounds back-pressure rather than enforcing a correctness invariant, so the wall-clock reading is sufficient.
 
 **What happens when it is spent.** The gate takes the *smaller* of the remaining call allowance and `WalAdmissionSaturationWaitBudget`, so a call never waits past its allowance and a single append never waits past the per-append bound. Once the allowance is exhausted the gate refuses immediately without opening another wait, throwing [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) with `LatticeSaturationSource.WalAdmission` and a message naming `WalAdmissionSaturationCallBudget`, so an operator can tell a per-call refusal from a per-append one.
 
@@ -1632,9 +1647,11 @@ When `true` (the default), a bulk WAL append carrying exactly one entry is dispa
 
 ### `WalMaxRetainedBytes`
 
-Optional advisory ceiling on retained WAL bytes per tree (default: `null`, disabled). When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (surfaced as the `orleans.lattice.storage.policy.trim_triggered` counter and `LatticeWalGcReport.BytePressureTriggered`), trimming toward `WalMaxRetainedBytes * WalBytePressureReclaimTarget`. The policy is **advisory only**: the GC never trims past the safe frontier (the slowest consumer's cursor and any `WalRetention` floor) to honour it, so a tree pinned by a lagging consumer can remain over the ceiling - `LatticeWalGcReport.BytePressureOverThreshold` and the `orleans.lattice.storage.policy.over_threshold` gauge report that condition. `null` disables the policy. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
+Optional advisory ceiling on a tree's WAL bytes (default: `null`, disabled). Despite the name it bounds **on-disk occupancy**, not live payload: when set, each `ILatticeWalGc.RunOnceAsync` pass samples the WAL's physical size - every byte it occupies, including dead bytes trimmed but not yet reclaimed by compaction, falling back per partition to the retained figure when a provider cannot report physical size - before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (surfaced as the `orleans.lattice.storage.policy.trim_triggered` counter and `LatticeWalGcReport.BytePressureTriggered`), trimming toward `WalMaxRetainedBytes * WalBytePressureReclaimTarget`. The policy is **advisory only**: the GC never trims past the safe frontier (the slowest consumer's cursor and any `WalRetention` floor) to honour it, so a tree pinned by a lagging consumer can remain over the ceiling - `LatticeWalGcReport.BytePressureOverThreshold` and the `orleans.lattice.storage.policy.over_threshold` gauge report that condition. `null` disables the policy. See [WAL](wal.md) and [Tree Storage](tree-storage.md).
 
 This option can be changed freely at any time. The new value takes effect on the next GC tick.
+
+**Size it above `LatticeOptions.WalMaxRetainedBytesWorkingSetMultiple` (2) times the largest tree's logical working set.** A log-structured provider reclaims dead bytes only by rewriting a segment once they reach its compaction threshold (half the file at the file provider's default ratio), so a healthy tree's steady-state occupancy is about twice its live set. A ceiling below that multiple is unsatisfiable by construction, and with the default `WalBytePressureReclaimTarget` of 0.8 its disarm point sits below the tree's natural floor, so the advisory alarm arms and never clears. Because the working set grows, nothing validates the rule at startup; every pass evaluates it against the working set it just measured and reports a breach on `orleans.lattice.wal.gc.ceiling_unsatisfiable`, which is zero-primed per tree.
 
 **A per-tree override can be set at runtime, with no silo restart (issue #3333).** The silo-wide value above is the default for every tree; an individual tree can pin its own ceiling through the tree-admin facade (`lattice_treeadmin_tree_set_config` with `applyWalMaxRetainedBytes: true`, or `ILatticeTreeAdmin.SetTreeConfigAsync` with `TreeConfigurationUpdate.ApplyWalMaxRetainedBytes`). The override is persisted on the tree's registry entry and re-read on every GC pass, so it takes effect on that tree's next pass rather than at the next silo start; a `null` value clears the override and restores the silo-wide default. This matters because the silo-wide value is usually sourced from environment or file configuration that a running host cannot change, so before this existed, correcting a ceiling that had become too small for a grown tree cost a restart - and a restart is exactly what an operator wants to avoid on a host whose WAL is already under pressure. The ceiling is advisory in both forms: an override can never cause the GC to trim past the safe frontier, so lowering one cannot lose data, it only moves the point at which byte-pressure trimming and the cadence floor engage.
 
@@ -1652,9 +1669,9 @@ Byte ceiling up to which the WAL garbage collector holds back a tree whose durab
 
 **Per-tree, pinned at first registration.** A tree pins the value in force for it when it is first registered in the tree registry - on its first use, or through `ILatticeTreeAdmin.CreateTreeAsync` - so a silo-wide default change is non-breaking for already-registered trees - they continue to fan across whatever partition count they were created with. New trees pick up the current default unless an operator override is configured.
 
-**Activation-time replay is partition-aware.** The leaf grain's activation-time materialiser iterates `[0, WalPartitions)` and runs an independent fall-off-log classification, slice read, and projection-checkpoint advance per partition. Per-partition checkpoints persist into the `LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`, additive `[Id]`), with partition 0 also mirrored into the legacy scalar `ProjectionCheckpointOffset` slot so a downgrade to a host that has never observed multi-partition state still reads a valid single-partition shape. Per-partition cursor consumer ids take the form `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}` so the per-shard WAL GC trims each partition independently against its own slowest consumer; on `WalPartitions = 1` the legacy unsuffixed shape `_lattice_materialiser_{treeId}_{leafGrainId}` is preserved for wire compatibility with hosts that have never enabled multi-partition replay.
+**Activation-time replay is partition-aware.** The leaf grain's activation-time materialiser iterates `[0, WalPartitions)` and runs an independent fall-off-log classification, slice read, and projection-checkpoint advance per partition. Per-partition checkpoints persist in the leaf's durable state as a nullable per-partition offset array (an additive serialization slot), with partition 0 also mirrored into the legacy scalar checkpoint slot so a downgrade to a host that has never observed multi-partition state still reads a valid single-partition shape. Per-partition cursor consumer ids take the form `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}` so the per-shard WAL GC trims each partition independently against its own slowest consumer; on `WalPartitions = 1` the legacy unsuffixed shape `_lattice_materialiser_{treeId}_{leafGrainId}` is preserved for wire compatibility with hosts that have never enabled multi-partition replay.
 
-Must be `>= 1`. Values below 1 fail option validation at silo start.
+Must be `>= 1`. Values below 1 fail options validation.
 
 ### `WalMaterialiserPinShards`
 
@@ -1668,9 +1685,10 @@ Number of durable state slots a single pin shard's blob is split across (default
 
 Buckets are the **write** dimension; [`WalMaterialiserPinShards`](#walmaterialiserpinshards) is the **read** dimension. They are orthogonal, and that is the point of having both. Raising the shard count also shrinks each blob, but it widens the WAL garbage collector's per-pass grain fan-in by the same factor, because the collector must read every shard to compute the trim floor. Raising the bucket count shrinks the blob without touching that fan-in at all: one activation still answers for the whole shard and unions its buckets in memory, so `GetPinsAsync` still costs one grain call per shard. Reach for buckets when pin writes are slow, and for shards when pin calls are queueing.
 
-Changing this value is a **durable-store migration**, and both directions are safe. Raising it: existing pins stay in the legacy slot, which every activation keeps reading, and each consumer's pin moves to its bucket the next time that consumer reports. Lowering it: an activation reads the wider layout it finds recorded in bucket zero, merges it, and immediately consolidates into the narrower one, so no pin is stranded. The legacy slot is never cleared except on tree deletion, so a rollback to a pre-bucketing build still finds the pins it wrote before the upgrade; those pins are stale, which retains more WAL, which is safe. As with the shard count, a deliberate rollout (drain, change, redeploy) is still preferable to flipping it on a hot cluster. Must be `>= 1`; the validator rejects values below 1.
+Changing this value is a **durable-store migration**, and both directions are safe. Raising it: existing pins stay in the legacy slot, which every activation keeps reading, and each consumer's pin moves to its bucket the next time that consumer reports. Lowering it: an activation reads the wider layout it finds recorded in bucket zero, merges it, and immediately consolidates into the narrower one, so no pin is stranded. The legacy slot is never cleared except on tree deletion, so a rollback to a pre-bucketing build still finds the pins it wrote before the upgrade; those pins are stale, which retains more WAL, which is safe. As with the shard count, a deliberate rollout (drain, change, redeploy) is still preferable to flipping it on a hot cluster. It is read from the default (unnamed) options, so per-tree overrides do not apply. Must be `>= 1`; the validator rejects values below 1.
 
 Pair with `orleans.lattice.materialiser.pin.durable_write_latency` and `orleans.lattice.materialiser.pin.reports_shed` when sizing: a sustained non-zero shed rate means the pin store is the bottleneck and the bucket count is the knob for it.
+
 ### `WalMaterialiserPinFlushIntervalMs`
 
 Debounce window, in milliseconds, over which a shard's durable pin writes are coalesced behind a grain-timer flush (default: 250 ms). Within the window the shard advances its in-memory monotonic-max frontier on every advancing report but persists at most one durable `WriteStateAsync`, collapsing a report burst into one durable write per shard per window. The coalescing only ever retains **more** WAL than an immediate write would (the persisted floor lags the in-memory floor by at most one window), so it is always GC-safe.
@@ -1681,7 +1699,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalMaterialiserPinShedCeiling`
 
-Maximum time a durable leaf-materialiser pin shard may shed coalescible reports continuously before one is forced through (default: `null`, disarmed, which preserves the historical shedding exactly). Under sustained leaf-activation churn the non-sheddable pin writes can hold a shed window open indefinitely and starve the path that restamps materialiser coverage, so the durable pin stops advancing and the retained WAL grows. With a ceiling set, once a shard has shed for that long the next report is issued regardless and `orleans.lattice.materialiser.pin.shed_forced` records it, bounding pin staleness at the cost of at most one enqueued write per ceiling period per shard. Arming it cannot lose data. The validator requires a positive value, or `null`.
+Maximum time a durable leaf-materialiser pin shard may shed coalescible reports continuously before one is forced through (default: `null`, disarmed, which preserves the historical shedding exactly). Under sustained leaf-activation churn the non-sheddable pin writes can hold a shed window open indefinitely and starve the path that restamps materialiser coverage, so the durable pin stops advancing and the retained WAL grows. With a ceiling set, once a shard has shed for that long the next report is issued regardless and `orleans.lattice.materialiser.pin.shed_forced` records it, bounding pin staleness at the cost of at most one enqueued write per ceiling period per shard. Arming it cannot lose data. It is read from the default (unnamed) options, so per-tree overrides do not apply. The validator requires a positive value, or `null`.
 
 ### `WalMaterialiserMaxConcurrentReplays`
 
@@ -1692,7 +1710,10 @@ Per-silo ceiling on the number of leaf grains that may run their activation-time
 The resolved ceiling, the configured option, the processor count, the grant, and the resolved managed heap ceiling are all written to the log once per process at silo start, so the effective figure can be read off the log rather than inferred from the host's vCPU count. The heap ceiling is reported there because the first four figures are all CPU quantities while the resource a concurrent replay exhausts first is the managed heap (issue #2784); a record carrying only the CPU side reads as a complete account of the sizing and is not one. It is reported as `unknown` when the runtime declines to supply it, which is a finding in its own right - heap occupancy then yields no verdict and the adaptive layer described below cannot engage on it.
 
 **The ceiling is sized once, but concurrency adapts beneath it (issue #2862).** The sizing above is CPU-derived and correct as far as it goes, but on a mass reactivation the binding constraint is usually the **heap**, not the CPU: a whole-window replay buffers the window, so N concurrent replays hold N such buffers against one fixed managed ceiling. The gate therefore carries a memory dimension on top of the CPU-derived figure. A replay that finishes while managed heap occupancy is at or above **75%** of the GC hard limit does not return its permit, and a replay that fails for memory pressure does not return its permit whatever the occupancy; a withheld permit is returned only when a replay completes cleanly **and** occupancy has receded below **60%**. Those two figures are a hysteresis band, not one edge, so the gate settles at the concurrency the heap can afford rather than oscillating across a single threshold. The occupancy denominator is the **GC hard limit** (`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, floored by the cgroup memory limit when one is readable) and not the container memory grant: under a container limit .NET applies its default `GCHeapHardLimitPercent` to the grant, so a 12 GiB grant yields a 9 GiB managed ceiling and a threshold written against the grant would sit 33% above the limit that actually throws. Backpressure never withholds the last permit, so the effective ceiling has a floor of one and the mechanism cannot latch, and it works by declining to return a permit already taken rather than by resizing, so it can never raise concurrency above the configured ceiling. Both arms of `orleans.lattice.wal.replay.permit_adaptations` are primed at zero when the gate is sized, so a flat zero is a measured zero rather than an absent series; the withheld arm additionally carries a `trigger` tag (`occupancy` or `fault`) naming which of the two mechanisms above withheld the permit, and each trigger value is primed separately (issue #2883). The counters are monotonic totals, so neither of them - nor their difference across two scrapes - can express what a process restart destroyed: the adaptation is held entirely in process memory, and a silo that dies at a withheld level of five starts again at zero with nothing in either series marking the discontinuity. `orleans.lattice.wal.replay.permits_withheld` is an observable gauge of that live level, published so the boundary is visible where a delta over the counters cannot show it (issue #2784). It is not a substitute for the counters: being sampled, a withhold and its restore that both fall between two scrapes leave it unchanged while the counters record both.
+
 Set to a positive value to pin the ceiling explicitly; an explicit value supersedes both figures. Must be `>= 0`; the validator rejects negative values.
+
+**Starvation drives take a bounded, non-queueing share of the gate (issues #3480, #3575).** The WAL GC sweep's starved-leaf drives and a leaf's own coverage-lag timer drives replay under this same gate, but they never queue for a permit, and together they hold at most half the resolved ceiling (rounded down, but never below one), leaving the rest for ordinary activations. A drive that cannot take a free permit immediately within that share is refused at once with a `LatticeSaturatedException` carrying `LatticeSaturationSource.ReplayPermitAdmission`. Within the share a coverage-lag timer drive never takes the last free slot, which is kept for the sweep - the only drive that clears a pin holding a tree's WAL cursor floor - and on a single-slot share the timer yields that slot while a refused sweep drive is outstanding. The sweep records such a refusal as the `admission_refused` outcome on `orleans.lattice.wal.gc.blocked_leaf_reactivations` and retries that consumer after a jittered delay that doubles with each consecutive refusal; the timer counts its refusals, and the drive opportunities its backoff then skips, as the `recheck_drive_refused` and `recheck_drive_deferred` reasons on `orleans.lattice.leaf.snapshot.driver.declines`. See [Metrics](metrics.md).
 
 **This ceiling is one of two factors (issue #2867).** Peak replay memory is the **product** of how many replays run concurrently and how much each one buffers, and the paragraph above is careful about the first while being silent about the second - which is how the ceiling came to be treated as *the* control. It is not. The per-replay factor is the slice width the replay reads the commit log in, and it is settable in its own right as [`WalReplaySliceBudget`](#walreplayslicebudget) (issue #2898). Until that option existed the width was a private constant with no option, no environment variable and no overlay entry behind it, so lowering peak memory by lowering the width was not something configuration could express. Both terms of the product are now settable.
 
@@ -1753,7 +1774,7 @@ never advance.
 
 Upper bound on the cadence at which the per-silo core WAL garbage-collection scheduler runs a `ILatticeWalGc.RunOnceAsync` pass over **every** registered tree (default: 1 hour, **enabled**). This is the *quiet-path* ceiling of an adaptive band whose floor is [`WalGcMinInterval`](#walgcmininterval): a tree that is reclaiming entries is collected far more often, and relaxes back to this interval once it has nothing left to reclaim. The core library ships the WAL garbage collector, but historically only drove it for *replicated* trees (via the replication package's per-tree maintenance grain). That left two retention gaps: a durable-WAL host that runs **without** the replication package never trimmed its WAL at all, and every **non-replicated** tree in a replicated host was never collected - both grew without bound, and `WalRetention` was inert for them. The built-in scheduler closes the gap by collecting every registered tree, replicated or not, so `WalRetention` is effective out of the box.
 
-A pass is retention housekeeping, not a latency-sensitive operation. Its cost scales with `trees × WalPartitions` storage reads (a head scan plus a trim per partition) and runs on every silo, so this ceiling is deliberately coarse to keep the **idle** storage cost low. Lowering it would only make a quiet tree poll more often, paying for passes that reclaim nothing, while buying no responsiveness on a tree that has work to do - that is what the floor is for. A host that needs a tighter disk bound - a high write rate paired with a small `WalRetention` - can lower it; `TimeSpan.Zero` (or any non-positive value) **disables** the scheduler entirely, restoring the historical caller-driven behaviour.
+A pass is retention housekeeping, not a latency-sensitive operation. Its cost scales with `trees x WalPartitions` storage reads (a head scan plus a trim per partition) and runs on every silo, so this ceiling is deliberately coarse to keep the **idle** storage cost low. Lowering it would only make a quiet tree poll more often, paying for passes that reclaim nothing, while buying no responsiveness on a tree that has work to do - that is what the floor is for. A host that needs a tighter disk bound - a high write rate paired with a small `WalRetention` - can lower it; `TimeSpan.Zero` (or any non-positive value) **disables** the scheduler entirely, restoring the historical caller-driven behaviour.
 
 The first pass is not run at silo start: it is staggered by [`WalGcStartupDelay`](#walgcstartupdelay), a random offset of half to one full stagger window (15 to 30 seconds by default), so the silo finishes activating before the scheduler adds scan/trim I/O and a rolling cluster restart does not align every silo's fan-out into a correlated I/O storm.
 
@@ -1779,6 +1800,8 @@ A **blocked** tree is the exception, and is also held at this floor. A pass that
 
 - **`cause="empty"`** - the tree registry was read successfully and holds no collectable tree. That is a correct observation of an idle silo rather than a fault, so this ladder relaxes all the way to [`WalGcInterval`](#walgcinterval): an empty host costs nothing, while one whose first tree is about to register still picks it up promptly.
 - **`cause="faulted"`** - the registry could not be read at all. This ladder is capped far lower, at five minutes clamped into `[WalGcMinInterval, WalGcInterval]`, because the wait a faulted pass picks **is the operator's blindness window**: the scheduler has learned nothing, so it cannot notice the fault clearing until it next tries. Sharing the quiet ceiling made that window up to a full `WalGcInterval` - an hour at stock defaults - during which a silo that had already recovered was indistinguishable from one that was dead (issue #3064). The cap bounds recovery without retrying hard: the enumeration that failed is a full key-range scan across every registry shard, so retrying it at the floor forever is how a transient fault becomes a storm.
+
+A pass that finds trees and schedules their ordinary per-tree cadences records `cause="scheduled"` at the floor instead, meaning no scheduler-wide backoff is in force. That arm is recorded on every healthy pass, so it is also what shows the series is deployed at all.
 
 Either ladder resets to the floor on the next pass that finds work, and the **faulted** ladder additionally resets on any pass whose enumeration merely succeeded - including one that found nothing. A registry that answered "nothing here" has proved it can be read, which is the only thing that ladder measures. Pair the backoff series with `orleans.lattice.wal.gc.scheduler_consecutive_faults`, which reports the current fault streak and returns to a measured zero on the first success.
 
@@ -1823,10 +1846,21 @@ Cross-cluster replication is configured by the
 full options reference - including `ReplicatedTrees`, `ReplicationPeers`,
 `ShipDoorbellEnabled`, the backoff triple, and the maintenance cadence
 knobs - lives on `LatticeReplicationOptions` and is documented in
+[Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#options-reference---latticereplicationoptions);
+the shipper and maintenance drivers those knobs tune are described in
 [Replication drivers](../lattice.replication/replication-drivers.md).
 Peer membership in particular has its own resolution model (topology
 seam vs. `ReplicationPeers` projection) covered in
 [Peer configuration](../lattice.replication/replication-drivers.md#peer-configuration-topology-vs-replicationpeers).
+
+`AddLatticeReplication` also supplies values for some options in this file:
+it mirrors the replication-side `ReplogPartitions` (onto `WalPartitions`),
+`WalMaxBatchEntries`, `WalMaxBatchBytes`, `WalMaxPendingBatches`,
+`WalStorageProvider`, and `WalRetention` onto the tree's `LatticeOptions`,
+but only when the replication-side value is set away from its own default and
+the core value is still at the core default, so a direct `LatticeOptions`
+override always wins. See
+[WAL and replog](../lattice.replication/configuration.md#wal-and-replog).
 
 The replication receiver also consumes this file's WAL-saturation options
 indirectly: with `AddLatticeReplication`, a receiver translates its local
@@ -1839,9 +1873,11 @@ documented in
 ## Materialised view options
 
 Materialised views are configured per view name on a separate options type,
-`LatticeViewOptions`, not on `LatticeOptions`. Set defaults or per-view overrides
-with `ConfigureLatticeView` (the view-name overload targets one view; the
-no-name overload sets the default applied to every view):
+`LatticeViewOptions`, not on `LatticeOptions`. Set a per-view override with
+`ConfigureLatticeView(viewName, ...)`. There is no no-name overload: each view
+resolves its options by its view name, so a default for every view goes through
+the standard options API as `siloBuilder.Services.ConfigureAll<LatticeViewOptions>(...)`
+(a plain `Configure<LatticeViewOptions>(...)` reaches only the unnamed instance):
 
 ```csharp verify
 siloBuilder.ConfigureLatticeView("adults", options =>
@@ -1868,9 +1904,9 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `MaxLagBudget` | 0 | Maximum committed-but-unapplied source entries before the view is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. Has no effect when `MaxLagBudget` is 0. |
 | `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. |
-| `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Must be within `[0, 1]` (validated at startup); the effective batch is clamped to `[1, BatchSize]`. |
+| `ThrottledBatchRatio` | 0.5 | Fraction of `BatchSize` drained per pass while the source is `Throttled`. Must be within `[0, 1]` (enforced by the options validator); the effective batch is clamped to `[1, BatchSize]`. |
 | `ThrottledPauseMs` | 50 | Milliseconds background drain ticks are skipped after a pass that saw a `Throttled` source. `<= 0` disables the deferral. |
-| `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Must be at least 1 (validated at startup); the effective batch is clamped to `BatchSize`. |
+| `SaturatedBatchSize` | 16 | Drip-feed batch drained per pass while the source is `Saturated`. Must be at least 1 (enforced by the options validator); the effective batch is clamped to `BatchSize`. |
 | `SaturatedPauseMs` | 500 | Milliseconds background drain ticks are skipped after a pass that saw a `Saturated` source. `<= 0` disables the deferral. |
 | `HistoryHybridFullValueWindow` | 5 minutes | Durable history views under `HistoryRetentionMode.Hybrid` only: the maximum apply-time age of a revision for which full LWW value bytes are kept; an older revision (drained from a backlog or a catch-up replay) is shaped to metadata only. A non-positive value degrades hybrid to metadata-only. See [History views](history-views.md). |
 
@@ -1878,16 +1914,117 @@ See [Materialised views](materialised-views.md) for the full behaviour of each
 option, including what registrations a view needs (`AddLattice` +
 `AddLatticeViews`, the latter folding in `AddWalCursorRegistry`).
 
+## Tag-index reconciliation options
+
+The background sweep that keeps each tag index consistent with the trees it
+covers is tuned on a separate options type, `LatticeTagIndexReconciliationOptions`,
+which each index resolves by its index name. Set a
+default for every index with `ConfigureLatticeTagIndexReconciliation(configure)`
+and a per-index override with
+`ConfigureLatticeTagIndexReconciliation(indexName, configure)`. The default form
+applies through `ConfigureAll`, so, as with `ConfigureLattice`, register it before
+any per-index override that should win over it:
+
+| Option | Type | Default | Meaning |
+|--------|------|---------|---------|
+| `Enabled` | `bool` | `true` | Whether the scheduled background sweep runs for the index; `false` unregisters its schedule. The on-demand reconcile call is unaffected. |
+| `Interval` | `TimeSpan` | 1 hour | Cadence between digest-gated sweeps. Must be positive (enforced by the options validator); a value below the 1-minute Orleans reminder minimum is clamped up to it. |
+| `ChunkSize` | `int` | 16 | Covered trees processed per phase-timer tick, bounding the work one tick performs. Must be at least 1 (enforced by the options validator). |
+| `ProbeOnly` | `bool` | `false` | Audit-only: the sweep probes and reports digest mismatches but never repairs them or advances the digest baseline. |
+
+See [Background reconciliation](api.md#background-reconciliation) for how the
+digest-gated sweep works.
+
+## Retry policy options
+
+`LatticeOptions.RetryPolicy` accepts any `ILatticeRetryPolicy`; the shipped
+`BoundedExponentialRetryPolicy` is tuned by `BoundedExponentialRetryPolicyOptions`.
+That type is not resolved through the options pattern.
+`AddLatticeRetryPolicy(configure)` builds one policy from it at the moment of the
+call and assigns that single instance to `RetryPolicy` for every tree, and
+`new BoundedExponentialRetryPolicy(options)` builds one for you to assign
+yourself. The values are captured when the policy is built, so later changes to
+the options instance have no effect, and an out-of-range value throws
+`ArgumentOutOfRangeException` from that call rather than at first use.
+
+| Option | Type | Default | Meaning |
+|--------|------|---------|---------|
+| `MaxAttempts` | `int` | 4 | Total attempts, including the first. Must be at least 1. |
+| `InitialDelay` | `TimeSpan` | 50 ms | Delay after the first failed attempt; each later delay doubles, up to `MaxDelay`. Must not be negative; `TimeSpan.Zero` retries without waiting. |
+| `MaxDelay` | `TimeSpan` | 2 seconds | Upper bound on any single delay. Must be at least `InitialDelay`. |
+| `RetryableExceptionClassifier` | `Func<Exception, bool>?` | `null` (every exception is retried) | When set, an exception the classifier rejects is rethrown immediately. A cancellation of the caller's token is never retried. |
+
+The policy wraps only the single-key and range mutations - `SetAsync` (with and
+without a TTL), `SetIfVersionAsync`, `GetOrSetAsync`, `DeleteAsync`,
+`ApplyCrdtDeltaAsync`, `DeleteRangeAsync` and `DeleteRangeWherePredicateAsync`;
+batch, atomic and bulk-load writes never enter it. It runs only for a mutation
+made inside a `LatticeIdempotencyContext` scope - without one there is no retry,
+whatever `RetryPolicy` holds - and when its budget is exhausted the original
+failure is rethrown with its stack trace. Because `AddLatticeRetryPolicy` assigns
+through `ConfigureAll`, a per-tree `ConfigureLattice(treeName, o => o.RetryPolicy = ...)`
+override wins only when it is registered after `AddLatticeRetryPolicy` (see
+[Per-tree overrides](#per-tree-overrides)). See [Retry policy](retry-policy.md)
+for the full model.
+
+## Compression dictionary training options
+
+Compression has no `LatticeOptions` knobs (see the note at the top of this
+page), but its opt-in auto-trained shared dictionary is tuned by
+`CompressionDictionaryTrainingOptions`. Like the retry options, this type is not
+resolved through the options pattern: `AddLatticeAutoTrainingCompressionDictionary(configure)`
+on the service collection captures one silo-wide instance at the moment of the
+call, validates it then - throwing `ArgumentOutOfRangeException` for a value
+outside the ranges below - and registers a single provider built from it. The
+replication package's `AddLatticeAutoSharedDictionary(configure)` takes the same
+options and forces `Enabled` on.
+
+| Option | Type | Default | Meaning |
+|--------|------|---------|---------|
+| `Enabled` | `bool` | `false` | Whether auto-training is active. While `false` the provider ignores observed payloads, trains nothing, resolves no dictionary id and emits no telemetry. |
+| `MaxSampleCount` | `int` | 1024 | Reservoir cap in samples; the oldest sample is evicted to admit a new one. Must be at least 1. |
+| `MaxReservoirBytes` | `long` | 8 MiB | Reservoir cap in total bytes; the oldest samples are evicted until the reservoir fits. Must be at least 1 and at least `MaxSampleBytes`. |
+| `MaxSampleBytes` | `int` | 64 KiB | Largest payload admitted to the reservoir; a larger one is ignored rather than truncated. Must be at least 1. |
+| `SamplingRate` | `double` | 1.0 | Probability that an observed payload is admitted. Must be in `[0, 1]`; `NaN` is rejected. |
+| `DictionaryCapacityBytes` | `int` | 112 KiB | Largest trained dictionary; also caps the footprint of every retained version. Must be at least 1. |
+| `MinSamplesToTrain` | `int` | 100 | Samples required before a training pass runs; a pass requested below it is skipped rather than throwing. Must be at least 1. |
+| `MinTrainingInterval` | `TimeSpan` | 5 minutes | Minimum interval since the previous training attempt; a pass requested inside it is skipped. `TimeSpan.Zero` disables the cadence gate. Must not be negative. |
+| `RetainedVersionCount` | `int` | 4 | Dictionary versions kept resolvable after a roll-over, including the current one. Must be at least 1. |
+| `FirstDictionaryId` | `uint` | 1 | Id of the first trained dictionary; later versions count up from it. Must not be `0`, which is reserved for "no dictionary". |
+
+See [Auto-trained dictionaries](compression.md#auto-trained-dictionaries) for how
+sampling, training and roll-over behave.
+
+## Per-call option types
+
+`WalMoveOptions` is passed to each `ILatticeAdmin.ExecuteWalMoveAsync` call
+rather than registered as silo configuration; a `null` argument uses
+`WalMoveOptions.Default`.
+
+| Option | Type | Default | Meaning |
+|--------|------|---------|---------|
+| `QuiesceLease` | `TimeSpan` | 30 seconds | How long the source partition stays fenced while the move copies its tail and flips the placement pin; if the move fails, the fence self-heals after this lease. A non-positive value uses the default. |
+| `CopyPageSize` | `int` | 256 | Entries copied per page from source to target. A non-positive value uses the default. |
+| `VerifyAfterCopy` | `bool` | `true` in `WalMoveOptions.Default` | Whether the move checks that the target tail matches the copied source range before flipping the pin. It is a plain `bool`, so `new WalMoveOptions { ... }` leaves it `false`; start from `WalMoveOptions.Default with { ... }` instead. |
+| `MaxConcurrentPartitionMoves` | `int` | 1 | Partitions a batch move copies in parallel; ignored by the single-partition overload. A non-positive value uses the default. |
+
+See [Moving a partition to another account](wal-storage-providers.md#moving-a-partition-to-another-account)
+for the move itself.
+
 ## Full Example
 
 ```csharp verify
-var builder = WebApplication.CreateBuilder(args);
+using Azure.Storage.Blobs;
+
+var connectionString = "UseDevelopmentStorage=true";
+var builder = WebApplication.CreateBuilder();
 
 builder.UseOrleans(silo =>
 {
     silo.UseLocalhostClustering();
 
-    // Register Lattice with Azure Blob storage
+    // Register Lattice with Azure Blob grain storage. The write-ahead log stays
+    // in memory unless a durable WAL provider is registered as well - see
+    // wal-storage-providers.md.
     silo.AddLattice((silo, name) =>
         silo.AddAzureBlobGrainStorage(name, options =>
         {
@@ -1914,3 +2051,4 @@ builder.UseOrleans(silo =>
         o.TombstoneGracePeriod = Timeout.InfiniteTimeSpan;
     });
 });
+```

@@ -538,8 +538,8 @@ public static class RepoContextHostBuilder
         builder.Services.AddHostedService<RepoContextStartupService>();
 
         // State the configuration this process actually resolved, once, at startup. The
-        // deployment's real settings arrive from an untracked compose override, so reading
-        // the repository does not tell you what the container runs - and the only reason
+        // deployment's real settings arrive from the per-host .env and any machine-local
+        // compose override, so reading the repository does not tell you what the container runs - and the only reason
         // that divergence was ever noticed is that one subsystem already reports its own
         // resolved cadence. This generalises that to every supplied variable plus the
         // runtime facts (ProcessorCount) that are not variables at all. Observability

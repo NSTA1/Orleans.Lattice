@@ -30,7 +30,9 @@ namespace Orleans.Lattice.Explorer.Web;
 /// Registration entry point for the embeddable Orleans.Lattice Explorer web head.
 /// A single <see cref="AddLatticeExplorerWeb(IServiceCollection, Action{LatticeExplorerWebOptions})"/>
 /// call wires up everything the standalone head registers, so a consumer can
-/// co-host the read-only explorer inside their own ASP.NET application.
+/// co-host the Explorer inside their own ASP.NET application. Data browsing is
+/// read-only; capability-gated areas such as Backups, Access, Tenants, and Schema
+/// can perform administration when the corresponding plugin/facade is available.
 /// </summary>
 public static class LatticeExplorerWebServiceCollectionExtensions
 {

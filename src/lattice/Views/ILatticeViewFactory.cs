@@ -102,7 +102,7 @@ public interface ILatticeViewFactory
     /// Deletes the materialised view named <paramref name="viewName"/>: stops and
     /// decommissions its maintainer (unregistering the keepalive reminder,
     /// releasing the source WAL pin, and clearing the durable checkpoint), deletes
-    /// every backing <c>view-{viewName}</c> / <c>view-{viewName}#g{N}</c>
+    /// every backing <c>view-{viewName}</c> / <c>view-{viewName}~g{N}</c>
     /// generation through the standard tree-deletion machinery, and removes the
     /// view's catalog entry and durable runtime registration. After deletion the
     /// view name is free to be re-created and no orphaned reminder, checkpoint, or

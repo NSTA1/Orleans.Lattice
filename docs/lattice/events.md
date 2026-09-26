@@ -49,6 +49,10 @@ Non-saga writes leave `OperationId` as `null`.
 
 The strict atomic-visibility cleanup avoids the older pattern of emitting reverse compensating writes - which would have generated additional `Set` / `Delete` events tagged with the same `OperationId` - because compensation writes would themselves become visible and reorder against concurrent reads. Subscribers that need stronger durability semantics (e.g. "only act on events for sagas that actually committed") should buffer per-key events keyed by `OperationId` and discard the buffer if `AtomicWriteCompleted` does not arrive within a bounded window.
 
+### A resize also publishes events for its internal steps
+
+`ResizeAsync` copies the tree through an internal online snapshot of its current physical tree and, after the alias swap, soft-deletes that physical tree. Those steps publish their own events, stamped with the old physical tree's id rather than the logical tree id: `SnapshotCompleted` when the copy finishes, `TreeDeleted` when the old physical tree is soft-deleted, and `TreePurged` when it is purged once `LatticeOptions.SoftDeleteDuration` has elapsed. `ResizeCompleted` itself is published under the logical tree id. For a tree that has never been resized, its physical tree id is its own id, so a subscriber to that tree receives `SnapshotCompleted` and `TreeDeleted` before `ResizeCompleted`, and `TreePurged` later; the deleted and purged tree in those events is the retired physical copy. A later resize publishes its internal events under the previous resize's physical tree id, a stream the logical tree's subscribers do not receive. `UndoResizeAsync` likewise publishes `TreeRecovered` for the old physical tree when it had already been soft-deleted, and `TreeDeleted` for the discarded copy.
+
 ### Operations that deliberately do not emit events
 
 The following APIs intentionally skip event publication to keep their bulk I/O profile predictable:
@@ -106,7 +110,7 @@ await handle.UnsubscribeAsync();
 
 ### Missing provider
 
-If `PublishEvents = true` but no matching `IStreamProvider` is registered on the cluster client, `SubscribeToEventsAsync` throws `InvalidOperationException` with an actionable message ("register one via clientBuilder.AddMemoryStreams(...) (or the Event Hub / Azure Queue equivalent), and ensure every silo hosting Lattice grains has the same provider registered"). This is the one hard-fail in the pipeline - publication itself continues to noop, but subscribing on a mis-configured client is treated as a programming error.
+If no `IStreamProvider` with the requested name is registered on the cluster client, `SubscribeToEventsAsync` throws `InvalidOperationException` with an actionable message ("No Orleans stream provider named '{providerName}' is registered on the cluster client. Register one via clientBuilder.AddMemoryStreams("{providerName}") (or the Event Hub / Azure Queue equivalent) and ensure every silo hosting Lattice grains has the same provider registered."), carrying the provider lookup failure as its inner exception. The check runs on the client whatever the silos' `PublishEvents` setting. This is the one hard-fail in the pipeline - publication itself continues to noop, but subscribing on a mis-configured client is treated as a programming error.
 
 ## Metrics
 

@@ -83,8 +83,8 @@
 
   /* Semantic roles for callouts */
   --lt-info: #2234b0;
-  --lt-warning: #8a5300;          /* 6.1:1 */
-  --lt-danger: #b42318;           /* 6.3:1 */
+  --lt-warning: #8a5300;          /* 6.3:1 */
+  --lt-danger: #b42318;           /* 6.6:1 */
   --lt-success: #1d7433;          /* 5.8:1 */
 
   /* Syntax (highlight.js token roles) */

@@ -96,7 +96,8 @@ three:
 
 A source that yields a key for a grain with no persisted state is harmless: the
 grain is visited, contributes nothing, and is revisited by a later rebuild
-rather than being recorded as indexed.
+rather than being recorded as indexed. The crawl's own `Enrolled` tally and the
+`backfill` series of `grains_enrolled` still count the visit.
 
 ### The optional count
 

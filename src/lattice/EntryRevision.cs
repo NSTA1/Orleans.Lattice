@@ -84,9 +84,8 @@ public readonly record struct EntryRevision
     /// <summary>
     /// The <see cref="HistoryRetentionMode"/> the maintainer applied when it wrote
     /// the stored revision, recording why a given revision does or does not carry
-    /// value bytes. Always <see cref="HistoryRetentionMode.FullValue"/> for a
-    /// revision read from the write-ahead-log fallback window (where the live value
-    /// bytes are still present).
+    /// value bytes. Revisions read from the write-ahead-log fallback window stamp
+    /// the tree's configured retention mode.
     /// </summary>
     [Id(10)] public HistoryRetentionMode RetentionShape { get; init; }
 

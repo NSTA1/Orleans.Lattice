@@ -56,7 +56,7 @@ Internally, `ReshardAsync` routes through a dedicated per-tree reshard coordinat
 2. **Migrating** - on each 2-second tick, read the current `ShardMap`, count virtual-slot ownership per physical shard, filter to eligible sources (owns >= 2 virtual slots and not already splitting), and dispatch up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent online shard-split operations against the largest-slot owners. Each underlying split atomically grows the map by one distinct physical shard via its own shadow-write + swap + reject phases, inheriting all of that mechanism's online-safety guarantees. Repeats until the map contains at least the target number of distinct physical shards.
 3. **Complete** - re-pin the registry's `ShardCount` to the target, clear in-progress state, publish a reshard-completed tree event (when tree events are enabled), prompt a reconcile of any tag index covering the tree, unregister the keepalive, and deactivate.
 
-Because each underlying split is itself an independent online operation, the tree never loses availability. Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard; after the split's swap phase, the source enters a `StaleShardRoutingException`-emitting reject state and the client retries against the new owner.
+Because each underlying split is itself an independent online operation, the tree never loses availability. Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard; from the split's swap phase onwards, the source is in a `StaleShardRoutingException`-emitting reject state and the tree's router retries against the new owner.
 
 ## Interaction with the autonomic split monitor
 
@@ -87,6 +87,10 @@ Recommended ranges for steady-state operation:
 | > 4096 | Not supported in a single tree - use multiple trees instead. |
 
 Splits halve the source shard's virtual-slot ownership. Starting from `ShardCount = 64` on the default map, each shard owns `4096 / 64 = 64` virtual slots and can be split 6 times (64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1) before hitting the `>= 2 slots` eligibility floor, so the full 4096 ceiling is reachable by the reshard path.
+
+## Telemetry
+
+Four instruments on the `orleans.lattice` meter track reshards, each tagged `tree` and `tenant`: `orleans.lattice.shard_root.reshard.initiated` and `orleans.lattice.shard_root.reshard.completed` count reshards that started and finished (the empty-tree fast path counts on both), `orleans.lattice.shard_root.reshard.rejected` counts requests refused before a coordinator started, with a `reason` tag (`argument_out_of_range_min`, `argument_out_of_range_max`, `already_in_progress`, `shrink_unsupported`, `resize_in_flight`, `state_write_failed`), and the `orleans.lattice.shard_root.reshard.in_flight` histogram records `0` or `1` at every `ReshardAsync` entry. See [Metrics](metrics.md) for the full schema.
 
 ## Limitations and future work
 

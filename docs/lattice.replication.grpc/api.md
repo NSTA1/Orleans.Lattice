@@ -50,7 +50,7 @@ On the receiving ASP.NET Core pipeline, call `MapLatticeReplicationGrpc` on the 
 | `MapLatticeReplicationGrpc` | extension method | Maps inbound replication routes on an ASP.NET Core endpoint route builder and returns the builder for chaining. |
 | `LatticeReplicationGrpcOptions` | sealed class | Configures peer endpoints, plaintext policy, channel customization, and local origin header override. |
 
-`AddLatticeReplicationGrpc` is idempotent for the public transport seams: it replaces the default no-op `IReplicationTransport` installed by `AddLatticeReplication` with the gRPC binding and uses the same peer channel cache for related outbound replication traffic.
+`AddLatticeReplicationGrpc` is idempotent for the public transport seams: it replaces the default no-op `IReplicationTransport` installed by `AddLatticeReplication` with the gRPC binding, and projects the same `Peers` map and hardened channel defaults onto every related outbound transport. The live-push seam and the peer-probe seam (`IReplicationDigestProbeTransport`: digest, Merkle-walk, and high-water-mark probes, the content-manifest exchange, and the dictionary pull) share one per-peer channel cache; snapshot bootstrap and the saga control channel each keep their own per-peer channel.
 
 ## Transport seam
 
@@ -79,14 +79,28 @@ See [Configuration](configuration.md).
 
 ## Endpoint mapping
 
-`MapLatticeReplicationGrpc` exposes the receiver routes for live push and related replication traffic. A host that only sends to peers can omit endpoint mapping. A host that only receives can call `AddLatticeReplicationGrpc` with an empty `Peers` map and still map the endpoint.
+`MapLatticeReplicationGrpc` exposes the receiver routes for live push and related replication traffic as three code-first gRPC services. There is no `.proto`: the push request is written by the replication batch encoder (the `ReplicationBatchEnvelope` wire format described in [Wire Format](../lattice.replication/wire-format.md)), and every other message is Orleans-serialized.
+
+| Service | RPC | Kind | Purpose |
+|---|---|---|---|
+| `orleans.lattice.replication.LatticeReplication` | `Push` | unary | Live push: one `ReplicationBatchEnvelope` in, one `ReplicationAck` out. |
+| `orleans.lattice.replication.LatticeReplication` | `ProbeDigest` | unary | Anti-entropy digest probe. |
+| `orleans.lattice.replication.LatticeReplication` | `ProbeMerkleWalk` | unary | Anti-entropy Merkle-walk digest over a key range. |
+| `orleans.lattice.replication.LatticeReplication` | `GetPeerHighWaterMark` | unary | The peer's applied watermark for a tree and origin, bounding leaf re-replay. |
+| `orleans.lattice.replication.LatticeReplication` | `ExchangeContentManifest` | unary | Content-hash payload-elision manifest exchange. |
+| `orleans.lattice.replication.LatticeReplication` | `PullCompressionDictionary` | unary | Shared compression-dictionary pull. |
+| `orleans.lattice.replication.LatticeRemoteSnapshot` | `GetMetadata` | unary | Snapshot-bootstrap cut-point metadata. |
+| `orleans.lattice.replication.LatticeRemoteSnapshot` | `RequestSnapshot` | server-streaming | The snapshot entries at that cut-point. |
+| `orleans.lattice.replication.LatticeSaga` | `Prepare`, `Commit`, `Abort`, `GetStatus` | unary | Cross-cluster saga control. |
+
+A host that only sends to peers can omit endpoint mapping. A host that only receives can call `AddLatticeReplicationGrpc` with an empty `Peers` map and still map the endpoint.
 
 ## Security
 
-The binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication and custom secret sources are part of the replication security surface; see [Transport Security](../lattice.replication/transport-security.md).
+The binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication and custom secret sources are part of the replication security surface; while `LatticeReplicationSecurityOptions.RequireAuthentication` is on (the default), the receiver-side shared-secret check covers every RPC in the endpoint table above and no other gRPC service on the host. See [Transport Security](../lattice.replication/transport-security.md).
 
 ## Observability
 
-Successful and failed sends are observed through the replication metrics surface. Per-peer lag, consecutive errors, entries behind, and last contact are owned by the replication shipper; the gRPC binding contributes the send outcome and duration (`orleans.lattice.replication.ship.duration`, tagged `outcome` = `ok` / `error`) and the shipped-entry count (`orleans.lattice.replication.wal.entries_shipped`) at the `IReplicationTransport` boundary. See [Observability](../lattice.replication/observability.md).
+Successful and failed sends are observed through the replication metrics surface. Per-peer lag, consecutive errors, entries behind, and last contact are owned by the replication shipper; the gRPC binding contributes the send outcome and duration (`orleans.lattice.replication.ship.duration`, tagged `outcome` = `ok` when the peer returns an ack - accepted or not - and `error` when the gRPC call throws) and the shipped-entry count (`orleans.lattice.replication.wal.entries_shipped`, added when the ack for a non-empty batch returns) at the `IReplicationTransport` boundary. A send that fails before the call is issued - an unknown peer, or a non-`https` endpoint without the plaintext opt-in - records neither. See [Observability](../lattice.replication/observability.md).
 
 The package also publishes its own meter, `orleans.lattice.replication.grpc`, with one instrument: the `orleans.lattice.replication.grpc.insecure_channel` counter (unit `{channel}`, tagged `peer`, `transport` = `push` / `snapshot` / `saga_control`, and `tenant` = `_platform_`), incremented - alongside a warning log - whenever `AllowPlaintextEndpoints` causes a channel to be built against a non-`https` endpoint. Subscribe to it with `AddMeter("orleans.lattice.replication.grpc")`; the bundled Replication Transport (gRPC) dashboard charts it.

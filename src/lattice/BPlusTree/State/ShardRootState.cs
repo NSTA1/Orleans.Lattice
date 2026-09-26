@@ -77,9 +77,9 @@ internal sealed class ShardRootState
     [Id(8)] public ShardSplitInProgress? SplitInProgress { get; set; }
 
     /// <summary>
-    /// Virtual slots that this shard has permanently split away to other
-    /// physical shards (key = virtual slot, value = new owner shard index).
-    /// Accumulated on every successful split completion; never cleared.
+    /// Virtual slots that this shard has split away to other physical shards
+    /// (key = virtual slot, value = new owner shard index). Accumulated on split
+    /// completion and reduced again when a later consolidation reclaims slots.
     /// <para>
     /// Used by the hot-path reject gate after <see cref="SplitInProgress"/>
     /// has been cleared so that stale <c>LatticeGrain</c> activations whose

@@ -176,5 +176,7 @@ authentication credential never flows through this seam.
 - `ExplorerAccessTokenSource` - the proactive, single-flight token-refresh engine.
 - `LatticeConnectionSettings.TransportHeaders` - non-secret headers attached to
   every call regardless of the sign-in state (for example an origin-lock routing
-  header), seedable via `LATTICE_EXPLORER_TRANSPORT_HEADERS`.
+  header), seedable via `LATTICE_EXPLORER_TRANSPORT_HEADERS`. Every
+  `LatticeConnectionSettings` member, with its type and default, is listed in
+  [Configuration](configuration.md#latticeconnectionsettings).
 - [Adding a custom auth method](adding-a-custom-auth-method.md)

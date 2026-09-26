@@ -15,11 +15,11 @@ not duplicate the design; it tells you how to run the kit.
 
 | Folder | Contents |
 |--------|----------|
-| [`bicep/`](bicep/) | `main.bicep` orchestrator, the per-concern modules (compute, storage, networking, vnet, privatedns, observability, frontdoor), `bootstrap.bicep` (registry pre-build seam), and `entra/` (the Microsoft Graph extension module + its scoped `bicepconfig.json`). |
-| [`hosts/`](hosts/) | The three container host projects - Silo, MCP, and Explorer - each with a chiselled, non-root Dockerfile. They reference the published `Orleans.Lattice` NuGet packages. See [`hosts/README.md`](hosts/README.md) for the full host configuration surface. |
+| [`bicep/`](bicep/) | `main.bicep` orchestrator, the per-concern modules (compute, storage, networking, vnet, privatedns, observability, frontdoor), `bootstrap.bicep` (registry pre-build seam), and `entra/` (the Microsoft Graph extension module + its scoped `bicepconfig.json`), plus example parameter sets (`main.bicepparam` and `params/`). |
+| [`hosts/`](hosts/) | The three container host projects - Silo, MCP, and Explorer - each with a chiselled, non-root Dockerfile. They reference the published `Orleans.Lattice` NuGet packages, plus the shared `Common/` hosting library (the Front Door origin lock and probe helpers, tested in `Common.Tests/`). See [`hosts/README.md`](hosts/README.md) for the full host configuration surface. |
 | [`deploy/`](deploy/) | `Deploy-ReferenceArchitecture.ps1`, the single idempotent orchestrator, and [`deploy/README.md`](deploy/README.md) documenting its internals. |
 | [`local/`](local/) | A Docker Compose harness that stands the whole estate up on one machine for development. See [`local/README.md`](local/README.md). |
-| [`local-dev/`](local-dev/) | A two-region variant of the local harness that builds every head straight from `src/**` by project reference (no NuGet), runs two network-isolated clusters with per-region storage, and swaps Entra for per-request dev identities under real deny-by-default. See [`local-dev/README.md`](local-dev/README.md). |
+| [`local-dev/`](local-dev/) | A two-region variant of the local harness that builds every head straight from `src/**` by project reference (no published Orleans.Lattice packages), runs two network-isolated clusters with per-region primary storage and one shared backup sink, and swaps Entra for per-request dev identities under real deny-by-default. See [`local-dev/README.md`](local-dev/README.md). |
 
 ## Prerequisites
 
@@ -256,16 +256,27 @@ immediately under the same names.
 - The single backup-primary region's silo runs the backup scheduler and writes
   full and incremental backup chains to the shared global Azure Blob backup sink.
   Standby regions have restore-only (read) access to the sink.
-- To restore, follow the `Orleans.Lattice.Backup.AzureBlob` restore procedure
-  against the backup container; HLC/LWW causal ordering means a restored value
-  never overwrites a causally-newer live value, so a cold restore into a live
-  active-active estate is safe.
+- A restore is fleet-wide for a replicated tree - every tree in
+  `-ReplicationTrees`, plus any tree whose replication is enabled at runtime. It
+  is promoted to an all-or-nothing coordinated restore across every current
+  replication peer, whatever restore mode is requested: it refuses to start
+  unless every peer is reachable, and on commit every region's tree cuts over
+  together to the backup's point in time, replacing live data written after the
+  backup (each region's pre-restore physical tree is retained). Only an in-place
+  restore into a tree that is not replicated on the restoring cluster merges by
+  per-key HLC/LWW, where a restored value never overwrites a causally newer live
+  value. See [Coordinated multi-cluster restore](../docs/lattice.replication/coordinated-restore.md)
+  and the backup package's [disaster recovery guide](../docs/lattice.backup/disaster-recovery.md).
 
 ### Failover and disaster recovery
 
 - Every region is a full read-write peer, so a regional outage is absorbed by the
   surviving regions with no promotion step: Azure Front Door latency-routes
-  clients to the nearest healthy region and fails over to the next-nearest.
+  clients to the nearest healthy region and fails over to the next-nearest. The
+  Explorer console is the one exception: its Blazor Server circuit must stay on
+  one replica, so Front Door pins every operator to the first region's Explorer
+  and fails over to a standby region (with a fresh circuit) only if that region
+  goes down.
 - The only single-region role is the backup primary. If that region is lost,
   designate a new primary by re-running the deployer with a different
   `-BackupPrimaryRegionCode`; the replication key and data are unaffected.
@@ -327,9 +338,12 @@ rest - no `Authorization` header:
 }
 ```
 
-Visual Studio Code, Visual Studio, and GitHub Copilot sign in with their own
-pre-authorized first-party Entra client, so no client id is needed; a client that
-prompts for one can use the Visual Studio Code id
+`bicep/entra/entra.bicep` pre-authorizes the Visual Studio Code, Visual Studio,
+and Azure CLI first-party clients for the silo scope by default (its
+`preAuthorizedMcpClientIds` parameter), so those clients sign in with no client id
+to supply and no consent prompt; add another client's id to that parameter to
+pre-authorize it too (for example a GitHub Copilot app id captured from a real
+sign-in). A client that prompts for a client id can use the Visual Studio Code id
 `aebc6443-996d-45c2-90f0-388ff96faa56`. A signed-in caller sees no tool groups -
 only the `lattice_capabilities` meta-tool - until the security administrator
 grants their Entra object id (`oid`) access on the Explorer console Access tab;
@@ -396,18 +410,21 @@ $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 Notes and gotchas:
 
 - **Tool arguments use `treeId`.** The data and state tools name their tree
-  parameter `treeId` (not `treeName`); the read-range tool's optional bounds
-  (`startInclusive`, `endExclusive`, `continuationToken`) are declared in the tool
-  schema, so a hand-written call must send them (as `null`). A schema-driven client
-  fills them in automatically.
+  parameter `treeId` (not `treeName`). The read-range tool's (`lattice_data_read_range`)
+  bounds (`startInclusive`, `endExclusive`), `pageSize`, and `continuationToken`
+  are optional parameters, left out of the schema's `required` list, so a
+  hand-written call may omit them.
 - **Token lifetime.** An Entra access token expires in about an hour. Re-mint and
   refresh the `Authorization` header before it lapses (automation should acquire a
   fresh token per session).
-- **Region round-robin and explicit targeting.** Front Door load-balances each
-  request across the regional origins with no affinity. The config-plane grants and
-  telemetry are symmetric across regions (the auth tree is replicated), but a
-  data-plane tree written in one region is not visible to a read routed to another
-  until replication converges it. The MCP head is wired for **cross-region
+- **Per-request routing and explicit targeting.** Front Door routes each request
+  independently, with no session affinity: to the lowest-latency healthy region,
+  spreading requests across every region within 50 ms of it, so consecutive calls
+  can land in different regions. The config-plane grants are symmetric across
+  regions (the auth tree is replicated), but telemetry is per region (each head
+  queries its own region's managed Prometheus), and a data-plane tree written in
+  one region is not visible to a read routed to another until replication
+  converges it. The MCP head is wired for **cross-region
   targeting**, so you do not need to bypass Front Door for a deterministic
   single-region check: call `lattice_list_regions` to enumerate the estate's
   regions (each region's id, cluster id, and per-facade reachability), then pass an
@@ -515,10 +532,13 @@ For a **two-region** topology - to exercise cross-cluster replication and
 differentiated per-identity authorization on one machine - use the
 [`local-dev/`](local-dev/) harness instead. It mirrors `local/` but differs in four
 deliberate ways: every head builds directly from `src/**` by project reference, so the
-stack always reflects your working tree with no NuGet restore or pack step; it stands
-up two network-isolated regions bridged only by the silo-to-silo replication seam;
-each region gets its own isolated Azurite (primary plus a dedicated backup sink); and
-it replaces Entra with hand-crafted per-request dev identities enforced under real
+stack always reflects your working tree with no pack or publish step (third-party
+dependencies still restore from NuGet); it stands up two network-isolated regions
+bridged only by two silo-only seams, one for replication and one to a single shared
+backup sink; each region gets its own isolated Azurite primary storage, while both
+share that one backup sink (a coordinated restore of a replicated tree needs every
+cluster to read the same backup); and it replaces Entra with hand-crafted
+per-request dev identities enforced under real
 deny-by-default, so an agent can act as any of several differentiated identities by
 setting a bearer token. See [`local-dev/README.md`](local-dev/README.md).
 

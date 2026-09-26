@@ -674,7 +674,8 @@ public sealed class AzureTableWalStorageOptions
     /// <c>orleans.lattice.provider.phase1.transient_retries</c>.
     /// </para>
     /// <para>
-    /// Must be non-negative.
+    /// Negative configured values are clamped to zero by the provider, disabling
+    /// additional transient retries.
     /// </para>
     /// </summary>
     public int PhaseOneTransientRetryMaxAttempts { get; set; } = DefaultPhaseOneTransientRetryMaxAttempts;

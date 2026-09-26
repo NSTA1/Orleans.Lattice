@@ -22,8 +22,7 @@ namespace Orleans.Lattice.Auth;
 /// <para>
 /// The compiled-snapshot <c>epoch</c>, <c>age</c> and <c>subjects</c> gauges are
 /// <see cref="ObservableGauge{T}"/> instruments backed by the live snapshot
-/// maintainers (see <see cref="AuthSnapshotGaugeRegistry"/>); their measurement
-/// callbacks run only on scrape.
+/// maintainer registry; their measurement callbacks run only on scrape.
 /// </para>
 /// </remarks>
 public static class LatticeAuthMetrics

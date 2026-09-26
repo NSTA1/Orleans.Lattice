@@ -37,7 +37,8 @@ does not exist.
 symbol, content, cross-reference, session and vector trees and **preserves the
 memory tree outright**. There is no window and nothing to restore afterwards -
 the memory records are never touched. The repository stays registered and stays
-listed by `repocontext_list_repos`, reporting no ingest and no file count, which
+listed by `repocontext_list_repos`, reporting no ingest, no file count, and no indexed
+commit, which
 is exactly its state; a subsequent `repocontext_add_repo` rebuilds the index from
 the working files.
 
@@ -82,7 +83,7 @@ the host will:
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | unset | Directory the archive is written to. **Unset disables the whole mechanism**, so it is opt-in and a host that sets nothing behaves exactly as before. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. Values below 30 are raised to 30, so a misconfiguration cannot turn the exporter into a busy loop against the store. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores when the store holds no memory at all, or when its restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores and leaves the archive write-only. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores when the store holds no memory at all, or when its restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores and leaves the archive write-only. `none` and `false` are also accepted for `off`, and `on-empty` for `auto`; any other value falls back to `auto`. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60 seconds. It is deliberately a fraction of the container's stop grace period, which the drain also needs. |
 
 `auto` is the useful default because it heals exactly the case this exists for -

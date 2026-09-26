@@ -63,7 +63,11 @@ The scaling-signal computer reduces the compute axis to one replica-demand scala
    scale-out without three half-loaded dimensions masquerading as one hot one.
    Multiplying by the current replica count expresses demand in replica-units -
    if every replica is at pressure `p`, the cluster needs about `p * replicas`
-   replicas' worth of capacity.
+   replicas' worth of capacity. Because each dimension is clamped to `1.0`, the
+   scalar cannot exceed the current replica count - a saturated pool reads
+   exactly its own size - so an autoscaler adds replicas only by targeting a
+   per-replica pressure below `1.0` (see
+   [the custom scale rule](keda-aca.md#the-custom-scale-rule)).
 2. **Asymmetric smoothing.** Scale-out is fast-attack: when the raw scalar rises
    the computer snaps to it immediately and re-baselines the EWMA. Scale-in is
    slow-release: a falling scalar is only allowed to descend through an

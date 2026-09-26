@@ -126,8 +126,8 @@ Resolved per index through `IOptionsMonitor<GrainIndexOptions>.Get(indexName)`.
 |---|---|---|
 | `TreeName` | `__grainindex/<name>` | The lattice tree backing the index. Validated to stay inside the reserved prefix. |
 | `AllowReplication` | `false` | Whether the index's tree may replicate across clusters. |
-| `BackfillBatchSize` | `256` | Grains visited per backfill pass. Must be at least 1. |
-| `BackfillInterval` | 1 second | Pause between backfill passes. Must be greater than zero. |
+| `BackfillBatchSize` | `256` (`DefaultBackfillBatchSize`) | Grains visited per backfill pass. Must be at least 1. |
+| `BackfillInterval` | 1 second (`DefaultBackfillInterval`) | Pause between backfill passes. Must be greater than zero. |
 | `BackfillEnabled` | `true` | Whether *this host* schedules the crawl. Switching it off leaves the checkpoint durable and the control primitives working; it only stops this host driving passes. |
 | `DriftPolicy` | `Reject` | What silo start does when the declaration has drifted on a breaking field. |
 | `ProjectionMode` | `Synchronous` | When entries are published relative to the grain's own state write. |
@@ -151,8 +151,8 @@ deferred in `Eventual` mode. It is configured for the whole silo with
 | Option | Default | What it controls |
 |---|---|---|
 | `Enabled` | `true` | Whether this silo drains pending projections in the background. Switching it off still records them; it only stops this silo retrying them. |
-| `RetryInterval` | 5 seconds | The pause between drain passes, which bounds how long an index lags a failed or deferred write. A non-positive value falls back to the 5-second default. |
-| `MaxBatchSize` | `256` | The most pending entries one drain pass visits before yielding to the next pass. A value below 1 is treated as 1. |
+| `RetryInterval` | 5 seconds (`DefaultRetryInterval`) | The pause between drain passes, which bounds how long an index lags a failed or deferred write. A non-positive value falls back to the 5-second default. |
+| `MaxBatchSize` | `256` (`DefaultMaxBatchSize`) | The most pending entries one drain pass visits before yielding to the next pass. A value below 1 is treated as 1. |
 
 See [The outbox](architecture.md#the-outbox) for what writes a marker and what
 clears it.

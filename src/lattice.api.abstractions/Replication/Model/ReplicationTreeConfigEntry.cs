@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.Replication;
 /// against - the runtime config tree and the static deployment-time
 /// replicated-tree map - into the facts an operator surface needs: whether the
 /// tree is enrolled, the merge mode in force, whether that mode is currently
-/// ambiguous (so shipping is paused fail-closed), and which source put it in
+/// ambiguous (so receivers fail closed on that tree), and which source put it in
 /// force.
 /// </summary>
 [GenerateSerializer]
@@ -24,8 +24,8 @@ public sealed record ReplicationTreeConfigEntry
     /// has been assigned or the mode is ambiguous.
     /// </param>
     /// <param name="ambiguous">
-    /// Whether the tree's merge-mode register carries more than one live value,
-    /// so shipping is paused fail-closed until an operator resolves it.
+    /// Whether the tree's merge-mode register carries more than one live value, so
+    /// the resolver returns no mode until an operator resolves it.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
     public ReplicationTreeConfigEntry(
@@ -46,11 +46,11 @@ public sealed record ReplicationTreeConfigEntry
 
     /// <summary>
     /// <c>true</c> when the tree is <b>effectively enrolled</b>, i.e. the host
-    /// admits its mutations for shipping. That is the runtime enablement flag
-    /// (at least one live enable dot and no surviving disable dot) when the
-    /// runtime entry is in force, and always <c>true</c> for a tree the static
-    /// deployment map declares - the static map is a floor, so a runtime disable
-    /// does not stop a statically declared tree.
+    /// admits its mutations for shipping when the producer consults this projection.
+    /// For an ambiguous runtime entry this reports the runtime enablement flag while <see cref="Mode"/> is
+    /// <c>null</c>; otherwise it is true for
+    /// an unambiguous runtime enrollment or for a tree the static deployment map
+    /// declares as the fallback floor.
     /// </summary>
     [Id(1)] public bool Enabled { get; init; }
 
@@ -64,8 +64,8 @@ public sealed record ReplicationTreeConfigEntry
     /// <summary>
     /// <c>true</c> when the tree's merge-mode register carries more than one
     /// live value, i.e. concurrent clusters assigned divergent modes that have
-    /// not been reconciled. While this holds the resolver fails closed and
-    /// pauses shipping the tree until an operator disables then re-enables it.
+    /// not been reconciled. While this holds the resolver returns no mode; active
+    /// shippers are not torn down and a peer with no local mode drops what they ship.
     /// Ambiguity wins over a static declaration, exactly as it does on the
     /// commit path.
     /// </summary>

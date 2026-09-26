@@ -24,7 +24,7 @@ namespace Orleans.Lattice;
 /// same silo activation can succeed once the regime clears.
 /// </para>
 /// <para>
-/// <b>Sources.</b> Surfaces from three distinct saturation failure
+/// <b>Sources.</b> Surfaces from four distinct saturation failure
 /// shapes that share the same operational meaning ("this tree's
 /// storage layer is back-pressured; the operation was refused"):
 /// </para>

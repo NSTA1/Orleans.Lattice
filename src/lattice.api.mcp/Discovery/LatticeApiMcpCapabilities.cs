@@ -2,7 +2,7 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The permission-scoped capability snapshot returned by the
-/// <c>lattice_capabilities</c> meta-tool: which of the four facade groups the
+/// <c>lattice_capabilities</c> meta-tool: which of the configured facade groups the
 /// <b>current authenticated caller</b> may use, and the identity of the cluster
 /// they are connected to. It is the MCP analog of the gRPC bindings'
 /// auth-scheme advertisement - authenticated and permission-scoped - so an agent

@@ -63,8 +63,8 @@ jobs:
       # GitHub Pages serves ONE site, and every deploy replaces it wholesale, so
       # without this guard the site is simply "whichever deploy ran last". That
       # is not the same as "the newest release": a core hotfix on an older line
-      # pushes a tag that also matches the lattice-v* trigger above (the family
-      # has cut lattice-v9.4.1, 9.4.2, 9.4.3 and 9.5.1 exactly this way), so
+      # pushes a tag that also matches the lattice-v* trigger above (for example
+      # lattice-v9.5.2 on release/9.5 after 9.6.0), so
       # patching an old line after a newer minor has shipped would silently
       # regress the public documentation to the older version. The same applies
       # to a dispatch on an older release/<X.Y> line.

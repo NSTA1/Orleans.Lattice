@@ -34,8 +34,8 @@ public enum LatticeReplicationApiOperation
 /// <see cref="ILatticeReplicationApiAuthorizer.IsAuthorizedAsync"/>. Carries the
 /// <see cref="Operation"/> being invoked, an optional <see cref="TargetId"/>
 /// (the target tree id for a tree-scoped enable / disable call;
-/// <see langword="null"/> for the whole-estate config read and the discovery
-/// operations), and the underlying gRPC <see cref="ServerCallContext"/> for
+/// <see langword="null"/> for the whole-estate config read or an unrecognised
+/// replication-control call), and the underlying gRPC <see cref="ServerCallContext"/> for
 /// header / identity / peer inspection.
 /// </summary>
 public readonly struct LatticeReplicationApiAuthorizationContext

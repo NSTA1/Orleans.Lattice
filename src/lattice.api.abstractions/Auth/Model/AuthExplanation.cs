@@ -58,10 +58,10 @@ public sealed record AuthExplanation
     [Id(7)] public LatticeEffect DefaultEffect { get; init; }
 
     /// <summary>
-    /// The authored rules that apply to this subject, operation, and scope,
-    /// ordered by governed tree id and then rule id. Advisory debugging detail: the authoritative verdict
-    /// is <see cref="Allowed"/>. Empty when the verdict rests solely on the
-    /// <see cref="DefaultEffect"/> or a bootstrap-administrator bypass.
+    /// The authored rules that overlap this subject, operation, and scope, drawn
+    /// from the target tree and the cluster-wide <c>*</c> bucket up to the
+    /// explanation cap, ordered by governed tree id and then rule id. Advisory
+    /// debugging detail: the authoritative verdict is <see cref="Allowed"/>.
     /// </summary>
     [Id(8)] public IReadOnlyList<LatticeAuthorizationRule> MatchedRules { get; init; } = Array.Empty<LatticeAuthorizationRule>();
 

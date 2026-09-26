@@ -47,7 +47,8 @@ Done.
 ## When to use
 
 - You need the cluster (not just clients) to guarantee stored values are
-  well-formed - JSON, UTF-8, size-bounded, or matching a structured predicate.
+  well-formed - JSON, UTF-8, size-bounded, matching a regular expression, or
+  matching a structured predicate.
 - You are evolving a value schema over time and want old and new values to coexist,
   with readers always seeing the current shape.
 

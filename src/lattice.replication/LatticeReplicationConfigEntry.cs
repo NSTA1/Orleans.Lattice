@@ -49,9 +49,10 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// A disabled tree keeps a live <see cref="Mode"/>, so <see cref="IsBottom"/>
-/// stays <see langword="false"/> and the entry remains in the OR-Map (disable
-/// stops shipping without forgetting the tree's fixed mode). The entry becomes
-/// bottom only when both the flag and the register carry no live state.
+/// stays <see langword="false"/> and the entry remains in the OR-Map. Disable
+/// removes the resolved runtime mode without forgetting the tree's fixed mode; an
+/// already-active shipper is not torn down by this entry. The entry becomes bottom
+/// only when both the flag and the register carry no live state.
 /// </para>
 /// </remarks>
 [GenerateSerializer]

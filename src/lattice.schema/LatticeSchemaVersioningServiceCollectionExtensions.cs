@@ -123,7 +123,8 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILatticeEnvelopeCodec>(
                 sp => sp.GetRequiredService<LatticeSchemaEnvelopeCodec>()));
 
-        // The SchemaAdmin-gated control plane over the config store + provider cache.
+        // In-process control plane over the config store + provider cache.
+        // Authorization is applied by the facade / gRPC layer, not by this admin itself.
         builder.Services.TryAddSingleton<ILatticeSchemaVersionAdmin, LatticeSchemaVersionAdmin>();
 
         return builder;

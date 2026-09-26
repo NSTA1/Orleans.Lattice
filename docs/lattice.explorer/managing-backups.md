@@ -71,8 +71,10 @@ restores, or deletes anything.
   consistency fence (multiple trees imply cross-tree consistency, so there is no
   separate toggle). Choose Full or Incremental with the kind radios; the
   base-backup dropdown appears only when Incremental is selected and lists the
-  existing full backups. A single **Backup** button dispatches by the selected
-  kind and selection.
+  existing full backups. An incremental capture needs exactly one selected tree
+  and a chosen base, so with more than one tree selected only a full backup set
+  can be captured. A single **Backup** button dispatches by the selected kind and
+  selection.
 - Optionally **schedule a recurring backup** while creating one: tick *Schedule
   recurring* and pick an interval in hours and minutes. Clicking **Backup** then
   both captures immediately and registers a recurring schedule for the selected
@@ -89,10 +91,17 @@ restores, or deletes anything.
   present), and by name and creation time (starts-with text boxes with the same
   debounce and clear button as the tree key search). The list is ordered
   newest-first and shown one page at a time. Restore a backup into a target
-  tree, choosing the restore mode from the dropdown: **Repair missing items
-  (non-destructive)** (in-place) or **Point-in-time replace (destructive)**
-  (shadow-cutover). The two modes are explained below. Delete a backup behind a
-  confirmation prompt that warns the action cannot be undone.
+  tree - the backup's own tree by default, which you can retype - choosing the
+  restore mode from the dropdown: **Repair missing items (non-destructive)**
+  (in-place) or **Point-in-time replace (destructive)** (shadow-cutover). The two
+  modes are explained below. A restore runs only after a confirmation prompt that
+  states the tree each backup lands in (and, for an incremental chain, the point
+  in time it restores to) and what the chosen mode does to it. A multi-tree
+  backup-set row has no target box: restoring it restores every member backup
+  back into its own tree, and the prompt lists each one. Delete a backup behind a
+  confirmation prompt that warns the action cannot be undone; deleting a
+  multi-tree backup-set row removes every member backup of the set, and the
+  prompt states how many that is.
 - **Incremental chains show as one row.** An incremental backup builds on a
   base, forming a chain (a full base backup followed by successive increments).
   The list collapses that whole chain to a single row - its most recent

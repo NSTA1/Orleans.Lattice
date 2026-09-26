@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 /// This foundation contract is a minimal set of RPCs over the transport-agnostic
 /// <see cref="ILatticeTreeAdmin"/> facade: the capability probe
 /// (<c>ProbeCapabilities</c>) and unauthenticated discovery (<c>GetAuthScheme</c>).
-/// The whole-tree lifecycle operations land in later releases, each appending an
+/// The whole-tree lifecycle operations append
 /// RPC here. Contract-versioning policy: fields on the wire messages are
 /// additive-only (new <c>[Id(n)]</c>); aliases and field numbers are never
 /// renumbered, so a newer response decodes cleanly under an older client, and new

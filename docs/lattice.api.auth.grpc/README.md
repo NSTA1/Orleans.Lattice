@@ -11,7 +11,7 @@ It provides:
 - **A code-first gRPC service.** A unary RPC per facade operation, bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeAuthApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record - either one of this package's own request/response envelopes (for example `AuthGroupRef`, `AuthPutRule`, `AuthAck`) or a facade DTO reused directly (for example `AuthGroupPage`, `AuthExplanation`) - serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
-- **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge, and the facade's own administrator check re-authorizes the resolved caller. Both default to deny.
+- **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge, and the facade's own administrator check re-authorizes the resolved caller. The transport gate denies every call until the host opts in, and the facade check, which cannot be switched off, denies any caller that is not a bootstrap or delegated access administrator.
 
 Administering authorization is the most sensitive surface in the cluster, so the binding fails closed: with no authorizer registered, every admin call is rejected with `PermissionDenied`.
 
@@ -84,10 +84,10 @@ Response envelopes:
 | `LatticeAuthApiGrpcClient` | Public typed client; one method per RPC over a caller-supplied `CallInvoker`. |
 | `LatticeAuthApiGrpcOptions` | Server-side options (`RequireAuthorization`, `CredentialHeaderName`, `CredentialScheme`). |
 | `ILatticeAuthApiAuthorizer` | Transport meta-authorization seam. |
-| `DenyAllAuthApiAuthorizer` | Default-deny authorizer (registered automatically). |
+| `DenyAllAuthApiAuthorizer` | Default-deny authorizer, registered by `AddLatticeAuthApiGrpc` only when the host has not already registered an `ILatticeAuthApiAuthorizer`; one the host registers afterwards, as the Quick start does, takes precedence. |
 | `AllowAllAuthApiAuthorizer` | Opt-in permissive authorizer for trusted-network use. |
 | `LatticeAuthApiAuthorizationContext` | Per-call description handed to the authorizer (operation, target id, call context). |
-| `LatticeAuthApiOperation` | Enumerates the operation behind each RPC. |
+| `LatticeAuthApiOperation` | Enumerates the operation behind each RPC, plus `Unknown` for an auth-API method the interceptor does not recognise, so a deny-by-default authorizer refuses an unmapped call rather than treating it as a benign operation. |
 | `ILatticeAuthApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context. |
 | `Auth*` request/response records | Public request and response DTOs for the unary RPCs. |
 | `AddLatticeAuthApiGrpc` / `MapLatticeAuthApiGrpc` | Registration and endpoint-routing extensions. |

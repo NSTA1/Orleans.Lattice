@@ -14,6 +14,13 @@
 > primitive - and the minimal 4-arm repro does NOT reproduce the wedge.
 > The bisect of "what additional condition is needed" is the live
 > question this plan tracks from here.
+>
+> **Location note (added later):** this plan moved here from
+> `repro/wedge-orleans/` in #591, which also deleted that folder's in-process
+> repro. References below to the repro "in this folder" and to
+> `repro/wedge-orleans/` describe the deleted repro, and `benchmark/vm/` (sections
+> 23.2 and 23.4) was never a path in this repository: the cohort runner is
+> `scripts/run-cohort.ps1` in this folder.
 
 ## 1. Reproducibility
 
@@ -894,7 +901,7 @@ Two changes shipped to make this failure mode unmissable to the next investigato
 
 1. **Named log line on `TimeoutException`** in `TcpIngestService.FlushAsync`. The bare Orleans `Response did not arrive on time in 00:00:30` stack is now wrapped:
    > `[silo] grain-rpc-deadline: SetManyAsync of N did not return within ResponseTimeout (BENCH_RESPONSE_TIMEOUT_SEC=30s). Offered rate exceeds sustained Tables drain rate at this rung; raise BENCH_RESPONSE_TIMEOUT_SEC, drop tickHz/vehicles, or tune WAL fan-out (BENCH_WAL_PARTITIONS / BENCH_WAL_MAX_PENDING_BATCHES).`
-2. **Cohort-runner verdict** (`benchmark/vm/run-cohort.ps1`) parses the FINAL line and reports `failed=N` explicitly when non-zero, so a "HEALTHY (but 55% failed)" cohort can't pass for HEALTHY.
+2. **Cohort-runner verdict** (`benchmark/vm/run-cohort.ps1`; the runner is `scripts/run-cohort.ps1` in this folder) parses the FINAL line and reports `failed=N` explicitly when non-zero, so a "HEALTHY (but 55% failed)" cohort can't pass for HEALTHY.
 
 ### 23.3 Saturation knobs catalogue (what to turn when offered exceeds drain)
 
@@ -926,5 +933,5 @@ Failure-mode -> knob mapping:
 
 - Wedge-plan.md is **closed** as a reliability investigation. Re-opening requires evidence that a `stall-watchdog` line fires AND `[wal-slot]` / `[wal-append]` lifecycle stages show a non-trivial dominant stage AND the `[silo] grain-rpc-deadline` line does NOT appear. Until that combination shows up, "wedge at high rungs" is the bench harness's grain RPC deadline, not a Lattice bug.
 - Next cycle is **performance, not reliability**. Family A (per-flush latency) at the 25k rung now has a clean 2,243 e/s sustained baseline on the F8 VM to push against.
-- The deterministic-VM bench harness (`benchmark/vm/`) is the canonical iteration loop. ACI is demoted to optional cross-environment smoke testing post-fix.
+- The deterministic-VM bench harness (written here as `benchmark/vm/`; the harness is this folder, `benchmark/azure-throughput/`) is the canonical iteration loop. ACI is demoted to optional cross-environment smoke testing post-fix.
 

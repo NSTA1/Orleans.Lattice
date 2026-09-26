@@ -67,8 +67,9 @@ sees the merged value.
 
 ## Rule kinds
 
-A `LatticeSchemaRule` is created with one of these factories; a policy validates a
-value against every rule it carries, in order:
+A `LatticeSchemaRule` is created with one of these factories. A value must satisfy
+every rule the policy carries: the rules are checked in order, and the first one the
+value fails rejects it with that rule's reason:
 
 | Factory | Enforces |
 |---|---|
@@ -201,9 +202,12 @@ non-compliant value failed. An ungoverned tree returns an ungoverned report
 
 When a tree uses both enforcement and [versioning](schema-versioning.md), a value
 is validated against its **target (post-upcast) shape**, since that is the
-compliant form. Advancing the target version and tightening the policy is a single
-shadow build: upcast, validate against the new policy, cut over, aborting on the
-first offending key.
+compliant form: on the write path the enforcement stage validates the plain value
+before the versioning stage wraps it in the envelope. Advancing the target version
+and re-stamping existing values (`AdvanceAndMigrateAsync`) is a single shadow
+build: upcast each value, validate it against the tree's **existing** policy, cut
+over, aborting on the first offending key. The migration leaves the policy
+unchanged, so tightening the policy is the separate remediation above.
 
 ## See also
 

@@ -60,9 +60,10 @@ caller-supplied origin would silently misroute loop-suppression,
 per-origin merge resolution, and WAL / observer audit, so the slot is
 deliberately not exposed.
 
-The static factory `LatticeIdempotencyKey.Fresh()` mints a new key by ticking
-a fresh `HybridLogicalClock`. Use it for ad-hoc callers that mint one
-key per logical operation:
+The static factory `LatticeIdempotencyKey.Fresh()` mints a new key whose
+timestamp is the current wall-clock tick, advanced past the last key the
+same process minted so that no two keys share a timestamp. Use it for
+ad-hoc callers that mint one key per logical operation:
 
 ```csharp verify
 using (LatticeIdempotencyContext.NewScope())
@@ -103,7 +104,10 @@ calls within the scope all share the same key.
 The shipped `BoundedExponentialRetryPolicy` makes up to `MaxAttempts`
 attempts in total (the first call counts as one), waiting
 `min(MaxDelay, InitialDelay * 2^(attempt-1))` after failed attempt number
-`attempt` before the next. Wire it via DI:
+`attempt` before the next. Its defaults (on both
+`BoundedExponentialRetryPolicyOptions` and the constructor) are
+`MaxAttempts = 4`, `InitialDelay = 50 ms`, `MaxDelay = 2 s`, and a null
+`RetryableExceptionClassifier`. Wire it via DI:
 
 ```csharp verify
 siloBuilder.AddLatticeRetryPolicy(options =>
@@ -116,10 +120,16 @@ siloBuilder.AddLatticeRetryPolicy(options =>
 });
 ```
 
-`AddLatticeRetryPolicy` installs the policy as the per-tree
-`LatticeOptions.RetryPolicy` for every tree. To pin a different policy
-on a single tree, set `LatticeOptions.RetryPolicy` from
-`ConfigureLattice("treeName", o => o.RetryPolicy = myPolicy)`.
+`AddLatticeRetryPolicy` builds the policy when it is called - an invalid
+value (`MaxAttempts` below 1, a negative `InitialDelay`, or a `MaxDelay`
+below `InitialDelay`) throws `ArgumentOutOfRangeException` from that call -
+and installs it as the per-tree `LatticeOptions.RetryPolicy` for every
+tree. To pin a different policy on a single tree, set
+`LatticeOptions.RetryPolicy` from
+`ConfigureLattice("treeName", o => o.RetryPolicy = myPolicy)`, and register
+that override after `AddLatticeRetryPolicy`: it assigns through
+`ConfigureAll`, and options configure actions run in registration order, so
+an `AddLatticeRetryPolicy` registered later replaces the tree's policy too.
 
 The policy is only consulted when an idempotency scope is open. A
 mutating call with no ambient key bypasses the policy entirely and
@@ -214,11 +224,13 @@ cluster as well.
 - **Always pair the policy with an idempotency scope.** Without an
   ambient key, the policy is bypassed - and rightly so, because the
   storage path has no way to dedup a retry.
-- **Keep `MaxAttempts` small.** The default of 4 attempts and 2 second
-  cap is sized for transient storage faults; longer budgets risk
-  amplifying load during a real outage.
+- **Keep `MaxAttempts` small.** The default of 4 attempts, a 50 ms
+  initial delay and a 2 second cap is sized for transient storage faults;
+  longer budgets risk amplifying load during a real outage.
 - **Use the classifier to scope retries.** A null classifier (the
-  default) retries on every exception, including programmer errors.
+  default) retries on every exception, including programmer errors -
+  the only exception the shipped policy never retries is a cancellation
+  of the caller's own `CancellationToken`.
   In production, restrict the classifier to the storage-transient
   exception families your provider emits.
 - **Treat the idempotency key as part of the application's data

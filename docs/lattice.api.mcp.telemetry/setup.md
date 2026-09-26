@@ -13,7 +13,7 @@ The telemetry group needs neither an `Orleans.Lattice.Api.*` facade nor an in-si
 
 ## Register the tool module
 
-`AddTelemetryTools(...)` binds and validates `LatticeApiMcpTelemetryOptions`, registers the default HTTP-backed backend client and the metric-access policy (both built once), and registers the telemetry tool group so its tools are advertised to a caller holding a `LatticeOperation.Telemetry` grant. It is idempotent: calling it twice registers exactly one tool group and one backend client.
+`AddTelemetryTools(...)` binds and validates `LatticeApiMcpTelemetryOptions`, registers the default HTTP-backed backend client and the metric-access policy (the policy is built once, with its wildcard patterns precompiled), and registers the telemetry tool group so its tools are advertised to a caller holding a `LatticeOperation.Telemetry` grant. It is idempotent: calling it twice registers exactly one tool group and one backend client.
 
 ```csharp verify
 using Orleans.Lattice.Api.Mcp.Telemetry;
@@ -90,8 +90,8 @@ services.AddTelemetryTools(o =>
 {
     o.BackendAddress = new Uri("https://prometheus.internal:9090/");
     o.MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed;
-    o.AllowedMetrics.Add("lattice_wal_append_total");   // exact name
-    o.AllowedMetrics.Add("lattice_shard_*");            // wildcard pattern
+    o.AllowedMetrics.Add("orleans_lattice_shard_writes_total"); // exact name
+    o.AllowedMetrics.Add("orleans_lattice_wal_*");              // wildcard pattern
 });
 ```
 

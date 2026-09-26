@@ -15,7 +15,8 @@ introspectable `ILatticeMembershipDirectory`, and **expands group membership to
 its full transitive closure with cycle detection**, so downstream policy always
 evaluates a flat, uniform group set. Nested (group-in-group) membership is
 supported, and token-asserted groups are themselves expanded through the
-directory closure.
+directory closure (unless the merge mode is `TokenOnly`, which bypasses the
+directory).
 
 The directory dogfoods reserved `sys-membership-*` `ILattice` trees (a groups
 tree, and an edges tree that stores each membership edge in both directions for

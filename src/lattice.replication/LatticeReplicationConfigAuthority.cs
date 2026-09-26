@@ -193,8 +193,9 @@ internal sealed class LatticeReplicationConfigAuthority(
         }
 
         // Disable-wins: author a disable dot. The entry (and its fixed mode) is
-        // kept in the OR-Map, and already-replicated peer data is never purged;
-        // disable only pauses shipping of new mutations.
+        // kept in the OR-Map, and already-replicated peer data is never purged.
+        // Already-active shippers are not torn down; peers with no resolved mode
+        // drop any entries they continue to ship while acknowledging the batch.
         var working = current.Clone();
         working.Disable(replicaId, NextFlagCounter(working.Enabled, replicaId));
         await _store.WriteEntryAsync(treeId, replicaId, working, cancellationToken).ConfigureAwait(false);
@@ -304,8 +305,8 @@ internal sealed class LatticeReplicationConfigAuthority(
 
         var bothDeclare = staticMode is not null;
 
-        // Fail closed: a divergent runtime mode pauses shipping for this tree and
-        // must never fall through to the static declaration, which would silently
+        // Fail closed: a divergent runtime mode returns no mode and must never fall
+        // through to the static declaration, which would silently
         // pick a mode.
         if (entry.HasAmbiguousMode)
         {

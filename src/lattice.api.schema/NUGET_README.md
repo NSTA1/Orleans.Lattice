@@ -19,7 +19,7 @@ transports bind over it, and it costs nothing until it is registered.
 - **Read-only compliance audit.** `ScanComplianceAsync` streams a tree's current
   values through its compiled policy and returns per-tree counts of compliant vs
   non-compliant values, grouped by failure reason. It is a pure read - it never
-  rewrites or dead-letters data - and is cancellable with best-effort progress.
+  rewrites or dead-letters data - and honours cancellation between values.
 - **Bounded-memory enumeration.** Dead-letter listing is streamed, so a large
   strict-mode queue enumerates with bounded memory.
 

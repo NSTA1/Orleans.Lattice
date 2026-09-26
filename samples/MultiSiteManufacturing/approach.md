@@ -44,9 +44,10 @@ stateDiagram-v2
 
 The lattice is totally ordered. `ComplianceFold.Fold` sorts facts by
 `(WallClockTicks, Counter, FactId)` before applying
-`StateTransitions.Apply` as a running `Max`, with a `retestArmed` flag
-threaded through to gate `MrbDisposition(UseAsIs)` demotion of
-`Rework` → `Nominal`. The arrival-order baseline (`NaiveFold.Step`)
+`StateTransitions.Apply` as a running `Max`. The only step that lowers
+the state is `MrbDisposition(UseAsIs)`: it demotes `FlaggedForReview` to
+`Nominal` outright, and demotes `Rework` to `Nominal` only when a
+`retestArmed` flag threaded through the fold is set. The arrival-order baseline (`NaiveFold.Step`)
 delegates to the same `StateTransitions.Apply` - the **only**
 difference between the two folds is the order in which facts are
 applied. Divergence in the dashboard is therefore purely an ordering
@@ -95,8 +96,8 @@ exercised independently from the UI and from tests:
 | Tier | Seam | Models | Toggle |
 |---:|---|---|---|
 | 1 | `IProcessSiteGrain.AdmitAsync` (origin) | Site unavailable / WAN latency | `IsPaused`, `DelayMs` |
-| 2 | `ChaosFactBackend` decorator (per backend) | Storage jitter, transient failure, write amplification | `IBackendChaosGrain` |
-| 3 | Reorder buffer inside `ProcessSiteGrain` | Cross-site out-of-order arrival after a pause lifts | `ReorderEnabled` |
+| 2 | `ChaosFactBackend` decorator (per backend) | Storage jitter, transient failure, write amplification, ingress reordering | `IBackendChaosGrain` |
+| 3 | Reorder buffer inside `ProcessSiteGrain` (releases admitted facts four at a time, shuffled) | Cross-site out-of-order arrival | `ReorderEnabled` |
 | 4 | `FederationRouter.IsDroppedByPartitionAsync` + `PartCrdtStore` shadow prefix | Simulated intra-cluster silo partition | `IPartitionChaosGrain.SetPartitionedAsync` |
 | 4b | `ChaosReplicationTransport` decorator on `IReplicationTransport` (outbound) + `ChaosReplicationApplier` decorator on `IReplicationApplier` (inbound) | App-level cross-cluster replication pause | `IReplicationDisconnectGrain.SetDisconnectedAsync` |
 | 5 | `docker network disconnect` against the peer Traefik | Genuine cross-cluster transport partition | Manual `docker network` commands |
@@ -137,9 +138,11 @@ agree before chaos is applied.
 `InspectionStarted` transition, so no fact sequence can fold to
 `UnderInspection` in v1.
 
-Chaos knobs are **snapshotted, zeroed for the duration of the seed,
-and restored** afterwards, so a previous session's chaos presets
-cannot make seed time non-deterministic. Serial numbers are
+Every site's chaos configuration (pause, delay, reorder) is
+**snapshotted, reset to nominal for the duration of the seed, and
+restored** afterwards, so a previous session's site presets cannot
+make seed time non-deterministic; backend, partition and
+replication-disconnect chaos are left untouched. Serial numbers are
 deterministic (`HPT-BLD-S1-2028-00001` … `-00005`); HLCs are stamped
 relative to `DateTimeOffset.UtcNow` at seed time so the dashboard
 always shows "recent" activity.
@@ -172,12 +175,16 @@ The sample's contribution is the per-tree opt-in:
 Four sample-specific seams sit alongside the package:
 
 - `BaselineReplicationApplier` decorates the package's
-  `IReplicationApplier` singleton; on every cross-cluster apply it
-  filters to `mfg-facts` entries and emits each replicated payload
-  into the local naive `BaselineFactBackend` so the side-by-side
-  divergence visualisation keeps working under cross-cluster traffic.
-  It also raises `FederationRouter.FactReplicated` so the dashboard
-  activity feed updates without polling.
+  `IReplicationApplier` singleton. It forwards each cross-cluster
+  apply (single or batched) to the inner applier first and acts only
+  when the inner applier reports that something merged: for
+  `mfg-facts` entries it emits each replicated payload into the local
+  naive `BaselineFactBackend` so the side-by-side divergence
+  visualisation keeps working under cross-cluster traffic, and raises
+  `FederationRouter.FactReplicated` so the dashboard activity feed
+  updates without polling. For `mfg-part-labels` entries it raises
+  `PartCrdtStore.PartChanged` instead, so an open part-detail card
+  refreshes when a peer's label delta lands.
 - `ChaosReplicationTransport` decorates the package's gRPC push
   transport (Tier 4b chaos): when the operator toggles the disconnect
   flag, `SendAsync` returns `Accepted=false` so the shipper holds
@@ -227,8 +234,10 @@ receiving side of the stream, so the same code path handles
 local-origin and peer-origin facts uniformly. The queue-backed
 transport also gives the feed durability: messages enqueued while a
 silo is restarting or briefly unreachable are picked up once it
-reconnects, subscription metadata is persisted in the Azure Table
-`PubSubStore`, and the broadcaster adds bounded retries around
+reconnects, subscription metadata is persisted through the Azure Table
+grain-storage provider `PubSubStore` (which, like every provider in the
+sample, writes Orleans' default `OrleansGrainState` table), and the
+broadcaster adds bounded retries around
 publish and subscribe plus a top-level catch in the receive handler
 so a single poison fact can't stall the queue.
 
@@ -237,10 +246,12 @@ A second namespace on the same provider,
 operator edits, cross-cluster OR-Set applies) the same way, so every
 circuit's part-detail card refreshes wherever the change landed.
 
-The domain views never poll - no `Timer`, no `setInterval`; gRPC
-server-streaming RPCs are thin adapters over the same channels. The
-one exception is the layout's per-peer replication strip, which polls
+The domain views never poll - no `Timer`, no `setInterval`. The one
+exception is the layout's per-peer replication strip, which polls
 the cluster-wide replication-activity grain every 500 ms (see section 6).
+On the gRPC side only `WatchDivergence` streams live from those
+channels; `WatchInventory`, `WatchPart` and `WatchSites` send a snapshot
+and then hold the stream open without pushing updates.
 
 Operator actions funnel through a single **"Next: …"** button driven
 by `NextActionResolver`, which picks the deterministic next step from
@@ -261,16 +272,18 @@ active injections.
 
 ## 8. Testing philosophy
 
-All tests run against Orleans `TestingHost` fixtures with in-memory
-storage - no Azurite dependency in the test suite, keeping CI fast
-and hermetic. The cross-cluster replication path itself is covered by
+All tests run in process with in-memory storage - single-silo Orleans
+`TestingHost` clusters or, for the gRPC contract tests, the host itself
+started in its `Testing` environment - so there is no Azurite
+dependency in the test suite, keeping CI fast and hermetic. The cross-cluster replication path itself is covered by
 the `Orleans.Lattice.Replication` and
 `Orleans.Lattice.Replication.Grpc` packages' own test suites; the
 sample's tests focus on the sample's own code: the inbound chaos
 applier decorator, the baseline-replay tap, the typed-CRDT accessors
-over `mfg-part-labels` / `mfg-part-operator`, and the domain,
-federation, dashboard, gRPC-contract, seeding, and coordinated-restore
-layers. Two-cluster end-to-end replication is
+over `mfg-part-labels` / `mfg-part-operator`, the folded compliance
+view, the site-activity tag index, the change-history activator, and
+the domain, federation, dashboard, gRPC-contract, seeding, operator,
+and coordinated-restore layers. Two-cluster end-to-end replication is
 exercised manually via Docker Compose because the `TestingHost`
 fixture materialises a single cluster.
 

@@ -129,9 +129,10 @@ public sealed class TenantUsageRecord
 
     /// <summary>
     /// Folds only the cluster slots whose id is in <paramref name="residentClusters"/>
-    /// into the tenant's global usage, so a stale slot for a cluster that no longer
-    /// hosts the tenant (or is offline) is excluded from the converged aggregate
-    /// the default enforcement scope admits against.
+    /// into a residency-scoped usage total, so a stale slot for a cluster that no
+    /// longer hosts the tenant (or is offline) can be excluded by callers that choose
+    /// this scope. The default global fold uses <see cref="Fold()"/> and includes all
+    /// published slots.
     /// </summary>
     /// <param name="residentClusters">The set of cluster ids to include. Must not be <c>null</c>.</param>
     /// <returns>The tenant's global usage restricted to the resident clusters.</returns>

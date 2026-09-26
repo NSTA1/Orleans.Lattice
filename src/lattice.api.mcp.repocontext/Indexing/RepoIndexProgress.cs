@@ -65,10 +65,10 @@ public sealed record RepoIndexProgress
     /// <summary>
     /// The cumulative number of index runs that have been started for this
     /// repository. It counts run starts, not retries or failures: the first
-    /// onboarding is one, and every subsequent re-drive adds one - each periodic
+    /// onboarding is one, and every subsequent fresh run adds one - each periodic
     /// reconcile that picks up on-disk edits and deletions, each gap back-fill,
-    /// each re-drive of a failed run, and each reminder-driven resume after a
-    /// host restart. Because the self-index grain reconciles on a schedule, this
+    /// and each re-drive of a failed run. A resume reminder for an already-running
+    /// job re-enqueues that run and does not increment this counter. Because the self-index grain reconciles on a schedule, this
     /// value rises steadily on a healthy, actively-maintained repository, so a
     /// high value is normal and is not by itself a sign of interruption or error.
     /// </summary>

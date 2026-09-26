@@ -256,7 +256,7 @@ conflate:
   / wal-tuning.md), because the binder is per-account concurrent
   in-flight transactions, not the aspirational TPS budget.
 
-The quick mental conversion: `ke/s of keys ~ transactions/s x 100`
+The quick mental conversion: `keys/s ~ transactions/s x 100`
 for `SetManyAsync`-shaped traffic, but for `SetAsync`-shaped traffic
 (one key per transaction) the two are equal.
 

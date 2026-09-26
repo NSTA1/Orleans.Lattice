@@ -6,9 +6,8 @@ namespace Orleans.Lattice.Auth;
 /// (<see cref="Scope"/>) to a principal (<see cref="Subject"/>). Rules are the
 /// durable, runtime-mutable unit of the authorization policy and are persisted in
 /// the reserved <c>sys-auth-policy</c> tree by the
-/// <see cref="ILatticeAuthorizationPolicyStore"/>. This type is the policy model
-/// only; how a set of rules combines into a decision is the responsibility of a
-/// later feature's decision engine.
+/// <see cref="ILatticeAuthorizationPolicyStore"/>. The decision engine combines
+/// authored rules with deny-overrides and the configured default effect.
 /// </summary>
 [GenerateSerializer]
 [Alias(AuthTypeAliases.LatticeAuthorizationRule)]

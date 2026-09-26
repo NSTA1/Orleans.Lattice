@@ -22,9 +22,10 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </para>
 /// <para>
 /// <b>Fail-closed.</b> When acquisition throws, the source logs and returns
-/// <see langword="null"/> so the introspection call falls through to anonymous and
-/// the remote cluster denies it (discovery then advertises no tools until the next
-/// acquisition succeeds), rather than forwarding a stale or fabricated credential.
+/// <see langword="null"/> so the discovery core falls back to the caller's own
+/// credential. A non-administrator caller is then denied by the remote admin gate
+/// (discovery advertises no tools until acquisition succeeds), rather than
+/// forwarding a stale or fabricated credential.
 /// </para>
 /// </remarks>
 internal sealed class ManagedIdentityAdministratorCredentialSource

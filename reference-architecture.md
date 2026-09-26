@@ -153,7 +153,7 @@ always-resident metrics collector, is described under [Observability](#observabi
 |---|---|---|---|---|
 | Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on compute pressure. |
 | MCP | built (MCP host) | 0 | N | Stateless remote MCP server; cold-starts on demand, idle at zero. |
-| Explorer | built (Explorer host) | 0 | N | Stateless operator console; a small admin tool, idle at zero. |
+| Explorer | built (Explorer host) | 0 | N | Operator console (Blazor Server): per-user circuit state only, pinned by sticky sessions, nothing durable; a small admin tool, idle at zero. |
 | Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or volume. |
 
 The silo is the only always-on head and the only one that must never reach zero.
@@ -260,13 +260,22 @@ backup sink is shared:
 - **Live peers keep serving.** The remaining regions continue to accept reads and
   writes; the front door fails user traffic over to the next-nearest healthy
   region automatically.
-- **Rebuild from the shared sink.** A replacement region is redeployed from the
-  same Bicep and cold-restores the latest backup chain from the shared blob sink,
-  then re-enrolls into replication and converges with the live peers.
-- **Restore vs live peers.** Because restore lands data that the live peers may
-  already have newer versions of, convergence is by the same per-key HLC/LWW rule:
-  a restored value never overwrites a causally newer live value. The
-  backup-primary designation prevents two regions racing to write the sink.
+- **Rebuild the region.** A replacement region is redeployed from the same Bicep.
+  The deployer enrols it in replication as it deploys it (pass 2), so the trees in
+  `-ReplicationTrees` are replicated there from the start - which decides how a
+  restore behaves.
+- **Restore vs live peers.** The shared blob sink is the source of truth for
+  restore, but restoring a replicated tree is not a per-region operation. The
+  restore - a cold restore included - is promoted to an all-or-nothing
+  coordinated restore across every current replication peer, whatever restore
+  mode was requested: it refuses to start unless every peer is reachable, and on
+  commit every region's tree cuts over together to the backup's point in time,
+  replacing live data written after the backup (each region's pre-restore
+  physical tree is retained). Per-key HLC/LWW convergence, where a restored value
+  never overwrites a causally newer live value, applies only to an in-place
+  restore into a tree that is not replicated on the restoring cluster. See
+  [Coordinated multi-cluster restore](docs/lattice.replication/coordinated-restore.md).
+  The backup-primary designation prevents two regions racing to write the sink.
 
 ## Autoscaling via the lattice.scaling KEDA bridge
 
@@ -395,7 +404,12 @@ every region:
 
 - **Latency-based routing** sends each user to the nearest healthy region. Because
   the estate is active-active with per-key convergence, **no session affinity is
-  required** and nearest-region routing is safe.
+  required** for consistency, and nearest-region routing is safe. The Explorer
+  origin group is the one exception, for a transport reason rather than a
+  consistency one: its Blazor Server circuit must stay on one replica, so the
+  first region is its sole active origin, the other regions are standbys that
+  take over only when that origin fails its health probe, and session affinity is
+  enabled on that group.
 - **Automatic failover**: on a regional health-probe failure, traffic moves to the
   next-nearest healthy region.
 - **One origin group per client-facing endpoint** (Explorer, MCP, State API). The

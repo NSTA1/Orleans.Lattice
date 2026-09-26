@@ -34,11 +34,9 @@ namespace Orleans.Lattice;
 /// tail.
 /// </para>
 /// <para>
-/// <b>Cross-package consumer.</b> The contract is identical between
-/// today's replication-only WAL consumer and the future log-first
-/// commit-point model in which the WAL is the sole durability mechanism
-/// - see <c>docs/future.md</c>. Implementations authored against this
-/// interface today are reusable in v2 without API change.
+/// <b>Cross-package consumer.</b> The contract is shared by replication, materialised
+/// views, backup, and the core commit-log pipeline: implementations preserve the
+/// same append/read/trim semantics regardless of which package is consuming the WAL.
 /// </para>
 /// </summary>
 public interface IWalStorageProvider

@@ -24,9 +24,9 @@ internal interface IRepoContextAnnIndexBuildGrain : IGrainWithStringKey
     /// <summary>
     /// Records the embedding space to build for and arms the coordinator: registers
     /// the keep-alive reminder and starts the phase pump. Idempotent - calling it
-    /// on an already-armed or already-converged coordinator does no extra work, so
-    /// the startup sweep can call it for every registered repository on every
-    /// start.
+    /// on an already-armed coordinator does not create duplicate work; calling it on
+    /// a converged coordinator may still run one confirming step in that activation
+    /// before the coordinator stands down, so the startup sweep can call it safely.
     /// </summary>
     /// <param name="space">The embedding space the index must cover.</param>
     Task EnsureBuildingAsync(EmbeddingSpaceTag space);

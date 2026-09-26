@@ -10,8 +10,8 @@ It provides:
 
 - **A code-first gRPC service.** One unary RPC per facade operation - the capability probe, diagnostics and inspection reads, tree lifecycle, alias and configuration, deletion and recovery, bulk load, restore, reshard, resize, snapshot, WAL placement and movement, orphaned-leaf audit / survey / repair, view and tag-index management, shard compaction, history retention, and the unauthenticated auth-scheme discovery call - bound from C# definitions rather than a `.proto`. The orphaned-leaf survey is the one operation without an RPC of its own: `SurveyOrphanedLeavesAsync` rides the `AuditOrphanedLeaves` RPC with the request's `Survey` flag set, so the service binds 51 unary RPCs - 50 facade operations plus `GetAuthScheme`.
 - **A public typed client.** `LatticeTreeAdminApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
-- **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer. Each RPC wraps the facade operation's arguments in this package's own request record (for example `TreeAdminCreateRequest`), and its response reuses the facade's result record from `Orleans.Lattice.Api.Abstractions`. The gRPC contract therefore adapts over the facade DTOs rather than being wire-identical to them, and client and server stay in lock-step by construction.
-- **Fail-closed authorization.** A per-call `ILatticeTreeAdminApiAuthorizer` seam gates every protected RPC at the edge, and the composed facade re-authorizes the resolved caller through the core access gate. Both default to deny.
+- **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer. Each RPC wraps the facade operation's arguments in this package's own request record (for example `TreeAdminCreateRequest`), and its response reuses the facade's result record from `Orleans.Lattice.Api.Abstractions`. The exceptions follow the facade's shape: `RevertTreeRestore` sends the facade's own `TreeRestoreResult` as its request and echoes it back, `DropView` echoes its `TreeAdminViewRequest` (both facade verbs return a bare `Task`), `RestoreTreeSet` wraps the member results in the facade's `TreeRestoreSetResult`, and `GetAuthScheme` uses this package's own `AuthSchemeAdvertisementRequest` / `AuthSchemeAdvertisement` records. The gRPC contract therefore adapts over the facade DTOs rather than being wire-identical to them, and client and server stay in lock-step by construction.
+- **Layered authorization.** A per-call `ILatticeTreeAdminApiAuthorizer` seam gates every protected RPC at the edge, and the composed facade re-authorizes the resolved caller through the core access gate. The edge gate defaults to deny (`DenyTreeAdminApiAuthorizer`, with `RequireAuthorization` defaulting to `true`). The facade gate denies by default only when `Orleans.Lattice.Auth` is registered, whose `LatticeAuthOptions.DefaultEffect` defaults to `Deny`; without that add-on the core no-op access gate allows every call, so the edge gate is the only barrier.
 
 The package has no external broker and no `.proto` file to maintain.
 
@@ -102,6 +102,39 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 
 `DropViewAsync` and `RevertTreeRestoreAsync` return a bare `Task`; `GetAuthSchemeAsync` is the one unauthenticated call and returns the endpoint's advertised auth schemes. Every other method returns the facade result record.
 
+### Wire message records
+
+The request records this package defines, each an Orleans-serialized `[GenerateSerializer]` record whose stable alias carries the `oitg.` prefix (the alias constants live in the public `GrpcTreeAdminTypeAliases` class). Properties marked `required` must be set by the caller. Responses are the facade result records from `Orleans.Lattice.Api.Abstractions`, except where noted above.
+
+| Record | Members | Used by |
+|---|---|---|
+| `TreeAdminTreeRequest` | `required string TreeId` | `ProbeCapabilities`, `GetShardHotness`, `InspectShardMap`, `GetTreeStats`, `CheckTreeExists`, `ResolveTreeAlias`, `GetTreeConfig`, `GetShardMap`, `DeleteTree`, `RecoverTree`, `GetTreeDeletionStatus`, `GetReshardStatus`, `UndoTreeResize`, `GetResizeStatus`, `GetSnapshotStatus`, `GetWalPlacement`, `AuditWalPlacement`, `GetHistoryRetention` |
+| `TreeAdminDiagnosticsRequest` | `required string TreeId`, `bool Deep` | `GetDiagnostics` |
+| `TreeAdminShardRequest` | `required string TreeId`, `int ShardIndex` | `GetProjectionDigest`, `TriggerShardCompaction` |
+| `TreeAdminStorageUsageRequest` | `bool Deep` | `GetStorageUsage` |
+| `TreeAdminCreateRequest` | `required string TreeId`, `int? ShardCount`, `int? MaxLeafKeys`, `int? MaxInternalChildren` | `CreateTree` |
+| `TreeAdminSetAliasRequest` | `required string TreeId`, `required string PhysicalTreeId` | `SetTreeAlias` |
+| `TreeAdminSetConfigRequest` | `required string TreeId`, `required TreeConfigurationUpdate Update` | `SetTreeConfig` |
+| `TreeAdminPurgeRequest` | `required string TreeId`, `bool Confirm` | `PurgeTree` |
+| `TreeAdminBulkLoadSessionRequest` | `required string TreeId`, `required string OperationId` | `BeginBulkLoad`, `CommitBulkLoad` |
+| `TreeAdminBulkLoadAppendRequest` | `required string TreeId`, `required string OperationId`, `long ChunkIndex`, `IReadOnlyList<DataEntry> Entries` | `AppendBulkLoad` |
+| `TreeAdminRestoreRequest` | `required string TreeId`, `required string BackupId`, `string? OperationId` | `RestoreTree` |
+| `TreeAdminRestoreSetRequest` | `required string SetId` | `RestoreTreeSet` |
+| `TreeAdminReshardRequest` | `required string TreeId`, `int TargetShardCount` | `ReshardTree` |
+| `TreeAdminResizeRequest` | `required string TreeId`, `int NewMaxLeafKeys`, `int NewMaxInternalChildren` | `ResizeTree` |
+| `TreeAdminSnapshotRequest` | `required string TreeId`, `required string DestinationTreeId`, `TreeSnapshotMode Mode`, `int? MaxLeafKeys`, `int? MaxInternalChildren` | `SnapshotTree` |
+| `TreeAdminOrphanedLeafRequest` | `required string TreeId`, `string? ResumeFrom`, `bool Survey` | `AuditOrphanedLeaves` (with `Survey` set for the survey), `RepairOrphanedLeaves` |
+| `TreeAdminWalMovePlanRequest` | `required string TreeId`, `int Partition`, `required string TargetProviderKey` | `PlanWalMove` |
+| `TreeAdminWalMoveExecuteRequest` | `required string TreeId`, `int Partition`, `required string TargetProviderKey`, `TreeWalMoveOptions? Options` | `ExecuteWalMove` |
+| `TreeAdminWalReclaimRequest` | `required string TreeId`, `int Partition`, `required string SourceProviderKey` | `ReclaimMovedWalSource` |
+| `TreeAdminViewListRequest` | (empty) | `ListViews` |
+| `TreeAdminCreateViewRequest` | `required string ViewName`, `required string SourceTreeId`, `required string ProviderKey`, `byte[] Payload` | `CreateView` |
+| `TreeAdminViewRequest` | `required string ViewName` | `GetViewStatus`, `RebuildView`, `ReconcileView`, `DropView` (also its response) |
+| `TreeAdminTagIndexListRequest` | (empty) | `ListTagIndexes` |
+| `TreeAdminTagIndexRequest` | `required string IndexName` | `GetTagIndexStatus`, `ReconcileTagIndex` |
+| `TreeAdminSetRetentionRequest` | `required string TreeId`, `TreeHistoryRetentionMode? Mode`, `TimeSpan? Window` | `SetHistoryRetention` |
+| `AuthSchemeAdvertisementRequest` | (empty) | `GetAuthScheme` |
+
 ## Quick Start
 
 Register the binding on a silo that already exposes the tree-administration facade, then map its routes. The host must expose the facade (`Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdmin`) in the same service provider - typically by co-hosting Orleans with `AddLattice(...).AddLatticeSchemaEnforcement(...).AddLatticeSchemaApi().AddLatticeTreeAdminApi()` on the same host. The binding fails closed, so register an `ILatticeTreeAdminApiAuthorizer` before serving traffic (or set `RequireAuthorization = false` behind an outer authentication boundary):
@@ -120,7 +153,23 @@ app.MapLatticeTreeAdminApiGrpc();
 
 ## Client
 
-`LatticeTreeAdminApiGrpcClient` is created over a caller-supplied `CallInvoker` and an `IServiceProvider` with Orleans serialization registered, via `LatticeTreeAdminApiGrpcClient.Create(callInvoker, serializerProvider)`. The typed client carries no address, TLS, retry, deadline, or credential policy of its own. A call the caller is not permitted to make surfaces as a `PermissionDenied` or `Unauthenticated` `RpcException` rather than an unhandled error.
+`LatticeTreeAdminApiGrpcClient` is created over a caller-supplied `CallInvoker` and an `IServiceProvider` with Orleans serialization registered, via `LatticeTreeAdminApiGrpcClient.Create(callInvoker, serializerProvider)`. The typed client carries no address, TLS, retry, deadline, or credential policy of its own. A call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error; the binding never issues `Unauthenticated`.
+
+## Status mapping
+
+The service maps every facade outcome onto an explicit gRPC status rather than letting it fall through to a generic fault:
+
+| Exception | gRPC status | Why |
+|---|---|---|
+| `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller lacks the tier the verb requires. A refusal by the transport authorizer is also `PermissionDenied`. |
+| `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the call: the asserted tenant failed validation against the caller's membership, or, under an asserted tenant, the call named a `sys-` tree or a malformed `t/` id. A call that asserts no tenant is not refused here; it resolves the default tenant. |
+| `KeyNotFoundException` | `NotFound` | The named materialised view or tag index is not registered. |
+| `TreeNotEmptyException` | `FailedPrecondition` | A bulk-load session was opened against a tree that already holds data. |
+| `BulkLoadOrderException` | `InvalidArgument` | A bulk-load chunk's keys were not strictly ascending. |
+| `InvalidOperationException` | `FailedPrecondition` | A precondition refused on a well-formed request - for example no backup engine or view subsystem registered, a reshard or resize already in flight, a tree that still sources a materialised view, a tenant quota breach, or a saturation refusal (`LatticeQuotaExceededException` and `LatticeSaturatedException` both derive from it, so neither surfaces as `ResourceExhausted` here). |
+| `ArgumentException` | `InvalidArgument` | A malformed or out-of-range argument, a reserved tree id, or an unconfirmed purge. |
+| `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
+| anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
 ## Configuration
 
@@ -129,21 +178,23 @@ app.MapLatticeTreeAdminApiGrpc();
 | Property | Type | Default | Purpose |
 |---|---|---|---|
 | `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces `ILatticeTreeAdminApiAuthorizer` on every inbound call. Set to `false` only when an outer authentication boundary already guards the endpoint. |
-| `CredentialHeaderName` | `string` | `authorization` | The inbound request-header name that carries the caller's credential token, bridged into the ambient Lattice credential. Only consulted when the `Orleans.Lattice.Auth` add-on is registered. |
+| `CredentialHeaderName` | `string` | `authorization` | The inbound request-header name that carries the caller's credential token, bridged into the ambient Lattice credential. The default bridge reads it on every call; without the `Orleans.Lattice.Auth` add-on the core no-op access gate ignores the bridged credential. |
 | `CredentialScheme` | `string` | `Bearer` | The authentication scheme stamped on the bridged credential. A case-insensitive scheme prefix on the header value (for example `"Bearer "`) is stripped before the remaining token is used. |
-| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | The inbound request-header name carrying the tenant the caller is acting as, lifted onto the ambient active-tenant scope for the duration of the call. Set to an empty string to disable header-based tenant selection. Only consulted when the tenancy add-on is registered. |
+| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | The inbound request-header name carrying the tenant the caller is acting as, lifted onto the ambient active-tenant scope for the duration of the call. Set to an empty string to disable header-based tenant selection. The header is read on every call; without the tenancy add-on the core no-op resolver ignores the stamped tenant. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | The auth schemes the endpoint advertises from its unauthenticated `GetAuthScheme` RPC, in preference order. Each descriptor must carry only public configuration, never a secret. |
 
 ### Per-tenant selection
 
-On a cluster running the optional tenancy add-on, the call's *active tenant* scopes the tree namespace every verb addresses, so a tenant-scoped caller administers only trees in its own `t/{tenant}/{name}` namespace. The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules; a call that cannot be attributed to a valid active tenant is refused and surfaces as a `PermissionDenied` `RpcException`. With no tenancy add-on registered the header is never consulted and the binding behaves exactly as it did before tenancy existed.
+On a cluster running the optional tenancy add-on, the call's *active tenant* scopes the tree namespace every verb addresses, so a tenant-scoped caller administers only trees in its own `t/{tenant}/{name}` namespace. The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, so the call resolves the reserved `default` tenant and addresses bare tree names unchanged. An asserted tenant the caller may not act as - one that is not registered, is not `Active`, or does not list the caller as an admin subject, and any assertion from an anonymous caller - is refused, as is a `sys-` tree name or a malformed `t/` id under an asserted tenant; each surfaces as a `PermissionDenied` `RpcException`. With no tenancy add-on registered the core no-op resolver ignores the stamped tenant, so the binding behaves exactly as it did before tenancy existed.
 
 ## Authorization surface
 
 The binding's public authorization seams (the service, marshallers, method definitions, and interceptor stay internal):
 
 - `ILatticeTreeAdminApiAuthorizer` - the per-call transport gate. `Task<bool> IsAuthorizedAsync(LatticeTreeAdminApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)` decides whether an inbound call may run at all. Two shipped implementations: `DenyTreeAdminApiAuthorizer` (the fail-closed default, registered via `TryAdd`, rejects every call with `PermissionDenied`) and `AllowAllTreeAdminApiAuthorizer` (opt-in, permits every call - for a trusted network behind a separate authentication boundary).
-- `LatticeTreeAdminApiAuthorizationContext` - the decoded inbound call handed to the authorizer. A `readonly struct` carrying `ServerCallContext Call` (headers, deadline, peer), `LatticeTreeAdminApiOperation Operation` (the specific operation being invoked), and `string? TargetId` (the tree id the call targets, or `null` for calls not scoped to a single tree, such as the auth-scheme discovery call).
+- `LatticeTreeAdminApiAuthorizationContext` - the decoded inbound call handed to the authorizer. A `readonly struct` carrying `ServerCallContext Call` (headers, deadline, peer), `LatticeTreeAdminApiOperation Operation`, and `string? TargetId`.
+- `LatticeTreeAdminApiOperation` - the per-operation discriminator. It names only the capability probe, the diagnostics and inspection reads, the lifecycle and configuration verbs, and view creation: `ProbeCapabilities`, `GetShardHotness`, `GetDiagnostics`, `InspectShardMap`, `GetProjectionDigest`, `GetTreeStats`, `GetStorageUsage`, `CreateTree`, `CheckTreeExists`, `SetTreeAlias`, `ResolveTreeAlias`, `GetTreeConfig`, `SetTreeConfig`, `GetShardMap`, and `CreateView`. Every other RPC - deletion and recovery, bulk load, restore, reshard, resize, snapshot, WAL placement and moves, the orphaned-leaf verbs, the remaining view verbs, tag indexes, compaction, and history retention - is presented as `Unknown`, as is an unrecognised method, so a deny-by-default per-operation policy refuses them and an authorizer cannot tell those verbs apart by operation.
+- `TargetId` is the tree id the request names - the source tree for `CreateView` and the result's target tree for `RevertTreeRestore` - or `null` for the storage-usage, restore-set, view (other than create), tag-index, and list requests, which carry no tree id, and for the orphaned-leaf requests, whose `TreeId` the interceptor does not decode. For `SnapshotTree` and `SetTreeAlias` the interceptor consults the authorizer a second time, under the same operation, with the destination tree or the alias's physical tree as the target, whenever that id differs from the primary one.
 - `ILatticeTreeAdminApiCredentialBridge` - the identity seam. `LatticeCredential? Resolve(ServerCallContext context)` lifts the caller's credential from the request; returning `null` leaves the caller anonymous (and an anonymous caller is denied when auth-backed control is active). The built-in default reads the configurable `CredentialHeaderName` / `CredentialScheme` header. This runs after, and independently of, the transport authorizer: the authorizer decides whether the call may run, and the resolved credential then feeds the composed facade's own fail-closed access gate.
 - `ILatticeTreeAdminApiAuthSchemeSource` - supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns. `AuthSchemeAdvertisement GetAdvertisement()` must return only public configuration (never a secret). The built-in options-backed source returns `AdvertisedAuthSchemes`.
 

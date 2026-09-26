@@ -11,8 +11,8 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ILatticeStats : IGrainWithStringKey
 {
     /// <summary>
-    /// Returns the current <see cref="TreeDiagnosticReport"/>. Concurrent callers
-    /// share the same in-flight fan-out; repeated callers within the configured
+    /// Returns the current <see cref="TreeDiagnosticReport"/>. A cache miss builds a
+    /// fresh shard fan-out for that caller; repeated callers within the configured
     /// cache TTL receive the cached report. When <paramref name="deep"/> is
     /// <c>true</c> the shard fan-out aggregates tombstone counts (walks the
     /// leaf chain of each shard).

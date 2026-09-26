@@ -34,7 +34,7 @@ public sealed class ReadOnlyStateMcpAuthorizer : ILatticeApiMcpAuthorizer
 
 The coarse gate decides only whether a request may reach a facade; it does not decide what the caller may see once there. That is the job of the credential bridge. The default bridge reads the authenticated principal off the `HttpContext` and resolves a `LatticeCredential`; at each tool invocation the resolved credential is stamped onto the ambient `LatticeCredentialContext`, so every facade call the tool makes runs under the caller's subject and flows through the same per-tree / per-key access gate the gRPC bindings and the data path already use. The bridge is fail-closed: it resolves a credential only for an authenticated principal, and returns none (anonymous) otherwise. It is the public `ILatticeApiMcpCredentialBridge` seam, `TryAdd`-registered, so a host can substitute its own bridge.
 
-The `CredentialHeaderName` and `CredentialScheme` options control which inbound header the token is read from and which scheme prefix is stripped before the remaining token is used as the credential.
+The `CredentialHeaderName` and `CredentialScheme` options control which inbound header the token is read from and which scheme prefix is stripped before the remaining token is used as the credential. An authenticated session that carries no usable token header - a certificate- or cookie-authenticated caller, or a bare scheme with no token - still resolves to a non-anonymous credential: the bridge uses the resolved principal id as the token.
 
 The bridge resolves the caller's principal id from the durable object-id (`oid`) claim first, falling back to `sub` and then the identity name. For an Entra delegated (user) token `sub` is a pairwise (user, client-app) identifier that differs from the stable `oid` the silo auth model keys subjects on, so keying discovery on `oid` ensures the subject the tool list is filtered for is the same subject the access gate enforces on - grants authored once by `oid` apply consistently across every client app.
 
@@ -52,10 +52,10 @@ The stamp is applied at every facade tool invocation, beside the credential stam
 
 | Caller | What `lattice_list_regions` returns |
 |--------|-------------------------------------|
-| No tenant asserted (an operator, or any caller on a non-tenancy cluster) | The full routing topology, unannotated and byte-for-byte as before tenant scoping existed. |
+| No tenant asserted (an operator, or any caller on a non-tenancy cluster), or any call to a head that cannot resolve tenant standing (a remote head without the `TenantAdmin` endpoint) | The full routing topology, unannotated and byte-for-byte as before tenant scoping existed. |
 | The reserved default tenant | The same full topology - the default tenant *is* the pre-tenancy behaviour by definition. |
 | A non-default tenant, standing resolved | The current region, plus only those peers in the tenant's **actionable set** (`allowed` union `resident`). Every entry is annotated with a `tenantScope` object. |
-| A non-default tenant, standing unresolvable | The current region alone. Never a fallback to the full topology. |
+| A non-default tenant whose standing the head's tenancy resolver cannot establish | The current region alone. Never a fallback to the full topology. |
 
 The **actionable set** is the union of the tenant-facing region sets described in [the tenancy guide](../lattice.tenancy/README.md#the-region-sets): the regions the operator has authorized the tenant into, and the regions the tenant is currently resident in. A region outside it is neither usable by that caller (routing a call there is refused by the residency gate) nor modifiable by it (`lattice_tenant_set_residency` refuses anything outside the allowed set), so omitting it removes disclosure without removing capability.
 
@@ -79,13 +79,13 @@ The `tenantScope` annotation is **additive and optional**: it is present only on
 
 Scoping is keyed on the **asserted active tenant**, not on the caller's role. An operator administering the platform sends no `lattice-active-tenant` header, so the operator path costs no extra authorization round trip - it simply never enters the scoping branch. This mirrors how `ITenantEnumerationFilter` scopes tree, tag-index, covered-tree, and view enumeration.
 
-**Tenancy off is free.** The tenancy probe is a single ambient-context read - no service resolution, no allocation - and it is false whenever nothing stamped a tenant. A host with no tenancy add-on therefore keeps the original path and returns the router's frozen snapshot by reference, exactly as before.
+**Tenancy off is free.** The tenancy probe is a single ambient-context read - no service resolution, no allocation - and it is false whenever nothing stamped a tenant. A host with no tenancy add-on therefore keeps the original path, exactly as before - and with no region-identity verification configured and every cluster id known, that path returns the router's frozen snapshot by reference. A `lattice-active-tenant` header sent to such a host changes nothing: scoping also requires a live tenancy region-visibility resolver, so the call is answered unscoped. The same holds on a remote head configured without the `TenantAdmin` endpoint, which has no way to resolve a tenant's standing - so on a tenancy estate every remote head that tenant callers reach needs that endpoint for discovery to be scoped.
 
 `lattice_capabilities` is deliberately unchanged: it advertises only the **current** region's per-group endpoints, which the caller is already connected to, so it discloses no peer topology and needs no scoping.
 
 ## Permission-scoped discovery
 
-Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed, so there is no "list then deny" gap. The `lattice_capabilities` meta-tool reports the same permission-scoped view.
+Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned: a facade group's tools are listed only when the caller holds an Allow grant for at least one operation the group covers, so a caller is never shown - and then denied - a group it holds no grant for. The filter is coarse by design: discovery reads grant presence, not every scope and Deny rule, so within a listed group the facade's access gate remains the authority and refuses at call time a tree or a verb the caller's grants do not cover. The `lattice_capabilities` meta-tool reports the same group-level view.
 
 ## Least privilege by default
 

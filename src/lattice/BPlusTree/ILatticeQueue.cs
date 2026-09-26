@@ -14,10 +14,10 @@ namespace Orleans.Lattice;
 /// Throughput is bounded by the single coordinator grain (FIFO is the
 /// contract, so sharding cannot relieve this). Applications needing higher
 /// throughput should fan work across several independently-named queues
-/// (partitioned lanes) and hash a producer key to a lane.
-/// <see cref="ListAsync(System.Threading.CancellationToken)"/> is an
-/// O(shards) fan-out and is intended for diagnostic / control-plane use, not
-/// the hot path.
+/// (partitioned lanes) and hash a producer key to a lane. The list and peek
+/// operations are served from the coordinator's in-memory cache after activation
+/// has loaded the backing rows, but listing is still diagnostic / control-plane
+/// only because it returns the whole parked set.
 /// </para>
 /// </summary>
 /// <typeparam name="T">The queued value type.</typeparam>
@@ -47,9 +47,8 @@ public interface ILatticeQueue<T>
     Task<int> CountAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns an ascending-id snapshot of every parked entry. This is a
-    /// fan-out scan across the backing tree's shards and is intended for
-    /// diagnostics; prefer <see cref="CountAsync(System.Threading.CancellationToken)"/>
+    /// Returns an ascending-id snapshot of every parked entry from the coordinator's
+    /// in-memory cache. Intended for diagnostics; prefer <see cref="CountAsync(System.Threading.CancellationToken)"/>
     /// and <see cref="PeekAsync(System.Threading.CancellationToken)"/> on the
     /// hot path.
     /// </summary>

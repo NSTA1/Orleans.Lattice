@@ -38,9 +38,10 @@ bounded chunks, and maintained in place as vectors are written and retired.
   deletion, rather than accumulating tombstones until a rebuild.
 - **Durability.** The index survives a restart: reloading is roughly 23x cheaper
   than rebuilding at 250,000 vectors, and the gap widens with the corpus.
-- **Lazy partial load.** Opening an index reads only its centroids; a query then
-  fetches only the partitions it probes, so a box warms as it serves instead of
-  paying for the whole corpus up front.
+- **Lazy partial load.** Opening an index lazily reads its centroids, its
+  identifier mapping and its per-partition commit records, but none of its vector
+  chunks; a query then fetches only the partitions it probes, so a box warms as it
+  serves instead of paying for the whole corpus up front.
 - **Honest status reporting.** The index always says which path answered a query
   (approximate or exhaustive) and whether it is still building, so a caller can
   never mistake a warming index for a settled one.

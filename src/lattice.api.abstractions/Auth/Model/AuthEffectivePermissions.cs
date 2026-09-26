@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Api.Auth;
 
 /// <summary>
 /// The result of <see cref="ILatticeAuthAdmin.EffectivePermissionsAsync"/>: the
-/// authorization rules currently in effect for a subject, resolved for
-/// dashboards and UX. Computed from the <b>live</b> policy store and the
+/// authored authorization rules that name a subject directly or through its groups,
+/// resolved for dashboards and UX. Computed from the <b>live</b> policy store and the
 /// subject's current group closure, so it reflects a rule change as soon as the
 /// change commits.
 /// </summary>
@@ -33,8 +33,8 @@ public sealed record AuthEffectivePermissions
     [Id(1)] public IReadOnlyList<string> GroupIds { get; init; } = Array.Empty<string>();
 
     /// <summary>
-    /// The authored rules in effect for the subject (both grants and denies),
-    /// ordered by <c>(governed tree id, rule id)</c>.
+    /// The authored rules naming the subject directly or through one of its groups
+    /// (both grants and denies), ordered by <c>(governed tree id, rule id)</c>.
     /// </summary>
     [Id(2)] public IReadOnlyList<LatticeAuthorizationRule> Rules { get; init; } = Array.Empty<LatticeAuthorizationRule>();
 

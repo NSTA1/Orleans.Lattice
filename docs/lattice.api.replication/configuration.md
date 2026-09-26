@@ -18,4 +18,4 @@ This facade drives the replication config authority but does not re-expose its c
 
 - The **static seed / fallback** replicated-tree set and the local cluster identity are configured on [`Orleans.Lattice.Replication`](../lattice.replication/configuration.md) through `LatticeReplicationOptions` (`ReplicatedTrees`, `ClusterId`).
 - Which trees are **runtime-enabled** is not configuration at all: it is authored through this facade at runtime and distributed as the `sys-replication-config` tree. See [runtime replication configuration](../lattice.replication/runtime-config.md).
-- Transport concerns - authorization enforcement, credential headers, TLS, advertised auth schemes - live on the [gRPC binding](../lattice.api.replication.grpc/configuration.md), not here.
+- Transport concerns - authorization enforcement, the credential and active-tenant headers, and advertised auth schemes - live on the [gRPC binding](../lattice.api.replication.grpc/configuration.md), not here; TLS and other channel policy belong to the hosting ASP.NET Core server and the caller's gRPC channel.
