@@ -1,5 +1,11 @@
 # Performance: multi-silo scaling guide
 
+> [!IMPORTANT]
+> **Scope: one tree, one storage account.** Every figure here comes from a cluster serving a **single tree** (two for the cross-tree saga rows), with its write-ahead log and grain state on **one Azure Storage account**.
+>
+> - **Trees.** Some of a tree's resources have a fixed count that does not grow with the cluster: its WAL partitions ([`WalPartitions`](configuration.md#walpartitions), default 8), its shards, and its transaction registry ([`TxRegistryShardCount`](configuration.md#txregistryshardcount), default 1). An estate serving many trees spreads more of them across its silos, so its aggregate write and atomic-saga throughput can scale further than one tree's. Reads, whose bound here lies outside the tree, would gain little. Multi-tree scaling has not been measured.
+> - **Storage accounts.** One account is a test constraint, not a library limit. Lattice can spread a tree's WAL partitions across several storage accounts; see [Multi-account fan-out](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement). The `SetManyAsync` ceiling below is that one account's ceiling.
+
 This document is an **approximate guide** to how Orleans.Lattice throughput
 responds when you add silos. It is the horizontal-scaling companion to
 [Performance: single-silo guide](performance-single-silo.md), which remains
