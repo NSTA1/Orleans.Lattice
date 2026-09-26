@@ -270,7 +270,46 @@ public sealed class ReplicationDeterministicSurfaceTests
         {
             Assert.That(result.Applied, Is.False);
             Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(result.Deferred, Is.False);
         });
+    }
+
+    [Test]
+    public async Task Default_batch_apply_reports_deferred_when_any_entry_is_deferred()
+    {
+        // A receive-fence deferral must survive aggregation: the receive path maps a
+        // deferred result to a not-accepted, cursor-preserving ack, so dropping it here
+        // would acknowledge the deferred entry and the sender would never re-ship it.
+        var applier = new RecordingApplier(
+        [
+            new ApplyResult { Applied = true, HighWaterMark = new HybridLogicalClock { WallClockTicks = 3, Counter = 0 } },
+            new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true },
+            new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero },
+        ]);
+
+        var result = await ((IReplicationApplier)applier).ApplyBatchAsync([Record(), Record(), Record()]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Deferred, Is.True, "One deferred entry makes the whole batch deferred.");
+            Assert.That(result.Applied, Is.True);
+            Assert.That(result.HighWaterMark, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 3, Counter = 0 }));
+            Assert.That(applier.Applied, Has.Count.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task Default_batch_apply_reports_not_deferred_when_no_entry_is_deferred()
+    {
+        var applier = new RecordingApplier(
+        [
+            new ApplyResult { Applied = true, HighWaterMark = HybridLogicalClock.Zero },
+            new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero },
+        ]);
+
+        var result = await ((IReplicationApplier)applier).ApplyBatchAsync([Record(), Record()]);
+
+        Assert.That(result.Deferred, Is.False);
     }
 
     [Test]

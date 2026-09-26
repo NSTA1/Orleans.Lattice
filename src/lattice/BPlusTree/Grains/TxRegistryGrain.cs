@@ -1536,7 +1536,7 @@ internal sealed partial class TxRegistryGrain(
 
         var now = TimeProvider.GetUtcNow();
         var options = optionsMonitor.Get(TreeId);
-        var effectiveTtl = ClampPinTtl(ttl, options);
+        var expiresAt = ResolvePinExpiry(now, ttl, options);
 
         // Build the proposed pin set and assert the new union does not
         // exceed the per-tree footprint cap. The check ignores expired
@@ -1593,7 +1593,7 @@ internal sealed partial class TxRegistryGrain(
         state.State.SnapshotPins[pinId] = new SnapshotPin
         {
             Txids = proposed,
-            ExpiresAt = now + effectiveTtl,
+            ExpiresAt = expiresAt,
         };
         InvalidatePinMemo();
         // A pin changes the read mask of every txid it covers, and the
@@ -1634,8 +1634,7 @@ internal sealed partial class TxRegistryGrain(
         }
 
         var options = optionsMonitor.Get(TreeId);
-        var effectiveTtl = ClampPinTtl(ttl, options);
-        var newExpiresAt = now + effectiveTtl;
+        var newExpiresAt = ResolvePinExpiry(now, ttl, options);
         if (newExpiresAt == pin.ExpiresAt)
         {
             // No-op: identical ttl was already recorded (e.g. two
@@ -1720,15 +1719,24 @@ internal sealed partial class TxRegistryGrain(
     /// tombstone-retention floor: a pin shorter than
     /// <see cref="LatticeOptions.TxDecisionRetention"/> is silently
     /// floored to the retention, because the registry's own tombstone
-    /// prune pass already covers anything shorter.
+    /// prune pass already covers anything shorter. A non-positive cap (for
+    /// example <see cref="Timeout.InfiniteTimeSpan"/>) disables the cap; when
+    /// the cap is disabled and no positive TTL was requested the pin has no
+    /// expiry and <see cref="Timeout.InfiniteTimeSpan"/> is returned, rather
+    /// than an unbounded pin collapsing to the retention floor (or, with
+    /// retention disabled, expiring the instant it is recorded).
     /// </summary>
     private static TimeSpan ClampPinTtl(TimeSpan requested, LatticeOptions options)
     {
-        if (requested <= TimeSpan.Zero) requested = options.MaxCursorSnapshotPinTtl;
-        if (options.MaxCursorSnapshotPinTtl > TimeSpan.Zero
-            && requested > options.MaxCursorSnapshotPinTtl)
+        var cap = options.MaxCursorSnapshotPinTtl;
+        if (requested <= TimeSpan.Zero) requested = cap;
+        if (cap > TimeSpan.Zero && requested > cap)
         {
-            requested = options.MaxCursorSnapshotPinTtl;
+            requested = cap;
+        }
+        if (requested <= TimeSpan.Zero)
+        {
+            return Timeout.InfiniteTimeSpan;
         }
         if (options.TxDecisionRetention > TimeSpan.Zero
             && requested < options.TxDecisionRetention)
@@ -1736,6 +1744,23 @@ internal sealed partial class TxRegistryGrain(
             requested = options.TxDecisionRetention;
         }
         return requested;
+    }
+
+    /// <summary>
+    /// Resolves the absolute expiry of a pin recorded at <paramref name="now"/>
+    /// for the caller-supplied <paramref name="requested"/> TTL, applying
+    /// <see cref="ClampPinTtl"/>. An unbounded pin, or a TTL that would carry
+    /// the expiry past <see cref="DateTimeOffset.MaxValue"/>, saturates at
+    /// <see cref="DateTimeOffset.MaxValue"/> instead of overflowing.
+    /// </summary>
+    private static DateTimeOffset ResolvePinExpiry(DateTimeOffset now, TimeSpan requested, LatticeOptions options)
+    {
+        var ttl = ClampPinTtl(requested, options);
+        if (ttl == Timeout.InfiniteTimeSpan || ttl >= DateTimeOffset.MaxValue - now)
+        {
+            return DateTimeOffset.MaxValue;
+        }
+        return now + ttl;
     }
 
     /// <summary>

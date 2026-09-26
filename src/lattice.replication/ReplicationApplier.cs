@@ -738,6 +738,20 @@ internal sealed partial class ReplicationApplier(
 
         if (outcome == AddOutcome.AddedWithEviction && evicted.Count > 0)
         {
+            // A displaced entry was never applied, yet the shadow-forward cache
+            // still holds the reservation taken when it was parked. Release each
+            // one (as the drain-failure path does) before handing the entries to
+            // the dead-letter queue, so a dead-letter replay or a peer re-delivery
+            // is applied instead of being classified as a shadow-forward duplicate
+            // and dropped - including when an enqueue below faults part-way.
+            if (_dedupeCaches.TryGetValue(entry.TreeId, out var cache))
+            {
+                foreach (var displaced in evicted)
+                {
+                    cache.Remove(displaced);
+                }
+            }
+
             var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
             foreach (var displaced in evicted)
             {
