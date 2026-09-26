@@ -9,7 +9,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Indexing;
 /// Covers the startup cadence report: the wall-clock indexing knobs are converted to
 /// pass counts against the reconcile spacing, so they are a matched set, and raising
 /// the reconcile interval can switch directory-modification-time pruning off with no
-/// error and nothing in the log. See issue #2075.
+/// error and nothing in the log. See issue #2075. The embedding gap scan interval has the
+/// same degenerate case - at or below the spacing it collapses to every pass - and the
+/// shipped defaults sit exactly on it. See issue #3350.
 /// </summary>
 [TestFixture]
 public sealed class RepoContextIndexingCadenceReporterTests
@@ -69,7 +71,8 @@ public sealed class RepoContextIndexingCadenceReporterTests
             "A full walk shorter than the reconcile spacing floors to one pass.");
         Assert.That(options.PruningCanEngage, Is.False);
 
-        var warning = entries.SingleOrDefault(e => e.Level == LogLevel.Warning);
+        var warning = entries.SingleOrDefault(
+            e => e.Level == LogLevel.Warning && e.Message.Contains("pruning", StringComparison.Ordinal));
         Assert.That(warning, Is.Not.Null,
             "Pruning being disabled by the arithmetic must not be silent.");
         Assert.That(warning!.Message, Does.Contain("DISABLED"));
@@ -90,6 +93,82 @@ public sealed class RepoContextIndexingCadenceReporterTests
         Assert.That(options.PruningCanEngage, Is.True);
         Assert.That(entries.Where(e => e.Level == LogLevel.Warning), Is.Empty,
             "A cadence that can prune must not warn.");
+    }
+
+    private static IReadOnlyCollection<CapturedLogEntry> Report(RepoContextIndexingOptions options)
+    {
+        var provider = new CapturingLoggerProvider();
+        using var factory = LoggerFactory.Create(b => b.AddProvider(provider));
+        new RepoContextIndexingCadenceReporter(
+                options, factory.CreateLogger<RepoContextIndexingCadenceReporter>())
+            .StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return provider.Entries;
+    }
+
+    [Test]
+    public void The_shipped_defaults_warn_that_the_gap_scan_cadence_has_no_effect()
+    {
+        // Issue #3350. The shipped 20-minute gap-scan interval equals the default
+        // 15 + 5 minute reconcile spacing, so it rounds up to one pass: the periodic
+        // term of the gap-scan gate is true on every pass and the convergence back-off
+        // can never change whether the scan runs. That collapse used to be visible
+        // only as a bare "1 pass(es)"; it must be stated.
+        var options = new RepoContextIndexingOptions();
+
+        Assert.That(options.MaximumReconcileSpacing, Is.EqualTo(TimeSpan.FromMinutes(20)),
+            "precondition: the shipped reconcile spacing");
+        Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(1),
+            "precondition: the shipped gap-scan interval collapses to one pass");
+        Assert.That(options.PruningCanEngage, Is.True,
+            "precondition: the shipped defaults prune, so the only warning is the gap-scan one");
+
+        var warning = Report(options).SingleOrDefault(e => e.Level == LogLevel.Warning);
+
+        Assert.That(warning, Is.Not.Null,
+            "A gap-scan cadence that has collapsed to every pass must not be silent.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(warning!.Message, Does.Contain("gap scan cadence has NO EFFECT"));
+            Assert.That(warning.Message, Does.Contain("every reconcile pass"),
+                "The warning must say what the collapse means for the scan.");
+            Assert.That(warning.Message, Does.Contain("1200 s is at or below the reconcile spacing of 1200 s"),
+                "The warning must carry the arithmetic that produced it.");
+            Assert.That(warning.Message, Does.Contain("2400"),
+                "The warning must name an interval at which the cadence would engage.");
+        });
+    }
+
+    [Test]
+    public void A_gap_scan_interval_just_above_the_spacing_reports_no_warning()
+    {
+        // The negative control, placed one second past the boundary so it pins the
+        // threshold rather than merely a comfortably wide cadence: ceil(1201 / 1200)
+        // is two passes, the periodic term can evaluate false, and the cadence is real.
+        var options = new RepoContextIndexingOptions
+        {
+            EmbeddingGapScanInterval = TimeSpan.FromSeconds(1201),
+        };
+
+        Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(2));
+        Assert.That(options.PruningCanEngage, Is.True);
+        Assert.That(Report(options).Where(e => e.Level == LogLevel.Warning), Is.Empty,
+            "A gap-scan cadence that spans more than one pass must not warn.");
+    }
+
+    [Test]
+    public void A_gap_scan_interval_below_the_spacing_warns_whatever_the_full_walk_says()
+    {
+        // The two degenerate cases are independent: a cadence that still prunes can
+        // have a collapsed gap scan, and the gap-scan warning must not be folded into
+        // (or gated on) the pruning one.
+        var (entries, options) = Report(300, 900, 60);
+
+        Assert.That(options.PruningCanEngage, Is.True);
+        Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(1));
+
+        var warning = entries.SingleOrDefault(e => e.Level == LogLevel.Warning);
+        Assert.That(warning, Is.Not.Null);
+        Assert.That(warning!.Message, Does.Contain("NO EFFECT").And.Contain("600"));
     }
 
     [Test]

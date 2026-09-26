@@ -191,6 +191,26 @@ internal sealed class LatticeWalGcScheduler(
     private readonly HashSet<string> _primedTrees = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Consecutive terminal-breach candidate passes per tree (issue #3149): a
+    /// pass over the byte ceiling, with an available cursor floor, that
+    /// reclaimed nothing. Absent means a run of zero. Confined to the
+    /// <see cref="ExecuteAsync"/> loop like the fields above, and pruned
+    /// alongside <see cref="_cadence"/>.
+    /// </summary>
+    private readonly Dictionary<string, int> _terminalBreachRuns = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Consecutive breaching passes a tree must accumulate before
+    /// <see cref="LatticeMetrics.WalGcTerminalBreach"/> starts advancing for it
+    /// (issue #3149). A breaching tree polls at the interval floor, so this is
+    /// several minutes of uninterrupted zero-reclaim over-ceiling passes at the
+    /// default floor - long past any consumer that is merely a pass or two
+    /// behind, and far short of the hundreds of passes the condition persisted
+    /// for, unannounced, before the signal existed.
+    /// </summary>
+    internal const int TerminalBreachPasses = 10;
+
+    /// <summary>
     /// Minimum time a tree must have been continuously blocked by the same
     /// consumer before the sweep will reactivate its leaf.
     /// </summary>
@@ -524,8 +544,10 @@ internal sealed class LatticeWalGcScheduler(
     /// <para>
     /// <b>It cannot outlive the condition that justified it.</b> The entry is
     /// replaced by every classifying sweep, dropped when the tree is neither
-    /// breaching its byte ceiling nor holding a retained backlog (issue #3229),
-    /// and dropped when the tree becomes genuinely floor-blocked - at which
+    /// breaching its byte ceiling nor holding a retained backlog (issue #3229) -
+    /// whether or not the pass reclaimed anything, since a pass that trims a
+    /// little behind a still-pinned floor is not healthy (issue #3609) - and
+    /// dropped when the tree becomes genuinely floor-blocked - at which
     /// point the blocked arm's own report is a better answer to the same
     /// question than a sample of it.
     /// </para>
@@ -2479,6 +2501,18 @@ internal sealed class LatticeWalGcScheduler(
                 LatticeMetrics.WalGcCeilingUnsatisfiable.Add(1, treeTag, tenantTag);
             }
 
+            // The terminal-breach verdict (issue #3149): over the ceiling with a
+            // usable floor, reclaiming nothing, for TerminalBreachPasses passes
+            // running. Every existing arm reads that as a transient
+            // (`over_ceiling` backs off and retries); this is what says the
+            // retries have stopped helping. A blocked floor is excluded because
+            // `blocked` already names that tree and its remedy.
+            RecordTerminalBreach(
+                treeId,
+                overCeiling && !reclaimed && report.CursorFloorState == WalGcCursorFloorState.Available,
+                treeTag,
+                tenantTag);
+
             // Self-healing remedy for the blocked condition, not just a label
             // for it (issue #2710 Limitation 2). A blocked tree stays blocked
             // until the offending leaf activates and replays, and nothing on
@@ -2711,10 +2745,10 @@ internal sealed class LatticeWalGcScheduler(
                         }
                     }
                 }
-                else
+                else if (!report.RetainedBacklog)
                 {
-                    // Neither breaching nor stranded, which after issue #3229 is
-                    // the genuinely healthy case and nothing else: the trim scan
+                    // Neither breaching nor holding a backlog, which is the
+                    // genuinely healthy case and nothing else: the trim scan
                     // ran, reclaimed what it was entitled to, and met no WAL it
                     // had to retain. The condition that licensed the sample is
                     // gone and will not be refreshed, so drop it rather than
@@ -2725,6 +2759,23 @@ internal sealed class LatticeWalGcScheduler(
                     // backlog must still retire its sample, or the drive would
                     // spend touches on a healthy tree forever off a classification
                     // no sweep will ever replace.
+                    //
+                    // Keyed on RetainedBacklog rather than on `stranded`
+                    // (issue #3609). `stranded` folds in `!reclaimed`, which is
+                    // right for what it admits to the sweep above and wrong as a
+                    // retirement predicate: trimming something does not imply
+                    // retaining nothing behind a pinned floor. On a partitioned
+                    // WAL one partition trims a little while another stays pinned
+                    // by the very holders this sample names, so the pass reclaims
+                    // AND retains. Retiring there also retired the blocked
+                    // observation below, and with it every consumer's
+                    // FirstObserved, so each re-sample restarted the
+                    // ReactivationMinBlockAge clock. Progress caused the wipe:
+                    // every lift let some partition trim, the episode ended, and
+                    // the holders never aged into eligibility. A pass that
+                    // reclaims while still retaining falls through this chain
+                    // and keeps both the sample and the budgets; it does not
+                    // refresh the sample, which remains the sweep's job.
                     _repairableFloorHolders.Remove(treeId);
                 }
 
@@ -3000,6 +3051,49 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Advances or ends <paramref name="treeId"/>'s run of terminal-breach
+    /// candidate passes, and advances
+    /// <see cref="LatticeMetrics.WalGcTerminalBreach"/> by one once the run has
+    /// reached <see cref="TerminalBreachPasses"/> (issue #3149).
+    /// <para>
+    /// Recorded once per breaching pass, not once per episode, so the rate is
+    /// readable against <c>wal.gc.passes</c> exactly as
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> is. The run lives
+    /// only in memory: a silo restart starts it again from zero, which delays
+    /// the signal by at most one threshold's worth of passes and never
+    /// fabricates it.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the pass collected.</param>
+    /// <param name="breaching">Whether this pass was over the ceiling, with an available floor, and reclaimed nothing.</param>
+    /// <param name="treeTag">The pass's tree tag.</param>
+    /// <param name="tenantTag">The pass's tenant tag.</param>
+    private void RecordTerminalBreach(
+        string treeId,
+        bool breaching,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        if (!breaching)
+        {
+            _terminalBreachRuns.Remove(treeId);
+            return;
+        }
+
+        _terminalBreachRuns.TryGetValue(treeId, out var run);
+        if (run < TerminalBreachPasses)
+        {
+            run++;
+            _terminalBreachRuns[treeId] = run;
+        }
+
+        if (run >= TerminalBreachPasses)
+        {
+            LatticeMetrics.WalGcTerminalBreach.Add(1, treeTag, tenantTag);
+        }
+    }
+
+    /// <summary>
     /// Emits a one-time zero observation for each WAL-retention series that a
     /// reader must be able to distinguish "measured, never happened" from "not
     /// reporting" on, so the series exists before its first real event.
@@ -3117,6 +3211,12 @@ internal sealed class LatticeWalGcScheduler(
         // from the emitter's mints a second series the emitter can never join,
         // which leaves a permanent zero sitting beside the real value.
         LatticeMetrics.WalGcCeilingUnsatisfiable.Add(0, treeTag, tenantTag);
+
+        // Zero-prime the terminal-breach counter (issue #3149) with the same
+        // (tree, tenant) pair RecordTerminalBreach emits under, so a flat zero
+        // is a measured "this tree is not stuck over its ceiling" rather than
+        // the silence the condition used to sit behind.
+        LatticeMetrics.WalGcTerminalBreach.Add(0, treeTag, tenantTag);
 
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
@@ -3539,6 +3639,7 @@ internal sealed class LatticeWalGcScheduler(
             {
                 _cadence.Remove(entry.Key);
                 _primedTrees.Remove(entry.Key);
+                _terminalBreachRuns.Remove(entry.Key);
                 _blockedConsumers.Remove(entry.Key);
                 snapshotPins?.Forget(entry.Key);
             }
@@ -3635,7 +3736,11 @@ internal sealed class LatticeWalGcScheduler(
     /// one such leaf would consume the whole pass and starve the other blockers
     /// of the tree - the failing leaf would deny the sweep to the leaves that
     /// might still heal. Issued concurrently, a pass costs the same wall-clock
-    /// as it did when it made a single touch.
+    /// as it did when it made a single touch. The one exception is arm 2's
+    /// head (issue #3610): a pre-classified pass touches the holder nearest the
+    /// floor first and alone, so the free replay permit goes to the floor rather
+    /// than to whichever touch reaches the gate first, and only then launches the
+    /// rest concurrently - at most one touch's worth of extra wall-clock.
     /// </para>
     /// <para>
     /// <b>It is not assumed to work.</b> See <see cref="MaxReactivationAttempts"/>:
@@ -3998,7 +4103,29 @@ internal sealed class LatticeWalGcScheduler(
         _blockedConsumers[treeId] = observation;
 
         var touches = new Task<ReactivationTouchResult>[touching.Count];
-        for (var i = 0; i < touching.Count; i++)
+        var concurrentFrom = 0;
+
+        // Issue #3610: the floor holder is touched first and alone. The
+        // classifier hands arm 2 its holders nearest the floor first, but a
+        // concurrent launch let whichever touch reached the replay gate first
+        // take the free permit, which on the live estate was always a leaf
+        // above the floor. The rest still run concurrently, so a stuck floor
+        // holder costs this pass one extra touch, and MaxReactivationAttempts
+        // bounds how many passes it can do that on.
+        if (preClassified && touching.Count > 1)
+        {
+            touches[0] = TryReactivateBlockedLeafAsync(
+                treeId,
+                touching[0],
+                treeTag,
+                tenantTag,
+                requireOffsetAdvance?.Contains(touching[0]) == true,
+                stoppingToken);
+            await ((Task)touches[0]).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            concurrentFrom = 1;
+        }
+
+        for (var i = concurrentFrom; i < touching.Count; i++)
         {
             touches[i] = TryReactivateBlockedLeafAsync(
                 treeId,

@@ -129,6 +129,109 @@ public sealed class LeafReplayOwnershipTests
         });
     }
 
+    [TestCase("a", "c", "d", "g", false, TestName = "RangeOverlaps_range_wholly_below_the_leaf_is_disjoint")]
+    [TestCase("h", "k", "d", "g", false, TestName = "RangeOverlaps_range_wholly_above_the_leaf_is_disjoint")]
+    [TestCase("a", "d", "d", "g", false, TestName = "RangeOverlaps_end_equal_to_low_is_disjoint")]
+    [TestCase("g", "k", "d", "g", false, TestName = "RangeOverlaps_start_equal_to_high_is_disjoint")]
+    [TestCase("a", "e", "d", "g", true, TestName = "RangeOverlaps_range_straddling_low_overlaps")]
+    [TestCase("f", "k", "d", "g", true, TestName = "RangeOverlaps_range_straddling_high_overlaps")]
+    [TestCase("e", "f", "d", "g", true, TestName = "RangeOverlaps_range_inside_the_leaf_overlaps")]
+    [TestCase("a", "z", "d", "g", true, TestName = "RangeOverlaps_range_covering_the_leaf_overlaps")]
+    [TestCase("d", "d\u0000", "d", "g", true, TestName = "RangeOverlaps_single_key_range_at_low_overlaps")]
+    [TestCase("a", "c", null, "g", true, TestName = "RangeOverlaps_unbounded_low_overlaps_a_range_below_high")]
+    [TestCase("h", "k", null, "g", false, TestName = "RangeOverlaps_unbounded_low_is_still_disjoint_above_high")]
+    [TestCase("h", "k", "d", null, true, TestName = "RangeOverlaps_unbounded_high_overlaps_a_range_above_low")]
+    [TestCase("a", "c", "d", null, false, TestName = "RangeOverlaps_unbounded_high_is_still_disjoint_below_low")]
+    [TestCase("a", "c", null, null, true, TestName = "RangeOverlaps_unbounded_leaf_overlaps_everything")]
+    [TestCase("a", null, "d", "g", true, TestName = "RangeOverlaps_open_ended_range_below_high_overlaps")]
+    [TestCase("h", null, "d", "g", false, TestName = "RangeOverlaps_open_ended_range_starting_at_or_above_high_is_disjoint")]
+    [TestCase("e", "c", "a", "z", false, TestName = "RangeOverlaps_inverted_range_is_empty_and_so_disjoint")]
+    public void RangeOverlaps_decides_half_open_intersection(
+        string start, string? end, string? low, string? high, bool expected)
+    {
+        Assert.That(LeafReplayOwnership.RangeOverlaps(start, end, low, high), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void IsDisjointRangeDelete_is_true_only_for_a_range_delete_outside_the_captured_bounds()
+    {
+        var ownership = LeafReplayOwnership.Capture(State(LeafShard, "d", "g"), Map);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ownership.IsDisjointRangeDelete(RangeDelete("a", "c")), Is.True);
+            Assert.That(ownership.IsDisjointRangeDelete(RangeDelete("g", "k")), Is.True);
+            Assert.That(ownership.IsDisjointRangeDelete(RangeDelete("a", "e")), Is.False, "A straddling range overlaps.");
+            Assert.That(ownership.IsDisjointRangeDelete(RangeDelete("f", "k")), Is.False, "A straddling range overlaps.");
+
+            // Only range deletes are ever consumed: every other kind keeps its
+            // existing judgement, whatever its key.
+            foreach (var kind in Kinds.Where(k => k != MutationKind.DeleteRange))
+            {
+                var outside = new LatticeMutation { TreeId = "t", Kind = kind, Key = "a", EndExclusiveKey = "c" };
+                Assert.That(ownership.IsDisjointRangeDelete(outside), Is.False, $"{kind} is not a range delete.");
+            }
+        });
+
+        Assert.That(
+            LeafReplayOwnership.Capture(State(null, null, null), null).IsDisjointRangeDelete(RangeDelete("a", "c")),
+            Is.False,
+            "An unbounded leaf owns every key, so no range delete is disjoint from it.");
+    }
+
+    [Test]
+    public void A_range_delete_judged_disjoint_covers_no_key_the_leaf_owns()
+    {
+        // The safety half of issue #3601, checked by brute force: consuming a
+        // range delete without applying it is correct only if it cannot
+        // tombstone any key the leaf holds, i.e. no key lies in both ranges.
+        string?[] bounds = [null, "a", "k010", "k020", "k030", "m", "n", "z"];
+        var checkedPairs = 0;
+
+        Assert.Multiple(() =>
+        {
+            foreach (var low in bounds)
+            {
+                foreach (var high in bounds)
+                {
+                    var ownership = LeafReplayOwnership.Capture(State(null, low, high), null);
+                    foreach (var start in bounds.OfType<string>())
+                    {
+                        foreach (var end in bounds)
+                        {
+                            if (!ownership.IsDisjointRangeDelete(RangeDelete(start, end)))
+                                continue;
+
+                            foreach (var key in Keys.Append(start))
+                            {
+                                var inDelete = string.CompareOrdinal(key, start) >= 0
+                                    && (end is null || string.CompareOrdinal(key, end) < 0);
+                                var inLeaf = (low is null || string.CompareOrdinal(key, low) >= 0)
+                                    && (high is null || string.CompareOrdinal(key, high) < 0);
+                                Assert.That(
+                                    inDelete && inLeaf,
+                                    Is.False,
+                                    $"[{start}, {end}) was judged disjoint from [{low}, {high}) but both contain '{key}'.");
+                            }
+
+                            checkedPairs++;
+                        }
+                    }
+                }
+            }
+        });
+
+        Assert.That(checkedPairs, Is.GreaterThan(50), "The grid must actually exercise disjoint ranges.");
+    }
+
+    private static LatticeMutation RangeDelete(string start, string? end) => new()
+    {
+        TreeId = "t",
+        Kind = MutationKind.DeleteRange,
+        Key = start,
+        EndExclusiveKey = end,
+    };
+
     [Test]
     public void Capture_rejects_a_null_state()
     {

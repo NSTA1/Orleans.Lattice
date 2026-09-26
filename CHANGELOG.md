@@ -26,11 +26,15 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Docs - Operator guides.** The persistent-503 narrowing ladder gains the discriminators it lacked, the tracked Dockerfile build and stamped-commit verification are documented, and two false-green test shapes are named. ([#2366](https://github.com/NSTA1/Orleans.Lattice/issues/2366), [#2707](https://github.com/NSTA1/Orleans.Lattice/issues/2707), [#2716](https://github.com/NSTA1/Orleans.Lattice/issues/2716), [#2738](https://github.com/NSTA1/Orleans.Lattice/pull/2738)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **WAL - GC reclaimable distance and terminal breach.** Each GC shard scan publishes its floor-to-head distance in offsets, and a tree over its byte ceiling with an available floor that reclaims nothing for 10 consecutive passes advances a primed terminal-breach counter. ([#3149](https://github.com/NSTA1/Orleans.Lattice/issues/3149)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
 ### Changed
 
 - **Docs - Multi-silo guide scope.** The multi-silo scaling guide now states that its figures come from one tree on one storage account and links multi-account fan-out, the Operate track lists it, and the internal `benchmark/` notes are no longer published on the docs site. ([#3617](https://github.com/NSTA1/Orleans.Lattice/pull/3617)) (`repository-wide`)
 
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Deletion - Single reminder teardown path.** An unreachable PurgeComplete arm is removed from the tree-deletion reminder handler, leaving the early guard as the one teardown path, now pinned by reminder-dispatch tests. ([#2347](https://github.com/NSTA1/Orleans.Lattice/issues/2347)) (`Orleans.Lattice`)
 
 ### Fixed
 
@@ -77,6 +81,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Indexing - A converged index read as stale.** A completed pass that found no changes never advanced `lastIngested`, so an up-to-date repository reported itself days stale. A no-change pass now re-stamps the marker. ([#3145](https://github.com/NSTA1/Orleans.Lattice/issues/3145)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Vector - Trained-index persist restarted from scratch.** Every failed keep-alive tick rewrote the whole trained index, producing multi-gigabyte WAL bursts and orphaning superseded generations. The persist now resumes where it stopped. ([#3547](https://github.com/NSTA1/Orleans.Lattice/issues/3547)) (`Orleans.Lattice.Vector`)
+
+- **WAL - GC floor repair stalled behind pinned holders.** A write-idle leaf never persisted a residual checkpoint advance, a pass that trimmed while still retaining discarded the holder sample and its block ages, and concurrent touches could spend the one free replay slot above the floor. ([#3608](https://github.com/NSTA1/Orleans.Lattice/issues/3608), [#3609](https://github.com/NSTA1/Orleans.Lattice/issues/3609), [#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610)) (`Orleans.Lattice`)
+
+- **Replay - Permit share and disjoint range deletes.** The GC replay share is sized from permits still in circulation, not the configured ceiling, and a DeleteRange disjoint from the replaying leaf no longer takes a ledger slot or clamps the checkpoint. Exempt-arrival admission is now pinned. ([#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610), [#3601](https://github.com/NSTA1/Orleans.Lattice/issues/3601), [#3299](https://github.com/NSTA1/Orleans.Lattice/issues/3299)) (`Orleans.Lattice`)
+
+- **Indexing - Pacer latched at its ceiling.** A vector-tree throttle indexing cannot move held the pacer at its maximum delay for the life of the process, and backed-off batches ratcheted its baseline down. A throttle outlasting 60 s at the ceiling is now advisory. ([#3456](https://github.com/NSTA1/Orleans.Lattice/issues/3456)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Indexing - Gap-scan diagnostics misreported.** A skip after an unmeasurable scan claimed coverage was observed complete, a pass offered no unchanged file was logged as convergence, and a gap-scan cadence collapsed to every pass without warning. Each now says what held. ([#3483](https://github.com/NSTA1/Orleans.Lattice/issues/3483), [#3350](https://github.com/NSTA1/Orleans.Lattice/issues/3350)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ### Security
 

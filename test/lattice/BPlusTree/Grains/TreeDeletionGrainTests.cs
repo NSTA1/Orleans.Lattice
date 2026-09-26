@@ -22,9 +22,10 @@ public partial class TreeDeletionGrainTests
                      IGrainFactory grainFactory,
                      IOptionsMonitor<LatticeOptions> optionsMonitor) CreateGrain(
         LatticeOptions? options = null,
-        FakePersistentState<TreeDeletionState>? existingState = null)
+        FakePersistentState<TreeDeletionState>? existingState = null,
+        IGrainContext? grainContext = null)
     {
-        var context = Substitute.For<IGrainContext>();
+        var context = grainContext ?? Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("deletion", TreeId));
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();

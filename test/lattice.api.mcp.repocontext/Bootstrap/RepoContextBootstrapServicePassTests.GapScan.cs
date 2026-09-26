@@ -22,6 +22,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Bootstrap;
 /// <see cref="The_shipped_default_cadence_re_checks_a_converged_repository_every_pass"/>
 /// pins the default behaviour that replaced it.
 /// </para>
+/// <para>
+/// The rule for every test in this fixture (issue #3350): at the shipped defaults
+/// <see cref="RepoContextIndexingOptions.PassesPerEmbeddingGapScan"/> is 1, so the
+/// periodic term of the gate is true on every pass and masks every other re-arm
+/// condition. A test whose subject is a re-arm condition or the cadence itself must
+/// therefore pin a spacing at which the periodic term can evaluate false
+/// (<c>BackOffOptions</c> or <c>TwoPassCadenceOptions</c>) and assert
+/// <see cref="RepoContextIndexingOptions.PassesPerEmbeddingGapScan"/> as a
+/// precondition; otherwise it passes whether or not the behaviour it names exists.
+/// Only a test whose subject is the shipped default may read the default options.
+/// </para>
 /// </summary>
 public sealed partial class RepoContextBootstrapServicePassTests
 {
@@ -98,16 +109,28 @@ public sealed partial class RepoContextBootstrapServicePassTests
     {
         // The cold pass scans and finds a gap. A probe that found a gap is not
         // convergence, so the verdict never flips and the next pass scans again
-        // rather than backing off over a known hole.
+        // rather than backing off over a known hole. The cadence is pinned wide so
+        // the periodic term cannot be what re-arms the scan (issue #3350): at the
+        // shipped defaults it is due every pass and this test would pass even with
+        // the gap term removed from the gate.
+        var options = BackOffOptions();
         using var harness = await ConvergedHarnessAsync(
-            coldOutcome: new RepoFileVectorIngestOutcome(0, 1, true));
+            options, coldOutcome: new RepoFileVectorIngestOutcome(0, 1, true));
 
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+        var secondPass = harness.UnchangedOfferedToIngestor.ToArray();
+        await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+        var thirdPass = harness.UnchangedOfferedToIngestor.ToArray();
 
-        Assert.That(
-            harness.UnchangedOfferedToIngestor,
-            Is.Not.Empty,
-            "an unhealed gap must keep the scan armed on every pass");
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                options.PassesPerEmbeddingGapScan,
+                Is.GreaterThan(3),
+                "precondition: the periodic cadence must not come due inside this test");
+            Assert.That(secondPass, Is.Not.Empty, "an unhealed gap must keep the scan armed");
+            Assert.That(thirdPass, Is.Not.Empty, "an unhealed gap must keep the scan armed on every pass");
+        });
     }
 
     [Test]
@@ -196,21 +219,34 @@ public sealed partial class RepoContextBootstrapServicePassTests
     [Test]
     public async Task The_periodic_cadence_re_arms_the_gap_scan_when_it_comes_due()
     {
-        // One reconcile spacing per gap scan means the cadence is due on every pass,
-        // which is exactly the pre-cadence behaviour and proves the gate is driven by
-        // the configured interval rather than hard-wired off.
-        var options = new RepoContextIndexingOptions { EmbeddingGapScanInterval = TimeSpan.Zero };
+        // A two-pass cadence is the narrowest one at which the periodic term can be
+        // observed both false and true (issue #3350). A one-pass cadence - the shipped
+        // default, or an interval of zero - is due on every pass, so a test pinned to
+        // it passes whether the gate reads the configured interval or is hard-wired on.
+        // The cold pass scans; the next pass is converged and not yet due, so it skips;
+        // the pass after that brings the cadence due and must scan again.
+        var options = TwoPassCadenceOptions();
         using var harness = await ConvergedHarnessAsync(options);
 
         await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+        var notYetDue = harness.UnchangedOfferedToIngestor.ToArray();
+        await harness.Service.RunAsync(GapScanRequest(harness), progress: null);
+        var due = harness.UnchangedOfferedToIngestor.ToArray();
 
         Assert.Multiple(() =>
         {
-            Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(1));
             Assert.That(
-                harness.UnchangedOfferedToIngestor,
+                options.PassesPerEmbeddingGapScan,
+                Is.EqualTo(2),
+                "precondition: the cadence must span two passes so its false branch is observable");
+            Assert.That(
+                notYetDue,
+                Is.Empty,
+                "a converged repository must not be re-scanned before the cadence comes due");
+            Assert.That(
+                due,
                 Is.Not.Empty,
-                "a cadence of one pass scans every pass, as it did before the cadence existed");
+                "the cadence must re-arm the gap scan once it comes due");
         });
     }
 
