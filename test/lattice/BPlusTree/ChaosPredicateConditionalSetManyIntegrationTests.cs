@@ -319,11 +319,41 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
             await Task.Delay(100);
         }
 
+        // ---- Routing convergence across the quiesce (issue #3358). The misses
+        // in issue #2663 survived all 31 passes above because a split had lost
+        // its separator: the leaf holding those rows was spliced into the
+        // sibling chain but reachable by no descent, and routing is a total
+        // function of the durable tree, so no quiesce could route to it again.
+        // The completeness check can no longer see that: since #3349 a leaf
+        // forwards a conditional entry it does not declare along the chain, and
+        // the range scan walks the chain rather than descending. So audit the
+        // quiesced tree for such leaves directly, and read every key back
+        // through the routing path, which never forwards.
+        var orphanedLeaves = await CollectOrphanedLeavesAsync(tree);
+        var unroutable = new List<int>();
+        for (int i = LowerProtectedStart; i < UniverseEnd; i++)
+        {
+            ChaosDoc? routed = null;
+            var key = KeyOf(i);
+            await RetryUntilAsync(async () => routed = await tree.GetAsync<ChaosDoc>(key));
+            if (routed is null) unroutable.Add(i);
+        }
+
         Assert.Multiple(() =>
         {
             Assert.That(failures, Is.Empty,
                 $"Chaos observed {failures.Count} invariant violations (first 20):\n " +
                 string.Join("\n ", failures.Take(20)));
+
+            Assert.That(orphanedLeaves, Is.Empty,
+                "Routing did not converge: after the quiesce these leaves are in the sibling chain but no "
+                + "descent from their shard root reaches them, so no routing path reaches their keys (first 10): "
+                + string.Join("; ", orphanedLeaves.Take(10)));
+
+            Assert.That(unroutable, Is.Empty,
+                "Routing did not converge: a point read through the routing path found no value for these keys "
+                + "after the quiesce, though every key in the universe was seeded and none is deleted (first 20): "
+                + string.Join(",", unroutable.Take(20)));
 
             Assert.That(matchMissing, Is.Empty,
                 "Completeness violated: guard-matching keys did not receive the marker (first 20): " +
@@ -393,6 +423,33 @@ public class ChaosPredicateConditionalSetManyIntegrationTests
             }
         }
         await action();
+    }
+
+    /// <summary>
+    /// Drives the read-only orphaned-leaf audit over every shard of
+    /// <paramref name="tree"/> to completion and describes each leaf it found in
+    /// a sibling chain that no descent from its shard root reaches.
+    /// </summary>
+    private static async Task<List<string>> CollectOrphanedLeavesAsync(ILattice tree)
+    {
+        var orphans = new List<string>();
+        string? resumeFrom = null;
+        do
+        {
+            OrphanedLeafRepairReport report = default;
+            var page = resumeFrom;
+            await RetryUntilAsync(async () => report = await tree.InspectOrphanedLeavesAsync(page));
+            foreach (var finding in report.Findings)
+            {
+                orphans.Add($"shard {finding.ShardIndex} leaf {finding.LeafId} "
+                    + $"[{finding.LowKeyInclusive}, {finding.HighKeyExclusive}) keys={finding.KeyCount} {finding.Disposition}");
+            }
+
+            resumeFrom = report.ResumeFrom;
+        }
+        while (resumeFrom is not null);
+
+        return orphans;
     }
 
     /// <summary>
