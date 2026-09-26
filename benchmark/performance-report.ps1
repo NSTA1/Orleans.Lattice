@@ -593,8 +593,8 @@ $Layer2Rows = @(
 # slot, and the point modes fan out at most that many calls per slot, so for
 # those workloads this bound - not the offered rate - is what an
 # undersized client would measure. The rig default of 8 was measured to cap
-# them below the cluster's own ceiling; 64 lifts that cap clear of it (the
-# 2-key sagas reach the transaction-registry refusal ceiling there). The
+# them below the cluster's own ceiling; 64 lifts that cap clear of it (at 64
+# the 2-key sagas are bound by per-saga durable-write latency, #3591). The
 # point modes fan each of the FlushConcurrencyPerSilo x N slots out into
 # FlushConcurrencyPerSilo calls (BENCH_POINT_FANOUT), so their in-flight
 # call count is FlushConcurrencyPerSilo^2 x N: linear in N, with constant
@@ -1341,6 +1341,10 @@ function Invoke-Layer3Cohorts {
 		# at most MaxRungEscalations times per cell. 0 disables escalation.
 		[double] $SaturationRatio = 0.9,
 		[int] $MaxRungEscalations = 3,
+		# How many times one cohort is re-run at the same rung because it
+		# read an unseeded keyspace, before it is kept (and excluded from the
+		# aggregate as UNSEEDED).
+		[int] $MaxUnseededRetries = 2,
 		# Cells from an earlier run of this sweep (state.layer3.cohorts),
 		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
 		# over and skipped; see -Resume.
@@ -1421,6 +1425,7 @@ function Invoke-Layer3Cohorts {
 				# published rung is what it is, never aggregated.
 				$probes = New-Object System.Collections.Generic.List[object]
 				$escalations = 0
+				$unseededRetries = 0
 				$accepted = $null
 				while ($true) {
 					$vehicles = $vehPerSilo * $silos
@@ -1500,9 +1505,29 @@ function Invoke-Layer3Cohorts {
 					if ($entry.producerBound) { $accepted = $entry; break }
 					# An unseeded read cohort measured the miss path; a higher
 					# offered load would not make it a read measurement.
-					if ($entry.unseeded) { $accepted = $entry; break }
+					# It is not evidence of headroom either, so it must not spend
+					# the cell's first-cohort escalation turn: accepting it made
+					# the next cohort the cell's second, which is never allowed
+					# to escalate, so a cell whose first cohort lost its seed was
+					# published as a lower bound at the starting rung. Re-run it
+					# at the same rung, a bounded number of times.
+					if ($entry.unseeded) {
+						if ($unseededRetries -lt $MaxUnseededRetries) {
+							$unseededRetries++
+							$unseededLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.unseeded$unseededRetries.log"
+							if (Test-Path $unseededLog) { Remove-Item $unseededLog -Force }
+							Move-Item $expectedLog $unseededLog -Force
+							Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) is UNSEEDED; re-running it at the same rung (retry $unseededRetries/$MaxUnseededRetries)"
+							continue
+						}
+						$accepted = $entry; break
+					}
 					if (-not $reachedOffered) { $accepted = $entry; break }
-					if ($cohortList.Count -gt 0 -or $escalations -ge $MaxRungEscalations) {
+					# An UNSEEDED cohort kept after its retries ran out is excluded
+					# from the aggregate, so it does not count as the cell's
+					# first cohort: the next one may still escalate.
+					$seededSoFar = @($cohortList | Where-Object { -not $_.unseeded }).Count
+					if ($seededSoFar -gt 0 -or $escalations -ge $MaxRungEscalations) {
 						$entry.offerBound = $true
 						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode): completed $($parsed.FinalThroughput) of $offered offered keys/s, which is offer-bound; not escalating further ($escalations escalation(s) used). The cell is a lower bound."
 						$accepted = $entry
