@@ -8,7 +8,9 @@
 #   1. copies the root pages to the site root, so that the corpus's
 #      ../../README.md style up-links resolve exactly as they do in the repo;
 #   2. copies docs/ underneath, plus the markdown from the directories the corpus
-#      links into (samples, benchmark, spec, reference-architecture);
+#      links into (samples, spec, reference-architecture). benchmark/ is left
+#      out: its markdown is internal rig notes, so step 3 sends links to it to
+#      github.com instead;
 #   3. rewrites every link that does not resolve inside the site to a github.com
 #      URL, so no page 404s;
 #   4. generates the navigation, grouping packages by the seam PACKAGES.md files
@@ -264,8 +266,11 @@ Get-ChildItem (Join-Path $Staging 'docs') -Recurse -Filter *.md | ForEach-Object
 }
 
 # Directories the corpus links into that carry their own markdown. Sample and
-# spec READMEs are real documentation and belong in the site.
-foreach ($extra in @('samples', 'benchmark', 'spec', 'reference-architecture')) {
+# spec READMEs are real documentation and belong in the site. benchmark/ is
+# deliberately absent: its markdown is internal notes for operating the rigs,
+# not user documentation, so it must not be published or searchable. Links to
+# it are rewritten to github.com like any other target outside the site.
+foreach ($extra in @('samples', 'spec', 'reference-architecture')) {
     $source = Join-Path $RepoRoot $extra
     if (-not (Test-Path $source)) { continue }
     $target = Join-Path $Staging $extra
@@ -2106,7 +2111,7 @@ foreach ($sample in $sampleEntries) {
     Add-LlmsLink "samples/$($sample.Name)/source.md" "$($sample.Name): source" $null
     Add-LlmsSplit "samples/$($sample.Name)/source.md" "$($sample.Name): source"
 }
-# Anything else on the site - the benchmark and specification pages the
+# Anything else on the site - the specification pages the
 # documentation links into - each followed by its parts, and the parts of any
 # split page listed above whose parts were not.
 foreach ($relative in $stagedPages) {
