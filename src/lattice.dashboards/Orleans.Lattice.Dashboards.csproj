@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Dashboards</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Pre-built Grafana dashboards and provisioning templates for Orleans.Lattice telemetry. Bundles ready-to-import JSON dashboards covering the orleans.lattice, orleans.lattice.replication, orleans.lattice.replication.grpc, orleans.lattice.auth, orleans.lattice.membership, orleans.lattice.backup, orleans.lattice.scaling, and orleans.lattice.tenancy meters.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
     <PackageTags>orleans;lattice;observability;grafana;opentelemetry;prometheus;dashboards</PackageTags>

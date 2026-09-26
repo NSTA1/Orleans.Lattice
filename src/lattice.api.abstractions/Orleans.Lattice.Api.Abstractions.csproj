@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Abstractions</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Shared contract package for the Orleans.Lattice API facades. Holds the transport-agnostic service interfaces and request/response models for the state, data, auth, backup, schema, tree-administration, tenancy, replication, telemetry, and region-discovery surfaces, so binding packages depend on a public, versioned contract instead of another package's internals. Contains no implementation and starts nothing; the facade packages implement these contracts and are registered separately.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

@@ -180,7 +180,7 @@ A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGE
 
 > **Every shipped package must have a live release line branch containing the tree it shipped from.**
 
-Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.7.x`, both `release/9.4` and `release/9.7` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
+Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.8.x`, both `release/9.4` and `release/9.8` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
 
 Retire a release line branch only once no shipped package still points at it.
 
@@ -226,7 +226,7 @@ The practical consequences are worth stating plainly:
 - A documentation fix that must appear on the site has to reach the **newest** line. Cherry-picking it only onto an older line updates that line's sources but will never publish.
 - Once a line stops being the newest, its documentation is frozen as far as the site is concerned. There is no per-version docs archive; see the limitation below.
 
-One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.7.x`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
+One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.8.x`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
 
 ## Release protocol
 
