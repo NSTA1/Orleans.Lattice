@@ -33,7 +33,7 @@ The index itself. Constructed from `VectorIndexOptions`.
 | `Contains(long)`, `TryGetVector(long, Span<float>)` | Presence and retrieval. |
 | `Clear()` | Drop everything. |
 | `EnsureCapacity(int)` | Reserve ahead of a bulk load, which makes the insert run allocation-free. |
-| `Train()` | Partition the corpus. Synchronous and expensive; keep it off the request path. |
+| `Train()` | Partition the corpus. Synchronous and expensive; keep it off the request path. Returns `false`, and leaves the index unpartitioned and answering exhaustively, when the corpus is too small to partition usefully (below `MinimumTrainingCount`, or resolving to fewer than two partitions). |
 
 **Query**
 
@@ -94,11 +94,11 @@ that must keep a partially-loaded instance across a fault uses
 | `RunBuildAsync` | Loops `BuildStepAsync` to completion. |
 | `UpsertAsync`, `RemoveAsync` | Incremental maintenance. |
 | `TryGetId`, `TryGetKey` | Resolve between an external string identifier and the index's `long` key. |
-| `FlushAsync` | Persist the partitions whose stamps moved, rewriting only the chunks whose content changed. |
+| `FlushAsync` | Persist the partitions whose stamps moved, rewriting only the chunks whose content changed. While a trained generation is part-way through committing, a flush completes that commit instead. |
 | `Search` | Synchronous and allocation-free, into a caller-owned span. Returns the number of hits written and reports the path through an `out` parameter. Under a lazy load it answers from whatever cells are already resident. |
 | `SearchAsync` | Query, returning a `VectorSearchOutcome`. Under a lazy load it fetches any cell the query would probe. |
 | `ReconcileAsync` | Bounded sweep against the store of record, always settling in the source's favour. |
-| `RebuildAsync`, `RetrainAsync` | Full rebuild, and re-partition in place after distribution drift. |
+| `RebuildAsync`, `RetrainAsync` | `RebuildAsync` discards every durable trace of the index and resets the build to `NotStarted`, to be driven again from the store of record. `RetrainAsync` re-partitions the resident corpus after distribution drift - re-reading nothing - and commits the result as a fresh generation, deleting the one it supersedes; calling it again after a failed attempt resumes that commit instead of training again. |
 
 **The build is a caller-driven pump, not a thread.** `BuildStepAsync` does one
 bounded slice and returns; `RunBuildAsync` loops it. This honours the core's
@@ -123,15 +123,15 @@ partitioning exists - so it stays `false` for that small corpus even though
 
 | Type | Purpose |
 |---|---|
-| `IVectorIndexStore` | The narrow async store seam: read, read-many, write, delete, scan by prefix, delete by prefix. |
-| `LatticeVectorIndexStore` | The `ILattice` adapter. The only type in the package that binds to Orleans. |
+| `IVectorIndexStore` | The narrow async store seam: read, read-many, write, delete, scan by prefix (optionally resuming strictly after a key already consumed, which has a correct but unoptimised default implementation), delete by prefix. |
+| `LatticeVectorIndexStore` | The `ILattice` adapter. The only type in the package that binds to Orleans. Its prefix scans push a resume point down into the tree scan, and resume a page walk abandoned by a bare Orleans response `TimeoutException` up to `DefaultScanTimeoutResumeAttempts` (2) consecutive times without banking a record. |
 | `IVectorSource`, `VectorSourceEntry` | The store-of-record seam the background build streams from. |
 | `VectorKeyDictionary` | The durable string-to-`long` identifier mapping. A monotonic allocator, never a hash. |
-| `VectorIndexBuildPhase` | `NotStarted`, `Ingesting`, `Training`, `Persisting`, `Ready`. Monotonic. |
+| `VectorIndexBuildPhase` | `NotStarted`, `Ingesting`, `Training`, `Persisting`, `Ready`, in that order during a build. It is not monotonic over the index's life: `RebuildAsync` (or a failed verification) returns it to `NotStarted`, and a writer that reopens an index whose build committed its trained generation but had not yet deleted the one it superseded resumes at `Persisting`, finishing that deletion on its next build step. |
 | `VectorIndexBuildState`, `VectorIndexManifest`, `VectorIndexPartitionState` | The durable build checkpoint, the commit record, and per-partition commit state. |
 | `VectorIndexStorageKeys`, `VectorIndexPersistenceFormat`, `VectorIndexRecord` | The key layout, the framing constants, and the checksummed record envelope. |
 | `VectorIndexLoadMode` | Full load versus lazy partial load. |
-| `VectorSearchOutcome` | A search result set plus the mode that produced it. |
+| `VectorSearchOutcome` | How many hits a search wrote into the caller's buffer, plus the mode that produced them. |
 | `DurableVectorIndexOptions` | Durable-layer configuration; see [Configuration](configuration.md). |
 
 ## Identifier mapping

@@ -1,7 +1,7 @@
 # Local-dev dual-cluster harness
 
 A two-region Orleans.Lattice environment that runs entirely on your machine, with
-**no Azure**, **no NuGet**, and **no Entra**. It mirrors
+**no Azure**, **no published Orleans.Lattice packages**, and **no Entra**. It mirrors
 [`reference-architecture/local`](../local) as closely as possible, but differs in
 four deliberate ways:
 
@@ -11,7 +11,8 @@ four deliberate ways:
   it up, with no pack/publish step.
 - **Two network-isolated regions.** Region A and region B are symmetric. Docker
   networking enforces the isolation: each region has a private network, and the
-  only bridge between them carries nothing but the silo-to-silo replication seam.
+  only links between them are two silo-only seams (see [Topology](#topology)): one
+  carries the replication traffic, the other reaches the one shared backup sink.
 - **Network-isolated primary storage per region.** Each region has its own Azurite
   primary storage, reachable only from within that region. The one deliberate
   exception is the backup sink: both regions share a single sink over a dedicated
@@ -292,13 +293,15 @@ The silos seed two demo tenants from [`identities.json`](identities.json)'s
 1. `tools/list` on region A's MCP (9090). The tenant tools are **grant-gated per
    identity**, exactly like every other tool group, so different identities see
    different subsets (with tenancy off they are absent for everyone):
-   - `platform-admin` and `region-operator` see all seven - the three
+   - `platform-admin` and `region-operator` see all eleven - the three
      self-awareness tools (`lattice_tenant_current`, `lattice_tenant_list`,
-     `lattice_tenant_get`) plus the four mutating administration tools
-     (`lattice_tenant_create` / `_suspend` / `_resume` / `_delete`, advertised only
-     when `TENANCY_CONTROL=true`).
-   - `data-reader` sees only the three read/self-awareness tools - no mutating
-     tools.
+     `lattice_tenant_get`) plus the eight administration tools
+     (`lattice_tenant_create` / `_suspend` / `_resume` / `_delete` /
+     `_set_quotas` / `_authorize_regions` / `_set_residency`, all mutating, and
+     the read-only `_region_status`), which are advertised only when
+     `TENANCY_CONTROL=true`.
+   - `data-reader` sees only the three read/self-awareness tools - no
+     administration tools.
    - `auditor` (telemetry-only) sees **no** tenant tools at all.
 2. Call `lattice_tenant_list` as `platform-admin` - it returns **both** `acme` and
    `globex` (it administers both). As `region-operator` - only `acme`. As
@@ -378,7 +381,9 @@ entirely - the Explorer then renders no Telemetry area there.
 | Per-request identity at the edge (MCP) | `DevBypassAuthenticationHandler` | Authenticates each request as the subject in its own `Authorization: Bearer <id>` header; no bearer means anonymous (zero tools). |
 | Per-identity sign-in (Explorer) | `DevBypassExplorerAuthMethod` | Forwards the username entered at the sign-in dialog as the caller's bearer token, so the console is served as that identity. Sign-in is manual: the environment credential seed is deliberately left off (see [Acting as an identity](#acting-as-an-identity)). |
 
-All four exist only in this harness and never ship in a real deployment host.
+All five exist only in this harness and never ship in a real deployment host (the
+single-region `hosts/` heads have separate, Entra-off-only dev bypasses, two of which
+share these names).
 
 ### Why the MCP head carries an administrator token
 
@@ -395,4 +400,4 @@ their tools. Enforcement is unaffected - the caller's *own* bearer token authori
 every actual tool call, so a `data-reader` still sees the write tools advertised but
 is denied at call time by deny-by-default. Without this token only an administrator
 caller could enumerate a full tool set remotely; every non-admin identity would fall
-back to just the two ungated baseline tools.
+back to the `lattice_capabilities` meta-tool alone.

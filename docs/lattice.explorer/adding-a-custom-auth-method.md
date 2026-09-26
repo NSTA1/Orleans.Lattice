@@ -68,6 +68,12 @@ public sealed class ApiKeyAuthMethod : IExplorerAuthMethod
 }
 ```
 
+The connection attaches a static credential header - `authorization` or
+`proxy-authorization` - only over an `https` endpoint, or one whose connection
+settings set `AllowUnencryptedHttp2`. For any other endpoint it refuses to send the
+credential in the clear, and the connection reports that refusal as a fault
+instead of connecting.
+
 ## A token method with transparent refresh
 
 For a short-lived token, wrap acquisition in an `ExplorerAccessTokenSource`. You

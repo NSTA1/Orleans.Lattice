@@ -27,11 +27,11 @@ public static class LatticeFileServiceCollectionExtensions
     /// <c>AddFileWalStorage</c> twice keeps the second configuration.
     /// <para>
     /// The same durable-WAL GC wiring the Azure Table provider installs
-    /// (WAL cursor registry + leaf reporter + WAL GC) is registered here
-    /// so opting into a durable local WAL never silently pairs with a
-    /// process-local, restart-wiped cursor registry (issue #919). All
-    /// three are idempotent (<c>TryAddSingleton</c>): a host that already
-    /// supplied its own keeps it.
+    /// (durable pin-aware leaf reporter + WAL GC) is registered here so opting
+    /// into a durable local WAL gets cross-restart trim protection even though
+    /// <c>AddLattice</c> already supplies an in-memory cursor registry fallback.
+    /// The registrations are idempotent: a host that already supplied its own
+    /// keeps it.
     /// </para>
     /// </summary>
     /// <param name="builder">The Orleans silo builder.</param>

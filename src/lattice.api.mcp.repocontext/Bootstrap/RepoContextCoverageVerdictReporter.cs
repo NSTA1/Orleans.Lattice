@@ -31,7 +31,8 @@ internal enum RepoContextCoverageVerdict
 
     /// <summary>
     /// An ingestion arm faulted, so the pass's coverage facts are not admissible
-    /// whatever they said. Clears convergence and re-arms the scan.
+    /// whatever they said. Clears convergence; the next pass decides whether a
+    /// measured gap or unmeasurable probe keeps the every-pass scan armed.
     /// </summary>
     ArmFailure = 1,
 

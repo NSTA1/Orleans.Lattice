@@ -76,7 +76,7 @@ underneath them. Orleans.Lattice fills that gap, and takes three positions about
 how:
 
 - **The store lives in the cluster.** State is held by grains in the same
-  process as the code using it, so a read is a grain call rather than a network
+  cluster as the code using it, so a read is a grain call rather than a network
   round trip to a separate tier with its own scaling and failure envelope.
 - **Conflict resolution is algebraic.** Merges are commutative, associative, and
   idempotent, so convergence needs no distributed lock manager and no consensus
@@ -101,7 +101,7 @@ set.
 | **Knowledge systems** | Ordered keyspaces with per-key revision history and server-side filtering, so a corpus can be browsed, versioned, and queried without a separate metadata store. | [Change history](FEATURES.md#indexing-search-and-views), [predicate operations](docs/lattice/predicated-operations.md), [tag indexes](docs/lattice/api.md#tag-indexes) |
 | **AI memory systems** | Conflict-free records with per-entry TTL and approximate nearest-neighbour search over vectors held in the same store the records live in. | [Vector search](docs/lattice.vector/README.md), [TTL](docs/lattice/ttl.md), [MCP server](docs/lattice.api.mcp/README.md) |
 | **Digital twins** | One grain per entity with durable, ordered state behind it, converging deterministically when a device and the cloud both write. | [Conflict-free merges](docs/lattice/state-primitives.md), [grain indexes](docs/lattice.grainindex/README.md), [events](docs/lattice/events.md) |
-| **Search and indexing platforms** | Materialised views and tag indexes maintained off the write-ahead log, so secondary access paths are derived rather than hand-maintained. | [Materialised views](docs/lattice/materialised-views.md), [tag indexes](docs/lattice/api.md#tag-indexes), [vector search](docs/lattice.vector/README.md) |
+| **Search and indexing platforms** | Materialised views maintained off the write-ahead log, so secondary access paths are derived rather than hand-maintained, alongside tag indexes queried by tag intersection or union. | [Materialised views](docs/lattice/materialised-views.md), [tag indexes](docs/lattice/api.md#tag-indexes), [vector search](docs/lattice.vector/README.md) |
 | **Distributed control planes** | Fail-closed authorization, atomic multi-key writes, fencing-token leases, and a saga coordinator for changes that must apply all-or-nothing. | [Atomic writes](docs/lattice/atomic-writes.md), [atomic action](docs/lattice/atomic-action.md), [distributed lock](docs/lattice/distributed-lock.md) |
 | **Multi-tenant SaaS platforms** | Keyspace-partitioned tenants with per-tenant quotas, metering, rate limiting, and optional region residency, layered on the core through null seams. | [Multi-tenancy](docs/lattice.tenancy/README.md), [schema enforcement](docs/lattice.schema/README.md), [tenant administration](docs/lattice.api.tenantadmin/README.md) |
 | **Collaborative applications** | Active-active replication where any cluster may write any key, with deterministic convergence and no coordinator to elect. | [Cross-cluster replication](docs/lattice.replication/README.md), [state primitives](docs/lattice/state-primitives.md), [change history](docs/lattice/change-history.md) |
@@ -119,8 +119,10 @@ deployment target, not a degraded development mode.
 
 - **Durability.** The [file write-ahead log](docs/lattice.storage.file/README.md)
   gives an append-and-fsync log per shard on local disk, with crash-safe
-  reconciliation and background compaction. The in-memory WAL is the default if
-  you do not need durability yet.
+  reconciliation and background compaction. Pair it with a durable grain-storage
+  provider for tree state, as the
+  [RepoContext container](samples/RepoContextContainer/README.md) does. The
+  in-memory WAL is the default if you do not need durability yet.
 - **Inspection.** The [Explorer console](docs/lattice.explorer/running-the-explorer.md)
   (in progress) browses trees, topology, data and history over the cluster's
   gRPC APIs.
@@ -139,9 +141,10 @@ matter.
 - **Authorization.** [Fail-closed, default-deny policy](docs/lattice/security.md)
   per tree, prefix, or key, enforced on the core data path and on every external
   API.
-- **Schema.** [Per-tree write validation and value versioning](docs/lattice.schema/README.md),
-  with dead-letter diversion of non-compliant writes and read-time upcasting of
-  stale values.
+- **Schema.** [Per-tree write validation and value versioning](docs/lattice.schema/README.md):
+  a local write that breaks the tree's policy is rejected, a non-compliant
+  replicated or restored item is dead-lettered once strict ingest is enabled, and
+  stale values are upcast on read.
 - **Tenancy.** [Keyspace-partitioned tenants](docs/lattice.tenancy/README.md) with
   a lifecycle, per-tenant quotas, metering and rate limiting.
 
@@ -180,7 +183,7 @@ flowchart TD
     App["Applications<br/>knowledge systems, AI memory, digital twins, search,<br/>control planes, multi-tenant SaaS, collaboration"]
 
     App --> Explorer["Explorer console<br/>(in progress)"]
-    App --> Apis["API facades<br/>state, data, auth, schema, backup,<br/>replication, tree admin, tenant admin"]
+    App --> Apis["API facades<br/>state, data, auth, schema, backup, replication,<br/>telemetry, tree admin, tenant admin"]
     App --> Mcp["MCP server<br/>tools for AI agents"]
 
     Explorer --> Core
@@ -240,7 +243,8 @@ Register Lattice on a silo. `AddLattice` registers the grain catalogue, the grai
 siloBuilder.AddLattice((silo, storageName) =>
     silo.AddMemoryGrainStorage(storageName));
 
-// AddLattice registers the in-memory WAL by default - swap for a durable backend in production.
+// AddLattice registers the in-memory WAL by default. In production, use durable grain
+// storage and a durable WAL backend instead - see below.
 
 // elsewhere - on the client or inside a grain - resolve a tree by name:
 var lattice = grainFactory.GetGrain<ILattice>("my-tree");
@@ -256,22 +260,36 @@ Console.WriteLine(user?.Name);
 await lattice.SetAsync("hello", "world"u8.ToArray());
 ```
 
-For production, swap the in-memory WAL for a durable backend - e.g. Azure Table Storage from the sibling package:
+For production, make both storage surfaces durable: the grain-storage provider that holds tree state, including each leaf's state row and snapshot, and the write-ahead log, in place of the in-memory WAL. For example, Azure Table Storage for both, from the `Microsoft.Orleans.Persistence.AzureStorage` and `Orleans.Lattice.Storage.AzureTable` packages:
 
 ```csharp verify
-siloBuilder
-    .AddLattice((silo, storageName) => silo.AddMemoryGrainStorage(storageName))
-    .AddAzureTableWalStorage(opts =>
+using Azure.Data.Tables;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Storage.AzureTable;
+
+var connectionString = "DefaultEndpointsProtocol=https;...";
+
+siloBuilder.AddLattice((silo, storageName) =>
+{
+    silo.AddAzureTableGrainStorage(storageName, options =>
     {
-        opts.ConnectionString = "DefaultEndpointsProtocol=https;...";
+        options.TableServiceClient = new TableServiceClient(connectionString);
     });
+});
+
+siloBuilder.AddAzureTableWalStorage(o =>
+{
+    o.ConnectionString = connectionString;
+});
 ```
 
 Add cross-cluster replication on top by registering `AddLatticeReplication(...)` alongside the WAL. See the [`Orleans.Lattice.Replication` overview](docs/lattice.replication/README.md) for the full multi-cluster setup.
 
-For a local-first alternative to the Azure Table backend, register the
-[file write-ahead log](docs/lattice.storage.file/README.md) instead and keep the
-whole deployment on one machine.
+For a local-first alternative to Azure Table Storage, pair the
+[file write-ahead log](docs/lattice.storage.file/README.md) with a durable local
+grain-storage provider - the [RepoContext container](samples/RepoContextContainer/README.md)
+runs Orleans ADO.NET grain storage over a single SQLite file - and keep the whole
+deployment on one machine.
 
 ## RepoContext: an example built on the platform
 
@@ -319,21 +337,52 @@ Use these documents for day-to-day use and operations:
 
 - [API Reference](docs/lattice/api.md) - the public `ILattice` interface, batch operations, options, and serializable types.
 - [Configuration](docs/lattice/configuration.md) - options reference, per-tree overrides, immutability constraints, storage provider.
+- [Consistency](docs/lattice/consistency.md) - the contract for what a caller of `ILattice` is guaranteed to observe, operation by operation.
 - [Security](docs/lattice/security.md) - opt-in identity, authorization, and enforcement: how membership, policy, fail-closed enforcement, the external APIs, and cross-cluster convergence fit together, with links to each package.
 - [Predicate Operations](docs/lattice/predicated-operations.md) - server-side predicate push-down for typed reads, conditional and atomic writes, scans, cursors, and range deletes.
+- [Atomic Writes](docs/lattice/atomic-writes.md) - `SetManyAtomicAsync`: all-or-nothing multi-key batches within a tree, and across trees through the `IGrainFactory` overload.
+- [Atomic Action](docs/lattice/atomic-action.md) - the public `IAtomicActionGrain` saga / TCC coordinator: an ordered plan of steps that commits all-or-nothing, compensating completed steps in strict reverse order.
+- [Distributed Lock](docs/lattice/distributed-lock.md) - the public `ILatticeLockGrain`: a FIFO-fair lock / lease keyed by name, with bounded leases and monotonic fencing tokens.
+- [TTL](docs/lattice/ttl.md) - per-entry time-to-live on `SetAsync` and on typed CRDT writes, with absolute server-side expiry.
+- [Bulk Loading](docs/lattice/bulk-loading.md) - `BulkLoadAsync` for a one-shot import into an empty tree, its streaming and resumable chunked forms, and how it compares with `SetManyAsync`.
 - [Migrating from an External Store](docs/lattice/external-store-migration.md) - importing an existing Redis, relational, or Cosmos DB dataset over the bulk-load path, with key-design, value-serialization, and post-load verification guidance.
+- [Durable Cursors](docs/lattice/durable-cursors.md) - server-checkpointed iterators for long-running key scans and resumable range deletes that survive silo failovers and client restarts.
+- [Snapshot Cursors](docs/lattice/snapshot-cursors.md) - strict snapshot-isolation cursors, whose every page reflects the tree as it was when the cursor opened.
+- [Snapshots](docs/lattice/snapshots.md) - point-in-time copies of a tree into a new destination tree, offline or online.
+- [Online Reshard](docs/lattice/online-reshard.md) - `ReshardAsync`: growing a tree's physical shard count while it keeps serving reads and writes.
+- [Tree Sizing](docs/lattice/tree-sizing.md) - `ResizeAsync`: changing a live tree's `MaxLeafKeys` and `MaxInternalChildren`, its phase machine, and its undo window.
+- [Tree Deletion](docs/lattice/tree-deletion.md) - soft delete with a configurable retention window, recovery, and manual purge.
+- [Tree Registry](docs/lattice/tree-registry.md) - the built-in registry of every user tree and its per-tree configuration overrides, aliases, and shard maps.
+- [Retry Policy](docs/lattice/retry-policy.md) - the opt-in retry surface for transient storage faults, and the idempotency-key contract that makes a retry safe.
 - [Queues](docs/lattice/queues.md) - the public `ILatticeQueue<T>` cluster-internal FIFO primitive, bounded-queue eviction, and throughput guidance.
 - [Compression](docs/lattice/compression.md) - the public `ILatticeCompressor` seam, `AddLatticeCompressor` registration, tag-space partitioning, and how to plug in a custom algorithm.
+- [Events](docs/lattice/events.md) - metadata-only notifications of tree mutations on a per-tree Orleans stream.
+- [Materialised Views](docs/lattice/materialised-views.md) - asynchronous, eventually-consistent filter / re-project and aggregation views maintained off a source tree's write-ahead log.
+- [History Views](docs/lattice/history-views.md) - opt-in, append-only per-key revision history kept as a materialised view, with live-tunable retention modes.
+- [Change History](docs/lattice/change-history.md) - reading a key's revision timeline from `ScanEntryHistoryAsync`, the State API, or the Explorer.
+- [Diagnostics](docs/lattice/diagnostics.md) - `DiagnoseAsync`: a point-in-time health snapshot of a tree for dashboards, health probes, and post-mortem investigation.
+- [Metrics](docs/lattice/metrics.md) - the `System.Diagnostics.Metrics` instrument catalogue, its tag conventions, OpenTelemetry registration, and the bundled Grafana dashboards.
 - [Samples](docs/lattice/samples.md) - runnable sample projects exercising `ILattice`.
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
+- [Performance: single-silo guide](docs/lattice/performance-single-silo.md) - approximate single-silo throughput and latency, measured against real Azure Tables.
+- [Performance: multi-silo scaling guide](docs/lattice/performance-multi-silo.md) - how that throughput responds as silos are added.
 - [Troubleshooting](docs/lattice/troubleshooting.md) - symptom-driven diagnosis: reading a `DiagnoseAsync` report, storage-provider write failures, split activity, slow scans, and stale reads.
 
 For internals (the "how"):
 
 - [Architecture](docs/lattice/architecture.md) - grain layers, sharding, root promotion, grain mapping, capacity.
+- [State Model](docs/lattice/state-model.md) - how tree state is laid out on disk and in memory, why the leaf state row stays small, and what an activation replays.
+- [State Primitives](docs/lattice/state-primitives.md) - the monotonic state primitives (hybrid logical clock, last-writer-wins register, version vector) and the opt-in CRDT value types.
 - [Tree Structure](docs/lattice/tree-structure.md) - internal/leaf node layout, two-phase leaf splits, idempotent split propagation.
 - [Tree Storage](docs/lattice/tree-storage.md) - per-provider storage limits, node size estimation, sizing recommendations.
+- [Shard Splitting](docs/lattice/shard-splitting.md) - how a hot physical shard splits in two at runtime, fully online, and how scans behave during a split.
+- [Read Caching](docs/lattice/caching.md) - the per-silo read-through cache in front of each leaf, its value-payload eviction, and its invalidation through tree aliasing.
+- [Tombstone Compaction](docs/lattice/tombstone-compaction.md) - background reaping of expired tombstones, its policy-driven triggers, and the operator API.
+- [Projection Rebuild](docs/lattice/projection-rebuild.md) - leaf-projection digests for cross-silo divergence detection, and policy-driven rebuild when a leaf falls off the log.
+- [Chaos Tests](docs/lattice/chaos-tests.md) - the integration suite that drives a live cluster with concurrent load, topology changes, network partitions, and storage faults, and asserts the consistency guarantees.
 - [Verified Atomic-Commit](docs/lattice/verified-atomic-commit.md) - the proven-core pattern, Coyote concurrency tier, property catalogue, and TLA+ spec behind the atomic-commit protocol.
+- [Verified Atomic Action](docs/lattice/verified-atomic-action.md) - the verified core and Coyote concurrency tier behind the atomic-action coordinator's step sequencing, reverse-order compensation, and crash resume.
+- [Verified Distributed Lock](docs/lattice/verified-lock.md) - the verified core and Coyote concurrency tier behind the distributed lock's fencing tokens, stale-token rejection, and expired-lease reclamation.
 - [Verified WAL](docs/lattice/verified-wal.md) - the proven-core pattern and Coyote concurrency tier behind the WAL shipping, GC-trim, cursor-registry, move-fence, shutdown-drain, offset-allocation, blocked-floor, and move-resume seams.
 - [WAL](docs/lattice/wal.md) - write-ahead log as the sole foreground-commit durability boundary.
 - [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.

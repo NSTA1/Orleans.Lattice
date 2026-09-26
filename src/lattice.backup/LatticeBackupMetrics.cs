@@ -128,7 +128,7 @@ public static class LatticeBackupMetrics
     /// <summary>Counter of bytes reclaimed by the retention pass, tagged with <see cref="TagScope"/>.</summary>
     public static readonly Counter<long> RetentionBytesReclaimed =
         BackupMetrics.Meter.CreateCounter<long>("orleans.lattice.backup.retention.bytes_reclaimed", unit: "By",
-            description: "Artifact bytes reclaimed by retention / deletion, tagged by scope.");
+            description: "Artifact bytes reclaimed by retention pruning, tagged by scope.");
 
     /// <summary>Counter of backups pruned by retention, tagged with <see cref="TagScope"/>.</summary>
     public static readonly Counter<long> RetentionPruned =
@@ -230,19 +230,22 @@ public static class LatticeBackupMetrics
             description: "Age in seconds of the newest tracked backup (0 when none).");
 
     /// <summary>
-    /// Per-scope last-run outcome. A scope enters the registry at schedule
-    /// registration, so <c>0</c> is a measured "scheduled, nothing has completed
-    /// yet" rather than an unreachable placeholder, and an absent series means no
-    /// schedule is registered for the scope (issue #2645). The value is the
-    /// <see cref="BackupScopeRunOutcome"/> ordinal, so every member of that enum
-    /// is emittable and the description must enumerate all of them.
+    /// Per-scope last-run outcome, held in a per-silo in-memory census that starts
+    /// empty when the silo starts. A scope enters the census when a schedule is
+    /// registered, when any successful capture records the scope, or when a
+    /// scheduler-run cycle fails or is denied, and it is never removed. <c>0</c> is
+    /// a measured "registered, no outcome recorded yet" placeholder; scheduler-run
+    /// cycles set the failure and denied values. The value is the
+    /// <see cref="BackupScopeRunOutcome"/> ordinal, so every member of that enum is
+    /// emittable and the description must enumerate all of them.
     /// </summary>
     private static readonly ObservableGauge<long> ScopeLastRunStatus =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.scope.last_run_status",
             ObserveScopeLastRunStatus, unit: "{status}",
-            description: "Per-scope last-run outcome (0=scheduled with no completed cycle, 1=success, "
-                + "2=failure, 3=denied), tagged by scope. The series appears at schedule registration, so 0 is a "
-                + "measured 'not yet'; an absent series means no schedule is registered for the scope.");
+            description: "Per-scope last-run outcome on this silo since it started (0=schedule registered with no "
+                + "outcome recorded yet, 1=success, 2=scheduler-run failure, 3=scheduler-run denied), tagged by scope. "
+                + "The series appears at schedule registration, after any successful capture, or after a scheduler-run "
+                + "failure or denial, and a cancelled schedule keeps its last value.");
 
     private static readonly ObservableGauge<double> ScopeLastSuccessAge =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.scope.last_success_age",

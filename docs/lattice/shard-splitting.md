@@ -17,84 +17,94 @@ hot virtual slots to a new physical shard so the load follows the data.
 ## How it works
 
 A split is driven by the internal `TreeShardSplitGrain` coordinator through
-five phases. The source shard *S* keeps serving reads and writes throughout;
-the target shard *T* receives mirrored data and eventually owns the moved
-slots.
+five persisted phases, in this order. The source shard *S* keeps serving reads and
+writes throughout; the target shard *T* receives mirrored data and eventually
+owns the moved slots.
 
 ```mermaid
 stateDiagram-v2
     [*] --> BeginShadowWrite : split requested for source shard S
-    BeginShadowWrite --> Drain : S starts mirroring moved-slot writes to T
-    Drain --> Reject : forward all moved-slot entries (live + tombstones) to T
-    Reject --> Swap : S rejects moved-slot operations + final drain pass
-    Swap --> Complete : registry reassigns the moved slots to T in one call
-    Complete --> [*] : final drain pass, then S seals the moved slots
+    BeginShadowWrite --> Drain : S mirrors moved-slot writes to T, prepared mutations swept across
+    Drain --> Swap : every moved-slot entry (live + tombstones) forwarded to T
+    Swap --> Reject : S sealed and rejecting, final drain, registry reassigns the moved slots to T
+    Reject --> Complete : reject state re-asserted
+    Complete --> [*] : final drain pass, then S records the moved slots in its moved-away table
 ```
 
-1. **BeginShadowWrite** - Coordinator persists intent and calls
-   `S.BeginSplitAsync(targetShardIndex, movedSlots, virtualShardCount)`. Before
-   any foreground writes are mirrored, the coordinator also runs a
-   **retroactive prepared-mutation sweep**: it walks *S*'s leaf chain,
-   pulls every in-flight `_pendingTx` entry whose key hashes into a moved
-   virtual slot via
-   `IBPlusLeafGrain.GetPendingMutationsForSlotsAsync(sortedMovedSlots, virtualShardCount)`,
-   and replays each one into *T*'s `_pendingTx` buckets under the
-   original `(txid, hlc, origin, vc, expiresAtTicks)` so any prepared
-   write that landed on *S* before the split survives the topology
-   change. The sweep is idempotent by `(txid, key)` and persists its
-   phase, so a coordinator crash mid-sweep resumes from the same point
-   on reactivation. Instrumentation:
+1. **BeginShadowWrite** - Coordinator takes the upper half of the virtual
+   slots *S* owns as the moved set, allocates a fresh target shard index from
+   the registry, persists its intent, and opens *S*'s shadow-write window for
+   the moved slots. From that moment every successful write *S* applies to a
+   key in a moved virtual slot is also mirrored to *T* through *T*'s batched
+   merge, preserving the original HLC. Before the drain begins, the
+   coordinator then runs a **retroactive prepared-mutation sweep**: it walks
+   *S*'s leaf chain, snapshots every in-flight prepared saga mutation whose
+   key hashes into a moved virtual slot, and replays each one into *T*'s
+   pending-transaction buckets under its original transaction id, HLC,
+   origin, vector clock, and expiry, so any prepared write that landed on *S*
+   before the window opened survives the topology change. A saga the
+   transaction registry already reports as committed or aborted has its
+   terminal applied to *T* directly instead. The sweep is idempotent per
+   `(transaction, key)`, and a coordinator crash mid-sweep re-runs the whole
+   sweep on recovery. Instrumentation:
    `orleans.lattice.split.retroactive_forward.entries` (counter, per
    replayed mutation) and
    `orleans.lattice.split.retroactive_forward.duration` (histogram,
-   total sweep wall-clock). From this point on, every successful write
-   *S* applies to a key in a moved virtual slot is also mirrored to *T*
-   via `T.MergeManyAsync`, preserving the original HLC. CRDT LWW
-   guarantees correct convergence regardless of how the foreground
-   write and the background drain interleave.
+   total sweep wall-clock). CRDT LWW guarantees correct convergence
+   regardless of how the foreground write and the background drain
+   interleave.
 2. **Drain** - Coordinator walks *S*'s leaf chain and forwards moved-slot
    entries (including tombstones) to *T* with their original HLC timestamps.
    The drain is **chunked** and **leaf-side filtered**: each leaf returns
-   only entries whose virtual slot is in the moved-slot set via
-   `IBPlusLeafGrain.GetDeltaSinceForSlotsAsync`, and the coordinator flushes
-   to *T* in batches of `SplitDrainBatchSize` (default 1024) entries. This
-   bounds peak memory on the coordinator regardless of source shard size,
-   and avoids transferring non-moved entries over the wire. Idempotent under
-   retry - re-running merges only converges to the same state.
-3. **Reject** - Coordinator marks the source leaves moved-away and calls
-   `S.EnterRejectPhaseAsync()` **before** the registry map flips. From this
-   point any read or write to *S* for a moved-slot key throws
-   `StaleShardRoutingException`, which freezes the source's committed state
-   for the migrating slots. The coordinator then runs one final authoritative
-   drain pass to *T*, so the destination is synchronised with the source's
-   now-frozen committed state before any reader can route to *T*. Reversing
-   this order - flipping the map before the source rejects - would open a
-   window in which a stale-routing reader could still be served the pre-split
-   value by the source.
-4. **Swap** - Coordinator reassigns the moved slots to *T* in the
-   registry's `ShardMap` with a single registry call that re-reads the
-   live map, applies the reassignment, and persists it under a fresh
-   `Version`, so a concurrent split or shard consolidation of the same
-   tree cannot erase either change. New router activations immediately
-   route the moved slots to *T*; stale activations that still cache the old
-   map hit the source's reject gate, catch `StaleShardRoutingException`,
-   invalidate their cached map, fetch the fresh map from the registry, and
-   retry against *T* - a single transparent retry per call.
+   only entries whose virtual slot is in the moved-slot set, and the
+   coordinator flushes to *T* in batches of `SplitDrainBatchSize` (default
+   1024) entries. This bounds peak memory on the coordinator regardless of
+   source shard size, and avoids transferring non-moved entries over the
+   wire. Each pass is bounded by the background-drain budget
+   (`BackgroundDrainLeavesPerPass` leaves or `BackgroundDrainMaxDuration`,
+   whichever binds first) and persists a key cursor the next tick resumes
+   from, so the phase advances to Swap only once the whole leaf chain has
+   been swept. Idempotent under retry - re-running merges only converges to
+   the same state.
+3. **Swap** - Coordinator seals every source leaf for the moved slots and
+   puts *S* into its reject phase **before** the registry map flips. From
+   this point any read or write to *S* for a moved-slot key is refused as
+   stale routing, which freezes the source's committed state for the
+   migrating slots. The coordinator then runs one final authoritative drain
+   pass to *T*, so the destination is synchronised with the source's
+   now-frozen committed state before any reader can route to *T*. Only then
+   does it reassign the moved slots to *T* in the registry's `ShardMap`,
+   with a single registry call that re-reads the live map, applies the
+   reassignment, and persists it under a fresh `Version`, so a concurrent
+   split or shard consolidation of the same tree cannot erase either change.
+   Reversing the order - flipping the map before the source rejects - would
+   open a window in which a stale-routing reader could still be served the
+   pre-split value by the source. New router activations immediately route
+   the moved slots to *T*; stale activations that still cache the old map
+   hit the source's reject gate, invalidate their cached map, fetch the
+   fresh map from the registry, and retry against *T* - a single
+   transparent retry per call.
+4. **Reject** - Coordinator re-asserts *S*'s reject phase. *S* already
+   entered it during Swap and the call is idempotent, so this phase only
+   records the transition; a crash-recovered coordinator that re-enters it
+   changes nothing.
 5. **Complete** - Coordinator runs one final drain pass to capture any
    tombstones written during shadow that were not mirrored on the hot path,
-   then calls `S.CompleteSplitAsync()` and clears its own state.
-   `CompleteSplitAsync` also promotes the just-completed split's moved
-   slots into a permanent `MovedAwaySlots` set on `S`, so even after the
-   active reject-phase state is cleared, every subsequent operation on a
-   moved-slot key continues to throw `StaleShardRoutingException`. This
-   guarantees that stale `[StatelessWorker]` `LatticeGrain` activations
-   (which may have cached the pre-split shard map) always trigger a map
-   refresh on first use rather than silently returning orphan data.
+   then tells *S* to complete the split and clears its own state.
+   Completing also promotes the split's moved slots into *S*'s persisted
+   moved-away slot table, so even after the active reject-phase state is
+   cleared, every subsequent operation on a moved-slot key continues to be
+   refused as stale routing. This guarantees that stale stateless-worker
+   router activations (which may have cached the pre-split shard map)
+   always trigger a map refresh on first use rather than silently returning
+   orphan data. The table is lifted only if a later shard consolidation
+   folds *T* back into *S* - and only after *T*'s entries for those slots
+   have been drained onto *S* - at which point *S*'s leaves re-ship the
+   reclaimed rows to their read caches.
 
 The coordinator state is persisted before any side effect, so a silo crash
-mid-split is recovered by the keepalive reminder: `RunSplitPassAsync`
-resumes from the last persisted phase, and every phase method is
-idempotent.
+mid-split is recovered by the keepalive reminder, which resumes from the
+last persisted phase; every phase is idempotent.
 
 ## Scan semantics during a split
 
@@ -109,8 +119,9 @@ throughout the split: every successful write is mirrored to the new
 owner during the shadow phase and the reject phase (which precedes the map
 swap) causes stale activations to transparently retry against the correct
 shard. The
-post-Complete permanent `MovedAwaySlots` rejection extends this for the
-lifetime of the source shard.
+post-Complete `MovedAwaySlots` rejection extends this for as long as the
+source does not own those slots again (only a later shard consolidation
+that folds them back lifts it).
 
 Scans (`ScanKeysAsync`, `ScanEntriesAsync`, `CountAsync`) reconcile against
 topology changes mid-scan as described below. See
@@ -410,7 +421,9 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   [Atomic Writes - After the retention window](atomic-writes.md#after-the-retention-window-indeterminate-not-inflight).
 * **No duplicate authority** - after the swap, only *T* is reachable for
   moved slots via the public API; orphan entries on *S* are unreachable
-  and reclaimed on tree purge.
+  and reclaimed on tree purge, unless a later shard consolidation folds *T*
+  back into *S*, which drains *T*'s entries onto *S* before lifting *S*'s
+  seal so the survivor's copy is authoritative again.
 * **Geometric convergence on a single hot slot** - if all heat is in one
   virtual slot, successive autonomic splits subdivide *S*'s slot set in
   half each pass, isolating the hot slot in `O(log virtualSlotsPerShard)`
@@ -419,8 +432,10 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 ## Scope
 
 Shard splitting is an autonomic concern. `ITreeShardSplitGrain` is internal
-infrastructure: every entry point asserts that the call originated inside
-the silo, so an external client call is rejected with
-`InvalidOperationException`. There is no public
+infrastructure: once `AddLatticeAuth` has installed its trust-boundary call
+filter, starting a split asserts that the call originated inside the
+cluster, so an external client call to start one is rejected with
+`LatticeAuthorizationDeniedException` (a cluster without that filter does
+not enforce the assertion). There is no public
 API to trigger or control a split; tuning is performed exclusively through
 the `LatticeOptions` listed above.

@@ -26,7 +26,7 @@ The package has no implementation, no registration extension, and no background 
 
 Before this package the facade service interfaces were `internal` to each facade package, so every consumer that needed the contract - the gRPC bindings and the co-hosted MCP server - had to be granted `InternalsVisibleTo` into the facade assembly (and, for the MCP server, into the core assembly as well). That coupled a consumer to a producer's private surface across several assemblies.
 
-Publishing the contract as a real, versioned public package removes those cross-package internal-visibility grants: a binding evolves against a stable public contract rather than another package's internals, and `internal` inside each facade goes back to meaning "safe to change". The interfaces keep their original `Orleans.Lattice.Api.{State,Data,Auth,Backup,Schema}` namespaces, so existing consumers compile unchanged.
+Publishing the contract as a real, versioned public package removes those cross-package internal-visibility grants: a binding evolves against a stable public contract rather than another package's internals, and `internal` inside each facade goes back to meaning "safe to change". The interfaces keep their original `Orleans.Lattice.Api.{State,Data,Auth,Backup,Schema}` namespaces, so existing consumers compile unchanged; the later contracts follow the same one-namespace-per-facade pattern (`Orleans.Lattice.Api.Replication`, `.Telemetry`, `.TreeAdmin`, `.TenantAdmin`, and the region-discovery `.Region`).
 
 ## Core properties
 

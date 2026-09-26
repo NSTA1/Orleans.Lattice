@@ -2,8 +2,8 @@ namespace Orleans.Lattice.Explorer.Core.Connection;
 
 /// <summary>
 /// Immutable connection configuration for a single state-API endpoint. Supplied
-/// to <see cref="ILatticeStateConnection.ConfigureAsync"/>; changing the
-/// <see cref="Address"/> rebuilds the underlying channel.
+/// to <see cref="ILatticeStateConnection.ConfigureAsync"/>; each configure call
+/// rebuilds the underlying channel from this complete snapshot.
 /// </summary>
 public sealed record LatticeConnectionSettings
 {
@@ -41,16 +41,15 @@ public sealed record LatticeConnectionSettings
     public IReadOnlyDictionary<string, string>? TransportHeaders { get; init; }
 
     /// <summary>
-    /// How long a previously healthy connection may stay in
-    /// <see cref="LatticeConnectionState.Reconnecting"/> before degrading to
-    /// <see cref="LatticeConnectionState.Faulted"/> (the visual disconnected
+    /// How long a connection may stay disrupted (connecting or reconnecting) before
+    /// degrading to <see cref="LatticeConnectionState.Faulted"/> (the visual disconnected
     /// state). Defaults to 5 seconds.
     /// </summary>
     public TimeSpan DegradeAfter { get; init; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// How often the background health monitor probes a degraded or reconnecting
-    /// endpoint to recover it. Defaults to 1 second.
+    /// How often the background health monitor probes a connecting, degraded, or
+    /// reconnecting endpoint to recover it. Defaults to 1 second.
     /// </summary>
     public TimeSpan HealthCheckInterval { get; init; } = TimeSpan.FromSeconds(1);
 

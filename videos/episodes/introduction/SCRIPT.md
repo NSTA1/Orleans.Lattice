@@ -7,8 +7,9 @@ tags: the technical half first, then the plain-language opening. Its fixes are
 applied to both.
 
 Written form, in the series voice (Emma, British English). The pronunciation
-lexicon (`voice/lexicon.json`) handles "Orleans", "ILattice", "Cluster A",
-"idempotent" and "lives"; captions keep the text exactly as written here.
+lexicon (`voice/lexicon.json`) handles "Orleans" and "ILattice", and, for the
+Kokoro engine, "Cluster A", "idempotent" and "lives"; captions keep the text
+exactly as written here.
 
 The first minute is for everyone, and uses no technical terms: what state is,
 why keeping it in many places at once is hard, and what Orleans.Lattice does
@@ -72,7 +73,9 @@ Each merges the other's update by taking the larger value per replica, so both a
 
 Deliver that update twice, and nothing changes.
 
-Merges are commutative, associative and idempotent, so any cluster can accept a write to any key, with no lock manager and no consensus round trip. For plain values, the last writer wins.
+Merges are commutative, associative and idempotent.
+
+So any cluster can accept a write to any key, with no lock manager and no consensus round trip. For plain values, the last writer wins.
 
 ### Everything else is a seam
 
@@ -86,7 +89,7 @@ So a deployment can grow without a rewrite. Start local: one machine, no cloud a
 
 Add a team: identity, authorization, schemas and tenants.
 
-Go global: active-active across regions, with backup and an autoscaling signal.
+Go global: active in every region at once, with backup and an autoscaling signal.
 
 At every stage, the programming model is the same. Your code resolves ILattice, and calls it.
 
@@ -98,7 +101,7 @@ Build, if you are writing code against ILattice.
 
 Evaluate, if you are deciding whether it fits.
 
-Operate, if you are running an estate. Pick your way in.
+Operate, if you are running an estate. You choose.
 
 <!-- pause 2.0 -->
 
@@ -120,11 +123,11 @@ than its source, or says it in plainer words, the reason is given.
 | a platform for building durable, distributed state systems on Microsoft Orleans | README, opening paragraph |
 | a sorted key-value store that runs inside your own cluster; no external database, coordinator or queue | README, "What is it?". "Durable" is kept for the platform and left off the store, because the default write-ahead log is in memory and not crash-safe (README, "The deployment journey"; `docs/lattice/wal.md`) |
 | three positions | README, "Why it exists" |
-| state is held by grains in the same cluster as the code that uses it; a read is a grain call, not a round trip to a separate database tier | README, "Why it exists", first position. The README says "the same process"; the script says "the same cluster", because the shard and leaf grains may be placed on any silo (`docs/lattice/architecture.md`) |
+| state is held by grains in the same cluster as the code that uses it; a read is a grain call, not a round trip to a separate database tier | README, "Why it exists", first position ("State is held by grains in the same cluster as the code using it"). Not "the same process": only the shard router and the leaf cache are stateless workers activated locally; shard roots, internal nodes and leaves may be placed on any silo, and a cached read first refreshes from its primary leaf (`docs/lattice/architecture.md`, `docs/lattice/caching.md`) |
 | conflict resolution is algebraic; commutative, associative and idempotent; no lock manager and no consensus round trip; any cluster can accept a write to any key | README, "What is it?" and "Why it exists" |
 | Cluster A adds three and cluster B five, each to its own count; neither state is above the other; the larger value per replica; the join; delivering that update twice changes nothing | `docs-site/figures/join-figures.json`, `gcounter`, mirroring `docs/crdt/gcounter.md` |
 | for plain values, the last writer wins | README, "What is it?" ("provided you use its CRDT Primitives"); `docs/crdt/readme.md`; `docs/lattice/state-primitives.md` |
-| storage, identity, governance, replication, administration and observability are companion packages behind documented seams; a host takes only what it registers; a capability it leaves out costs nothing | the site's "A core plus seams" lede, word for word; README, "Architecture: a core plus seams" |
-| Local: one machine, no cloud account; Team: identity, authorization, schemas, tenants; Global: active-active across regions, backup, an autoscaling signal | README, "The deployment journey". Lattice publishes the scaling signal; an external autoscaler such as KEDA acts on it (`docs/lattice.scaling/README.md`) |
+| storage, identity, governance, replication, administration and observability are companion packages behind documented seams; a host takes only what it registers; a capability it leaves out costs nothing | the site's "A core plus seams" lede, word for word but for its punctuation (no serial comma, and ", and" where the site has a semicolon); README, "Architecture: a core plus seams" |
+| Local: one machine, no cloud account; Team: identity, authorization, schemas, tenants; Global: active in every region at once, backup, an autoscaling signal | README, "The deployment journey". Its "Active-active replication" (the site's lede says "active-active across regions") is said in plain words: each region serves reads and writes ("Multiple regions, each serving reads and writes"), and the voice read the hyphenated compound as two words with a pause. Lattice publishes the scaling signal; an external autoscaler such as KEDA acts on it (`docs/lattice.scaling/README.md`) |
 | the programming model is the same at every stage; your code resolves ILattice and calls it | the site's "One programming model, Local to Global" ("ILattice unchanged at every stage"); README, "The deployment journey" |
 | the documentation has three ways in: Build, Evaluate and Operate, and who each is for | the site's "Three ways in" |

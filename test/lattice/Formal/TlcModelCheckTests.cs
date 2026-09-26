@@ -63,8 +63,8 @@ public sealed class TlcModelCheckTests
     private const string CleanBanner = "Model checking completed. No error has been found.";
 
     /// <summary>
-    /// TLC is fast on these bounded instances: the base model is 7,649 states
-    /// at depth 17 in about three seconds, and a mutant usually trips in about
+    /// TLC is fast on these bounded instances: the base model count was measured
+    /// before the model changed in #2612, and a mutant usually trips in about
     /// one. This ceiling is a hang guard rather than a budget, and a run
     /// approaching it means the model is wrong, not that the timeout is tight.
     /// </summary>

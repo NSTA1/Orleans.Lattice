@@ -12,9 +12,9 @@ using Orleans.Lattice.Replication.Grpc;
 namespace Orleans.Lattice.Samples.CrossClusterAuthorization;
 
 /// <summary>
-/// Builds one in-process Orleans cluster wired with the full authorization
-/// stack (Membership + Auth + the State/Auth admin APIs) and cross-cluster
-/// replication of the reserved membership/auth system trees. Two of these, given
+/// Builds one in-process Orleans cluster wired with membership, auth enforcement,
+/// and cross-cluster replication of the data tree plus the reserved membership/auth
+/// system trees. Two of these, given
 /// mirror-image <see cref="SiteConfig"/>s, form a two-site topology whose policy
 /// and membership surface converges across sites, so a revoke authored on one
 /// site becomes enforced on the other.

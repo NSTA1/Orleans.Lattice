@@ -6,7 +6,7 @@ Cross-cluster replication can be turned on and off **per tree at runtime**, with
 
 Replication configuration is not a bespoke store and not a cross-cluster handshake. It is itself a **replicated CRDT system tree**, `LatticeSystemTreeNames.ReplicationConfig` (`sys-replication-config`), dogfooding the exact pattern the engine already uses for its membership and auth-policy system trees.
 
-The tree is an OR-Map keyed by target tree id. Each value is a small composite CRDT record (`LatticeReplicationConfigEntry`):
+The tree holds a single OR-Map, stored under the well-known key `LatticeSystemTreeNames.ReplicationConfigMapKey` (`config`) and keyed by target tree id. Each value is a small composite CRDT record (`LatticeReplicationConfigEntry`):
 
 - **Enablement** is a disable-wins `RwFlag`. Enabling adds an enable dot; disabling adds a disable dot that wins, so a concurrent enable and disable resolves to disabled - the safe direction.
 - **Merge mode** is an `MvRegister` holding the encoded `LatticeMergeMode`. Two clusters that concurrently enable the same tree under different modes both survive convergence, so a divergent mode is **detectable** rather than silently overwritten. An `MvRegister` is used deliberately in place of an `LwwRegister`, whose last-writer-wins contract would drop the loser under a concurrent multi-cluster write - exactly the correctness hazard here.
@@ -31,23 +31,23 @@ A grain call must never sit on the commit hot path, so the config tree is projec
 Two dynamic seams read that snapshot:
 
 - **`IReplicatedTreeMembership`** answers "should this tree replicate right now?" from the snapshot (unioned with the static seed).
-- **`ILatticeMergeModeResolver`** answers "under which merge mode?" from the snapshot (falling back to the static seed when the runtime tree has no entry).
+- **`ILatticeMergeModeResolver`** answers "under which merge mode?" from the snapshot (falling back to the static seed whenever the runtime tree holds no enabled, unambiguous mode for the tree - a runtime-disabled entry included - but never for an ambiguous mode; see [Fail-closed ambiguity](#fail-closed-ambiguity)).
 
-The boot-time flag-mode and merge-mode startup guards become runtime precondition checks, so a mode that is only valid with a configured local replica is validated when a tree is enabled, not only at startup.
+The boot-time flag-mode and merge-mode startup guards become runtime precondition checks, so a mode that is only valid with a configured local replica is validated when a tree is enabled, not only at startup; a failed check - or a host with no `ClusterId` to stamp the enablement dot with - throws `LatticeReplicationPreconditionFailedException`.
 
 ## Fail-closed ambiguity
 
-When the `MvRegister` holds more than one live mode for a tree, the snapshot marks that tree **ambiguous** and the resolver returns no mode. The commit-time producer then **pauses shipping that tree** until the ambiguity is resolved, rather than silently picking a mode and dead-lettering the loser's data. Resolution is an operator action: disable the tree (which the disable-wins flag settles unambiguously) and re-enable it under the intended single mode.
+When the `MvRegister` holds more than one live mode for a tree, the snapshot marks that tree **ambiguous** and the resolver returns no mode, even when the tree is also declared statically. The commit-time observer then stops nudging the tree's shippers. The per-peer shipper does not currently gate on the resolution, though: it keeps draining the tree's WAL on its phase timer and ships new locally-authored entries with the batch header's mode set to `LwwRegister`. A peer whose own resolution of the tree also returns no mode - the converged case - drops them at its receiver-side enrollment gate (logged, not dead-lettered). That rejection is not a deferral, so the peer still acknowledges the batch and the sender advances its cursor past the dropped entries; they are not re-shipped once the tree resolves to a mode again, so the peer diverges for those writes until a snapshot re-seed (for example an enable that names a bootstrap source cluster) or the anti-entropy repair pipeline brings it back in line. Resolution is an operator action: disable the tree (which the disable-wins flag settles unambiguously) and re-enable it under the intended single mode.
 
-This is the load-bearing safety property of the whole feature: a divergent multi-cluster mode write can never be silently resolved in favour of one side.
+The resolver itself never picks one of the divergent modes: it reports the tree as ambiguous until an operator settles it.
 
 ## Enable, disable, and mode changes
 
 The engine authoring seam is `ILatticeReplicationConfigAuthority`, installed only when `AddLatticeReplication(..., enableRuntimeConfig: true)` is called:
 
-- **Enable** fixes the merge mode at enable time. Enabling an already-enabled tree under the same mode is idempotent; under a **different** mode it is rejected (`LatticeReplicationModeChangeRejectedException`), because a mode change would reinterpret every already-shipped value under a new merge algebra. The sanctioned way to change a mode is to disable, then re-enable under the new mode; naming a bootstrap source cluster on that enable re-seeds a tree that already holds data (next bullet).
+- **Enable** fixes the merge mode at enable time. Enabling an already-enabled tree under the same mode is idempotent; under a **different** mode - or while its mode is ambiguous - it is rejected (`LatticeReplicationModeChangeRejectedException`), because a mode change would reinterpret every already-shipped value under a new merge algebra. The sanctioned way to change a mode is to disable, then re-enable under the new mode; naming a bootstrap source cluster on that enable re-seeds a tree that already holds data (next bullet).
 - **Enable on a non-empty tree** composes the existing snapshot bootstrap: when a bootstrap source cluster is named and the tree already holds rows, a receiver-driven snapshot is requested (through `ILatticeBootstrapCoordinator` / `ILatticeReplicationAdmin.RequestSnapshotAsync`) so the peer converges on the pre-existing rows the change feed will not carry.
-- **Disable** writes the disable-wins dot. It pauses shipping new mutations; it never purges data already replicated to peers, and it keeps the entry (with its last mode) in the config tree. A later enable re-fixes the mode to the value it requests; no bootstrap runs unless that enable names a bootstrap source cluster.
+- **Disable** writes the disable-wins dot. The tree drops out of the runtime enrollment: unless it is also declared statically (see [Reading the effective configuration](#reading-the-effective-configuration)), membership no longer reports it as replicated and the resolver returns no mode. As with an ambiguous tree, the shipper does not currently stop shipping it, and a converged peer drops those entries while the sender advances past them (see [Fail-closed ambiguity](#fail-closed-ambiguity)). Disable never purges data already replicated to peers, and it keeps the entry (with its last mode) in the config tree. A later enable re-fixes the mode to the value it requests; no bootstrap runs unless that enable names a bootstrap source cluster.
 
 ## Reading the effective configuration
 
@@ -55,7 +55,7 @@ The engine authoring seam is `ILatticeReplicationConfigAuthority`, installed onl
 
 The projection applies exactly the precedence `SnapshotLatticeMergeModeResolver` applies on the commit path, so the report always describes what the host actually does:
 
-1. An **ambiguous** runtime mode fails closed - the mode is reported `null` and shipping is paused. A static declaration never resolves the ambiguity.
+1. An **ambiguous** runtime mode fails closed at resolution - the mode is reported `null` - but shipping does not pause: a converged peer drops the tree's new entries and the sender advances past them (see [Fail-closed ambiguity](#fail-closed-ambiguity)). A static declaration never resolves the ambiguity.
 2. Otherwise an **enabled runtime entry with an unambiguous mode** wins, and that mode is reported.
 3. Otherwise the **static declaration** is the floor that keeps the tree shipping, and its mode is reported.
 

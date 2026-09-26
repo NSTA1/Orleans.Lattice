@@ -4,9 +4,10 @@
 
 `ILattice.SetManyAtomicAsync` commits a batch of key-value pairs all-or-nothing:
 either every key in the batch becomes visible together, or - on failure or a
-failed guard - nothing is written and every key keeps its pre-batch value. This
+failed guard - nothing is committed and every key keeps its pre-batch value. This
 sample commits a successful batch, then runs a guarded batch whose precondition
-fails to prove no partial state leaks, and finally uses the
+fails to prove no partial state leaks, re-runs it with a guard every key
+satisfies so it commits in full, and finally uses the
 `IGrainFactory.SetManyAtomicAsync` overload to flip keys across two separate
 trees as one unit.
 

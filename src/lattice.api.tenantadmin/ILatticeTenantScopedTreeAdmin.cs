@@ -14,10 +14,8 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <remarks>
 /// <para>
 /// <b>Fail-closed tenant derivation.</b> The operating tenant is never a method
-/// parameter and is never taken from the wire. It is derived solely from the
-/// ambient <see cref="LatticeActiveTenantContext"/>, which the tenancy layer sets
-/// only after validating the asserted tenant against the caller's membership. A
-/// call made with no active tenant in scope is refused with a
+/// parameter. This facade reads the ambient <see cref="LatticeActiveTenantContext"/>
+/// and refuses a call with no active tenant in scope with
 /// <see cref="TenantScopeRequiredException"/> before any tree is named or touched.
 /// </para>
 /// <para>
@@ -28,8 +26,11 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// local name contains. A tenant is therefore structurally unable to lifecycle or
 /// schema-modify a tree outside its own namespace - there is no parameter through
 /// which another tenant's tree could be named. This is the single narrowest seam
-/// at which confinement is enforced; the underlying facades then apply their own
-/// fail-closed authorization on the composed id.
+/// at which confinement is enforced. Lifecycle verbs then delegate to the
+/// tree-admin facade, which applies its own fail-closed authorization on the
+/// composed id. Schema verbs delegate to the in-process schema admin, which does
+/// not authorize on its own, so callers must reach this facade through an
+/// authorized tenant-administration transport.
 /// </para>
 /// <para>
 /// <b>Quota.</b> Tree creation is admitted against the active tenant's quota
@@ -135,7 +136,9 @@ public interface ILatticeTenantScopedTreeAdmin
 
     /// <summary>
     /// Sets or replaces the schema-enforcement policy on the active tenant's tree
-    /// named <paramref name="name"/>, enforced immediately on subsequent writes.
+    /// named <paramref name="name"/>, enforced immediately on subsequent writes. The
+    /// target id is tenant-composed here; authorization is expected at the transport
+    /// layer before this in-process schema admin call is reached.
     /// </summary>
     /// <param name="name">The tenant-local, unqualified tree name. Must not be <c>null</c> or empty.</param>
     /// <param name="policy">The policy to apply. Must not be <c>null</c>.</param>
@@ -148,7 +151,9 @@ public interface ILatticeTenantScopedTreeAdmin
 
     /// <summary>
     /// Clears the schema-enforcement policy on the active tenant's tree named
-    /// <paramref name="name"/>. Returns <c>true</c> when a policy was removed.
+    /// <paramref name="name"/>. Returns <c>true</c> when a policy was removed. The
+    /// target id is tenant-composed here; authorization is expected at the transport
+    /// layer before this in-process schema admin call is reached.
     /// </summary>
     /// <param name="name">The tenant-local, unqualified tree name. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
@@ -160,7 +165,9 @@ public interface ILatticeTenantScopedTreeAdmin
 
     /// <summary>
     /// Reads the schema-enforcement policy on the active tenant's tree named
-    /// <paramref name="name"/>, or <c>null</c> when none exists.
+    /// <paramref name="name"/>, or <c>null</c> when none exists. The target id is
+    /// tenant-composed here; authorization is expected at the transport layer before
+    /// this in-process schema admin call is reached.
     /// </summary>
     /// <param name="name">The tenant-local, unqualified tree name. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the read.</param>

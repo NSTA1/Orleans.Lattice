@@ -6,7 +6,7 @@
 //   - a user-assigned managed identity (the region's workload identity)
 //   - a Log Analytics workspace capped at 1 GB/day ingestion
 //   - an Azure Container Apps managed environment wired to that workspace
-//   - three container apps: silo (min 1 / max 10), MCP and Explorer (min 0)
+//   - three container apps: silo (min 1 / default max 3), MCP and Explorer (min 0)
 //
 // This module owns the COMPUTE lane only. Storage (WAL + clustering table),
 // networking (VNet / Front Door / replication transport), and observability
@@ -423,7 +423,7 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 // =============================================================================
-// Silo container app (the Orleans cluster; min 1 / max 10)
+// Silo container app (the Orleans cluster; min 1 / default max 3)
 // -----------------------------------------------------------------------------
 // Intra-region clustering model:
 //   - Azure Table membership (storage sub-issue) provides Orleans membership;

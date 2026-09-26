@@ -37,7 +37,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <para>
 /// <b>Deliberately additive.</b> The first line is still exactly the aggregate status
 /// word, so a consumer that compared the whole body against <c>Healthy</c> keeps
-/// working, and callers leave <see cref="HealthCheckOptions.ResultStatusCodes"/> at
+/// working, and callers leave <see cref="Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions.ResultStatusCodes"/> at
 /// the framework default so the code an orchestrator (and the acceptance predicate)
 /// reads is unchanged. An endpoint using this writer gains detail; it does not move.
 /// </para>

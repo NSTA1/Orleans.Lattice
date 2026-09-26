@@ -9,10 +9,14 @@ namespace Orleans.Lattice.BPlusTree;
 /// The refusal reasons are ordered by evaluation order, cheapest and most
 /// selective first, so a cold shard reports
 /// <see cref="BelowRateThreshold"/> rather than a downstream structural reason.
-/// Each value maps to an observability reason tag on
-/// <c>orleans.lattice.split.admission.deferred</c>, so an operator can tell a
-/// tree that is uniformly loaded from one that has hit its shard ceiling from
-/// one whose shards are simply too small to be worth splitting.
+/// <see cref="ShardCeilingReached"/>, <see cref="UniformLoad"/> and
+/// <see cref="LowOccupancy"/> map to observability reason tags on
+/// <c>orleans.lattice.split.admission.deferred</c> (beside the cluster gate's own
+/// <c>cluster_cap</c>), so an operator can tell a tree that is uniformly loaded
+/// from one that has hit its shard ceiling from one whose shards are simply too
+/// small to be worth splitting. <see cref="AlreadySplitting"/>,
+/// <see cref="BelowRateThreshold"/>, <see cref="Cooldown"/> and
+/// <see cref="InsufficientSlots"/> are not recorded on any counter.
 /// </remarks>
 internal enum ShardSplitAdmissionOutcome
 {

@@ -42,8 +42,8 @@ for (var i = 0; i < args.Length; i++)
             toleranceRaw = args[++i];
             break;
         default:
-            // Unknown args are forwarded to BDN's argument parser later. Keeping
-            // the simple parse loop limited to the harness-specific switches.
+            // Unknown args are rejected by this harness; add explicit parsing here
+            // before using a new option.
             break;
     }
 }

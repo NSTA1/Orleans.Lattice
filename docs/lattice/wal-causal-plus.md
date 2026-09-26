@@ -65,6 +65,7 @@ Each WAL entry is extended to carry causal metadata required for causal+ consist
 - `OriginClusterId`
 - `Timestamp` (Hybrid Logical Clock)
 - `Mode` (`LatticeMergeMode`)
+- The remaining envelope slots, which causal+ does not touch: `EndExclusiveKey`, `IsTombstone`, `ExpiresAtTicks`, `TransactionId`, `IsPrepared`, `AtomicShardCount`, `IsMerge`, `IsBackstop`, `Category`, `MatchedKeys`, `CrossTreeOperationId` and `CrossTreeParticipants` (the `AtomicBatchSize` / `AtomicBatchIndex` pair is described in 1.2).
 
 The per-shard monotonic offset is **not** a field on the entry. It is assigned by the owning WAL shard as the entry is appended and travels alongside it, which is why replay can be ordered by offset without the offset being part of the entry's wire shape.
 

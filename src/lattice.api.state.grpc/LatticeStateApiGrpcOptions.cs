@@ -19,11 +19,12 @@ public sealed class LatticeStateApiGrpcOptions
     /// <summary>
     /// The inbound request-header (gRPC metadata) name that carries the caller's
     /// credential token, bridged into the ambient Lattice credential so the
-    /// data-plane access gate can resolve the caller's subject and filter reads.
-    /// Defaults to <c>authorization</c>. Only consulted when auth-backed
-    /// visibility is active (the <c>Orleans.Lattice.Auth</c> add-on is
-    /// registered); when it is not, no header is read and the state API behaves
-    /// exactly as before.
+    /// data-plane access gate can resolve the caller's subject and filter reads
+    /// when auth-backed visibility is active (the <c>Orleans.Lattice.Auth</c>
+    /// add-on is registered). Defaults to <c>authorization</c>. The header is
+    /// bridged on every call, including when authorization is disabled or no auth
+    /// add-on is present; without auth-backed visibility the credential does not
+    /// change what the state API returns.
     /// </summary>
     public string CredentialHeaderName { get; set; } = "authorization";
 

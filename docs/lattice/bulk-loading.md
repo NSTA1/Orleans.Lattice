@@ -69,9 +69,12 @@ await tree.BulkLoadAsync(entries);
 
 It is a **one-shot initial-import primitive**: every shard must be empty when
 it is called. The call fans out to every physical shard, including shards this
-load has no entries for, and a shard that already has a root node - one that
-has ever been written, even if every key has since been deleted - rejects it
-with `InvalidOperationException`. It is **not** re-drivable: each call mints a
+load has no entries for, and a shard that already has a root node rejects it
+with `InvalidOperationException` while the shards without one still load their
+share. A shard gains its root node the first time any operation reaches it - a
+read, a count or a warm-up as well as a write - and keeps it even after every
+key has been deleted, so a tree that has only ever been read from can already
+refuse a bulk load. It is **not** re-drivable: each call mints a
 fresh operation id, so re-issuing a load after it (or part of it) has
 completed fails on the shards that already hold data. Only the per-shard retry
 inside a single call is idempotent, so after a crash mid-import restart
@@ -111,6 +114,15 @@ ids, so restart against a fresh tree - or drive the chunks yourself through
 extension appends each chunk to the right edge of the tree, so entries must
 arrive in ascending key order (as the example's comment notes); it validates
 neither that order nor that the tree is empty.
+
+The extension also addresses the tree's shard roots directly instead of going
+through the `ILattice` facade, so none of the facade's checks run on it: not
+the whole-tree `LatticeOperation.BulkLoad` gate, not write interception, and
+not the reserved-namespace guards. On a cluster running `AddLatticeAuth`,
+whose trust boundary refuses direct external calls to internal grains, a call
+from outside the silo is rejected with `LatticeAuthorizationDeniedException`.
+Where those checks matter, drive the load through `BulkAppendChunkAsync`
+(below) or the tree-administration bulk-load session instead.
 
 ## Resumable chunked bulk load (`BulkAppendChunkAsync`)
 

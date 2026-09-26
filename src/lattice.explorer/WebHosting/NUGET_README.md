@@ -2,7 +2,8 @@
 
 Opt-in **embeddable hosting library** for the
 [Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice) Blazor Server
-web head. Add and run the read-only explorer console **inside your own ASP.NET
+web head. Add and run the explorer console - a read-only browser of cluster
+state plus capability-gated administration areas - **inside your own ASP.NET
 application** (or a thin dedicated host) and point it at a cluster's state-API
 endpoint, behind a single `AddLatticeExplorerWeb` + `MapLatticeExplorer` opt-in.
 

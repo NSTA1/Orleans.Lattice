@@ -3901,8 +3901,11 @@ internal sealed partial class LatticeGrain(
 
     /// <summary>
     /// Lazily ensures the tree's <c>TombstoneCompactionGrain</c> has a
-    /// registered reminder, on the first write to this tree. Subsequent
-    /// writes are no-ops.
+    /// registered reminder, on the first write this worker activation handles.
+    /// Subsequent writes on the same activation are no-ops. The latch is per
+    /// activation, so every new stateless worker asks once; that is safe because
+    /// the compaction grain registers only when the reminder is absent and never
+    /// moves an existing schedule (issue #3592).
     /// </summary>
     private async Task EnsureCompactionReminderAsync()
     {

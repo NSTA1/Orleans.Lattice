@@ -25,7 +25,7 @@ This gives every write a totally-ordered timestamp without requiring a central c
 Each key-value entry in a leaf node is wrapped in `LwwValue<byte[]>`:
 
 ```
-LwwValue = (Value, Timestamp, IsTombstone)
+LwwValue = (Value, Timestamp, IsTombstone, ...)   // plus expiry, origin cluster, vector clock, migration marker
 ```
 
 The merge rule is simple: **the entry with the higher `HLC` timestamp wins**. This is:
@@ -80,7 +80,7 @@ Merge({r1->10, r2->5}, {r1->8, r3->3}) = {r1->10, r2->5, r3->3}
 
 This is commutative, associative, and idempotent - making it safe for uncoordinated consumers to merge version vectors from multiple sources.
 
-**Example use case:** a downstream replica that periodically asks "what's changed since I last looked?" The caller hands its current version vector to the leaf and gets back only the entries newer than that point, so a sidecar projector can keep an external search index up to date without re-scanning the whole tree on every poll.
+**Example use case:** the tree's own bulk copies - a tree merge, and the drain of a shard split or consolidation (filtered to the moving slots) - present an empty version vector to each leaf and receive its entries in one delta, which the destination merges idempotently. This is internal machinery, not a public API: to keep an external projection such as a search index up to date, subscribe to [tree events](events.md), register an [`IMutationObserver`](api.md#mutation-observers), or maintain a [materialised view](materialised-views.md).
 
 ## State Deltas
 
@@ -330,15 +330,16 @@ Use the multi-value register when **losing a concurrent write is unacceptable** 
 
 ## Recursive CRDT Composition (`ICrdt<TSelf>`)
 
-The CRDT primitives above all share the same merge contract: an in-place `MergeFrom(other)` that is commutative, associative, and idempotent, plus an `IsBottom` predicate that distinguishes a truly empty value from one that merely happens to evaluate to a neutral element (e.g. a `PnCounter` whose increments equal its decrements is **not** bottom because it still carries replica history).
+The CRDT primitives above all share the same merge contract: an in-place `MergeFrom(other)` that is commutative, associative, and idempotent, an `IsBottom` predicate that distinguishes a truly empty value from one that merely happens to evaluate to a neutral element (e.g. a `PnCounter` whose increments equal its decrements is **not** bottom because it still carries replica history), and a `Clone()` that returns a deep, independent copy sharing no mutable buffer with the original.
 
 This contract is captured by the generic interface `ICrdt<TSelf>`:
 
 ```
-interface ICrdt<TSelf>
+interface ICrdt<TSelf> where TSelf : ICrdt<TSelf>
 {
     void MergeFrom(TSelf other);
     bool IsBottom { get; }
+    TSelf Clone();
 }
 ```
 

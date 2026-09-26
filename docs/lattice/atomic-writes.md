@@ -183,10 +183,12 @@ if (outcome == AtomicWriteOutcome.PreconditionFailed)
 
 ### Saga Coordinator Grain
 
-Each call to `SetManyAtomicAsync` routes through `LatticeGrain` to a freshly
-created `AtomicWriteGrain` activation keyed by `{treeId}/{operationId}`,
-where `operationId` is a GUID generated per call. The grain persists a single
-`AtomicWriteState` POCO whose phase transitions drive the saga lifecycle:
+Each call to `SetManyAtomicAsync` is routed by the tree to a saga
+coordinator grain keyed by `{treeId}/{operationId}`, where `operationId` is
+a GUID generated per call (or the caller-supplied idempotency key - see
+[Caller-supplied idempotency keys](#caller-supplied-idempotency-keys)). The
+grain persists a single `AtomicWriteState` POCO whose phase transitions drive
+the saga lifecycle:
 
 ```
 NotStarted --> Prepare --> Execute --> registry.MarkCommitted --> fan-out --> Completed   (success)
@@ -417,14 +419,14 @@ cluster's sagas, runs a version that understands sharded ids. See
 
 ### Phase 4 - Complete
 
-Whether the saga succeeds or rolls back, it ends by writing `Phase =
-Completed`, unregistering the keepalive reminder, arming the retention
+Whether the saga commits or aborts, it ends by persisting the completed
+phase, unregistering the keepalive reminder, arming the retention
 reminder (`atomic-write-retention`, default 48 h via
 `LatticeOptions.AtomicWriteRetention`) for delayed state cleanup,
-calling `registry.ForgetAsync(txid)` so the registry transitions the
-decision into its tombstone retention window, and calling
-`DeactivateOnIdle`. Failed sagas preserve `FailureMessage` so a client
-that re-invokes the same grain key receives the original failure via
+asking the registry to forget the decision - which moves it into its
+tombstone retention window - and requesting deactivation. A failed saga
+preserves its failure message, so a client that retries with the same
+`operationId` receives the original failure via
 `InvalidOperationException`.
 
 The terminal write also **releases the staged batch payload** from the
@@ -821,7 +823,9 @@ non-final tally leaves the per-tree linearization mark unset and the
 receiver leaves' pending buckets undrained - readers dialling back
 through `ITxRegistryGrain.GetStatusAsync` observe `InFlight` for the
 whole saga and fall through to the pre-saga value. Only on the final
-arrival does the receiver:
+arrival does the receiver (for a cross-tree write, only once the
+[receiver barrier](#cross-cluster-cross-tree-visibility-receiver-barrier)
+has also decided):
 
 1. Mark the registry's decision (`MarkCommittedAsync` /
    `MarkAbortedAsync`) - the single per-tree visibility flip.
@@ -845,9 +849,9 @@ legacy producer that never stamps `AtomicShardCount` sees a count of
 `0` on every arrival, which the gate treats as "no expected-total
 information" and falls back to first-terminal-wins semantics -
 equivalent to the pre-gate behaviour. The registry's cleanup call for a
-finished saga clears both maps alongside the decision entry, so the
-persisted footprint stays bounded by the in-flight + recently-completed
-saga set.
+finished saga clears both maps when it tombstones the decision entry,
+so the persisted footprint stays bounded by the in-flight +
+recently-completed saga set.
 
 ### Prepared writes never enter the receiver's batched merge path
 
@@ -916,7 +920,12 @@ trees replicate to.
 |---|---|
 | `IGrainFactory.SetManyAtomicAsync(IReadOnlyList<LatticeTreeBatch>, operationId, ct)` | Commit per-tree slices atomically; returns a `CrossTreeAtomicWriteOutcome`. |
 | `IGrainFactory.BeginAtomicWrite(operationId)` | Open a `LatticeAtomicWriteBuilder` for fluent, per-tree staging. |
+| `LatticeAtomicWriteBuilder.ForTree(treeId)` | Select (creating if needed) the tree that subsequent staging calls target; re-selecting a tree continues its slice. |
+| `LatticeAtomicWriteBuilder.Set(key, value)` / `Set<T>(key, value[, serializer])` | Stage a raw, or serialized (System.Text.Json by default), value write under the current tree. |
+| `LatticeAtomicWriteBuilder.SetWhere<T>(key, value, predicate[, serializer])` | Stage a value write under the current tree's guard predicate, evaluated once server-side against the pre-saga value of every key in that tree's slice; a tree carries at most one predicate. |
+| `LatticeAtomicWriteBuilder.Set(LatticeStagedCrdtWrite)` / `SetMany(IEnumerable<LatticeStagedCrdtWrite>)` | Couple one or more staged CRDT mutations into the write (see [Coupling a CRDT mutation into an atomic write](#coupling-a-crdt-mutation-into-an-atomic-write)). |
 | `LatticeAtomicWriteBuilder.Delete(key)` | Stage a retraction (tombstone) for `key` under the current `ForTree(...)`; rides the saga and flips jointly with sibling `Set` calls. |
+| `LatticeAtomicWriteBuilder.CommitAsync(ct)` | Commit every staged slice through `IGrainFactory.SetManyAtomicAsync`; returns a `CrossTreeAtomicWriteOutcome`. |
 | `LatticeTreeBatch(TreeId, Entries, Predicate = null, EntryDeltas = null, EntryDeletes = null)` | One tree's slice: tree id, key/value entries, optional server-side guard predicate, optional per-entry CRDT deltas, and an optional parallel per-entry is-delete channel (a `true` slot tombstones its key). |
 | `CrossTreeAtomicWriteOutcome` | `Committed` (all trees committed) or `PreconditionFailed` (a guard failed; nothing committed anywhere). |
 
@@ -1063,12 +1072,13 @@ decision authority. The flow is:
    single-tree saga in a new prepare-and-pause mode: it stages the
    prepared writes into the per-leaf pending-tx buckets, registers a
    *delegation* mapping its local txid to the coordinator, then pauses
-   without broadcasting any terminal. Each tree votes `Prepared` (or
-   `PreconditionFailed` if its guard missed).
+   without broadcasting any terminal. Each tree votes prepared,
+   precondition-failed (its guard missed), or failed (its staging failed
+   and it aborted itself).
 2. **Single global decision.** Once every tree has voted, the
-   coordinator writes **one** decision - `Committed` or `Aborted` - to
-   its own persistent state. This single write is the cross-tree
-   linearization point.
+   coordinator writes **one** decision - commit only if every tree voted
+   prepared, otherwise abort - to its own persistent state. This single
+   write is the cross-tree linearization point.
 3. **Finalize.** The coordinator fans out a `Finalize` call to every
    tree whose saga voted prepared (a tree whose guard missed or whose
    staging failed has already terminated itself), which marks its
@@ -1164,8 +1174,14 @@ batch that is.
   first exists: at the coordinator's admission of a cross-tree write, and
   at the replicated cross-tree barrier's wait-set freeze on the receiver.
   A disagreement throws `InvalidOperationException` naming both trees and
-  their resolved ids, before anything is staged, persisted, or dispatched,
-  so a rejected saga leaves no state behind. The check is on *agreement*,
+  their resolved ids. At the coordinator this happens before anything is
+  staged, persisted, or dispatched, so the rejected write leaves no state
+  behind. On a receiver it happens only after the tree's registry has
+  recorded the terminal's arrival and persisted a delegation of the saga
+  to the barrier, which records nothing; the delegation remains, so reads
+  on that tree resolve to in flight and see pre-saga values, the
+  replicated prepared writes stay pending, and each redelivery of the
+  terminal fails the same check. The check is on *agreement*,
   not on any particular value, so a host that never configured replication
   (uniform empty cluster id) always passes; a tree whose slice of the batch
   is empty is dropped from the participant set before the check. It is not

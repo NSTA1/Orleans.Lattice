@@ -76,9 +76,10 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         // built from the configured default region plus each peer. Every group's
         // per-region reachability is static configuration, except that the current
         // region may additionally serve telemetry from the co-located tool module
-        // (AddTelemetryTools registers an ILatticeApiMcpToolGroup for it) rather
-        // than from a routable Telemetry endpoint - a capability, not configuration
-        // - so the router is built by a factory that reads the registered tool
+        // (the telemetry tool registration adds an ILatticeApiMcpToolGroup for it) rather
+        // than from a routable Telemetry endpoint. A configured Telemetry endpoint is
+        // advertised for discovery/routing, but the co-located tool still answers with
+        // its local backend, so the router is built by a factory that reads the registered tool
         // groups, exactly as the in-silo router and the capabilities report do.
         // Both discovery (via the catalog) and per-call routing derive from this one
         // source of truth and can never disagree.
@@ -167,12 +168,11 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 new GrpcLatticeTreeAdmin(LatticeTreeAdminApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
 
-            // The tree-administration MCP group's tools are the schema-control
-            // tools, so its backing ILatticeSchemaControl facade is wired off the
+            // The tree-administration MCP group includes both tree-lifecycle/admin
+            // tools and schema-control tools. The schema facade is wired off the
             // same endpoint (the schema-API gRPC service is co-hosted with the
-            // tree-administration gRPC service on the same silo address). The
-            // schema facade is registered exactly when the group is, so removing
-            // the remote deferral never advertises a tool with no backing facade.
+            // tree-administration gRPC service on the same silo address), so removing
+            // the remote deferral never advertises a schema tool with no backing facade.
             services.TryAddSingleton<ILatticeSchemaControl>(sp =>
                 new GrpcLatticeSchemaControl(LatticeSchemaApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
@@ -211,9 +211,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
 
             // A remote head has no in-process tenancy registry to read a tenant's
             // region standing from, so it resolves it over the same facade. Without
-            // this the region catalog would fail closed to the current region alone
-            // for every tenant-asserted call, which is safe but would hide the
-            // regions a tenant is actually resident in. Replace (not TryAdd)
+            // this replacement the core null resolver answers unscoped, which is safe
+            // but would hide the regions a tenant is actually resident in. Replace (not TryAdd)
             // deterministically supersedes the core null default when the head also
             // ran AddLattice.
             services.Replace(ServiceDescriptor.Singleton<ITenantRegionVisibilityResolver>(

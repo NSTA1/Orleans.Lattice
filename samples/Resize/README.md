@@ -6,8 +6,9 @@
 (`MaxLeafKeys` / `MaxInternalChildren`) on a tree that already holds data. It
 runs **online**: reads and writes stay available while it drains the source into
 a freshly-sized destination tree (shadow-forwarding live writes) and atomically
-swaps the alias. Every entry is preserved. This sample populates a tree past a
-single leaf, resizes its leaf capacity from the default 128 to 256, polls
+swaps the alias. Every entry is preserved. This sample populates a tree with 500
+entries (hashed across the default 64 shards, so each shard's root is still a
+single leaf), resizes its leaf capacity from the default 128 to 256, polls
 `IsResizeCompleteAsync` until the swap finishes, and confirms the data survived
 and the tree is still writable.
 

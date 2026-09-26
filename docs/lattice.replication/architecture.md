@@ -50,8 +50,10 @@ flowchart LR
 2. **Per-shard replication WAL.** Each commit is appended by the leaf's commit-log
    writer to a per-tree,
    per-shard write-ahead log addressed by a deterministic hash of the key. The
-   WAL is the single source of truth for replication: shipping, snapshotting,
-   and recovery all read from it, never from the primary tree. The WAL grain
+   WAL is the source of truth for incremental replication: shipping and
+   recovery read from it, never from the primary tree. Snapshot bootstrap is the
+   exception - the default snapshot provider exports a point-in-time view of the
+   tree's committed leaf projections rather than replaying the WAL. The WAL grain
    contract and the turn-safe batching protocol live in
    [`wal.md`](wal.md); the pluggable durability backend lives in
    [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md).
@@ -125,9 +127,10 @@ flowchart LR
    entry - which keeps its source cluster's origin - is never re-shipped and a
    write replicated into and back out of a peer never loops.
 
-3. **Source HLCs are preserved on the receiver.** Apply does not advance the
-   receiver's local clock over an incoming write; the persisted timestamp is the
-   authoring cluster's HLC. That is what makes lexicographic
+3. **Source HLCs are preserved on the receiver.** The persisted timestamp of an
+   applied write is the authoring cluster's HLC, verbatim; the receiving leaf
+   only advances its own clock to at least that value, so a later local write
+   still sorts after the applied one. That is what makes lexicographic
    `(HLC, originClusterId)` last-writer-wins resolution converge identically
    across clusters.
 
@@ -155,7 +158,8 @@ seams: `IMutationObserver` (the commit-time nudge), the per-tree
 `ILatticeMergeModeResolver`, `ILatticeOriginClusterIdResolver`, and
 `ILatticeReplicationContext` implementations `AddLatticeReplication` swaps in,
 the `ITreeAliasObserver` that rebinds shippers after an alias swap, and the
-`IWalCursorRegistry` that carries receiver-side trim pins; its own
+`IWalCursorRegistry` that carries the per-peer ship cursors and receiver
+blocked floors that hold back WAL trimming; its own
 `IReplicationApplier` is the receiver-side merge seam. The
 single-cluster and multi-cluster code paths are identical up to the point where
 the transport carries a batch across a network boundary; there is no

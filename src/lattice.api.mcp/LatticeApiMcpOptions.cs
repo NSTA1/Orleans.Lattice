@@ -87,8 +87,8 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the read/write data facade contributes tools. Defaults to
-    /// <see langword="false"/>. Set to <see langword="true"/> by
-    /// <c>AddDataTools</c> when the host opts the data tool module in.
+    /// <see langword="false"/>. Reserved for hosts that bind options directly; the
+    /// current data tool registration contributes its group by registering the tool module.
     /// </summary>
     public bool EnableDataTools { get; set; }
 
@@ -114,10 +114,9 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the auth-admin control facade contributes tools. Defaults to
-    /// <see langword="false"/>. Set to <see langword="true"/> by
-    /// <see cref="LatticeMcpServiceCollectionExtensions.AddAuthTools"/> when the
-    /// host opts the auth control plane in; the auth tool module reads it so the
-    /// capabilities report reflects that auth is enabled on this server.
+    /// <see langword="false"/>. Set by
+    /// <see cref="LatticeMcpServiceCollectionExtensions.AddAuthTools"/> for host
+    /// diagnostics; the current auth tool module is contributed by its DI registration.
     /// </summary>
     public bool EnableAuthTools { get; set; }
 
@@ -171,9 +170,11 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the tree-administration tool module also contributes its
-    /// <b>mutating</b> tree-lifecycle tools (explicit tree creation, alias
-    /// assignment, per-tree configuration update) in addition to the read-only
-    /// lifecycle tools (existence, alias resolution, config read, shard-map read).
+    /// <b>mutating</b> tree lifecycle and administration tools (create, alias,
+    /// configuration including WAL retained-byte ceilings, delete/recover/purge,
+    /// bulk load, restore, reshard, resize/undo, snapshot, WAL placement/move,
+    /// views, tag-index, retention, and compaction) in addition to the read-only
+    /// lifecycle/admin inspection tools.
     /// Defaults to <see langword="false"/> so a registered tree-administration module
     /// is lifecycle-read-only until the host explicitly opts lifecycle control in -
     /// either by setting this flag or by passing <c>enableLifecycle: true</c> to
@@ -197,19 +198,17 @@ public sealed class LatticeApiMcpOptions
     public LatticeApiMcpProtectedResourceMetadata? ProtectedResourceMetadata { get; set; }
 
     /// <summary>
-    /// Whether the tenant-administration tool module is registered, advertising
-    /// the <c>tenantadmin</c> capability to a caller granted
-    /// <see cref="LatticeOperation.Admin"/>. Defaults to <see langword="false"/> so
-    /// a cluster that never calls <c>AddTenantAdminTools(...)</c> exposes no
-    /// tenant-admin capability at all (fail-closed, byte-for-byte unchanged versus
-    /// before). Set by <c>AddTenantAdminTools(...)</c>.
+    /// Whether the tenant-administration tool module is registered. Defaults to
+    /// <see langword="false"/> and is set by <c>AddTenantAdminTools(...)</c> for
+    /// host diagnostics; the current tenant-admin capability is exposed by the
+    /// registered tool group and remains gated by <see cref="LatticeOperation.Admin"/>.
     /// </summary>
     public bool EnableTenantAdminTools { get; set; }
 
     /// <summary>
-    /// Whether the tenant-administration tool module contributes its
-    /// <b>mutating</b> tenant-lifecycle tools (create, suspend, resume, delete).
-    /// The tenant lifecycle is all-mutating, so the group contributes no tools
+    /// Whether the tenant-administration tool module contributes its control tools:
+    /// create, suspend, resume, delete, set quotas, authorize regions, set residency,
+    /// and region status. The tenant-admin surface is control-gated, so the group contributes no tools
     /// until the host explicitly opts control in - either by setting this flag or
     /// by passing <c>enableControl: true</c> to <c>AddTenantAdminTools(...)</c>.
     /// Every tool it then contributes is annotated destructive and non-read-only,

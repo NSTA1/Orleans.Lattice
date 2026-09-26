@@ -10,8 +10,8 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="LatticeSystemTreeNames.ReplicationConfig"/> OR-Map and the static
 /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> deployment map - into
 /// the facts an operator surface needs: whether the tree is enrolled, the merge
-/// mode in force, whether that mode is currently ambiguous (so shipping is
-/// paused fail-closed), and which source put it in force.
+/// mode in force, whether that mode is currently ambiguous (so receivers fail
+/// closed on that tree), and which source put it in force.
 /// </summary>
 /// <param name="TreeId">The target tree id.</param>
 /// <param name="Enabled">
@@ -30,9 +30,9 @@ namespace Orleans.Lattice.Replication;
 /// <param name="Ambiguous">
 /// <see langword="true"/> when the tree's merge-mode register carries more than
 /// one live value, i.e. concurrent clusters assigned divergent modes that have
-/// not been reconciled. While this holds the resolver fails closed and pauses
-/// shipping the tree until an operator disables then re-enables it. Ambiguity
-/// wins over a static declaration, exactly as it does on the commit path.
+/// not been reconciled. While this holds the resolver returns no mode; active
+/// shippers are not torn down and a peer with no local mode drops what they ship.
+/// Ambiguity wins over a static declaration, exactly as it does on the commit path.
 /// </param>
 public readonly record struct LatticeReplicationTreeStatus(
     string TreeId,

@@ -24,7 +24,8 @@ internal readonly record struct RepoContextClaimState(
     /// Lease expiry is deliberately <em>not</em> consulted here. The record is the
     /// fencing high-water mark, not a second copy of the lease; liveness of the
     /// lease itself belongs to <see cref="ILatticeLockGrain"/>, which reclaims an
-    /// expired lease and hands the next waiter a strictly higher token. That higher
+    /// expired lease. If a waiter exists, or the next claimant arrives later, the
+    /// next grant carries a strictly higher token. That higher
     /// token is what supersedes the old holder, so expiry reaches the write path
     /// through the fence rather than through a clock read here.
     /// </remarks>

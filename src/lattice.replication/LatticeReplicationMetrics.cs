@@ -97,9 +97,9 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was short-circuited by
     /// the receiver before merge - either the per-origin high-water-mark
-    /// already covers <see cref="WalRecord.Timestamp"/>, or a
-    /// defence-in-depth gate detected a local-origin entry that must
-    /// not loop back onto its authoring cluster.
+    /// already covers <see cref="WalRecord.Timestamp"/>, the receiver-side
+    /// local-origin gate rejected an entry authored by this cluster, or the
+    /// snapshot-pinned causal floor already covers the point write.
     /// </summary>
     public const string OutcomeDedup = "dedup";
 
@@ -181,8 +181,8 @@ public static class LatticeReplicationMetrics
     /// not resident / online in the region serving this receiver. The entry is not
     /// applied; because the tree is enrolled (and therefore bounded) it is
     /// dead-lettered with <see cref="ReasonTenantOffline"/> for operator visibility.
-    /// The high-water-mark is left unchanged so the sender re-ships the entry, which
-    /// converges once the tenant becomes resident here.
+    /// The transport acknowledges the rejection; this records the receiver-side
+    /// refusal and does not imply the sender will re-ship it.
     /// </summary>
     public const string OutcomeRejectedTenantOffline = "rejected-tenant-offline";
 
@@ -191,9 +191,9 @@ public static class LatticeReplicationMetrics
     /// receiver-side tenant-isolation gate because its tenant, while it exists, has
     /// been suspended or disabled by an operator. The entry is not applied; because
     /// the tree is enrolled (and therefore bounded) it is dead-lettered with
-    /// <see cref="ReasonSuspendedTenant"/> for operator visibility. The
-    /// high-water-mark is left unchanged so the sender re-ships the entry, which
-    /// converges if and when the tenant is reinstated.
+    /// <see cref="ReasonSuspendedTenant"/> for operator visibility. The transport
+    /// acknowledges the rejection; this records the receiver-side refusal and does
+    /// not imply the sender will re-ship it.
     /// </summary>
     public const string OutcomeRejectedSuspendedTenant = "rejected-tenant-suspended";
 
@@ -202,7 +202,8 @@ public static class LatticeReplicationMetrics
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
-    ///
+    /// <see cref="ReasonModeMismatch"/>, <see cref="ReasonForeignTenant"/>,
+    /// <see cref="ReasonTenantOffline"/>, <see cref="ReasonSuspendedTenant"/>,
     /// and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
@@ -1510,8 +1511,10 @@ public static class LatticeReplicationMetrics
     /// <see cref="LeafReReplaySkipRangeEmpty"/>, or
     /// <see cref="LeafReReplaySkipWalTrimmed"/>. A
     /// <see cref="LeafReReplaySkipWalTrimmed"/> skip is the operator-only alert
-    /// signal: the repair cannot proceed from the WAL and a bootstrap-snapshot
-    /// remediation (tracked as a separate follow-up) is required.
+    /// signal: the repair cannot proceed from the WAL. It and a
+    /// <see cref="LeafReReplaySkipRangeEmpty"/> skip over localised ranges hand
+    /// off to the scoped bootstrap-snapshot fallback
+    /// (<see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/>).
     /// </summary>
     public static readonly Counter<long> LeafReReplaySkipped =
         Meter.CreateCounter<long>("orleans.lattice.replication.leaf_rereplay.skipped", unit: "{skip}",
@@ -1569,18 +1572,20 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter incremented once per scoped bootstrap-snapshot fallback pass
     /// that begins re-deriving the divergent leaf range from the live tree
-    /// after a targeted leaf re-replay reported the local write-ahead-log had
-    /// been garbage-collected past the divergence point
-    /// (<see cref="LeafReReplaySkipReason.WalTrimmed"/>). Tagged by
+    /// after a targeted leaf re-replay reported either that the local write-ahead-log
+    /// had been garbage-collected past the divergence point
+    /// (<see cref="LeafReReplaySkipReason.WalTrimmed"/>) or that it selected no
+    /// eligible entry inside the localised ranges, the below-cursor blind spot
+    /// (<see cref="LeafReReplaySkipReason.RangeEmpty"/>). Tagged by
     /// <see cref="TagTree"/> and <see cref="TagPeer"/>. The fallback ships dark
     /// behind <see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/>;
-    /// it runs only after the WAL-trimmed signal and only when at least one
+    /// it runs only after one of those two signals and only when at least one
     /// leaf range was localised, so its scope is bounded to the drift rather
     /// than the whole tree.
     /// </summary>
     public static readonly Counter<long> BootstrapFallbackTriggered =
         Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap_fallback.triggered", unit: "{fallback}",
-            description: "Scoped bootstrap-snapshot fallback passes triggered after a WAL-trimmed leaf re-replay, tagged by tree and peer.");
+            description: "Scoped bootstrap-snapshot fallback passes started after a leaf re-replay found the WAL trimmed past the divergence or no eligible entry in the localised ranges, tagged by tree and peer.");
 
     /// <summary>
     /// Canonical name of the <see cref="BootstrapFallbackTriggered"/> counter.
@@ -1607,7 +1612,7 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter incremented once per scoped bootstrap-snapshot fallback that is
     /// skipped without re-shipping - because the fallback is disabled even
-    /// though the WAL-trimmed signal fired, the localised range set was empty,
+    /// though re-replay could not reach the divergence, the localised range set was empty,
     /// or the scoped export yielded no committed entries. Tagged by
     /// <see cref="TagTree"/>, <see cref="TagPeer"/>, and <see cref="TagReason"/>;
     /// the reason value is one of <see cref="BootstrapFallbackSkipDisabled"/>,

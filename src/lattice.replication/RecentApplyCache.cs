@@ -19,12 +19,11 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="TryAdd"/> wins the race; a losing call short-circuits
 /// the apply.
 /// <para>
-/// Correctness is still bounded by the per-origin HWM. The cache is a
-/// fast-path optimisation: it suppresses the duplicate-emit pair
-/// before the apply grain hop even when the HWM round-trip would
-/// otherwise admit both. Cache eviction under sustained churn cannot
-/// cause a re-merge - the HWM check is the authoritative dedupe key
-/// and remains in place for any entry the cache has evicted.
+/// Correctness is shared with the receiver's other idempotency seams. The cache
+/// suppresses recent duplicate identity tuples before the apply grain hop; cache
+/// eviction under sustained churn falls through to the leaf-level per-key LWW merge,
+/// which makes an identical re-apply a no-op. The high-water-mark pinned floor only
+/// drops point writes already covered by a snapshot handoff.
 /// </para>
 /// <para>
 /// The cache is per-applier, per-tree; the applier singleton holds a

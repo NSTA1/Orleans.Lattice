@@ -103,8 +103,10 @@ internal sealed partial class RepoContextStore
 
     /// <summary>
     /// Extends the lease on an existing claim without changing its fencing token.
-    /// A renew presenting a superseded token is reported as not granted, which is
-    /// the signal the holder was fenced out and must stop writing.
+    /// A renew whose lock lease has lapsed, even with no queued waiter, is reported
+    /// as not granted with reason <c>superseded</c>. That is a lock-level signal to
+    /// stop and re-claim; the record's fence accepts the old token until another
+    /// claim stamps a higher one.
     /// </summary>
     /// <param name="key">The full repository-context key of the claimed memory record.</param>
     /// <param name="fencingToken">The token from the original grant.</param>

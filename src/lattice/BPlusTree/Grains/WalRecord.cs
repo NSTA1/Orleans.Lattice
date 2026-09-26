@@ -252,11 +252,10 @@ public readonly record struct WalRecord
     /// (<c>SetManyAtomicAsync</c> saga). Mirrored verbatim from the
     /// producing <see cref="LatticeMutation.TransactionId"/>; every
     /// per-key emit inside the same saga shares a single
-    /// transaction id, including compensation rolls. Single-key
-    /// non-saga writes mirror whatever the producer-side ambient
-    /// <c>LatticeTransactionContext</c> supplies; in practice this
-    /// is <see cref="Guid.Empty"/> for plain
-    /// <c>SetAsync</c> / <c>DeleteAsync</c> calls.
+    /// transaction id. Public single-key and non-atomic batch writes stamp a fresh
+    /// ambient id for the logical call; convergence-only or hand-constructed paths
+    /// that publish without a leading public entry point can still carry
+    /// <see cref="Guid.Empty"/>.
     /// <para>
     /// Strictly additive on the wire: legacy peers and entries
     /// authored before this slot existed decode as

@@ -40,7 +40,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 
 | Sample | What it shows |
 |---|---|
-| [SchemaEnforcement](../../samples/SchemaEnforcement/README.md) | The two opt-in `Orleans.Lattice.Schema` capabilities over the opaque-`byte[]` core: per-tree write validation with dead-letter diversion, and self-describing value versioning with read-time upcasting. |
+| [SchemaEnforcement](../../samples/SchemaEnforcement/README.md) | The two opt-in `Orleans.Lattice.Schema` capabilities over the opaque-`byte[]` core: per-tree write validation (a malformed write rejected with `LatticeSchemaViolationException` and never persisted), and self-describing value versioning with read-time upcasting. |
 | [MultiTenancy](../../samples/MultiTenancy/README.md) | A single-silo tour of multi-tenancy: the tenant registry, the isolation naming seam, and the operator control-plane facade. |
 
 ### Identity and Security
@@ -104,7 +104,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 
 [`samples/HelloWorld`](../../samples/HelloWorld)
 
-Minimal interactive REPL over a single-silo, in-memory Orleans cluster. Starts a silo configured with `AddLattice(...)` + in-memory grain storage and reminders, then prompts for commands - `create`, `read`, `update`, `delete`, `list`, `exit` - and applies each one against a tree named `hello-world`. Every operation is timed with `Stopwatch` and reported as `[OK]` / `[FAIL]` with the elapsed milliseconds, so it doubles as a quick sanity check that a locally-built `Orleans.Lattice` package behaves correctly.
+Minimal interactive REPL over a single-silo, in-memory Orleans cluster. Starts a silo configured with `AddLattice(...)` + in-memory grain storage and reminders, then prompts for commands - `create`, `read`, `update`, `delete`, `list`, `exit` - and applies each one against a tree named `hello-world`. Every operation is timed with `Stopwatch` and reported as `[OK]` / `[FAIL]` with the elapsed milliseconds, so it doubles as a quick sanity check that a local build of `Orleans.Lattice` behaves correctly (the sample references the library project directly).
 
 Run it with:
 
@@ -116,7 +116,7 @@ dotnet run --project samples/HelloWorld
 
 [`samples/MultiSiteManufacturing`](../../samples/MultiSiteManufacturing)
 
-Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge -> heat-treat -> machining -> NDT -> MRB -> FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for injecting site-level pause/delay/reorder, and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store.
+Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge -> heat-treat -> machining -> NDT -> MRB -> FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for fault injection (site pause, delay and reorder, per-backend storage faults, a simulated intra-cluster partition, and a cross-cluster replication pause), and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store.
 
 The sample runs as **two independent Orleans clusters** (`us` and `eu`), each with two silos, connected by an opt-in cross-cluster replication link over gRPC so changes in one cluster converge on the other.
 
@@ -133,13 +133,13 @@ Run it with:
 ./samples/MultiSiteManufacturing/run.ps1
 ```
 
-The script builds the host image if needed, starts both clusters (four silos, one Azurite per cluster plus a shared `azurite-backup` account, two Traefik proxies, and a Prometheus + Grafana pair) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs.
+The script builds the host image if needed, starts both clusters (four silos, one Azurite per cluster plus a shared `azurite-backup` account, two Traefik proxies, and a Prometheus + Grafana pair) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs. `-Username` / `-Password` bring the stack up with state-API authentication, `-Backup` enables the backup and restore subsystem, and `-NoBuild` reuses the cached host image.
 
 ## VehicleFleetSimulator
 
 [`samples/VehicleFleetSimulator`](../../samples/VehicleFleetSimulator)
 
-A simulated vehicle fleet that streams structured telemetry events over gRPC, imported into this repo to drive forthcoming WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication` and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree. Currently independent of the lattice library - it builds and runs on its own, with its own `VehicleFleetSimulator.slnx`.
+A simulated vehicle fleet that streams structured telemetry events over gRPC. It is the load generator behind the docker-compose benchmark scenarios and the real-Azure throughput harness, both of which build on its projects (see [Benchmarks](benchmarks.md)), and the foundation for a future sample that bridges the simulator's event stream into a Lattice tree. The simulator itself does not depend on the lattice library - it builds and runs on its own, with its own `VehicleFleetSimulator.slnx`.
 
 The full stack (Azurite + Silo + gRPC API + Blazor WASM UI) runs under Docker Compose:
 
@@ -155,7 +155,7 @@ UI on `http://localhost:8090`, API on `http://localhost:8080`. See [`samples/Veh
 
 A deployable Azure Container Apps (ACA) sample that proves the `Orleans.Lattice.Scaling` autoscaling signal drives KEDA replica scale-out on the compute axis. One container image runs as a genuine multi-silo Orleans cluster: each replica joins over real Azure Storage clustering and persists grain state and the Lattice write-ahead log to Azure Table storage, all via managed identity (no connection strings). Each replica co-hosts the write-capable gRPC data API - gated by a hashed admin password injected as an ACA secret and presented as HTTP Basic over ACA's managed TLS ingress - and the `/lattice/scale` HTTP signal endpoint the ACA KEDA `metrics-api` scale rule scrapes.
 
-A bundled `.NET` `LoadDriver` console drives the compute axis (activation and dispatch pressure, not storage growth) so the cluster's `scaleValue` rises and ACA scales the replica count out. The `deploy/` folder provisions everything from a single bicep template plus PowerShell scripts:
+A bundled `.NET` `LoadDriver` console drives the compute axis (activation and dispatch pressure, not storage growth) so the cluster's `scaleValue` rises and ACA scales the replica count out. The `deploy/` folder provisions everything from two bicep templates - `main.bicep` for the cluster and `registry.bicep` for the Basic container registry that `deploy.ps1` builds the silo image into - plus PowerShell scripts:
 
 ```powershell
 ./samples/ClusterScaling/deploy/deploy.ps1      # provision + deploy

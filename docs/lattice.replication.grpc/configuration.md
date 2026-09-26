@@ -48,7 +48,7 @@ app.MapLatticeReplicationGrpc();
 
 Maps remote cluster id to the endpoint URI that cluster exposes for replication gRPC calls. The keys should match the cluster ids used by `LatticeReplicationOptions.ReplicationPeers` and by outbound batch `TargetClusterId` values.
 
-Each peer is resolved into a cached HTTP/2 channel on first use. The map is read when that channel is created; runtime edits are not a topology update mechanism. Restart or use a higher-level deployment rollout when peer endpoints change.
+Each outbound transport resolves a peer into its own cached HTTP/2 channel on first use: live push and the `IReplicationDigestProbeTransport` peer probes share one, and snapshot bootstrap and saga control each keep another. The map is read when a channel is created; runtime edits are not a topology update mechanism. Restart or use a higher-level deployment rollout when peer endpoints change.
 
 A send to a cluster id missing from `Peers` fails instead of silently dropping the batch.
 

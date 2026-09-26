@@ -278,9 +278,8 @@ internal sealed partial class ReplicationApplier(
             // from a wire-supplied field), so a peer cannot redirect a write into a
             // foreign tenant. A write whose tree names a non-existent tenant, or a
             // tenant not resident in this serving region, is refused and
-            // dead-lettered (the tree is enrolled and therefore bounded) with the
-            // HWM left unchanged so the sender re-ships and convergence recovers once
-            // the tenant exists / becomes resident. This is the isolation boundary
+            // dead-lettered (the tree is enrolled and therefore bounded). The transport
+            // acknowledges the refusal rather than asking the sender to re-ship. This is the isolation boundary
             // only: it never gates on quota (a replicated apply converges a write
             // that already happened on the origin), and it is bypassed entirely when
             // tenancy is off - the null gate's IsActive is false, so this is a single
@@ -369,9 +368,9 @@ internal sealed partial class ReplicationApplier(
                 return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
             }
 
-            // Range deletes carry HybridLogicalClock.Zero by design (the walk
-            // produces many per-leaf HLCs that cannot be faithfully collapsed),
-            // so per-origin HWM dedupe does not apply to them. Range applies
+            // Range deletes carry the producer's issue HLC, but a range spans many
+            // keys and is naturally idempotent at the leaf layer, so the per-origin
+            // HWM point-write dedupe path does not apply to them. Range applies
             // are naturally idempotent at the leaf layer.
             if (entry.Op == MutationKind.DeleteRange)
             {
@@ -496,7 +495,7 @@ internal sealed partial class ReplicationApplier(
             // without a leaf hop, and any re-delivery evicted from the
             // bounded cache falls through to the idempotent leaf-level LWW
             // apply (a no-op for identical bytes). Range deletes bypass it
-            // entirely because they carry HLC.Zero (ambiguous identity).
+            // because one HLC identifies a range operation rather than a point write.
             var cache = _dedupeCaches.GetOrAdd(
                 entry.TreeId,
                 static (_, capacity) => new RecentApplyCache(capacity),
@@ -1615,8 +1614,8 @@ internal sealed partial class ReplicationApplier(
     /// </summary>
     private void RecordFifoState(WalRecord entry)
     {
-        // Skip range deletes (carry HLC.Zero) and entries with a missing
-        // origin (defensive - the caller-side guard rejects empty origins
+        // Skip range deletes (one HLC covers a range rather than a point write)
+        // and entries with a missing origin (defensive - the caller-side guard rejects empty origins
         // before we get here).
         if (entry.Op == MutationKind.DeleteRange || string.IsNullOrEmpty(entry.OriginClusterId))
         {

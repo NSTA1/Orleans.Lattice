@@ -12,9 +12,12 @@ deployment. Tenants that share a cluster (or a set of replicated clusters) are:
   only read, write, enumerate, administer, back up, restore, or replicate trees
   inside its own tenant's namespace; and
 - **Governed at runtime** - each tenant carries aggregate quotas across all of its
-  trees (durable bytes, live keys, resident memory, tree count, request rate), an
-  optional burst allowance whose overage is explicitly metered, and an optional
-  physical-isolation binding, all adjustable at runtime through the control plane.
+  trees (durable bytes, live keys, resident memory, tree count, request rate) and an
+  optional burst allowance whose overage is explicitly metered, both adjustable at
+  runtime through the control plane. Its tenant record also carries a physical
+  placement binding (a dedicated WAL provider and/or silo placement filter); the
+  control plane creates every tenant on the shared placement, and a binding is
+  immutable in effect once the tenant's trees are placed.
 
 It is a **companion package**, following the same model as `lattice.auth` and
 `lattice.schema`: the tenancy logic (registry, compiled quota/isolation policy,
@@ -130,8 +133,9 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   asserted tenant has been lifted onto the ambient context. In a co-hosted head
   that happens in-process and flows to the grain on the Orleans request context.
   On a **split head** - an API head in its own process reaching the silo over gRPC
-  - each binding must lift the `lattice-active-tenant` header itself, which every
-  binding does through the shared `LatticeActiveTenantAssertion` seam. A binding
+  - each binding must lift the `lattice-active-tenant` header itself. The control-plane
+  bindings do it through the shared `LatticeActiveTenantAssertion` helper, and the
+  data binding through its own replaceable `ILatticeDataApiActiveTenantBridge` seam. A binding
   that did not would not fault: its facade would resolve the reserved default
   tenant and serve the caller the shared cluster-global namespace, so the
   behaviour is covered by a contract guard rather than left to review.
@@ -152,11 +156,15 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   change, and the refusal would be counted against the server-fault rate operators
   alert on. A call that resolves cleanly but breaches the tenant's quota is a
   different outcome again - capacity, not authorization - and surfaces as
-  `ResourceExhausted`. An enumeration for a denied caller returns an empty page
+  `ResourceExhausted` on the data and schema gRPC bindings. The
+  tree-administration binding (where a create can breach the tree-count ceiling)
+  maps it, as the `InvalidOperationException` that `LatticeQuotaExceededException`
+  derives from, to `FailedPrecondition`. An enumeration for a denied caller returns an empty page
   rather than an error, so listing never leaks the cluster-global catalog.
 - **Identity-derived, enforced at the auth gate.** The active tenant is carried in
-  the Orleans `RequestContext` under a single well-known key, populated from the
-  caller's membership at the auth seam. The fail-closed access gate behind
+  the Orleans `RequestContext` under a single well-known key, stamped at the edge
+  from the caller's asserted tenant and validated against the caller's membership at
+  the auth seam. The fail-closed access gate behind
   `ILatticeAccessGate` is made tenant-aware: a request is denied unless the
   subject's active tenant owns the target tree (prefix match), or an explicit
   cross-tenant grant or platform-operator scope authorizes it.
@@ -181,7 +189,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   namespace is an avoidable confusion trap. The check is applied at create only,
   so a tenant registered before the guard existed stays readable and deletable.
   The id `default` is reserved for the legacy-adoption tenant: it can never be
-  suspended, deleted, or given quotas (each fails closed with a
+  suspended, deleted, given quotas, have its admin-subject set changed, or be named
+  on either side of a cross-tenant grant offer (each fails closed with a
   `ReservedTenantOperationException`), while a resume of it is an allowed no-op.
   Tenant ids are immutable once created.
 - **Tenant-scoped tree naming.** `AddLatticeTenancy` replaces the core's no-op
@@ -194,7 +203,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   data, state, tree-administration, schema, replication, and backup facades resolve
   the caller-supplied name through the `ResolveEffectiveTreeIdAsync` extension
   `LatticeTenantExtensions` adds over `ITenantContextResolver` (the interface
-  itself carries only `ResolveCurrentAsync`) at their entry point and use that one
+  itself carries only `ResolveCurrentAsync` and its synchronous `TryResolveCurrent`
+  fast path) at their entry point and use that one
   effective id for **both** the authorization check and the operation, so a verb
   can never authorize one tree and act on
   another. Without that, an external caller had no route into its own namespace at
@@ -210,8 +220,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   the name is actually scoped.
 - **Enumeration pruning.** `AddLatticeTenancy` likewise replaces the core's no-op
   `ITenantEnumerationFilter`, so a tree-id enumeration (the cluster-state tree
-  catalog, the tag-index catalog, the in-cluster all-tree-ids read) is pruned to
-  the trees the active tenant owns. Pruning is defence in depth rather than the
+  catalog, the tag-index catalog, the view catalog, the in-cluster all-tree-ids
+  read) is pruned to the trees the active tenant owns. Pruning is defence in depth rather than the
   boundary: a caller that asserts no tenant is not pruned, and is confined instead
   by the per-entry authorization check, which composes the same tenant enforcer the
   write path uses and denies a tenant-scoped tree outright when no active tenant is
@@ -271,7 +281,8 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   above the cap and at or below `cap x (1 + burst%)` is admitted and **metered as
   overage** - a first-class, billing-ready signal distinct from ordinary usage;
   usage above `cap x (1 + burst%)` is refused with `LatticeQuotaExceededException`
-  carrying the tenant id and dimension. A tenant with burst `0` refuses at the cap.
+  carrying the tenant id and dimension. A tenant with burst `0` refuses as soon as
+  usage exceeds the cap.
   Over the [data gRPC binding](../lattice.api.data.grpc/README.md#quota-refusals)
   the refusal reaches a remote caller as `ResourceExhausted` carrying the breached
   dimension as a trailer; the tenant id is not echoed back, because the caller
@@ -288,7 +299,7 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   has usage. Setting `MeterInterval` to zero disables metering entirely and leaves
   admission permanently open, which is only appropriate for a deployment running
   tenancy without resource governance.
-- **A tenant's first sample always publishes.** Republishing a usage slot is gated
+- **A tenant's first non-empty sample always publishes.** Republishing a usage slot is gated
   by a hysteresis band (`PublishMinAbsoluteDelta` / `PublishMinRelativeDelta`) so a
   stream of negligible movements does not churn the registry. That band damps churn
   *between successive samples*, so it is deliberately not applied to a tenant's
@@ -362,30 +373,35 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
 
 ### Enforcement scope (multi-cluster)
 
-Each tenant carries a per-tenant `TenantEnforcementScope` (`TenantUsageAccountingOptions.DefaultEnforcementScope`
-supplies the default for new tenants):
+Quota admission runs under a `TenantEnforcementScope`. Today the scope is
+cluster-wide rather than per tenant: every tenant is admitted under
+`TenantUsageAccountingOptions.DefaultEnforcementScope`, read live, and the tenant
+record carries no scope of its own (the resolver is a seam for a future per-tenant
+override):
 
 - **`GlobalConverged` (default).** For the slow-moving storage gauges (bytes, keys,
-  memory, tree count) each resident cluster contributes its current local usage to a
-  per-cluster-slot state CRDT (a map from `ClusterId` to that cluster's latest
+  memory, tree count) each cluster contributes its current local usage for the tenant
+  to a per-cluster-slot state CRDT (a map from `ClusterId` to that cluster's latest
   sample). A cluster writes only its own slot and reads the whole map, so global
-  usage is the sum-fold over the `Online` resident regions' slots. Enforcement admits
-  against the global fold, giving a single global budget rather than `limit x clusters`,
-  with bounded transient overshoot. Monotonic tallies (overage, ops-ever) use
-  grow-only `GCounter`s. Slots are republished on a cadence with hysteresis so
-  continuous usage does not flood the replication path.
-- **`PerCluster` (fallback).** Each cluster meters only its own local usage against
-  the limit, adding no usage-replication traffic. Effective global capacity is
-  `limit x clusters`. Selectable per tenant for operators who prefer hard-partitioned,
-  zero-telemetry-cost capacity.
+  usage is the sum-fold over every slot published so far - the fold is not filtered
+  by the tenant's region statuses. Enforcement admits against the global fold,
+  giving a single global budget rather than `limit x clusters`, with bounded
+  transient overshoot. The monotonic overage tallies use grow-only `GCounter`s (one
+  per bytes, keys, memory, and tree-count dimension). Slots are republished on a
+  cadence with hysteresis so continuous usage does not flood the replication path.
+- **`PerCluster` (fallback).** Each cluster admits against only its own local usage
+  slot, so effective global capacity is `limit x clusters`. Selectable, cluster-wide,
+  by operators who prefer hard-partitioned capacity. The scope changes only which
+  figure admission reads: every cluster still meters and publishes its slot on the
+  same cadence, so it does not remove the usage-publishing traffic.
 
 No enforcement scope introduces cross-cluster coordination or consensus -
 `GlobalConverged` reads a convergent CRDT sum, it never locks or votes.
 
 ### Rate limiting
 
-The `ops/sec` limit is always enforced **per-cluster**, whichever enforcement scope a
-tenant is on (a rate window is too short relative to replication lag for a
+The `ops/sec` limit is always enforced **per-cluster**, whichever enforcement scope is
+configured (a rate window is too short relative to replication lag for a
 converged global count to be meaningful). It is enforced by silo-local, in-process token buckets - a per-silo
 singleton limiter (not a grain) the data-plane entry path consults with a lock-free
 token decrement - so the per-op hot path takes zero grain hops. A low-frequency
@@ -439,8 +455,9 @@ how that scoping applies to region discovery.
 
 - **Allowed vs resident.** A platform operator authorizes, per tenant, the *allowed*
   region set; the tenant's delegated admin selects its *residency set* (the subset it
-  actually replicates to and is served from) within that allowed set. A new tenant
-  defaults to the region it is created in.
+  actually replicates to and is served from) within that allowed set. A tenant that
+  has never configured residency - every newly created tenant - is treated as online
+  in every region, the pre-residency admit-all behaviour, until it does.
 - **Metadata everywhere, data to the residency set.** Tenant definitions still
   converge to every region, so any region can fail-closed answer "is this tenant
   resident here?"; tenant data replicates only to the residency set.
@@ -459,14 +476,16 @@ Adding or removing a region is asynchronous and observable. Each region carries 
 | `None` | No | No relationship. An *allowed but not yet entered* region reports `None`. |
 | `Provisioning` | Yes | The region has been added and is being prepared. |
 | `Backfilling` | Yes | Existing data is being copied into the region. |
-| `Online` | Yes | A full read-write replica. Served, counted for quota, and part of the `GlobalConverged` fold. |
+| `Online` | Yes | A full read-write replica, and the only status in which this region serves the tenant. |
 | `Draining` | No | The region has been dropped from residency and is shedding data. |
 | `Offline` | No | Drained; data is confirmed present in the remaining residency set. |
 | `Removed` | No | The removal is complete. |
 
 The **resident set** is exactly the rows whose status is `Provisioning`,
-`Backfilling`, or `Online`. A region is not served, not counted for quota, and not
-part of the `GlobalConverged` fold until it reaches `Online`.
+`Backfilling`, or `Online`. A region does not serve the tenant until it reaches
+`Online`. Quota accounting does not follow these statuses: the `GlobalConverged`
+fold sums every cluster slot the tenant has published, whatever the status of that
+slot's region.
 
 ### Invariants
 
@@ -478,8 +497,10 @@ Enforced by `ILatticeTenantRegionAdmin` and never bypassed by a transport bindin
   set is refused with `TenantLastRegionException`.
 - **A region a tenant is still resident in cannot be revoked.** Drain it with
   `SetResidencyAsync` first, then revoke it with `AuthorizeAllowedRegionsAsync`.
-- **An unknown tenant fails closed** with `TenantNotFoundException` on every
-  operation.
+- **An unknown tenant fails closed** on every operation: with
+  `TenantNotFoundException` for a platform operator, and with the same
+  `LatticeAuthorizationDeniedException` as any other refusal for a non-operator
+  caller, so a tenant admin cannot probe for another tenant's existence.
 
 Region residency is administered through the
 [`ILatticeTenantRegionAdmin`](../lattice.api.tenantadmin/README.md#ilatticetenantregionadmin)
@@ -492,8 +513,10 @@ control-plane facade, which is reachable
 `TenantObservabilityOptions` (default `PublishGauges = true`, `PublishInterval` 30
 seconds) publishes per-tenant gauges - current usage against each quota dimension and
 the metered overage tallies - on a fixed cadence, so an operator can see per-tenant
-consumption and headroom, and region-status change events surface exactly when a new
-region becomes `Online` or an old one is fully drained.
+consumption and headroom. Separately, every registered
+`ITenantRegionStatusChangeListener` is notified of each tenant's local-region status
+transition - any change of `TenantRegionStatus`, such as a region becoming `Online`
+or finishing its drain - once the residency snapshot has observed it.
 
 Every instrument is an **observable gauge** on the `orleans.lattice.tenancy` meter
 (`LatticeTenantMetrics.MeterName`). Each series carries a single `tenant` tag
@@ -503,22 +526,22 @@ series (`default` for the reserved legacy-adoption tenant), and the reserved
 `orleans.lattice.tenancy.tenants`. The per-tenant series cover every tenant in the
 registry. Set `PublishGauges = false` to publish none of them.
 
-| Instrument | Meaning |
-|---|---|
-| `orleans.lattice.tenancy.tenants` | Cluster-aggregate count of tenants in the warm usage index. It belongs to the platform rather than to any tenant, so it carries the reserved `_platform_` sentinel as its `tenant` value rather than being left untagged - a tenant-scoped matcher then excludes it by stating so, not by accident of absence. |
-| `orleans.lattice.tenancy.usage.bytes` | The tenant's current aggregate durable bytes. |
-| `orleans.lattice.tenancy.usage.keys` | The tenant's current aggregate live-key count. |
-| `orleans.lattice.tenancy.usage.memory_bytes` | The tenant's current aggregate resident memory. |
-| `orleans.lattice.tenancy.usage.trees` | The number of trees the tenant currently owns. |
-| `orleans.lattice.tenancy.quota.bytes` | The tenant's steady-state `MaxBytes` ceiling. |
-| `orleans.lattice.tenancy.quota.keys` | The tenant's steady-state `MaxKeys` ceiling. |
-| `orleans.lattice.tenancy.quota.memory_bytes` | The tenant's steady-state `MaxMemoryBytes` ceiling. |
-| `orleans.lattice.tenancy.quota.trees` | The tenant's steady-state `MaxTreeCount` ceiling. |
-| `orleans.lattice.tenancy.quota.burst_percent` | The tenant's `BurstPercent` headroom above its bounded ceilings. |
-| `orleans.lattice.tenancy.overage.bytes` | Converged, durable metered byte overage accrued above the byte ceiling. |
-| `orleans.lattice.tenancy.overage.keys` | Converged, durable metered key overage. |
-| `orleans.lattice.tenancy.overage.memory_bytes` | Converged, durable metered resident-memory overage. |
-| `orleans.lattice.tenancy.overage.trees` | Converged, durable metered owned-tree overage. |
+| Instrument | Unit | Meaning |
+|---|---|---|
+| `orleans.lattice.tenancy.tenants` | `{tenant}` | Cluster-aggregate count of tenants in the warm usage index. It belongs to the platform rather than to any tenant, so it carries the reserved `_platform_` sentinel as its `tenant` value rather than being left untagged - a tenant-scoped matcher then excludes it by stating so, not by accident of absence. |
+| `orleans.lattice.tenancy.usage.bytes` | `By` | The tenant's current aggregate durable bytes. |
+| `orleans.lattice.tenancy.usage.keys` | `{key}` | The tenant's current aggregate live-key count. |
+| `orleans.lattice.tenancy.usage.memory_bytes` | `By` | The tenant's current aggregate resident memory. |
+| `orleans.lattice.tenancy.usage.trees` | `{tree}` | The number of trees the tenant currently owns. |
+| `orleans.lattice.tenancy.quota.bytes` | `By` | The tenant's steady-state `MaxBytes` ceiling. |
+| `orleans.lattice.tenancy.quota.keys` | `{key}` | The tenant's steady-state `MaxKeys` ceiling. |
+| `orleans.lattice.tenancy.quota.memory_bytes` | `By` | The tenant's steady-state `MaxMemoryBytes` ceiling. |
+| `orleans.lattice.tenancy.quota.trees` | `{tree}` | The tenant's steady-state `MaxTreeCount` ceiling. |
+| `orleans.lattice.tenancy.quota.burst_percent` | `%` | The tenant's `BurstPercent` headroom above its bounded ceilings. |
+| `orleans.lattice.tenancy.overage.bytes` | `By` | Converged, durable metered byte overage accrued above the byte ceiling. |
+| `orleans.lattice.tenancy.overage.keys` | `{key}` | Converged, durable metered key overage. |
+| `orleans.lattice.tenancy.overage.memory_bytes` | `By` | Converged, durable metered resident-memory overage. |
+| `orleans.lattice.tenancy.overage.trees` | `{tree}` | Converged, durable metered owned-tree overage. |
 
 The four ceiling gauges (`quota.bytes`, `quota.keys`, `quota.memory_bytes`, and
 `quota.trees`) emit a measurement **only for a tenant whose corresponding dimension
@@ -597,27 +620,36 @@ also match the `_lattice_` and `sys-` platform trees.
   author (or delegate the authority to author) that rule; a caller acting purely as a
   tenant admin has no path to it.
 - **Two-tier governance.** A platform-operator capability (cluster-wide) performs
-  tenant lifecycle, quota/burst/scope/placement changes, allowed-region authorization,
-  and cross-tenant grants. A delegated per-tenant admin capability (scoped to one
-  tenant) manages that tenant's trees, subjects, schema, and region residency strictly
-  within the granted quota and allowed-region set - it can neither raise its own caps,
-  widen its allowed regions, nor reach another tenant.
+  tenant lifecycle, quota and burst changes, and allowed-region authorization, and
+  may act on any tenant's behalf. A delegated per-tenant admin capability (scoped to
+  one tenant) manages that tenant's trees, admin subjects, schema, region residency,
+  and its own side of a cross-tenant grant (offering its data, or approving,
+  rejecting, or revoking a grant it is party to) strictly within the granted quota
+  and allowed-region set - it can neither raise its own caps, widen its allowed
+  regions, nor reach another tenant.
 - **Enable-gated.** No tenant can be created unless the feature is enabled, and every
   mutating control-plane tool is contributed only when the host opts writes in.
 
 ## Tenant-aware surfaces
 
-Tenancy also reaches the operator- and agent-facing surfaces. Each is activated purely
-by whether tenancy is enabled - there is no separate opt-in flag - so a deployment
-without tenancy keeps a byte-for-byte-unchanged UI and tool surface.
+Tenancy also reaches the operator- and agent-facing surfaces. Each is a module the
+host registers (below); once registered, it keys its behaviour off whether tenancy is
+actually present rather than off a separate opt-in flag, so a deployment without
+tenancy keeps a byte-for-byte-unchanged UI and tool surface.
 
-- **Explorer.** When the Explorer's tenant view is enabled, the signed-in header shows
+- **Explorer.** When the Explorer's tenant view is enabled (`AddExplorerTenantView()`,
+  which the bundled web and MAUI Explorer heads register themselves), the signed-in
+  header shows
   the caller's current tenant and, for a platform operator, a selector to switch the
   active tenant or request an all-tenant view. The controls render nothing for an
   anonymous caller or a non-tenancy deployment, and every switch is authorized
   fail-closed through the operator gate. See
   [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md).
-- **MCP.** When tenancy is wired, the MCP server contributes a read-only tenant
+- **MCP.** When tenancy is wired and the self-awareness module is registered
+  (`AddTenantSelfAwarenessTools()`, which the split-head remote registration calls
+  itself whenever a tenant-admin endpoint is configured; the module then self-gates on
+  the tenant self-service facade and needs no flag), the MCP server contributes a
+  read-only tenant
   self-awareness tool group - `lattice_tenant_current` (the tenant the caller is
   operating as), `lattice_tenant_list` (the tenants the caller may access), and
   `lattice_tenant_get` (one accessible tenant's lifecycle and per-region residency).
@@ -632,8 +664,9 @@ without tenancy keeps a byte-for-byte-unchanged UI and tool surface.
   group is annotated destructive and non-read-only except
   `lattice_tenant_region_status`, which is a read. Region discovery is
   tenant-scoped too:
-  `lattice_list_regions` advertises only the calling tenant's actionable set, annotated
-  with its standing. See
+  for a caller asserting a non-default tenant, `lattice_list_regions` advertises only
+  that tenant's actionable set plus the region serving the call, annotated with its
+  standing. See
   [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md).
 
 ## Configuration reference
@@ -660,9 +693,9 @@ Governs usage metering and the quota-enforcement scope new tenants inherit.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| `DefaultEnforcementScope` | `TenantEnforcementScope` | `GlobalConverged` | The [enforcement scope](#enforcement-scope-multi-cluster) a newly created tenant starts with. |
-| `PublishMinAbsoluteDelta` | `long` | `65536` (`64 * 1024`) | Absolute movement, in the sampled unit, below which a usage republish is damped. A tenant's *first* publish is never damped. |
-| `PublishMinRelativeDelta` | `double` | `0.05` | Relative movement below which a usage republish is damped. Applied together with the absolute floor. |
+| `DefaultEnforcementScope` | `TenantEnforcementScope` | `GlobalConverged` | The [enforcement scope](#enforcement-scope-multi-cluster) every tenant's quota admission runs under, read live; there is no per-tenant override yet. |
+| `PublishMinAbsoluteDelta` | `long` | `65536` (`64 * 1024`) | Absolute movement, in the sampled unit, below which a usage republish is damped. A tenant's *first* non-empty publish is never damped. |
+| `PublishMinRelativeDelta` | `double` | `0.05` | Relative movement, as a fraction of the last published value, below which a usage republish is damped. Per dimension the effective threshold is the larger of this fraction and `PublishMinAbsoluteDelta`, and the slot republishes when any one dimension moves by at least its threshold. |
 | `MeterInterval` | `TimeSpan` | `30s` | The per-silo metering cycle that samples each tenant's footprint and rolls it into that tenant's per-cluster usage slot. Zero or a negative value disables metering entirely, which pins quota admission in its documented fail-open branch so an authored quota never binds. |
 
 ### `TenantObservabilityOptions`

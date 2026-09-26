@@ -22,12 +22,13 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// lifecycle operation needs to reach.
 /// </para>
 /// <para>
-/// <b>Scaffolding scope.</b> This foundation exposes only the capability probe;
-/// the whole-tree lifecycle operations (bulk-load, delete/drop, resize, reshard,
-/// and the rest) land in the dependent sub-issues, each adding its verb here and a
-/// probe flag on <see cref="LatticeTreeAdminCapabilities"/>. Whole-tree operations
-/// will use the whole-tree operation gates (<see cref="LatticeOperation.Admin"/> /
-/// <see cref="LatticeOperation.BulkLoad"/>), default-denied for anonymous callers.
+/// The facade now carries the capability probe plus the whole-tree lifecycle and
+/// administration verbs that shipped on this surface: shard hotness, storage
+/// usage, tree creation/deletion/recovery/purge/snapshot/restore, bulk load,
+/// resize, reshard, WAL placement/move, views, tag-index repair, retention, and
+/// schema-control delegation. Whole-tree operations use the whole-tree operation
+/// gates (<see cref="LatticeOperation.Admin"/> / <see cref="LatticeOperation.BulkLoad"/>),
+/// default-denied for anonymous callers.
 /// </para>
 /// <para>
 /// <b>Fail-closed authorization is inherited</b> from the facade access-gate seams;
@@ -335,8 +336,8 @@ public interface ILatticeTreeAdmin
     /// Opens a resumable, chunk-paged <b>bulk-load (tree creation)</b> session on
     /// <paramref name="treeId"/>, after authorizing the whole-tree
     /// <see cref="LatticeOperation.BulkLoad"/> capability fail-closed. Bulk-load is a
-    /// bottom-up initial-seed primitive, so the tree must be <b>empty</b>: a tree
-    /// that already holds data is rejected with <see cref="TreeNotEmptyException"/>
+    /// bottom-up initial-seed primitive, so the tree must be <b>empty</b>: a deep
+    /// diagnostic probe rejects a tree that already holds data or tombstones with <see cref="TreeNotEmptyException"/>
     /// so the caller can distinguish it from a transient fault. Reserved system tree
     /// ids are rejected.
     /// </summary>
@@ -590,8 +591,8 @@ public interface ILatticeTreeAdmin
     /// <param name="treeId">The source tree to snapshot. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="destinationTreeId">The id for the new destination tree. Must not be <c>null</c>, empty, reserved, or already exist.</param>
     /// <param name="mode">Whether to quiesce the source tree during the copy.</param>
-    /// <param name="maxLeafKeys">Optional leaf sizing override for the destination tree; <c>null</c> inherits the source tree's options.</param>
-    /// <param name="maxInternalChildren">Optional internal-node sizing override for the destination tree; <c>null</c> inherits the source tree's options.</param>
+    /// <param name="maxLeafKeys">Optional leaf sizing override for the destination tree; <c>null</c> uses the library default.</param>
+    /// <param name="maxInternalChildren">Optional internal-node sizing override for the destination tree; <c>null</c> uses the library default.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The source tree's snapshot status after the trigger, echoing the requested destination and mode.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="destinationTreeId"/> is <c>null</c>, empty, or reserved.</exception>
@@ -671,8 +672,9 @@ public interface ILatticeTreeAdmin
     /// <see cref="RepairOrphanedLeavesAsync"/> uses, so a leaf reported
     /// <see cref="TreeOrphanedLeafDisposition.Repairable"/> here is one the repair
     /// would act on, and a refusal here is the refusal the repair would make. Run it
-    /// first. A report with no findings is a clean bill of health and rules the
-    /// defect out as the cause of an unbounded WAL.
+    /// first. A complete report with no findings is a clean bill of health and
+    /// rules the defect out as the cause of an unbounded WAL; an incomplete batch
+    /// with no findings only covers the range it reached.
     /// </para>
     /// <para>
     /// <b>One call is one bounded batch.</b> It returns when its work budget is

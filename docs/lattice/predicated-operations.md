@@ -14,17 +14,18 @@ all-or-nothing guarantees of the guarded atomic batch see
 
 ## How it works
 
-1. **Translate (client).** The caller's lambda is lowered to a small,
+1. **Capability gate (client).** Push-down requires the value serializer to
+   implement `ILatticePredicateSerializer` so the server can project each value
+   into a navigable JSON document. The default `JsonLatticeSerializer<T>`
+   satisfies this. A serializer that cannot expose a JSON document throws
+   `NotSupportedException` at the call site, before the lambda is translated
+   and before any RPC.
+2. **Translate (client).** The caller's lambda is lowered to a small,
    serializable intermediate representation (IR) - `LatticePredicateNode` - by
    `LatticePredicateTranslator`. Translation happens once, on the client,
    before any RPC. A construct outside the allowlist throws
    `NotSupportedException` immediately, naming the offending construct; the
    server never sees an IR it cannot evaluate.
-2. **Capability gate (client).** Push-down requires the value serializer to
-   implement `ILatticePredicateSerializer` so the server can project each value
-   into a navigable JSON document. The default `JsonLatticeSerializer<T>`
-   satisfies this. A serializer that cannot expose a JSON document throws
-   `NotSupportedException` at the call site - again, before any RPC.
 3. **Evaluate (server).** The leaf grain parses each candidate value's bytes as
    a JSON document and evaluates the IR against it, independent of `T`. Keys
    whose value does not match are skipped; live values that match flow back.
@@ -33,20 +34,32 @@ Because evaluation is value-shape driven (JSON), the predicate sees the same
 field names your type serializes to. Missing or tombstoned keys are treated as
 non-matches.
 
+Every predicate overload on this page has a sibling that also takes an explicit
+`ILatticeSerializer<T>`; the shorter form uses `JsonLatticeSerializer<T>.Default`.
+
 ## Supported expressions
 
 The translator allowlists exactly:
 
-- **Member access** on the lambda parameter, resolved by property name
-  (`u => u.Age`, including nested paths like `o => o.Customer.Tier`).
+- **Member access** on the lambda parameter - properties or fields - resolved
+  by name (`u => u.Age`, including nested paths like `o => o.Customer.Tier`); a
+  bare boolean member (`u => u.IsActive`) is a predicate on its own.
 - **Constants**, including captured locals (`var min = 18; u => u.Age >= min`).
+  More generally, any sub-expression that does not reference the lambda
+  parameter - a captured field, another object's property, even a method call -
+  is evaluated once on the client at translation time and pushed down as a
+  literal.
 - **Comparison operators**: `==`, `!=`, `<`, `<=`, `>`, `>=`.
 - **Boolean operators**: `&&`, `||`, `!`.
-- **String methods**: `StartsWith`, `EndsWith`, `Contains`, and `Equals`.
+- **String methods**: `StartsWith`, `EndsWith`, `Contains`, and `Equals`, in
+  their ordinal forms only. An overload taking a `StringComparison`,
+  `ignoreCase`, or culture argument is rejected, because the server compares
+  strings ordinally.
 
-Anything else - method calls outside that set, indexers, casts to unsupported
-types, references to closures that touch other instances - throws
-`NotSupportedException` at translation time on the client.
+Conversions (casts) around a member or constant are unwrapped. Anything else
+that involves the lambda parameter - a method call on it outside that set, an
+indexer, arithmetic, or any other operator - throws `NotSupportedException` at
+translation time on the client.
 
 ## Reading values by predicate - `GetManyAsync`
 
@@ -151,7 +164,10 @@ done on each owning leaf, so a key-only scan never ships values across the wire
 at all, and an entry/value scan only ships the values that match. The resilient
 overloads recover transparently from an `EnumerationAbortedException` (raised
 when the remote enumerator is reclaimed mid-scan, for example by a silo
-failover or idle expiry) with the predicate intact.
+failover or idle expiry) with the predicate intact. The low-level
+`KeysAsync<T>`, `EntriesAsync<T>`, and `ValuesAsync<T>` accept the same
+predicate but run a single enumeration without that recovery; prefer the
+`Scan*` forms.
 
 ```csharp verify
 // Keys only - no values cross the wire.
@@ -211,7 +227,9 @@ while (true)
 await tree.CloseCursorAsync(cursorId);
 ```
 
-The snapshot variants apply the predicate against a zero-observable-writes view:
+The snapshot variants (`OpenSnapshotKeyCursorAsync<T>` and
+`OpenSnapshotEntryCursorAsync<T>`) apply the predicate against a
+zero-observable-writes view:
 
 ```csharp verify
 var snapCursor = await tree.OpenSnapshotKeyCursorAsync<Order>(

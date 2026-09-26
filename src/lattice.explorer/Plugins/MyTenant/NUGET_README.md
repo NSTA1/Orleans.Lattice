@@ -42,11 +42,18 @@ from B. The cluster re-enforces all of it: client gating here is advisory.
 ## Registration
 
 ```csharp
+builder.Services.AddExplorerPluginAdapters(); // the shell's plugin adapters
 builder.Services.AddExplorerAccess();      // supplies the real platform-operator gate
 builder.Services.AddExplorerTenantView();  // opts into tenant scoping
-builder.Services.AddExplorerTenancy();     // the shared tenancy seam
+builder.Services.AddExplorerTenancy();     // the shared tenancy seam (AddExplorerMyTenant also registers it)
 builder.Services.AddExplorerMyTenant();
 builder.Services.AddExplorerMyTenantPlugin();
+```
+
+and link the plugin stylesheet from the head's document head:
+
+```html
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.MyTenant/lattice-mytenant.css" />
 ```
 
 `AddExplorerAccess()` must come **before** `AddExplorerTenantView()`: the

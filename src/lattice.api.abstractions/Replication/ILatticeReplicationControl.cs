@@ -59,9 +59,12 @@ public interface ILatticeReplicationControl
     /// <summary>
     /// Disables replication for <paramref name="treeId"/>, after authorizing the
     /// tree fail-closed for the <see cref="LatticeOperation.Replication"/>
-    /// capability. Disabling pauses shipping new mutations; it never purges
-    /// already-replicated peer data and keeps the tree's fixed merge mode so a
-    /// later re-enable is a fresh bootstrap. Idempotent.
+    /// capability. Disabling removes the tree's resolved runtime mode but does not
+    /// tear down an already-active shipper; if it keeps shipping, peers that resolve
+    /// no mode drop those entries while acknowledging the batch. It never purges
+    /// already-replicated peer data and keeps the tree's fixed merge mode. A later
+    /// re-enable requests a snapshot bootstrap only when a source cluster is
+    /// supplied and the tree already holds data. Idempotent.
     /// </summary>
     /// <param name="treeId">The target tree id to disable. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

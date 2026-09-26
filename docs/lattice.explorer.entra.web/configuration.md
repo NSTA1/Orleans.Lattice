@@ -101,8 +101,8 @@ whose cache cannot satisfy it. Microsoft.Identity.Web then raises a re-auth
 signal, which this package translates into a typed
 `ExplorerWebReauthRequiredException`. During silent renewal of an existing
 sign-in that latches the credential as revoked, and the core Explorer traps the
-revoked state and shows a "Your session expired - sign in again" interstitial
-whose button navigates to a forced-interactive sign-in. (The initial token
+revoked state and shows a "Your session expired" interstitial whose
+**Sign in again** button navigates to a forced-interactive sign-in. (The initial token
 acquisition of a new sign-in is outside that latch path, so the exception
 surfaces directly there.)
 

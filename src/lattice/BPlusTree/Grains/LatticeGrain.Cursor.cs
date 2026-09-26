@@ -187,7 +187,7 @@ internal sealed partial class LatticeGrain
         // back-pressure, starving replication applies and reads queued on those
         // same roots and feeding a client-retry storm on the resulting timeout.
         // Shed the open here - before GetRoutingAsync and the capture fan-out -
-        // with a typed, retryable back-pressure error, so a saturated tree
+        // with a typed back-pressure error whose source is SnapshotCursorOpen, so a saturated tree
         // refuses the expensive open cheaply instead of amplifying its own
         // collapse. Only Saturated sheds (a Throttled tree is normal moderate
         // load and stays browsable), mirroring the atomic-write saga's quiesce

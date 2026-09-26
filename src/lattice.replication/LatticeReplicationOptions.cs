@@ -833,8 +833,8 @@ public class LatticeReplicationOptions
     public TimeSpan MaintenanceGcInterval { get; set; } = DefaultMaintenanceGcInterval;
 
     /// <summary>
-    /// Cadence at which the per-tree maintenance grain iterates the
-    /// configured <see cref="ReplicationPeers"/> and invokes
+    /// Cadence at which the per-tree maintenance grain iterates the current
+    /// <see cref="IReplicationTopology"/> peer set and invokes
     /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
     /// on each peer. Defaults to
     /// <see cref="DefaultMaintenanceFallOffCheckInterval"/>. Must
@@ -987,12 +987,14 @@ public class LatticeReplicationOptions
     /// <summary>
     /// Master switch for the bootstrap-snapshot fallback - the
     /// garbage-collected-divergence repair step that follows a targeted leaf
-    /// re-replay which could not reach the divergence point because the local
-    /// write-ahead log had been trimmed past it (the
-    /// <see cref="LeafReReplaySkipReason.WalTrimmed"/> signal). When
-    /// <see langword="true"/> (and the re-replay reported
-    /// <see cref="LeafReReplaySkipReason.WalTrimmed"/> and at least one leaf
-    /// range was localised), the fallback re-derives the committed projection
+    /// re-replay which could not reach the divergence point, either because the
+    /// local write-ahead log had been trimmed past it (the
+    /// <see cref="LeafReReplaySkipReason.WalTrimmed"/> signal) or because no
+    /// retained entry inside the localised ranges sat above the peer's cursor
+    /// (the <see cref="LeafReReplaySkipReason.RangeEmpty"/> signal, the
+    /// below-cursor blind spot). When <see langword="true"/> (and the re-replay
+    /// reported one of those signals over at least one localised leaf range),
+    /// the fallback re-derives the committed projection
     /// of just the divergent leaf range from the live tree via the range-scoped
     /// <see cref="ISnapshotProvider.ExportAsync(string, IReadOnlyList{LeafReReplayRange}, Orleans.Lattice.HybridLogicalClock, CancellationToken)"/>
     /// overload (the live tree is immune to WAL trimming) and re-ships those

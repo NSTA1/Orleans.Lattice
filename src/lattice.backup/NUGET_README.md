@@ -40,9 +40,12 @@ shipped as a sibling package.
 
 ## Security
 
-Every capture, restore, list, describe, and delete authorizes its scope through
-the same access gate the data path uses, against a dedicated `Backup` (capture)
-or `Restore` (author / bulk-load) capability, before touching data. The catalog
+Every capture and restore authorizes its scope through the same access gate the
+data path uses, against a dedicated `Backup` (capture) or `Restore` (author /
+bulk-load) capability, before touching data; the list, describe, and delete
+operations of the `Orleans.Lattice.Api.Backup` control facade authorize each
+manifest's scope the same way. The engine's catalog-store and sink seams
+themselves perform no authorization check. The catalog
 and store live in reserved `sys-backup-*` trees that inherit the core `sys-`
 catalog-hiding filter.
 
@@ -50,9 +53,16 @@ catalog-hiding filter.
 
 ```csharp
 siloBuilder
+    // Not durable: use a durable grain storage provider and a durable WAL in production.
     .AddLattice((silo, name) => silo.AddMemoryGrainStorage(name))
     .AddLatticeBackup();
 ```
+
+With the in-memory grain storage above and the in-memory WAL that core
+registration installs by default, the default in-cluster sink's backups and the
+backup catalog - both ordinary reserved `sys-backup-*` trees - do not survive a
+restart. A durable deployment registers durable grain storage and a durable WAL
+provider, and for disaster recovery a durable external sink.
 
 Must be registered after `AddLattice(...)`. For a remotely-drivable control
 plane, add the

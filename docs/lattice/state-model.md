@@ -69,13 +69,22 @@ replay.
 On every leaf activation, the materialiser runs three steps in
 order:
 
-1. **Prefer a snapshot when newer than the checkpoint.** If the
-   leaf's snapshot storage carries a blob whose snapshot offset
-   strictly exceeds the persisted checkpoint, the leaf rehydrates
-   its cache from the blob's canonical rows and advances the
-   persisted checkpoint to the snapshot offset. This is the safety
-   net for the case where the WAL has been trimmed past the
-   persisted checkpoint between deactivations.
+1. **Rehydrate from a usable snapshot.** If the leaf's snapshot
+   storage carries a readable blob, the leaf rehydrates its cache
+   from the blob's canonical rows and sets each WAL partition's
+   persisted checkpoint to exactly the offset the snapshot covers
+   for it - advancing the checkpoint when the snapshot is newer,
+   and lowering it when the snapshot sits at or behind it, so the
+   tail replay rebuilds the rows past the snapshot. The cache is
+   empty on a fresh activation, so even an at-or-behind snapshot is
+   loaded rather than forcing a whole-window replay. This is also
+   the safety net for a WAL trimmed past the persisted checkpoint
+   between deactivations: the WAL GC trims only prefixes a snapshot
+   covers, so the snapshot can be the only durable copy of that
+   prefix. A leaf whose rehydrate lowered a checkpoint captures a
+   fresh snapshot once its tail replay has re-advanced that
+   checkpoint, in the same activation, so it does not reload the
+   same stale snapshot every time.
 2. **Choose where the replay starts.** A leaf that rehydrated from a
    snapshot resumes above it (a *warm* activation). A leaf with no
    usable snapshot starts with an empty cache, which the persisted
@@ -111,9 +120,9 @@ The activation path therefore tolerates any combination of:
   range, so the cost of the tail replay is bounded by the leaf's
   own range, not by the WAL head. The trim trigger is also a no-op
   for the sentinel: there is no projection state to lose.
-- A leaf whose snapshot is older than the persisted checkpoint
-  (snapshot ignored; a cold replay of the whole readable WAL window
-  rebuilds the cache).
+- A leaf whose snapshot is at or behind the persisted checkpoint
+  (snapshot rehydrated, each checkpoint lowered to the snapshot's
+  coverage, and a tail replay from there rebuilds the rest).
 - A leaf whose snapshot is newer than the persisted checkpoint and
   the WAL has been trimmed (snapshot rehydrate, then tail replay
   from the snapshot offset).
@@ -137,8 +146,8 @@ registered `CrdtShape`'s `MergeDelta`.
 
 `ILattice.ApplyCrdtDeltaAsync(key, mode, deltaBytes)` is the
 public surface. The typed CRDT accessors wrap this surface and are
-the recommended caller-facing seam; they own the typed delta DTO
-construction and the producer-side state cache.
+the recommended caller-facing seam; for each mutation they read the
+key's current state and mint the typed delta from it.
 
 `LwwRegister` keys remain a full-state model: the WAL carries the
 canonical post-merge `byte[]` payload in `Value`. Concurrent writers

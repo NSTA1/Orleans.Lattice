@@ -21,8 +21,9 @@ namespace Orleans.Lattice.Replication;
 /// <param name="Ambiguous">
 /// <see langword="true"/> when the tree's merge-mode register carries more than
 /// one live value, i.e. concurrent clusters assigned divergent modes that have
-/// not been reconciled. A reader must fail closed (pause shipping the tree)
-/// while this holds.
+/// not been reconciled. A reader must fail closed and return no mode while this
+/// holds; active shippers are not torn down and a peer with no local mode drops
+/// what they ship.
 /// </param>
 internal readonly record struct ReplicationConfigProjection(
     bool Enabled,

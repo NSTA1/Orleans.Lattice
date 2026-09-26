@@ -16,10 +16,10 @@ public enum LatticeSchemaDeadLetterSource : byte
     Restore = 1,
 
     /// <summary>
-    /// The item was a rejected local write, optionally captured for inspection.
-    /// Local writes fail closed with <see cref="LatticeSchemaViolationException"/>
-    /// by default; this source is used only when a deployment opts to also retain
-    /// the rejected value.
+    /// Reserved for a local-write rejection source. The current built-in strict
+    /// ingest paths record replication and restore sources; ordinary local writes
+    /// fail closed with <see cref="LatticeSchemaViolationException"/> and are not
+    /// recorded as dead letters by this enum member.
     /// </summary>
     LocalRejected = 2,
 }

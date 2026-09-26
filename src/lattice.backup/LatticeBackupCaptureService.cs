@@ -239,8 +239,8 @@ internal sealed class LatticeBackupCaptureService(
 
         // A trim that raced the up-front check, or a range delete that the uniform
         // point-keyed artifact cannot faithfully encode, abandons the delta for a
-        // fresh full backup. The partial artifact is content-addressed and simply
-        // orphaned.
+        // fresh full backup. The partial artifact is addressed by this capture's
+        // artifact id and simply orphaned.
         if (collector.FellOffLog || collector.RequiresFullFallback)
         {
             logger.LogWarning(

@@ -17,8 +17,8 @@ No external broker, no shared database, no host-level outgoing-call filter.
 It supports:
 
 - Per-tree opt-in with a declared `LatticeMergeMode`.
-- Origin-stamped HLC on every record, with at-most-once apply per `(origin, hlc)`.
-- Causal+ delivery - vector-clock-stamped entries with receiver-side dependency satisfaction across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards.
+- Origin-stamped HLC on every record, with at-most-once apply per exact `(origin, hlc, key, op)` record identity.
+- Causal+ delivery - vector-clock-stamped entries with receiver-side dependency satisfaction across point writes, atomic multi-key writes, and structural shadow-forwards; maintenance writes (tombstone compaction) are never replicated, so they add no edges to the causal graph.
 - Active-active topology: any peer can write to any tree; conflicting updates converge deterministically.
 - Atomic batch delivery - replicated `SetManyAtomicAsync` arrives on every peer as a single visible unit.
 - gRPC push transport - one unary call per batch over a cached HTTP/2 channel per peer cluster.
@@ -31,7 +31,7 @@ It supports:
 ## Core Properties
 
 - **Convergent under concurrent writes.** Two clusters writing to the same key arrive at the same final state, deterministically, without coordination.
-- **Causally consistent.** A receiver never observes a write before the writes it causally depends on - across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards.
+- **Causally consistent.** A receiver never observes a write before the writes it causally depends on - across point writes, atomic multi-key writes, and structural shadow-forwards.
 - **Cycle-safe.** Origin attribution is durable metadata on every record, not ambient context - replicating into and back out of a peer cluster never loops a mutation back to its source.
 - **At-most-once apply.** Re-delivery of the same `(origin, hlc, key, op)` is idempotent. Counters do not double-increment, sets do not re-add.
 - **No host-level coupling.** Replication is produced by the silo at commit time. Hosts neither install outgoing-call filters nor route mutations through their own pipeline.
@@ -45,15 +45,15 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Active-active topology** | Any peer can write to any tree. Multi-cluster concurrent updates converge to the same state by CRDT mode, not by post-merge LWW-on-bytes. | [Replication Modes](replication-modes.md) |
 | **At-most-once apply** | Re-delivery of the same record is idempotent: an exact-identity recent-apply cache suppresses a repeated `(origin, hlc, key, op)` record, and the typed merges are themselves idempotent, so counters, sets, and registers are never double-applied. | [Replication Apply](replication-apply.md) |
 | **Atomic batch delivery** | Replicated `SetManyAtomicAsync` arrives on every receiver as a single visible unit. No reader observes a partial-set state across clusters. | [Replication Apply](replication-apply.md) |
-| **Auto-bootstrap on fall-off-log** | A receiver whose per-origin high-water mark falls behind the sender's retained WAL is re-seeded from a fresh snapshot automatically (`AutoBootstrapOnFallOffLog`, on by default) - no operator intervention. | [Auto-Bootstrap](auto-bootstrap.md) |
-| **Causal+ ordering** | A receiver never observes a write before its causal dependencies - point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards all preserve causal order. | [WAL](wal.md) |
+| **Auto-bootstrap on fall-off-log** | When the fall-off detector finds a peer's per-origin high-water mark behind the oldest WAL entry still retained for that peer, the receiver re-seeds from a fresh snapshot automatically (`AutoBootstrapOnFallOffLog`, on by default). The built-in periodic check compares against the local WAL; a sender only trims entries its shipper has not yet acknowledged when `WalRetention` is set - see [`WalRetention`](configuration.md#walretention). | [Auto-Bootstrap](auto-bootstrap.md) |
+| **Causal+ ordering** | A receiver never observes a write before its causal dependencies - point writes, atomic multi-key writes, and structural shadow-forwards all preserve causal order. | [WAL](wal.md) |
 | **Coordinated multi-cluster restore** | Restoring a backup into a replicated tree runs as an all-or-nothing cross-cluster saga: every cluster cuts over together or rolls back together, so no peer re-advances the restored cut and no reader observes a torn restore. | [Coordinated Restore](coordinated-restore.md) |
 | **Dead-letter queue** | Poison entries - schema skew, oversized values, corrupt HLC - are quarantined per tree after a configurable retry budget; replication continues past them. | [Dead-Letter Queue](dead-letter-queue.md) |
 | **gRPC push transport** | One unary gRPC call per batch over a long-lived, HTTP/2-multiplexed channel per peer. Push latency is sub-second, well below reminder-cadence pull. | [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) |
 | **Health check** | ASP.NET Core / Kubernetes `IHealthCheck` reporting `Degraded` when entries-behind, last-contact age, or consecutive-error streak crosses a soft bound, and `Unhealthy` when a hard bound is crossed or the degraded state outlasts the configured grace window. An opt-in inbound-silence signal covers receive-side liveness. | [Health Check](health-check.md) |
 | **Observability** | Per-peer entries-behind, bytes-behind, ship-in-flight, consecutive-errors, and last-contact gauges, plus receiver-side apply lag and duration histograms, on `LatticeReplicationMetrics`. | [Observability](observability.md) |
-| **Origin-stamped HLC** | Every replicated record carries `(originClusterId, hlc)`. Cycles break naturally, transitive topologies preserve causality, and applies are idempotent by identity. | [Replication Apply](replication-apply.md) |
-| **Per-tree opt-in + per-key filter** | Declare which trees replicate and (optionally) which keys within a tree. Granular enough to ship operator-visible labels while keeping per-shift counters local. | [Replication Modes](replication-modes.md) |
+| **Origin-stamped HLC** | Every replicated record carries `(originClusterId, hlc)`. Cycles break naturally, transitive topologies preserve causality, and applies are idempotent by record identity: a repeated `(originClusterId, hlc, key, op)` record is suppressed or re-applies as a no-op. | [Replication Apply](replication-apply.md) |
+| **Per-tree opt-in + per-key filter** | Declare which trees replicate and (optionally) which keys within a tree the shipper sends. Granular enough to ship operator-visible labels while keeping per-shift counters out of the incremental stream; the key filter is not applied to snapshot exports or the opt-in anti-entropy repair paths, so a peer that bootstraps from this cluster still receives every key. | [Replication Modes](replication-modes.md) |
 | **Pluggable transport** | `IReplicationTransport` is the public seam. gRPC is the canonical implementation; in-process and custom transports plug into the same contract. | [Transport](transport.md) |
 | **Receiver-side flow control** | The receiver stamps optional `SuggestedBatchSize` / `PauseForMs` hints onto every ack; the sender clamps its per-tick batch cap and pauses on request. A struggling receiver throttles in-band without timing out RPCs; a recovered receiver re-accelerates by lifting the hints. | [Receiver Flow Control](receiver-flow-control.md) |
 | **Runtime per-tree replication config** | Enable or disable replication for a tree at runtime under a fixed merge mode, distributed as the converging `sys-replication-config` system tree. Flip it once on any cluster and every peer converges; concurrent divergent modes fail closed instead of silently overwriting. | [Runtime Replication Config](runtime-config.md) |

@@ -11,8 +11,12 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ITombstoneCompactionGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Ensures the compaction reminder is registered. Called once by
-    /// <see cref="ILattice"/> on the first write to a tree. Idempotent.
+    /// Ensures the compaction reminder is registered, registering it only when
+    /// it is absent so that a call never moves an existing schedule (issue
+    /// #3592). Called by each <see cref="ILattice"/> worker activation on its
+    /// first write, and by tree recovery and snapshot restore. A changed
+    /// <see cref="LatticeOptions.TombstoneGracePeriod"/> is applied by the next
+    /// reminder tick rather than here.
     /// </summary>
     Task EnsureReminderAsync();
 

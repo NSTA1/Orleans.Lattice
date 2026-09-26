@@ -138,10 +138,10 @@ Each RPC wraps the facade DTOs in one of these Orleans-serialized request / resp
 | `BackupHealthConfigureRequestMessage` | `required string BackupId`, `bool MonitoringEnabled`, `long IntervalTicks`. |
 | `BackupHealthConfigureResponse` | (empty). |
 
-The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)). The schedule RPCs use `BackupScheduleRequestMessage` / `BackupScheduleResponse` and `BackupCancelScheduleRequestMessage` / `BackupCancelScheduleResponse`. The health RPCs use the `BackupHealth*` records above and facade DTOs from `Orleans.Lattice.Backup`.
+The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)). The schedule RPCs use `BackupScheduleRequestMessage` / `BackupScheduleResponse` and `BackupCancelScheduleRequestMessage` / `BackupCancelScheduleResponse`. The health RPCs use the `BackupHealth*` records above and facade DTOs from `Orleans.Lattice.Backup`. The `ListBackups` RPC takes the facade's `BackupCatalogRequest` and returns its `BackupCatalogPage` directly, and `StreamBackups` takes a `BackupStreamRequest` and streams `BackupManifest` messages. `RestoreResponse` carries no tenant dead-letter counters, so a `LatticeRestoreResult` returned by `RestoreBackupAsync` over gRPC always reports `DeadLetteredCrossTenant` and `DeadLetteredOverQuota` as `0`.
 
 ## Serialization aliases
 
 ### `GrpcBackupTypeAliases`
 
-A public static class holding the stable Orleans serialization alias constants for the wire message records, referenced by their `[Alias(...)]` attributes so the wire contract stays stable across renames.
+A public static class holding the stable Orleans serialization alias constants for the wire message records, referenced by their `[Alias(...)]` attributes so the wire contract stays stable across renames. `AliasPrefix` is `oibg.`, and there is one constant per wire message record, named after the record (for example `BackupCaptureRequestMessage` is `oibg.capreq` and `BackupHealthConfigureResponse` is `oibg.hcfgresp`).

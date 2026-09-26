@@ -20,9 +20,12 @@ the package ships a health
 check (`AddLatticeScalingHealthCheck`) and an HTTP scrape endpoint
 (`MapLatticeScalingSignal`) so an external autoscaler can consume it directly.
 
-The public surface (`ILatticeScalingSignal`, `ScalingSignal`, `ComputePressure`,
-`StoragePressure`, `WalAccountPressure`, `WalRebalanceRecommendation`,
-`LatticeScalingSignalOptions`) is stable for downstream integration.
+The public surface - `ILatticeScalingSignal`; the `ScalingSignal`,
+`ComputePressure`, `StoragePressure`, `WalAccountPressure`, and
+`WalRebalanceRecommendation` snapshots and the `WalPressureClassification` enum;
+`LatticeScalingSignalOptions` and `LatticeScalingHealthCheckOptions`; the
+registration and endpoint extension classes; `LatticeScalingMetrics`; and
+`ScalingTypeAliases` - is stable for downstream integration.
 
 ## Getting started
 

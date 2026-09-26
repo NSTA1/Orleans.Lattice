@@ -16,7 +16,7 @@ Configures the durable per-key history retained on the reserved `sys-backup-cata
 | `CrossTreeFencePollInterval` | `TimeSpan` | `25ms` | The poll interval between successive in-flight observations while the fence waits for sagas to drain. Must be strictly positive. |
 | `MaxCrossTreeFenceAttempts` | `int` | `5` | The maximum number of fence attempts a cross-tree-consistent capture makes before failing. Each attempt drains, captures, and re-observes; an attempt is retried when a cross-tree saga registers on the set during the capture window. Must be at least 1. |
 | `SinkSharingEnforcement` | `BackupSinkSharingEnforcement` | `Warn` | How a positively refuted cross-cluster backup sink is enforced at silo start. See [Cross-cluster sink sharing](#cross-cluster-sink-sharing). |
-| `SinkSharingProbeTimeout` | `TimeSpan` | `15s` | The maximum wall-clock time the cross-cluster sink-sharing probe may spend before giving up and reporting `Unverified`. Bounds silo start, which blocks on the probe. Must be strictly positive. |
+| `SinkSharingProbeTimeout` | `TimeSpan` | `15s` | The maximum wall-clock time the cross-cluster sink-sharing probe may spend before giving up and reporting `Unverified`. Bounds silo start, which blocks on the probe, and each health-sweep refresh of the verdict. Must be strictly positive. |
 
 `HistoryRetentionMode` is the core Lattice history-retention enum; `MetadataOnly` retains the per-key revision metadata without retaining every historical value.
 
@@ -46,7 +46,7 @@ The guard costs nothing when it cannot apply. A deployment with no replicated tr
 
 Two faults are distinguished. A replicated tree backed by the default in-cluster sink is rejected outright at start regardless of `SinkSharingEnforcement`, because an in-cluster sink dogfoods a per-cluster reserved tree and is provably invisible to a peer - that needs no probe. An external sink is what the probe tests.
 
-The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptions.DefaultInterval`, six hours by default), which is what resolves the cold-start case where every cluster starts at once, nobody has written a marker yet, and the first verdict is necessarily `Unverified`. See [Disaster recovery](disaster-recovery.md#un-restorable-backups-a-sink-that-is-not-shared) for how the verdict reaches each backup's health report.
+The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptions.DefaultInterval`, six hours by default) - so only while that monitor runs, against a durable sink with `LatticeBackupHealthOptions.Enabled` - which is what resolves the cold-start case where every cluster starts at once, nobody has written a marker yet, and the first verdict is necessarily `Unverified`. See [Disaster recovery](disaster-recovery.md#un-restorable-backups-a-sink-that-is-not-shared) for how the verdict reaches each backup's health report.
 
 ## `LatticeBackupHealthOptions`
 

@@ -8,9 +8,9 @@
 #
 # The chiseled ASP.NET runtime is distroless, shell-less, and runs as a non-root
 # user by default. Health probes MUST be HTTP/TCP (the /health endpoint), not
-# shell exec probes - there is no shell in the final image. The explorer persists
-# its JSON config to a writable path (LATTICE_EXPLORER_CONFIG below), since the
-# chiseled non-root image has no writable per-user app-data directory.
+# shell exec probes - there is no shell in the final image. Program.cs sets the
+# Explorer config path explicitly to a writable location, since the chiseled
+# non-root image has no writable per-user app-data directory.
 #
 # InvariantGlobalization: ENABLED (ICU dropped). See
 # reference-architecture/hosts/README.md for the ordinal-only audit. For this

@@ -55,8 +55,8 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="sourceClusterId">
     /// The id of the cluster that produced the snapshot. Stamped onto
-    /// every applied entry so the per-origin HWM dedupe recognises
-    /// the snapshot/incremental boundary. Must be non-null and
+    /// every applied entry so the snapshot-pinned floor and causal frontier
+    /// recognise the snapshot/incremental boundary. Must be non-null and
     /// non-empty.
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed at every state transition and on every yielded snapshot entry.</param>

@@ -3,8 +3,7 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <summary>
 /// How a tree-administration restore applied a backup to its target tree. Mirrors
 /// the backup engine's own restore mode as a transport-agnostic value the
-/// tree-administration facade can return and accept without the abstractions
-/// package taking a dependency on the backup engine.
+/// tree-administration facade can return and accept.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiTreeAdminTypeAliases.TreeRestoreMode)]

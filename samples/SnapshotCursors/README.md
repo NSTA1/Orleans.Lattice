@@ -4,9 +4,10 @@
 
 A snapshot cursor gives **strict snapshot isolation**.
 `OpenSnapshotEntryCursorAsync` freezes the tree state at open time; every page
-the cursor returns reflects that captured instant, and no concurrent write -
-foreground `SetAsync` / `DeleteAsync`, atomic saga, or range delete - is ever
-visible to the cursor for the rest of its lifetime.
+the cursor returns reflects that captured instant, and no concurrent change -
+foreground `SetAsync` / `DeleteAsync`, atomic saga, range delete, replication
+apply, or a topology change such as a shard split - is ever visible to the cursor
+for the rest of its lifetime.
 
 This sample opens a snapshot cursor, reads the first page, then **mutates the
 tree mid-iteration** (adds a new key and overwrites an existing one) and keeps
@@ -62,9 +63,16 @@ Done: the snapshot cursor never observed writes made after it was opened.
 
 - Pagination where the latest writes **should** appear on later pages: use a
   live cursor (`OpenEntryCursorAsync` / see [DurableCursors](../DurableCursors)).
-- A single exact aggregate at one instant: `CountAsync` /
-  [StronglyConsistentScans](../StronglyConsistentScans) is cheaper than opening
-  and draining a snapshot cursor.
+- A single exact count that need not be one instant's view of the whole tree:
+  `CountAsync` (see [StronglyConsistentScans](../StronglyConsistentScans)) is
+  cheaper than opening and draining a snapshot cursor.
+- A scan that pauses for hours, or a tree whose largest shard is too big to
+  freeze. An open is refused with `LatticeSnapshotReplayBudgetExceededException`
+  when the deepest shard's frozen baseline would exceed
+  `LatticeOptions.MaxSnapshotReplayEntries` (10,000,000 rows by default), and a
+  cursor whose baseline can no longer be loaded - for example one left idle
+  longer than `LatticeOptions.SnapshotBaselineTtl` (6 hours by default) - throws
+  `LatticeSnapshotExpiredException` on its next page and must be reopened.
 
 ## Feature doc
 

@@ -304,11 +304,10 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <summary>
     /// Drops the recorded outcome for <paramref name="txid"/>. Called
     /// after every touched leaf has applied its terminal so the
-    /// registry's persisted footprint stays bounded. After this call
-    /// <see cref="GetStatusAsync"/> returns <see cref="TxStatus.InFlight"/>
-    /// - by which point no leaf has the txid in its pending bucket
-    /// anymore so that observation is consistent with the absence of
-    /// any pending mutation.
+    /// registry's persisted footprint stays bounded. The decision is tombstoned
+    /// for <see cref="LatticeOptions.TxDecisionRetention"/> so ordinary status
+    /// reads return <see cref="TxStatus.Indeterminate"/> until the tombstone ages
+    /// out; with zero retention the row is removed immediately.
     /// </summary>
     [AlwaysInterleave]
     Task ForgetAsync(Guid txid);

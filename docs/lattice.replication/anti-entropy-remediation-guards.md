@@ -14,7 +14,7 @@ When remediation is enabled, repair re-ship volume is rate-limited per `(tree, p
 
 ## 3. Per-(tree, peer) circuit breaker
 
-After `RemediationFailureThreshold` consecutive failures for a `(tree, peer)`, the circuit breaker opens: remediation is skipped with reason `circuit_open` and the gauge reports the disabled state for `RemediationCircuitResetInterval`. After the cooldown the breaker half-opens and the next evaluation runs one trial pass - success closes the breaker and clears the gauge, a failed trial re-opens it for a fresh cooldown. Any success resets the consecutive-failure count. A "failure" is a remediation pass that threw or whose re-ship sink reported zero entries shipped despite candidate entries having been selected.
+After `RemediationFailureThreshold` consecutive failures for a `(tree, peer)`, the circuit breaker opens: remediation is skipped with reason `circuit_open` and the gauge reports the disabled state for `RemediationCircuitResetInterval`. After the cooldown the breaker half-opens and the next evaluation runs one trial pass - success closes the breaker and clears the gauge, a failed trial re-opens it for a fresh cooldown. Any success resets the consecutive-failure count. A "failure" is a remediation pass whose re-ship sink reported zero entries shipped despite candidate entries having been selected. In the current code a pass whose re-ship throws (for example a transport error reaching the peer) is caught inside the pass and counted as a success: it resets the consecutive-failure count, and closes a half-open breaker, instead of counting toward `RemediationFailureThreshold`.
 
 ## Enabling it
 

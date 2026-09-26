@@ -1,6 +1,6 @@
 # Read Caching
 
-The `LeafCacheGrain` is a `[StatelessWorker]` that acts as a per-silo read-through cache for leaf data:
+Point reads (`GetAsync`, `ExistsAsync`, `GetManyAsync`) reach a leaf through a read-through cache: an internal stateless-worker grain placed in front of each primary leaf (the leaf cache grain in the diagram below). Each silo that reads through it runs its own activation - a stateless worker can run several per silo - and every activation keeps its own local mirror of the leaf's entries. Versioned reads (`GetWithVersionAsync`) bypass the cache and go to the leaf directly:
 
 ```mermaid
 flowchart LR
@@ -40,7 +40,10 @@ flowchart LR
 - **Epoch-flip full snapshot**: A leaf re-activation bumps the
   leaf-side epoch, so a cache holding a stale cursor falls back to a
   full-snapshot delivery on its next refresh and adopts the new
-  cursor. The cursor is intentionally non-persistent: the WAL replay
+  cursor. A cursor whose sequence is ahead of the leaf's is treated as
+  stale in the same way. On either resync the cache discards its whole
+  mirror before merging the snapshot, so keys the leaf has since
+  deleted or migrated away do not linger. The cursor is intentionally non-persistent: the WAL replay
   path remains the sole projection source-of-truth and the cursor
   adds zero per-write durable I/O.
 - **Freshness bound**: Cached reads are bounded by `CacheTtl + one delta round-trip`. See [Consistency](consistency.md#read-cache-staleness) for the full per-operation contract.
@@ -57,6 +60,22 @@ flowchart LR
   every cached entry whose key hashes into one of those virtual
   slots so it stops serving the source's pre-migration snapshot once
   the destination has taken authoritative ownership.
+  It also keeps the set, so a later read of a key in one of those
+  slots is refused with the internal stale shard-routing signal -
+  which the routing tier absorbs by refreshing its shard map and
+  retrying against the new owner - instead of being answered as a
+  miss.
+- **Seal lift after consolidation**: When an online shard
+  consolidation folds virtual slots back onto the shard, the primary
+  leaf lifts its moved-away seal for them. The next delta carries the
+  leaf's reduced sealed set - or, once no slot remains sealed, an
+  explicit lift signal - and the cache adopts it, so it stops refusing
+  the reclaimed keys. Because the cache pruned those rows while the
+  slots were sealed but kept advancing its delivery cursor past them,
+  the leaf also records a fresh delivery sequence for every key it
+  holds in a reclaimed slot, so the next incremental refresh re-ships
+  those rows instead of leaving the cache answering a miss for keys
+  the leaf owns.
 
 ## Value-payload eviction
 
@@ -86,12 +105,16 @@ Because `LwwValue.Create` never stores a `null` value and empty values are
 non-null `byte[0]`, the shape `Value == null && !IsTombstone` is an unambiguous
 **payload-evicted sentinel**. A value read (`GetAsync` / `GetManyAsync`) that
 lands on the sentinel delegates to the primary leaf for the authoritative bytes -
-reusing the same delegation path as pending and migrated keys - and is recorded
-as a cache miss. An existence check (`ExistsAsync`) is answered from the retained
+reusing the same delegation path as pending and migrated keys. A single-key
+`GetAsync` that delegates for this reason is recorded as a cache miss; a
+`GetManyAsync` batch leaves every delegated key out of its hit and miss counts.
+An existence check (`ExistsAsync`) is answered from the retained
 metadata with no leaf RPC. A later higher-HLC write for the key re-ships the full
 value in a delta, and the merge repopulates the payload, so hot keys drift back
-into residency automatically. The net trade is bounded per-silo memory against
-one leaf RPC on the evicted fraction of value reads.
+into residency automatically. The budget is re-resolved each time a refresh
+merges entries, so a changed budget reaches a warm activation, but lowering it
+evicts nothing until the next entry is merged. The net trade is bounded per-silo
+memory against one leaf RPC on the evicted fraction of value reads.
 
 ## Cache Invalidation via Tree Aliasing
 
@@ -111,7 +134,7 @@ The old `LeafCacheGrain("leaf-abc")` is never called again and will be garbage-c
 
 ### Stale `LatticeGrain` activations
 
-`LatticeGrain` is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old (now soft-deleted) physical tree. When a request hits a stale activation and the shard throws `InvalidOperationException`, the grain catches the error, invalidates its cached alias via `TryInvalidateStaleAlias()`, re-resolves the alias from the registry, and retries the operation - all transparently within the same grain call. This means the caller sees at most one brief retry delay, not a failure.
+`LatticeGrain` is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old physical tree. Once the resize has moved the old tree's shards into its rejecting phase - which follows the swap and stays in force after the old tree is soft-deleted - they refuse every request with an internal stale tree-routing signal. The activation then discards its cached alias and shard map, re-resolves the alias from the registry, and retries the operation within the same call, for up to a 60-second wall-clock budget. A cached alias that instead points at a physical tree deleted without a rejecting phase - the discarded copy after an `UndoResizeAsync` - makes the shard throw `InvalidOperationException`, which the activation handles the same way, once (a Lattice domain exception such as `LatticeSaturatedException` propagates instead of being absorbed). Either way the caller sees a brief retry delay, not a failure.
 
 ## Read performance
 

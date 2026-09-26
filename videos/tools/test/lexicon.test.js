@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { workspaceRoot } from "../lib/hyperframes.js";
-import { applyLexicon, heteronymsIn, loadHeteronyms, loadLexicon, validateLexicon } from "../lib/lexicon.js";
+import { applyLexicon, heteronymsIn, loadHeteronyms, loadLexicon, readingFor, validateLexicon } from "../lib/lexicon.js";
 
 const entries = validateLexicon([
   { written: "CRDT", spoken: "C R D T" },
@@ -48,11 +48,50 @@ test("an entry without a spoken form is rejected", () => {
   assert.throws(() => validateLexicon([{ written: "X", spoken: "" }]), /no 'spoken' form/);
 });
 
-test("the series lexicon says the verb 'lives', not the plural of 'life'", () => {
+test("the series lexicon says the verb 'lives', not the plural of 'life', for Kokoro", () => {
   const series = loadLexicon(path.join(workspaceRoot, "voice", "lexicon.json"));
   assert.equal(applyLexicon("First: the store lives in the cluster.", series), "First: the store livs in the cluster.");
-  assert.equal(applyLexicon("where the state lives.", series), "where the state livs.");
+  assert.equal(applyLexicon("where the state lives.", series, "kokoro"), "where the state livs.");
   assert.equal(applyLexicon("It delivers.", series), "It delivers.", "only the whole word is respelt");
+});
+
+test("an engine gets its own spoken form, or the written form when its entry is null", () => {
+  const lexicon = validateLexicon([
+    { written: "Orleans", spoken: "Or-leens", engines: { chatterbox: "Orleens" } },
+    { written: "lives", spoken: "livs", engines: { chatterbox: null } },
+    { written: "CRDT", spoken: "C R D T" },
+  ]);
+  const text = "Orleans lives in a CRDT.";
+  assert.equal(applyLexicon(text, lexicon), "Or-leens livs in a C R D T.", "no engine: the default forms");
+  assert.equal(applyLexicon(text, lexicon, "kokoro"), "Or-leens livs in a C R D T.", "an engine with no form of its own: the default");
+  assert.equal(applyLexicon(text, lexicon, "chatterbox"), "Orleens lives in a C R D T.");
+});
+
+test("the series lexicon gives Chatterbox one-word names and leaves it the words it reads from context", () => {
+  const series = loadLexicon(path.join(workspaceRoot, "voice", "lexicon.json"));
+  assert.equal(
+    applyLexicon("Orleans.Lattice runs on Microsoft Orleans. The store lives in the cluster.", series, "chatterbox"),
+    "Orleens Lattice runs on Microsoft Orleens. The store lives in the cluster.",
+  );
+  assert.equal(applyLexicon("Cluster A adds three; merges are idempotent.", series, "chatterbox"), "Cluster A adds three; merges are idempotent.");
+  assert.equal(applyLexicon("Your code resolves ILattice.", series, "chatterbox"), "Your code resolves I Lattice.");
+  for (const entry of series) {
+    for (const spoken of Object.values(entry.engines ?? {})) {
+      if (spoken !== null) assert.doesNotMatch(spoken, /-/, `'${entry.written}': a hyphen makes Chatterbox pause`);
+    }
+  }
+});
+
+test("Chatterbox reads a hyphenated compound as one breath; other engines keep the hyphen", () => {
+  assert.equal(readingFor("Go global: active-active across regions, a key-value store.", "chatterbox"), "Go global: active active across regions, a key value store.");
+  assert.equal(readingFor("Go global: active-active across regions.", "kokoro"), "Go global: active-active across regions.");
+  assert.equal(readingFor("Three - and no more; 2-3 minutes.", "chatterbox"), "Three - and no more; 2-3 minutes.", "only a hyphen between two letters");
+});
+
+test("an engine the workspace does not run, or an empty form for one, is rejected", () => {
+  assert.throws(() => validateLexicon([{ written: "X", spoken: "x", engines: { piper: "ex" } }]), /unknown engine 'piper'/);
+  assert.throws(() => validateLexicon([{ written: "X", spoken: "x", engines: { chatterbox: "" } }]), /neither a spoken form nor null/);
+  assert.throws(() => validateLexicon([{ written: "X", spoken: "x", engines: ["chatterbox"] }]), /not an object/);
 });
 
 test("heteronyms are found as whole words, whatever their case, once each and in order", () => {

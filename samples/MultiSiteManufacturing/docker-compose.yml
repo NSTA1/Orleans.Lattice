@@ -22,9 +22,10 @@
 # pointed at the peer Traefik; that traffic uses Traefik's default
 # (round-robin) router for the gRPC service path.
 #
-# Only TWO host ports are published:
+# Only three host ports are published:
 #   5001 -> traefik-us -> Blazor UI + replication gRPC
 #   5002 -> traefik-eu -> Blazor UI + replication gRPC
+#   3000 -> grafana -> observability dashboards
 #
 # Silo HTTP (:8080), Orleans silo (:11111), and gateway (:30000) ports
 # are `expose`-d only on their internal networks - nothing silo-side
@@ -53,7 +54,7 @@
 # Each silo points its package-shipped gRPC push transport
 # (`PackageReplication__PeerGrpcEndpoint`) at the peer's Traefik, which
 # is resolvable on the local cluster network because the peer Traefik
-# is multi-homed there. Traefik's active health check evicts unhealthy
+# is multi-homed there. Traefik load balancing routes around unhealthy containers.
 # silos from rotation within ~2s.
 #
 # Simulate a cross-cluster partition (Tier 5):
@@ -253,16 +254,16 @@ services:
       Seeder__Enabled: "true"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
       # Shared backup sink account (azurite-backup), reachable from BOTH
-      # clusters. The backup subsystem writes manifests + content-addressed
+      # clusters. The backup subsystem writes content-addressed manifests plus per-capture
       # artifacts here so a backup captured on either cluster is restorable
       # from any peer - the prerequisite for a coordinated multi-cluster
       # restore of a replicated tree.
       ConnectionStrings__BackupBlobStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup:10000/devstoreaccount1;"
       # Cross-cluster replication peer. The package's gRPC push
-      # transport opens a stream to the peer's Traefik, which is
+      # transport sends unary batches to the peer's Traefik, which is
       # resolvable on us-net because it is multi-homed there; US silos
       # have NO route to EU silos directly (no shared network).
-      # Traefik's active health check handles per-silo failover on the
+      # Traefik load balancing handles per-silo failover on the
       # peer side.
       PackageReplication__PeerClusterId: "eu"
       PackageReplication__PeerGrpcEndpoint: "http://traefik-eu:80"

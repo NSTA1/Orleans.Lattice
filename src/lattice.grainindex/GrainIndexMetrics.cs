@@ -97,11 +97,11 @@ public static class GrainIndexMetrics
     /// <remarks>
     /// The two series answer different questions and are deliberately not
     /// additive. <see cref="PathActivation"/> counts the enrolments that were
-    /// <i>performed</i>, which is every enrolment, because a grain is only ever
-    /// indexed by its own activation. <see cref="PathBackfill"/> counts the ones
-    /// the crawl <i>caused</i>, which is how much of a dormant population the
-    /// crawl has onboarded. A crawl-driven grain therefore appears on both;
-    /// chart them side by side rather than summing them.
+    /// <i>performed</i>, which is every enrolment that reaches a grain activation.
+    /// <see cref="PathBackfill"/> counts the ones the crawl <i>caused</i>, which is
+    /// how much of a dormant population the crawl has onboarded. A crawl-driven
+    /// stateful grain appears on both; a no-state grain the crawl cannot activate
+    /// appears only on the backfill path. Chart them side by side rather than summing them.
     /// </remarks>
     public const string GrainsEnrolledName = "orleans.lattice.grainindex.grains_enrolled";
 

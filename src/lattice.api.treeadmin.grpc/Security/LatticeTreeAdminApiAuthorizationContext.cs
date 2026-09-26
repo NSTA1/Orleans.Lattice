@@ -6,8 +6,8 @@ namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 /// Identifies which tree-administration control-API operation an inbound gRPC
 /// call invokes. Supplied to
 /// <see cref="ILatticeTreeAdminApiAuthorizer.IsAuthorizedAsync"/> so a host can
-/// make per-operation decisions (for example, allow the read-only capability
-/// probe but deny the whole-tree lifecycle operations later releases add).
+/// make per-operation decisions (for example, allow read-only probes and deny
+/// destructive whole-tree lifecycle operations).
 /// </summary>
 public enum LatticeTreeAdminApiOperation
 {
@@ -54,10 +54,10 @@ public enum LatticeTreeAdminApiOperation
     GetShardMap = 13,
 
     /// <summary>
-    /// A tree-administration control-API method the interceptor does not recognise
-    /// (for example a future RPC added without updating the operation map).
-    /// Presented to the authorizer so a deny-by-default policy can refuse an
-    /// unmapped call rather than have it silently masquerade as a benign read.
+    /// A tree-administration control-API method not assigned a narrower enum member
+    /// in this version of the interceptor. Many supported RPCs intentionally land
+    /// here; deny-by-default policies can still refuse or admit the call based on the
+    /// target id and ambient credential.
     /// </summary>
     Unknown = 14,
 
@@ -69,8 +69,8 @@ public enum LatticeTreeAdminApiOperation
 /// Describes an inbound tree-administration control-API gRPC call to
 /// <see cref="ILatticeTreeAdminApiAuthorizer.IsAuthorizedAsync"/>. Carries the
 /// <see cref="Operation"/> being invoked, an optional <see cref="TargetId"/> (the
-/// tree id the call targets; <see langword="null"/> for the unauthenticated
-/// discovery operation), and the underlying gRPC <see cref="ServerCallContext"/>
+/// tree id the call targets; <see langword="null"/> when the request shape is not
+/// mapped to a single target by this interceptor), and the underlying gRPC <see cref="ServerCallContext"/>
 /// for header / identity / peer inspection.
 /// </summary>
 public readonly struct LatticeTreeAdminApiAuthorizationContext

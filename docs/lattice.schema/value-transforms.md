@@ -16,18 +16,21 @@ a value's JSON document with no client callback.
 
 ## Building a transform
 
-Compose a transform from these factories:
+Compose a transform from these factories. The root of every transform is a
+`Passthrough`; the member operations inside it address **top-level** members of the
+document, and value expressions always read from the *input* document, never the
+partially rewritten output:
 
 | Factory | Effect |
 |---|---|
-| `Passthrough(ops...)` | Apply zero or more member operations to the input document, leaving everything else intact. |
-| `SetMember(path, valueExpr)` | Set (or add) the member at `path` to the value produced by `valueExpr`. |
-| `DropMember(path)` | Remove the member at `path`. |
-| `RenameMember(from, to)` | Move the member at `from` to `to`. |
-| `Member(path)` | A value expression reading the member at `path`. |
+| `Passthrough(ops...)` | Copy the input document, then apply zero or more member operations in order, leaving everything else intact. |
+| `SetMember(path, valueExpr)` | Set (or add) the top-level member `path` to the value produced by `valueExpr`. |
+| `DropMember(path)` | Remove the top-level member `path`. |
+| `RenameMember(from, to)` | Move the top-level member `from` to `to`. |
+| `Member(path)` | A value expression reading the top-level member `path` of the input document. |
 | `Const(constant)` | A value expression yielding a constant. |
 | `Compute(op, operands...)` | A value expression computing over its operands (`Concat`, `Coalesce`). |
-| `Conditional(predicate, then, else)` | Choose between two transforms based on a `LatticePredicateNode`. |
+| `Conditional(predicate, then, else)` | A value expression yielding `then` when the `LatticePredicateNode` matches the input document, otherwise `else`. |
 
 ```csharp verify
 using Orleans.Lattice.Schema;

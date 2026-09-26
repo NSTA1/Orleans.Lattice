@@ -3,7 +3,7 @@
     Stand up (or tear down) the full Vehicle Fleet Simulator stack locally via docker compose.
 
 .DESCRIPTION
-    Brings up Azurite + Silo + API in containers, detached. The Azurite data volume
+    Brings up Azurite + Silo + API + UI in containers, detached. The Azurite data volume
     is ALWAYS wiped before starting so every run begins from a clean Orleans cluster,
     grain storage and stream-queue state - appropriate for the demo (no durable state
     across runs anyway, since grain storage is in-memory).

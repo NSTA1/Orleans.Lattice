@@ -2,8 +2,8 @@ namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
 /// A pre-saga snapshot of a single key's value, captured during the
-/// <see cref="AtomicWritePhase.Prepare"/> phase so that compensation can
-/// restore it via a fresh write (LWW resolves in favor of the newer HLC).
+/// <see cref="AtomicWritePhase.Prepare"/> phase so guarded and diagnostic paths
+/// can describe the state the saga observed before it staged prepared writes.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.AtomicPreValue)]
@@ -59,7 +59,8 @@ internal sealed class AtomicPreValue
 /// <summary>
 /// Persistent state for <see cref="Grains.AtomicWriteGrain"/>.
 /// Tracks the progress of an in-flight atomic multi-key write so that it
-/// can be resumed (or compensated) after a silo restart.
+/// can be resumed after a silo restart or aborted by recording the terminal
+/// decision and discarding prepared writes.
 /// Key format: <c>{treeId}/{operationId}</c>.
 /// </summary>
 [GenerateSerializer]
@@ -89,8 +90,8 @@ internal sealed class AtomicWriteState
     [Id(3)] public List<AtomicPreValue> PreValues { get; set; } = [];
 
     /// <summary>
-    /// Index of the next entry to commit during <see cref="AtomicWritePhase.Execute"/>,
-    /// or the next entry to roll back during <see cref="AtomicWritePhase.Compensate"/>.
+    /// Index of the next entry to commit during <see cref="AtomicWritePhase.Execute"/>.
+    /// Abort compensation does not issue per-key rollback writes.
     /// </summary>
     [Id(4)] public int NextIndex { get; set; }
 

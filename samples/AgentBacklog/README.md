@@ -40,7 +40,7 @@ Start the container box and set `REPO_PATH`, exactly as in the
 
 ```bash
 cd ../RepoContextContainer
-REPO_PATH=/absolute/path/to/a/repo docker compose up -d
+REPO_PATH=/absolute/path/to/some/parent docker compose up -d
 ```
 
 The host must be running with writes enabled (`AddRepoContextTools(enableWrites: true)`),

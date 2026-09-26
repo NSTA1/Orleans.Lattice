@@ -650,9 +650,8 @@ internal sealed partial class ReplicationApplier
         // segment, so its one tree id names one owning tenant and a single check
         // covers the whole run. A run whose tree names a non-existent tenant, or a
         // tenant not resident in this serving region, is refused: each entry is
-        // dead-lettered (the tree is enrolled and therefore bounded) and the HWM is
-        // left unchanged so the sender re-ships and convergence recovers once the
-        // tenant exists / becomes resident. Bypassed entirely when tenancy is off
+        // dead-lettered (the tree is enrolled and therefore bounded) and the transport
+        // acknowledges the refusal rather than asking the sender to re-ship. Bypassed entirely when tenancy is off
         // (the null gate's IsActive is false), so the batch path is byte-for-byte
         // unchanged. Checked before any HWM grain call so a refused run costs no
         // round-trip.
@@ -1405,9 +1404,8 @@ internal sealed partial class ReplicationApplier
     /// for an out-of-region tenant - and records the matching apply-duration outcome,
     /// so per-entry receiver observability is preserved. A single warning is logged
     /// per run rather than per entry to avoid a log-flood amplification from a hostile
-    /// peer. Returns a non-applied, HWM-unchanged result so the run neither merges nor
-    /// advances the per-origin high-water-mark, and the sender re-ships (converging
-    /// once the tenant exists / becomes resident).
+    /// peer. Returns a non-applied result so the run neither merges nor advances the
+    /// per-origin high-water-mark; the transport still acknowledges the refusal.
     /// </summary>
     private async Task<ApplyResult> RejectTenantIsolationRunAsync(
         IReadOnlyList<WalRecord> entries,

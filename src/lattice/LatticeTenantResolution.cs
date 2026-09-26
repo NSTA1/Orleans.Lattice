@@ -46,7 +46,8 @@ internal static class LatticeTenantResolution
     /// <exception cref="ArgumentNullException"><paramref name="resolver"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="treeName"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeTenantAccessDeniedException">
-    /// The resolver denied the operation (no valid active tenant).
+    /// The asserted tenant failed validation, or the resolved tenant attempted a
+    /// reserved namespace escape.
     /// </exception>
     public static ValueTask<string> ResolveEffectiveTreeIdAsync(
         ITenantContextResolver resolver,
@@ -81,9 +82,9 @@ internal static class LatticeTenantResolution
     /// reserved <see cref="TenantId.Default"/> returns the bare name unchanged
     /// (default-tenant adoption); a non-default tenant scopes an unqualified
     /// name into its <c>t/{tenant}/{name}</c> namespace. A name the caller
-    /// already qualified (the reserved <c>t/</c> tenant namespace or a
-    /// <c>_lattice_</c> / <c>sys-</c> system namespace) is returned unchanged
-    /// and never double-composed.
+    /// already qualified is never double-composed, but a confined non-system
+    /// caller is still checked for namespace escape: reserved <c>sys-</c> names
+    /// and malformed tenant-qualified names are denied rather than passed through.
     /// </summary>
     /// <param name="tenant">The resolved active tenant.</param>
     /// <param name="treeName">The caller-supplied tree name.</param>

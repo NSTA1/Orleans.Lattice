@@ -136,8 +136,8 @@ builder.Services.AddSingleton(new SiloIdentity(siloId, isPrimarySilo, clusterNam
 // Orleans.Lattice.Replication: WAL, shipper, applier, dead-letter
 // handling, plus the gRPC push transport. Every replicated tree in
 // the sample ships through that package - `mfg-facts`,
-// `mfg-site-activity`, and its `tag-mfg-site` membership tree as
-// LwwRegister, `mfg-part-labels` as OrSet (typed CRDT delta
+// `mfg-site-activity` as LwwRegister, its `tag-mfg-site` membership tree as
+// OrFlag, and `mfg-part-labels` as OrSet (typed CRDT delta
 // shipping). The `mfg-part-operator` tree
 // stays cluster-local because LWW across clusters with disjoint HLCs
 // is meaningless. See `docs/lattice.replication/` for the package's
@@ -346,8 +346,8 @@ builder.Host.UseOrleans(silo =>
 
         // Cross-cluster replication. The package's ReplicatedTrees map
         // covers every tree the sample wants replicated:
-        // `mfg-facts` (LWW), `mfg-site-activity` + its `tag-mfg-site`
-        // membership tree (LWW), and `mfg-part-labels` (OrSet - typed
+        // `mfg-facts` (LWW), `mfg-site-activity` (LWW), its `tag-mfg-site`
+        // membership tree (OrFlag), and `mfg-part-labels` (OrSet - typed
         // CRDT delta shipping). The
         // `mfg-part-operator` tree stays cluster-local because LWW
         // across clusters with disjoint HLCs is meaningless. Wired
@@ -423,7 +423,7 @@ builder.Host.UseOrleans(silo =>
             if (!string.IsNullOrWhiteSpace(backupBlobConnectionString))
             {
                 // One shared container across BOTH clusters. Backup and artifact
-                // ids are content-addressed, so a shared container never collides;
+                // backup ids are content-addressed and artifact ids are per-capture, so a shared container never collides;
                 // sharing it is exactly what lets a peer resolve the manifest and
                 // artifacts a sibling cluster captured.
                 silo.AddLatticeBackupAzureBlob(o =>

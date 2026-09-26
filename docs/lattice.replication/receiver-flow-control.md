@@ -25,7 +25,7 @@ The receiver-side gRPC service calls `EvaluateAsync` after a successful apply, o
 | `TreeName` | Logical tree id the batch was applied to. |
 | `OriginClusterId` | Authoring cluster id of the just-applied entries. |
 | `EntryCount` | Number of entries handed to the applier (includes deduped / parked entries). |
-| `ApplyDurationMs` | Wall-clock duration of the apply call, in milliseconds. `0` indicates the receiver did not measure (e.g. empty heartbeat batch). |
+| `ApplyDurationMs` | Wall-clock duration of the apply call, in milliseconds. The built-in gRPC receiver times every push, including an empty heartbeat batch (which reports a near-zero, not exactly `0`, duration); a custom receiver may pass `0` when it did not measure. Recognise a heartbeat by `EntryCount == 0`. |
 
 The policy returns a `ReceiverFlowControlHint` whose two `int?` fields project directly onto `ReplicationAck.SuggestedBatchSize` / `ReplicationAck.PauseForMs`.
 

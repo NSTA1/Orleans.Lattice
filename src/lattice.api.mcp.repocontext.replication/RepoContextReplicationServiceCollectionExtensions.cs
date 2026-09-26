@@ -42,10 +42,10 @@ public static class RepoContextReplicationServiceCollectionExtensions
     /// </para>
     /// <para>
     /// The cross-cluster embedding-gap scanner stays local to each cluster; this helper
-    /// only governs which trees ship and how they converge, so the two common
-    /// topologies both work: a single-indexer deployment that computes the expensive
-    /// embedding index once and replicates it, and a fully active-active deployment
-    /// where every cluster embeds and the membership CRDT reconciles presence.
+    /// only governs which trees ship and how they converge. Deployments that want a
+    /// single indexer plus read replicas must still configure the repo-context role
+    /// gate correctly; an omitted or misspelled role falls back to the hub behaviour,
+    /// so this helper does not by itself prove that only one cluster is indexing.
     /// </para>
     /// <para>
     /// Requires <c>Orleans.Lattice</c> to be registered first (via

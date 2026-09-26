@@ -45,10 +45,13 @@ mutual exclusion:
 
 - **Exclusion and fairness** come from the lock, which is FIFO-fair across the
   cluster.
-- **Liveness** comes from the lock's bounded, expiry-reclaimed lease. A claim is
-  never a flag; it always expires. A worker that dies mid-item releases it by
-  doing nothing, and `Claimed -> Ready` on lease expiry is the normal path, not an
-  exception.
+- **Liveness** comes from the lock's bounded, expiry-reclaimed lease. A claim's
+  lease is never a flag; it always expires. A worker that dies mid-item frees the
+  item by doing nothing - the lock reclaims the lapsed lease, so the next claim is
+  granted - and `Claimed -> Ready` on lease expiry is the normal path, not an
+  exception. Until that next claim or a release, the record still reports the dead
+  worker's claim (`claimed: true` with `isHeld: false` in
+  `repocontext_claim_status`) and keeps refusing unfenced writes.
 - **Safety after a handover** comes from the lock's monotonic fencing token,
   which strictly increases and is never reused across activations or crashes.
 
@@ -66,11 +69,18 @@ The admission rules, in order:
 | --- | --- | --- |
 | Never claimed | any, or none | **Accepted.** Every pre-existing caller is unchanged. |
 | Claim live | none | **Refused** - a live claim excludes unfenced writes. |
+| Claim released | none | **Accepted** - a released record readmits unfenced writes. |
 | Claim live or released | below the record's high-water mark | **Refused** - a superseded holder can never write. |
 | Claim live or released | above the high-water mark, but not the token the lock currently holds | **Refused** - a token ahead of the record's stamp is honoured only when the lock confirms it issued it. |
 | Claim released | at or above the high-water mark | **Refused** - re-claim first. |
 | Claim live, token current, different region | current token | **Refused** - claims are region-scoped. |
 | Claim live, token current, same region | current token | **Accepted.** |
+
+A claim is **live** from the moment it is stamped until it is released; the
+write path never reads the lease's expiry. A holder whose lease has lapsed
+therefore still passes the check under its token until another claim is granted,
+which stamps a strictly higher token and puts the lapsed holder below the
+high-water mark.
 
 Two consequences are worth stating plainly, because collapsing them is how
 "fenced" gets misread as "true":
@@ -114,16 +124,19 @@ static string Describe(RepoContextClaimResult claim) =>
 ```
 
 `repocontext_renew_claim` returns the same shape, and a reason of `superseded` is
-the authoritative signal that this run has lost the item: it must abandon
-immediately without writing anything further.
+the authoritative signal that this run's lease is gone: it lapsed and the lock
+reclaimed it, whether or not another worker has claimed the item since, and the
+next claim by anyone fences this run's token out. It must abandon immediately
+without writing anything further.
 
 **Always pass `leaseSeconds` explicitly on a renew.** Omitting it does not
 preserve the lease being held - it requests the cluster's configured default,
-which is deliberately short, so renewing a long claim without a length cuts it
+which is deliberately short (`LatticeOptions.DefaultLockLeaseDuration`, 30 seconds
+unless the host overrides it), so renewing a long claim without a length cuts it
 down. Both outcomes are `granted: true`, so the reduction is reported separately
 as `leaseShortened: true` with the prior expiry in `previousLeaseExpiresAtUtc`.
 Without that signal the reduction is invisible until the *next* renew, which
-returns `superseded` - by which point the worker has been fenced out mid-task
+returns `superseded` - by which point the worker has lost its lease mid-task
 while believing it held the claim. Treat a shortening renew as a prompt to renew
 again with an explicit length, not as success.
 
@@ -168,8 +181,9 @@ not complete until it completes, however green its sub-items are.
 Groupings also share **one branch**. Because `main` requires a status check with
 "up to date before merging", every merge into `main` invalidates every other open
 pull request, which must then update and re-run the whole suite: N concurrent
-sub-items cost quadratic CI. So an epic gets `<type>/epic/<slug>`, sub-items nest
-under it as `<type>/epic/<slug>/<item>`, and the epic reaches `main` as a single
+sub-items cost quadratic CI. So an epic gets `<type>/epic/<slug>`, sub-items branch
+off it as `<type>/epic/<slug>-<item>` (a hyphen, not a slash: git cannot hold a branch
+`X` and a branch `X/anything` at once), and the epic reaches `main` as a single
 fully-gated pull request. CI runs on epic-targeted pull requests, and an epic
 branch deliberately carries no protection - CI *running* is what gives feedback,
 while a *strict* required check is what serialises. The full rules, including who

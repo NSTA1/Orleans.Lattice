@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <see cref="McpReplicationConfig"/>. It reconciles the runtime config tree and
 /// the static deployment-time replicated-tree map into the facts an operator
 /// surface needs: whether the tree is enrolled, the merge mode in force, whether
-/// that mode is currently ambiguous (so shipping is paused fail-closed), and
+/// that mode is currently ambiguous (so receivers fail closed on that tree), and
 /// which source put it in force.
 /// </summary>
 internal sealed record McpReplicationTreeConfig
@@ -30,8 +30,8 @@ internal sealed record McpReplicationTreeConfig
     public string? Mode { get; init; }
 
     /// <summary>
-    /// Whether the tree's merge-mode register carries more than one live value,
-    /// so shipping is paused fail-closed until an operator resolves it.
+    /// Whether the tree's merge-mode register carries more than one live value, so
+    /// the resolver returns no mode until an operator resolves it.
     /// </summary>
     public required bool Ambiguous { get; init; }
 

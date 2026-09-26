@@ -33,7 +33,7 @@ commit-time observer short-circuits before any sink call.
 
 | Mode | Status | Convergence guarantee |
 |------|--------|-----------------------|
-| `LwwRegister` | **Available** | Last-writer-wins ordered by `(HybridLogicalClock, OriginClusterId)`. Concurrent writes from different clusters silently drop the loser; safe under single-writer-per-key discipline. |
+| `LwwRegister` | **Available** | Last-writer-wins ordered by `HybridLogicalClock`; an exact HLC tie falls to the replica-invariant tombstone, expiry, and value-byte fields before `OriginClusterId`. Concurrent writes from different clusters silently drop the loser; safe under single-writer-per-key discipline. |
 | `OrSet` | **Available** | Observed-remove set. State-based merge - concurrent active-active adds and removes from multiple clusters survive convergence with their causal dot context preserved. |
 | `PnCounter` | **Available** | Positive-negative counter. Pointwise-max merge on each replica's positive and negative components - concurrent increments and decrements from multiple clusters sum correctly. |
 | `VersionVector` | **Available** | Version vector. Pointwise-max merge on each replica's `HybridLogicalClock` entry. Late or duplicate delivery is a no-op. |
@@ -52,13 +52,13 @@ The validator accepts every defined `LatticeMergeMode` value; only undefined int
 
 ## When `LwwRegister` is the right choice
 
-`LwwRegister` is the right answer for keys with overwrite-with-latest semantics, but only under **single-writer-per-key discipline**. Each key must have at most one authoritative cluster at any given time (e.g. routed by tenant, by shard, or by ownership token). Under this discipline, last-writer-wins is correct: there is never a genuinely-concurrent write to resolve, and the HLC-plus-origin tiebreaker just orders the unambiguous successor.
+`LwwRegister` is the right answer for keys with overwrite-with-latest semantics, but only under **single-writer-per-key discipline**. Each key must have at most one authoritative cluster at any given time (e.g. routed by tenant, by shard, or by ownership token). Under this discipline, last-writer-wins is correct: there is never a genuinely-concurrent write to resolve, and the HLC order (with its deterministic tie-break) just orders the unambiguous successor.
 
 If your workload allows concurrent writes from multiple clusters to the same key, last-writer-wins **silently drops the loser** - both writes return success on their respective clusters, but only one survives the merge. For those workloads, declare a typed CRDT mode and author values through the matching accessor on `ILattice`.
 
 ## How typed CRDT modes apply on the receiver
 
-For every typed CRDT mode, the producer-side accessor authors the matching public typed delta DTO into the single `WalRecord.Delta` slot at commit time. The `WalRecord.Value` slot is omitted on the wire for CRDT modes - the canonical payload travels only as the typed delta, not as a serialised post-merge snapshot. The receiver-side applier reads the typed delta from `Delta`, deserialises it through the matching DTO, reads the locally-stored primitive under optimistic concurrency, calls the primitive's instance `MergeDelta(delta)` operation, and writes the merged state back. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the entry the receiver's commit appends to its own WAL carries the foreign origin, and the receiver's ship loop - which ships only locally-authored entries - filters it out: the same cycle-break semantics as LWW. Change-feed consumers that historically read `Value` directly on CRDT-mode entries must migrate to either reading `Delta` and folding it against their own prior observed state, or reading the post-merge state through the public lattice surface (`ILattice.GetAsync` / typed accessors).
+For every typed CRDT mode, the producer-side accessor authors the matching public typed delta DTO into the single `WalRecord.Delta` slot at commit time. The `WalRecord.Value` slot is stripped on the wire from every committed CRDT-mode `Set` that carries a typed delta (prepared saga entries keep it) - the canonical payload travels only as the typed delta, not as a serialised post-merge snapshot. The receiver-side applier forwards the typed delta from `Delta` to the tree's CRDT-delta apply path, which folds it into the stored primitive with the primitive's `MergeDelta` operation inside a single grain turn and records a CRDT-delta revision, exactly as a locally-authored CRDT write is recorded. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the entry the receiver's commit appends to its own WAL carries the foreign origin, and the receiver's ship loop - which ships only locally-authored entries - filters it out: the same cycle-break semantics as LWW. Change-feed consumers that historically read `Value` directly on CRDT-mode entries must migrate to either reading `Delta` and folding it against their own prior observed state, or reading the post-merge state through the public lattice surface (`ILattice.GetAsync` / typed accessors).
 
 Typed-delta merge is commutative, associative, and idempotent: late or duplicate delivery converges to the same set / counter / vector / map regardless of arrival order. The per-origin high-water-mark still gates re-delivery to short-circuit redundant work, but correctness does not depend on it for typed CRDT modes.
 
@@ -81,7 +81,7 @@ The registration installs a deserialiser / merger descriptor into the `CrdtShape
 Mitigations, in order of preference:
 
 - **Producer-side debounce / coalescing.** Buffer keystrokes in the editor for a short window (for example 50-150 ms) and commit the batch as a run of inserts under the last-resolved parent dot, or as a single multi-character element when the application's element granularity permits. Coalescing N keystrokes into one commit cuts the WAL and ship rate by N without changing the converged order. The debounce lives in the application's edit loop, not in the lattice - the lattice deliberately commits exactly what it is told so the convergence contract stays exact.
-- **Coarser-grained `Snapshot` / LWW mode for cold sequences.** A sequence that is read-mostly and only occasionally rewritten wholesale (a rarely-edited document, a config list rebuilt on save) does not need per-keystroke convergence. Storing it as an opaque value under `LwwRegister` (or rebuilding and writing the whole list on save) replaces the per-edit WAL storm with one entry per save, at the cost of last-writer-wins on concurrent whole-document writes. Reserve `Sequence` mode for keys that are genuinely concurrently edited at fine granularity.
+- **Coarser-grained whole-value storage under `LwwRegister` for cold sequences.** A sequence that is read-mostly and only occasionally rewritten wholesale (a rarely-edited document, a config list rebuilt on save) does not need per-keystroke convergence. Storing it as an opaque value under `LwwRegister` (or rebuilding and writing the whole list on save) replaces the per-edit WAL storm with one entry per save, at the cost of last-writer-wins on concurrent whole-document writes. Reserve `Sequence` mode for keys that are genuinely concurrently edited at fine granularity.
 
 The WAL saturation back-pressure surface (`IWalSaturationSignal` / `IWalSaturationObserver`) still applies: a producer that ignores the debounce guidance and drives a single hot sequence key past the per-tree WAL admission budget observes the standard saturation signal and `LatticeSaturatedException`, the same as any other write-amplifying workload.
 
@@ -99,8 +99,8 @@ This means a write whose shape disagrees with the declared mode cannot converge
 on the peer. A plain last-writer-wins write to a tree declared as a CRDT mode
 ships value bytes the receiver tries to decode as a typed delta; a CRDT write
 under the wrong mode ships a delta the receiver decodes with the wrong shape.
-Either way the receiver's typed apply throws during `DeserializeDelta`, the
-entry is retried, and after `MaxApplyRetries` it is parked on the dead-letter
+Either way the receiver's typed apply throws while decoding the payload under the
+declared shape, the entry is retried, and after `MaxApplyRetries` it is parked on the dead-letter
 queue. The origin cluster's own copy stays correct, so the divergence is
 silent - the peer simply never receives that key.
 

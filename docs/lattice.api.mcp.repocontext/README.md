@@ -18,7 +18,7 @@ Every record is stored as a CRDT value on a named Lattice tree, so concurrent up
 
 ## Fail-closed and permission-scoped
 
-The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding one of the data-plane operations that makes the built-in data group usable, and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`, and the claim trio `claim`, `renew_claim`, `release_claim`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`; a reader-only caller never sees them. `repocontext_claim_status` is a read and is always contributed.
+The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding one of the data-plane operations that makes the built-in data group usable, and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`, the claim trio `claim`, `renew_claim`, `release_claim`, and in workspace mode `add_repo`, `remove_repo`, and `reset_index`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`, and each is offered only to a caller whose grant includes a write-shaped data-plane operation; a reader-only caller never sees them. `repocontext_claim_status` is a read and is always contributed.
 
 The write opt-in is not on its own enough for the two **onboarding** tools. `repocontext_bootstrap` and `repocontext_add_repo` both take the working tree to walk from the wire, so they are contributed only when a workspace root is passed as `workspaceRoot`, and at invocation they run only when the effective path guard is enforcing. Without one the guard admits every absolute path on the host, which would let any caller holding a write grant have the server index a directory it never should have read and then hand the contents back through `repocontext_context` and `repocontext_search`. Everything else the write opt-in contributes keys on a repository id rather than a path and is unaffected.
 
@@ -64,3 +64,4 @@ Related package docs:
 
 - [MCP Server](../lattice.api.mcp/README.md) - the host binding, credential bridge, and authorization gate this module composes.
 - [File WAL storage](../lattice.storage.file/README.md) - the cloud-free durable WAL backend the local container uses.
+- [Multi-cluster replication](../lattice.api.mcp.repocontext.replication/README.md) - the opt-in `Orleans.Lattice.Api.Mcp.RepoContext.Replication` companion that enrols the replicated repository-context trees under their required merge modes.

@@ -18,7 +18,7 @@ The package has no external broker and no `.proto` file to maintain.
 ## Core Properties
 
 - **Public seam only.** Callers configure `LatticeReplicationGrpcOptions`, send through `IReplicationTransport`, and receive through `IReplicationApplier`.
-- **Long-lived channels.** Each peer endpoint gets a cached HTTP/2 channel that multiplexes concurrent calls.
+- **Long-lived channels.** Each outbound transport caches a long-lived HTTP/2 channel per peer endpoint - live push and the peer probes share one, and snapshot bootstrap and saga control each keep their own - and every channel multiplexes concurrent calls.
 - **Idempotent delivery.** Sender retries may redeliver a batch; the receiver's record-identity dedup (an exact `(origin, hlc, key, op)` match, backed by an idempotent leaf-level apply) makes repeated records no-ops.
 - **Ack-driven progress.** Senders advance their per-peer cursor to the `ReplicationAck.HighestAppliedHlc` reported by the receiver (or, when an accepted ack reports a frontier at or below the current cursor because every entry was deduplicated, to the last shipped entry's HLC); a rejected ack leaves the cursor in place.
 - **Transport-neutral payload.** The wire bytes are the normal `ReplicationBatchEnvelope` encoding described in [Wire Format](../lattice.replication/wire-format.md).

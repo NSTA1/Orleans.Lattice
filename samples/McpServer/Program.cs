@@ -42,8 +42,8 @@ const string Agent = DemoCredentialBridge.AgentSubject;
 const string Scheme = DemoAuthenticator.Scheme;
 const int Port = 5290;
 
-// Every data-plane + admin capability the four tool groups require, in one mask,
-// so a single Allow rule unlocks the whole granted tool set for the agent.
+// Every data-plane + admin capability the registered tool groups require, in one
+// mask, so a single Allow rule unlocks the whole granted tool set for the agent.
 const LatticeOperation AllOperations =
     LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete |
     LatticeOperation.RangeRead | LatticeOperation.RangeDelete | LatticeOperation.CrdtApply |

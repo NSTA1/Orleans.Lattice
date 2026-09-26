@@ -62,7 +62,7 @@ siloBuilder.AddLatticeReplicationSecretsFromConfiguration(
     configuration.GetSection("LatticeReplication:Secrets"));
 ```
 
-The configuration section binds to a record with `Secret`, `AcceptedSecrets`, and `PeerSecrets` keys. The hostile-config scan still runs, so a section at the conventional `LatticeReplication:Secrets` path that bottoms out in `appsettings.json` is still rejected at startup.
+The source reads the section's `Secret`, `AcceptedSecrets`, and `PeerSecrets` keys; a `PeerSecrets` entry for the target cluster id overrides `Secret` on outbound calls. The hostile-config scan still runs, so a section at the conventional `LatticeReplication:Secrets` path that bottoms out in `appsettings.json` is still rejected at startup.
 
 ## Hostile-config scan
 
@@ -70,7 +70,7 @@ A hosted startup validator runs as an `IHostedService` and inspects every regist
 
 The check exists because the most common path to a leaked secret is a developer pasting it into `appsettings.json` (or its `Development` / `Production` variants), committing the file to source control, and discovering the leak weeks later. The scan does not inspect values; only the (key name, provider type, file path) tuple, so it cannot itself surface a secret.
 
-To opt out, set `LATTICE_REPLICATION_ALLOW_SOURCE_TREE_SECRETS=1`. The toggle is environment-variable-only and intentionally not a `LatticeReplicationSecurityOptions` flag - making it a code option would route through `IConfiguration` and create a circular hostile-config path.
+To opt out, set `LATTICE_REPLICATION_ALLOW_SOURCE_TREE_SECRETS` to `1`, `true`, or `yes`, or set `LatticeReplicationSecurityOptions.ScanConfigurationForSecrets` to `false`; either one skips the scan and logs a warning at startup. The environment variable is the preferred escape hatch: the validator reads it straight from the process environment rather than through `IConfiguration`, and it is auditable in deployment manifests.
 
 Tests and minimal hosts that do not register an `IConfiguration` root are unaffected; the validator resolves `IConfiguration` optionally and is a no-op when no configuration is present.
 
@@ -106,7 +106,7 @@ The receiver-side auth interceptor is registered globally on the gRPC service, s
 - **Calls without the `x-lattice-replication-secret` header** with `StatusCode.Unauthenticated`.
 - **Calls whose secret is not in the accepted-set snapshot** with `StatusCode.PermissionDenied`.
 
-Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The saga control RPCs additionally pass an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`.
+Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The snapshot metadata and snapshot stream RPCs apply the same check on the exporting side before any tree is read, and refuse a non-enrolled tree with `StatusCode.PermissionDenied` too. The saga control RPCs additionally pass an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`.
 
 The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to keep comparison time independent of how close the candidate secret is to a real one.
 

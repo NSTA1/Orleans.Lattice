@@ -225,6 +225,7 @@ Automated scanning still finds a minority of real barriers, and it is blind to
 most of the criteria above - it cannot see whether a tab is bound to a panel,
 whether a heading outline is navigable, whether a keyboard user can bypass the
 chrome, or whether a change was announced. That is why criteria 1 to 6, 9 and 10
-are asserted explicitly in `AccessibilityStructureTests` rather than left to the
-sweep. `AxeMutationProof.md` in this directory records the mutation test proving
+are asserted explicitly - in `AccessibilityStructureTests`, plus criterion 6's
+enumerated `aria-selected` check in `AccessibilitySweepTests` - rather than left
+to the sweep. `AxeMutationProof.md` in this directory records the mutation test proving
 axe did not catch #1793, and is the honest evidence for that split.

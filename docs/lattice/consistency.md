@@ -19,8 +19,9 @@ each section:
 
 ## Consistency levels
 
-Every public `ILattice` method is classified against exactly one of the
-following four levels.
+The tables below state a guarantee for each operation they list, mostly in
+terms of the following four levels. They do not cover every `ILattice`
+method: a method that no table lists is not classified here.
 
 | Level | What the caller observes |
 |-------|--------------------------|
@@ -63,7 +64,7 @@ exception. Callers never see `StaleShardRoutingException` or
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
 | `GetManyAsync` | **Per-key linearizable** (default `CacheTtl`); **per-key eventually consistent** (`CacheTtl > 0`) | **Atomic visibility tree-wide**: a concurrent `SetManyAtomicAsync` is observed either entirely or not at all across the requested key set. The batch is *not* a global snapshot across non-saga keys - two unrelated keys may reflect different real-time points. |
-| `SetManyAsync` | **Per-key linearizable, batch non-atomic** | Each key is written under its own linearization point. A partial failure leaves the batch half-applied with no rollback, and because the fan-out fails fast without cancelling its siblings, writes for other keys may still be in flight when the exception is thrown - the half-applied state is settled only once those branches finish, so re-read rather than assume. |
+| `SetManyAsync` | **Per-key linearizable, batch non-atomic** | Each key is written under its own linearization point. A partial failure leaves the batch half-applied with no rollback, and because the fan-out fails fast without cancelling its siblings, writes for other keys may still be in flight when the exception is thrown - the half-applied state is settled only once those branches finish, so re-read rather than assume. The same holds when an opt-in finite `LatticeOptions.SetManyFanOutBudget` (unbounded by default) expires: the call is refused with `LatticeSaturatedException` while the outstanding branches run to completion. |
 | `SetManyAtomicAsync` | **Per-key linearizable, batch atomic, atomic-visible tree-wide, atomic-visible across clusters** | All-or-nothing: on success every key holds its new value; on failure every key holds its pre-saga value. **A concurrent reader observes the saga atomically** - the post-decision visibility flip is a single tree-wide point. The atomic-visibility guarantee extends across every cluster the tree replicates to. See [Atomic Writes](atomic-writes.md). |
 | `DeleteRangeAsync` | **Strongly consistent** | Every key in the range is tombstoned. Robust against sparse multi-shard distributions. For resumable or crash-safe range deletes use `OpenDeleteRangeCursorAsync` instead. |
 | `CountAsync` | **Strongly consistent, atomic-visible tree-wide** | Exact live key count under the topology snapshot the call observes. A concurrent `SetManyAtomicAsync` is observed atomically (included entirely or excluded entirely). Throws `InvalidOperationException` if topology changes outrun the retry budget (`LatticeOptions.MaxScanRetries`, default 3). |

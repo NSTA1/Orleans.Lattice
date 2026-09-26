@@ -35,9 +35,10 @@ public readonly record struct ReceiverFlowControlContext
 
     /// <summary>
     /// Wall-clock duration of the just-applied
-    /// <c>IReplicationApplier.ApplyBatchAsync</c> call, in milliseconds.
-    /// A value of <c>0</c> indicates the receiver did not measure the
-    /// duration for this push (e.g. an empty heartbeat batch).
+    /// <c>IReplicationApplier.ApplyBatchAsync</c> call, in milliseconds. The built-in
+    /// gRPC receiver measures every push, including empty heartbeat batches; a value
+    /// of <c>0</c> is just a measured near-zero duration or a custom receiver that did
+    /// not supply timing.
     /// </summary>
     public double ApplyDurationMs { get; init; }
 }

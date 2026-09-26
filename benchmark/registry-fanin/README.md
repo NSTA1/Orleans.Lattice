@@ -29,7 +29,11 @@ not follow it. Both were measured; they are separate results.
 
 So the one-line summary is **not** "no scaling law was found". It is: **the
 scaling law is real and measured, and there is no evidence it currently hurts.**
-Claim A is tracked as live work in issue #3240 and is **not** closed by claim B.
+Claim A was tracked in issue #3240, closed as completed on 2026-09-21 when the
+fan-in bound (#3262) reached `main`. That bound caps how many registry calls run
+concurrently, independently of tree count; it is not a bound on the call volume
+claim A measures (see [The bound limits calls, not work](#the-bound-limits-calls-not-work)).
+Claim B never closed claim A.
 
 This distinction has already been collapsed once, by a careful reader, against
 an acceptance criterion whose literal falsifier was claim A and which never
@@ -157,14 +161,16 @@ running the measurement, and each cost real time to find.
 
 ### 1. The background services are reminder-birthed, not boot-started
 
-`LatticeGrain` registers an Orleans **reminder** per tree, and all three of the
-live storm's top callers register with the same one-minute due time:
+Each of these services registers its own Orleans **reminder**: `LatticeGrain`
+arms the hot-shard monitor and the healing orchestrator once per tree, and each
+view's maintainer registers one for its view. All three of the live storm's top
+callers register with the same one-minute due time:
 
 | grain | site | due |
 |---|---|---|
 | `HotShardMonitorGrain` | `:226-229` | 1 min |
 | `ShardHealingOrchestratorGrain` | `:96-99` | 1 min |
-| `ViewMaintainerGrain` | `:170-173` | 1 min |
+| `ViewMaintainerGrain` | `:264-267` | 1 min |
 
 Those three were 87 of the 103 live timeouts. Reminders are **persistent**, so
 they survive into the next process lifetime and re-fire after a cold start with
@@ -290,7 +296,8 @@ protected container `repocontextcontainer-repocontext-1` and its volume
 `repocontextcontainer_repocontext-data` are named in the forbidden lists and the
 guard refuses to run if the rig's own project, volume, or image tag does not
 match its required prefix. The rig runs against a **separate, throwaway**
-container with its own volume, built from the same image.
+container with its own volume, running an image `rig.ps1 build` builds from the
+same `apps/repocontext/Dockerfile` out of the current checkout.
 
 ## The fan-out arm: the only arm that reaches the bound
 
@@ -358,9 +365,11 @@ gate instrument.
 
 **2. A permit carries a batch, not a read.** `Pump()` takes
 `Math.Min(MaxBatchSize = 64, arrivals)` ids per permit, so a *single
-instantaneous burst* needs more than `16 x 64 = 960` waiting ids before the
-permits are exhausted. With arrivals **spread in time** the first 16 each take a
-permit of their own and 16 concurrent distinct reads suffice. The ~960 figure
+instantaneous burst* needs more than `15 x 64 = 960` waiting ids before the
+permits are exhausted (fifteen full batches of 64 carry 960 ids, so the
+sixteenth permit is needed only beyond that). With arrivals **spread in time**
+the first 16 each take a permit of their own and 16 concurrent distinct reads
+suffice. The ~960 figure
 applies only to one simultaneous burst - which is exactly what this arm issues,
 so it is the relevant figure here.
 
@@ -426,8 +435,10 @@ Two design points matter for reading them:
   unreadable: that is precisely why the original run's numbers could not be
   interpreted.
 
-`collect-window.ps1` reads all three into an `AdmissionGate` block whose
-`RegimeReached` field is the one to consult first. **Every other figure in that
+`collect-window.ps1` reads all three, together with the gate's earlier
+`orleans.lattice.registry.admission.wait` histogram (added with the gate itself
+in #3262), into an `AdmissionGate` block whose `RegimeReached` field is the one
+to consult first. **Every other figure in that
 block is meaningless while it is false.**
 
 ### The bound limits calls, not work
@@ -548,7 +559,8 @@ does not predict timeouts in this rig.** At 4.25x the live tree count and ~2x
 the live registry load, three of four cold starts were entirely clean. That is
 claim B only. The fan-in *load* does scale linearly with tree count - claim A,
 confirmed, see [Two claims](#two-claims-and-they-must-not-be-collapsed) - and
-that remains open work in issue #3240.
+the fan-in bound that closed issue #3240 caps how many of those calls run at
+once, not how many there are.
 
 ### Finding 5: scale and host CPU saturation, jointly, do not reproduce it either
 

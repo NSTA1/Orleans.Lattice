@@ -13,7 +13,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 ### Added
 
 - **Atomic - Saga decision registry admission bound.** `LatticeOptions.TxRegistryAdmissionBudgetBytes` (default 768 KiB) refuses a new saga with `LatticeSaturatedException` before the per-tree registry row outgrows the provider entity limit, and new `tx_registry` instruments report its writes. ([#3475](https://github.com/NSTA1/Orleans.Lattice/issues/3475)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
-- **Docs - Agent-readable site.** Every page is also published as markdown, with generated llms.txt and sitemap.xml. Oversized pages are split, source links resolve, and each page states the release and package version it documents. ([#3571](https://github.com/NSTA1/Orleans.Lattice/pull/3571), [#3577](https://github.com/NSTA1/Orleans.Lattice/pull/3577), [#3578](https://github.com/NSTA1/Orleans.Lattice/pull/3578)) (`repository-wide`)
+- **Docs - Agent-readable site.** Every page is also published as markdown, each package's docs as one file, and llms.txt lists every page. Oversized pages are split, source links resolve, the sitemap drops misdated entries, and each page states the release and version it documents. ([#3571](https://github.com/NSTA1/Orleans.Lattice/pull/3571), [#3577](https://github.com/NSTA1/Orleans.Lattice/pull/3577), [#3578](https://github.com/NSTA1/Orleans.Lattice/pull/3578), [#3586](https://github.com/NSTA1/Orleans.Lattice/pull/3586)) (`repository-wide`)
 
 - **WAL - Append coalescing.** Under load a batched write left each WAL partition only a few entries, so every slice paid a full storage round trip. `WalAppendCoalescingInFlightThreshold` (default `4`, `0` disables) lets a slice accumulate while that many flushes are in flight. ([#3396](https://github.com/NSTA1/Orleans.Lattice/issues/3396)) (`Orleans.Lattice`)
 
@@ -239,6 +239,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Tests - Two chaos tests flaked on harness timing.** The production-shipper fixture clears its startup backoff before tests run, and restore reconciliation is pinned by a deterministic regression across registry scan aborts. ([#3233](https://github.com/NSTA1/Orleans.Lattice/issues/3233), [#3337](https://github.com/NSTA1/Orleans.Lattice/issues/3337)) (`repository-wide`)
 
 - **Replay - Leaf replay decoded every record of a shared WAL partition.** Each leaf decoded every other leaf's records before discarding them, costing heavy GC on large trees. A new optional `IWalStorageProvider.ReadFilteredAsync` seam lets providers skip records the leaf does not own. ([#3565](https://github.com/NSTA1/Orleans.Lattice/issues/3565)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Storage.AzureTable`)
+
+- **Core - New workers postponed tombstone compaction.** Each new `LatticeGrain` worker re-registered its tree's compaction reminder on its first write, moving the next pass a full period out, so a tree that kept getting new workers never compacted. It now registers only when absent. ([#3592](https://github.com/NSTA1/Orleans.Lattice/issues/3592)) (`Orleans.Lattice`)
 
 ### Security
 

@@ -18,8 +18,10 @@ namespace Orleans.Lattice.Replication;
 /// first enabled and cannot be changed in place: enabling an already-enabled
 /// tree under a different mode is rejected with
 /// <see cref="LatticeReplicationModeChangeRejectedException"/>. To change a
-/// mode, disable the tree (which pauses shipping) and re-enable it under the new
-/// mode. A re-enable requests a bootstrap only when the caller supplies a
+/// mode, disable the tree and re-enable it under the new mode. Disabling removes
+/// the resolved runtime mode but does not tear down an already-active shipper; if it
+/// keeps shipping, peers that resolve no mode drop those entries while acknowledging
+/// the batch. A re-enable requests a bootstrap only when the caller supplies a
 /// bootstrap source cluster id and the tree already contains data.
 /// </para>
 /// <para>
@@ -94,11 +96,12 @@ public interface ILatticeReplicationConfigAuthority
 
     /// <summary>
     /// Disables replication for <paramref name="treeId"/>, authoring a
-    /// disable-wins flag dot so the merge-mode resolver returns <see langword="null"/>
-    /// and shipping pauses. The tree's <see cref="LatticeReplicationConfigEntry"/>
-    /// (including its fixed merge mode) is kept in the config OR-Map, and
-    /// already-replicated peer data is <b>never</b> purged - disable only stops
-    /// shipping <i>new</i> mutations. A later re-enable is therefore a fresh
+    /// disable-wins flag dot so the merge-mode resolver returns <see langword="null"/>.
+    /// The tree's <see cref="LatticeReplicationConfigEntry"/> (including its fixed
+    /// merge mode) is kept in the config OR-Map, and already-replicated peer data is
+    /// <b>never</b> purged. Already-active shippers are not torn down; if one keeps
+    /// shipping, peers that resolve no mode drop those entries while acknowledging the
+    /// batch. A later re-enable is therefore a fresh
     /// bootstrap under whatever mode is then chosen.
     /// <para>
     /// Idempotent: disabling a tree that is absent or already disabled authors no

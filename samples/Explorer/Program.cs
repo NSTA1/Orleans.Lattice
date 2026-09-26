@@ -59,8 +59,8 @@ const string AdminPassword = "explorer";
 //   * Static (default, no configuration): a small in-memory roster backs the
 //     picker and the create form. An id that is not in the roster fails closed
 //     ("No such principal in the directory.") rather than being created as an
-//     unvalidated free-text entry. This mode is one-command runnable and is what
-//     the sample's own tests exercise.
+//     unvalidated free-text entry. This mode is one-command runnable and needs no
+//     external identity service.
 //
 //   * Entra (opt-in): set ALL THREE of LATTICE_ENTRA_TENANT_ID,
 //     LATTICE_ENTRA_CLIENT_ID, and LATTICE_ENTRA_CLIENT_SECRET to back the picker

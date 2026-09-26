@@ -11,7 +11,7 @@ namespace MultiSiteManufacturing.Host.Inventory;
 /// <summary>
 /// Bulk-loads a small, diverse spread of parts into the federation on
 /// silo startup. The seed is deterministic - same serial numbers, same
-/// facts, same HLCs across runs - so demos look identical every time
+/// facts with deterministic payloads - so demos look structurally identical every time
 /// the host starts against a fresh storage account.
 /// </summary>
 /// <remarks>
@@ -24,7 +24,7 @@ namespace MultiSiteManufacturing.Host.Inventory;
 /// silo restart, the seeder re-seeds rather than leaving the cluster
 /// flagged "seeded" over empty trees. To force a full re-seed from a
 /// clean slate, delete the <c>msmfgGrainState</c> and
-/// <c>msmfgLatticeFacts*</c> tables from Azurite (or the target storage
+/// <c>msmfg*</c> Lattice tables from Azurite (or the target storage
 /// account).
 /// </para>
 /// <para>

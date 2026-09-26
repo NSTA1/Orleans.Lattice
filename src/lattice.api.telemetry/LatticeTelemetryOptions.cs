@@ -79,9 +79,9 @@ public class LatticeTelemetryOptions
     /// The exact metric names and/or patterns permitted when
     /// <see cref="MetricAccess"/> is
     /// <see cref="LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed"/>. Each
-    /// entry is either an exact metric name (for example
-    /// <c>lattice_wal_append_total</c>) or a pattern containing <c>*</c>
-    /// wildcards (for example <c>lattice_wal_*</c>). Ignored when
+    /// entry is either an exact Prometheus metric name (for example
+    /// <c>orleans_lattice_wal_saturation_state</c>) or a pattern containing <c>*</c>
+    /// wildcards (for example <c>orleans_lattice_wal_*</c>). Ignored when
     /// <see cref="MetricAccess"/> is
     /// <see cref="LatticeTelemetryMetricAccessMode.ReadAll"/>.
     /// </summary>

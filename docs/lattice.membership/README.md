@@ -15,7 +15,7 @@ It is the identity foundation the [`Orleans.Lattice.Auth`](../lattice.auth/READM
 
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeMembership()` on the silo. A cluster that does not add the package has no directory and no resolution pipeline, and the core read/write path is byte-for-byte unchanged.
 - **Subject = id + group closure.** A resolved subject is a stable subject id and the transitively-expanded set of groups it belongs to, so a group-scoped authorization rule applies to every member without the rule naming them.
-- **Pluggable authentication.** A credential is turned into a principal by one or more `ILatticeCredentialAuthenticator`s, selected by the credential's scheme. The package ships an anonymous authenticator and a JWT authenticator; a host can register its own.
+- **Pluggable authentication.** A credential is turned into a principal by one or more `ILatticeCredentialAuthenticator`s, tried in registration order: the first whose `CanHandle` recognizes the credential - by its scheme / issuer hint, or by the issuer parsed from the token when no hint is present - resolves it, and a credential no authenticator claims resolves to the anonymous subject. The package ships an anonymous authenticator (which never claims a credential) and a JWT authenticator; a host can register its own.
 - **Resolution is cached.** Subject resolution is memoised with a configurable TTL (`ResolutionCacheTtl`, default 5 minutes) so a burst of calls from the same caller does not re-expand its group closure every time. Cache hit and miss rates are exposed as counters on the `orleans.lattice.membership` meter (see [Observability](observability.md)).
 
 ## Setup
@@ -78,6 +78,8 @@ siloBuilder.AddLatticeJwtAuthenticator(options =>
 });
 ```
 
+The JWT authenticator reads a credential's token issuer only when the credential carries no scheme. The credential bridges in the gRPC and MCP facade bindings stamp one (`Bearer` by default), so an authenticator that must serve those calls also sets `SchemeHint` to that scheme; see [`JwtAuthenticatorOptions`](configuration.md#jwtauthenticatoroptions).
+
 A host that authenticates its own way registers a custom `ILatticeCredentialAuthenticator`:
 
 ```csharp
@@ -86,7 +88,7 @@ siloBuilder.Services.AddSingleton<ILatticeCredentialAuthenticator, MyAuthenticat
 
 ## Managing the directory
 
-Groups and their membership edges are managed through `ILatticeMembershipDirectory`, resolved from the silo's service provider. Group membership is transitive: a group can be a member of another group, and a subject's resolved closure includes every group reachable from it. A membership edge references a member by id (a user or nested group id); the directory does not maintain a separate user record - member ids are resolved from the configured identity source (an [identity directory provider](identity-directory-providers.md)) and asserted through credentials.
+Groups and their membership edges are managed through `ILatticeMembershipDirectory`, resolved from the silo's service provider. Group membership is transitive: a group can be a member of another group, and a subject's resolved closure includes every group reachable from it. A membership edge references a member by id (a user or nested group id); the directory does not maintain a separate user record - a member id is a plain subject id, asserted through credentials and, when directory validation is enabled, checked against the configured identity source (an [identity directory provider](identity-directory-providers.md)) by the `ILatticeAuthAdmin` administration facade before it writes.
 
 ```csharp verify
 public sealed class DirectorySeeder(ILatticeMembershipDirectory directory)
@@ -106,6 +108,22 @@ public sealed class DirectorySeeder(ILatticeMembershipDirectory directory)
 }
 ```
 
+The directory is a trusted, silo-side seam: it runs its reads and writes under system origin, bypassing the access gate. Operator and remote administration goes through the `ILatticeAuthAdmin` facade that [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) registers, which authorizes the caller before it touches the directory.
+
+| Member | Returns | Purpose |
+|---|---|---|
+| `UpsertGroupAsync(MembershipGroup group, CancellationToken)` | `Task` | Creates or replaces a group record. |
+| `GetGroupAsync(string groupId, CancellationToken)` | `Task<MembershipGroup?>` | Reads a group record, or `null` when no such group exists. |
+| `ListGroupsAsync(CancellationToken)` | `IAsyncEnumerable<MembershipGroup>` | Enumerates every group record in id order. |
+| `RemoveGroupAsync(string groupId, CancellationToken)` | `Task` | Removes a group record; a no-op when it does not exist. Leaves the group's membership edges in place (see below). |
+| `AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken)` | `Task` | Makes `memberId` a direct member of `groupId`; `memberKind` defaults to `User`. Idempotent. |
+| `RemoveMemberAsync(string groupId, string memberId, CancellationToken)` | `Task` | Removes a membership edge; a no-op when it does not exist. |
+| `GroupsOfAsync(string memberId, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The member's full transitive group closure (nested groups walked with cycle detection), excluding the member itself. |
+| `ExpandGroupsAsync(IReadOnlyCollection<string> seedGroups, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The transitive closure of a set of seed groups, including the seeds; a seed the directory does not know contributes only itself. |
+| `MembersOfAsync(string groupId, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The group's direct members (users and nested groups). |
+
+Every `CancellationToken` parameter defaults to `default`.
+
 Removal is **non-cascading**: `RemoveGroupAsync` deletes only the group record, not the membership edges that reference the group (as a parent or as a nested member). Remove those edges explicitly with `RemoveMemberAsync` when retiring a group, or an orphaned edge can keep contributing the deleted group id to a subject's closure.
 
 ## Concepts
@@ -114,10 +132,14 @@ Removal is **non-cascading**: `RemoveGroupAsync` deletes only the group record, 
 |---|---|---|
 | Group | `MembershipGroup` | Stable `GroupId`, optional display name. |
 | Membership edge | `MembershipMemberKind` | An edge is a user-in-group or a group-in-group (nested); the member is referenced by id. |
-| Resolved principal | `LatticePrincipal` | The subject id + group closure a credential resolved to. |
-| Credential authenticator | `ILatticeCredentialAuthenticator` | Scheme-selected credential to principal mapper. |
-| Subject mapper | `ILatticeSubjectMapper` | Maps a principal's claims onto additional groups. |
+| Membership directory | `ILatticeMembershipDirectory` | The group and edge store that subject resolution reads (see [Managing the directory](#managing-the-directory)). |
+| Authenticated principal | `LatticePrincipal` | What an authenticator produces from a validated credential: the subject id, issuer, claim bag, token-asserted groups, and token expiry - before it is merged with the directory. |
+| Resolved subject | `LatticeSubject` (core) | The final subject id, transitive group closure, and claim bag the authorization layer evaluates. |
+| Credential authenticator | `ILatticeCredentialAuthenticator` | Recognizes a credential (`CanHandle`) and validates it into a `LatticePrincipal` (`AuthenticateAsync`). |
+| Built-in authenticators | `JwtCredentialAuthenticator`, `AnonymousCredentialAuthenticator` | The per-issuer JWT authenticator - the extensible base the Entra and OIDC authenticators specialize - and the fallback that never claims a credential. |
+| Subject mapper | `ILatticeSubjectMapper` | Merges a principal with its directory-derived groups into the final `LatticeSubject`; the default mapper applies `GroupMergeMode` and the optional `ClaimToGroups` projection. |
 | Group merge mode | `SubjectGroupMergeMode` | How token-asserted groups combine with directory groups (`Union` by default). |
+| Identity-directory provider | `ILatticeIdentityDirectory` | The read-only search / validate view onto the external identity source (see [Identity-directory providers](identity-directory-providers.md)). |
 
 ## Relationship to authorization
 

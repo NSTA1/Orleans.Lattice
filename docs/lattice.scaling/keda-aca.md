@@ -18,7 +18,7 @@ endpoint is exactly that: a GET endpoint returning a JSON body with a top-level
    ----------------------                 -----------------------------------
    GET https://<app>/lattice/scale  --->  MapLatticeScalingSignal()
         reads $.scaleValue          <---  { "scaleValue": 3.4, ... }
-        targetValue: 1
+        targetValue: 0.5
         desiredReplicas = ceil(scaleValue / targetValue)
 ```
 
@@ -68,7 +68,7 @@ scale: {
         metadata: {
           url: 'https://${containerApp.properties.configuration.ingress.fqdn}/lattice/scale'
           valueLocation: 'scaleValue'
-          targetValue: '1'
+          targetValue: '0.5'
           activationTargetValue: '1'
         }
       }
@@ -79,9 +79,19 @@ scale: {
 
 - `valueLocation: 'scaleValue'` - the JSON path KEDA reads. The endpoint emits it
   as a stable, camelCase top-level property.
-- `targetValue: '1'` - the scale value is already expressed in replica-units, so a
-  target of `1` means "provision one replica per replica-unit of demand". KEDA
-  computes `desiredReplicas = ceil(currentValue / targetValue)`.
+- `targetValue: '0.5'` - the per-replica pressure the rule holds the pool at.
+  `scaleValue` is the dominant compute pressure (`0.0` to `1.0`) times the current
+  replica count, so it never exceeds that count except at the `MinReplicas` floor
+  or while the scale-in gate holds an earlier value. An ACA custom scale rule
+  exposes no metric type, so KEDA's default `AverageValue` applies and it computes
+  `desiredReplicas = ceil(scaleValue / targetValue)`: the pool grows when the
+  dominant pressure rises above `targetValue`, and shrinks - once the scale-in
+  gate lets the value fall - when fewer replicas would still carry the same load
+  at or below `targetValue`. A `targetValue` of `1`
+  therefore never adds a replica - at full saturation it asks for exactly the
+  current count - so scale-out needs a value below `1`. `0.5` is the value the
+  [`ClusterScaling` sample](../../samples/ClusterScaling/README.md) deploys: a
+  saturated pool asks for twice its current size.
 - `activationTargetValue: '1'` - the threshold above which KEDA activates the app
   from zero (if you allow scale-to-zero). Keep it aligned with your `MinReplicas`.
 - `minReplicas` / `maxReplicas` - the ACA replica envelope. Set `minReplicas` to

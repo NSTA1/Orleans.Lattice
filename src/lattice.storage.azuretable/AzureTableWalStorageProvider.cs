@@ -47,7 +47,7 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// <b>Atomicity (phase 2).</b> After phase 1 commits, the provider
 /// hands off to a per-shard <see cref="PhaseTwoWorker"/>. The worker
 /// drains pending commits in strict <c>startOffset</c> order and
-/// coalesces up to 99 manifest-row adds plus one <c>TAIL</c> upsert
+/// coalesces up to 49 manifest-row adds plus one <c>TAIL</c> upsert
 /// into a single phase-2 transaction. The strict-offset drain order
 /// makes TAIL unconditionally monotonic regardless of phase-1
 /// completion order, and the coalescing collapses N round-trips into
@@ -71,11 +71,10 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// <b>Capacity.</b> Azure Tables caps a single transaction at 100
 /// actions and 4&#160;MiB. Phase 1 holds entry rows only (no HEAD
 /// sentinel) and accepts up to <see cref="MaxEntriesPerBatch"/>
-/// entries. Phase 2 holds up to 99 manifest-row adds plus the
-/// shared TAIL upsert. Callers chunk larger logical batches
-/// upstream; the WAL grain's <c>LatticeOptions.WalMaxPendingBatches</c>
-/// already keeps batches well below this cap in the canonical
-/// replication path.
+/// entries. Phase 2 deliberately holds up to 49 manifest-row adds plus the
+/// shared TAIL upsert. Callers chunk larger logical batches upstream; the WAL
+/// grain's <c>LatticeOptions.WalMaxPendingBatches</c> bounds concurrent batches,
+/// not the row count of one batch.
 /// </para>
 /// <para>
 /// <b>Thread safety.</b> Instances are safe for concurrent calls

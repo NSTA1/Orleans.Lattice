@@ -645,8 +645,8 @@ public sealed class RepoContextDrainSignal : IDisposable
     /// Binds the signal to the host lifetime so the drain window is measured across
     /// the whole stop sequence: the clock starts on
     /// <see cref="IHostApplicationLifetime.ApplicationStopping"/> and stops on
-    /// <see cref="IHostApplicationLifetime.ApplicationStopped"/>, which the host
-    /// raises only once every hosted service has stopped.
+    /// <see cref="IHostApplicationLifetime.ApplicationStopped"/>. The stop signal is
+    /// a host-lifetime marker, not proof every hosted-service callback finished.
     /// </summary>
     /// <param name="lifetime">The host application lifetime.</param>
     /// <exception cref="ArgumentNullException"><paramref name="lifetime"/> is null.</exception>

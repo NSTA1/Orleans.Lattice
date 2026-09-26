@@ -72,7 +72,8 @@ caching, dashboards, and the Explorer), see [PACKAGES.md](../PACKAGES.md) - the
 authoritative, maintained inventory, grouped by the seam each package fills. The
 matching capability catalogue is [FEATURES.md](../FEATURES.md). Convention:
 package `foo` lives at `src/foo/`, `test/foo/`, and
-`docs/foo/` (`docs/crdt/` is a docs-only conceptual topic with no code).
+`docs/foo/` (`docs/crdt/` is a docs-only conceptual topic with no code, and
+`docs/videos/` holds the companion pages for the video series below).
 The top-level `videos/` folder is the educational video series, a HyperFrames
 (HTML-to-video) workspace with its own CI lane; its conventions live in the
 **video-production** skill (`.github/skills/video-production/SKILL.md`).
@@ -440,6 +441,12 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     no `branches:` filter and so already covers every base; `coverage.yml` runs
     nightly on a schedule, `publish.yml` is push-triggered, and
     `ci-serial-old.yml` is manual-dispatch only, so none of them is affected.)
+    The same four workflows also run on `push` to `*/epic/**` (never
+    `release/**`): an advisory integration-branch lane that evaluates the bucket
+    itself after each member merge - `ci.yml` unconditionally, the other three
+    only when that merge touched their `paths:` - and blocks nothing.
+    `CiIntegrationBranchTriggerTests` fails the build if a workflow that gates
+    epic pull requests lacks that push trigger.
   - **An epic branch must never carry branch protection, and in particular
     never a required status check with `strict` (require branches to be up to
     date before merging).** That setting on `main` is precisely what serialises

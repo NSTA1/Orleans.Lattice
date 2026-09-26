@@ -25,8 +25,8 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="destinationTreeId">The ID for the new tree. Must not already exist.</param>
     /// <param name="mode">Whether to lock the source tree during the snapshot.</param>
-    /// <param name="maxLeafKeys">Optional sizing override for the destination tree. If <c>null</c>, uses the source tree's options.</param>
-    /// <param name="maxInternalChildren">Optional sizing override for the destination tree. If <c>null</c>, uses the source tree's options.</param>
+    /// <param name="maxLeafKeys">Optional sizing override for the destination tree. If <c>null</c>, uses the library default.</param>
+    /// <param name="maxInternalChildren">Optional sizing override for the destination tree. If <c>null</c>, uses the library default.</param>
     Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys = null, int? maxInternalChildren = null);
 
     /// <summary>

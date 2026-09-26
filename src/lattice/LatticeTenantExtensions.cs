@@ -20,7 +20,7 @@ namespace Orleans.Lattice;
 /// path. When the tenancy add-on is registered, its resolver scopes an
 /// unqualified name into the active tenant's <c>t/{tenant}/{name}</c> namespace
 /// and fails closed (<see cref="LatticeTenantAccessDeniedException"/>) when the
-/// caller has no valid active tenant.
+/// caller asserts a tenant it may not use or attempts a reserved namespace escape.
 /// </para>
 /// </remarks>
 public static class LatticeTenantExtensions
@@ -44,8 +44,9 @@ public static class LatticeTenantExtensions
     /// byte-for-byte identical to not calling this at all. When the tenancy add-on
     /// is registered, an unqualified name is scoped into the active tenant's
     /// <c>t/{tenant}/{name}</c> namespace, an already-qualified or reserved name is
-    /// returned unchanged, and a caller with no valid active tenant fails closed
-    /// with <see cref="LatticeTenantAccessDeniedException"/>.
+    /// returned unchanged after namespace-escape checks, and an invalid asserted
+    /// tenant or reserved namespace escape fails closed with
+    /// <see cref="LatticeTenantAccessDeniedException"/>.
     /// </para>
     /// </remarks>
     /// <param name="tenantResolver">The active-tenant context resolver seam.</param>
@@ -55,7 +56,8 @@ public static class LatticeTenantExtensions
     /// <exception cref="ArgumentNullException"><paramref name="tenantResolver"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="treeName"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeTenantAccessDeniedException">
-    /// The resolver denied the operation (no valid active tenant).
+    /// The asserted tenant failed validation, or the resolved tenant attempted a
+    /// reserved namespace escape.
     /// </exception>
     public static ValueTask<string> ResolveEffectiveTreeIdAsync(
         this ITenantContextResolver tenantResolver,
@@ -86,7 +88,8 @@ public static class LatticeTenantExtensions
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="treeName"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeTenantAccessDeniedException">
-    /// The resolver denied the operation (no valid active tenant).
+    /// The asserted tenant failed validation, or the resolved tenant attempted a
+    /// reserved namespace escape.
     /// </exception>
     public static ValueTask<ILattice> GetLatticeAsync(
         this IServiceProvider services,
@@ -116,7 +119,8 @@ public static class LatticeTenantExtensions
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="treeName"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeTenantAccessDeniedException">
-    /// The resolver denied the operation (no valid active tenant).
+    /// The asserted tenant failed validation, or the resolved tenant attempted a
+    /// reserved namespace escape.
     /// </exception>
     public static ValueTask<ILattice> GetLatticeAsync(
         this IGrainFactory grainFactory,

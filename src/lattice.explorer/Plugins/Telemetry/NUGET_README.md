@@ -39,6 +39,16 @@ opt-ins; both need `AddExplorerTelemetry()`.
 
 ```csharp
 services.AddExplorerTelemetry();
+services.AddExplorerTelemetryPlugin();          // the Telemetry area
+services.AddExplorerTelemetryMyTenantSection(); // the My tenant metrics section
+```
+
+The area plugin also needs the shell's plugin adapters (`AddExplorerPluginAdapters()`),
+and the metrics section appears only when the My tenant area is registered too. A
+head that renders either surface links the plugin stylesheet:
+
+```html
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Telemetry/lattice-telemetry.css" />
 ```
 
 Call it after `AddExplorerConfiguration()` and `AddExplorerAuth()`, whose session

@@ -3,9 +3,10 @@
 ## What it shows
 
 Bulk loading seeds an **empty** tree far more cheaply than a loop of `SetAsync`
-calls: it computes the finished tree shape up front, packs each leaf to
-capacity, and commits each shard once instead of splitting nodes as the tree
-grows. This sample demonstrates both entry points - the one-shot
+calls: it packs each leaf to capacity and builds the tree without splitting
+nodes as it grows - the one-shot form computes the finished shape up front and
+commits each shard once, and the streaming form grafts each chunk onto the
+right edge of the tree. This sample demonstrates both entry points - the one-shot
 `ILattice.BulkLoadAsync(entries)` that takes the whole dataset at once, and the
 streaming `BulkLoadAsync(IAsyncEnumerable, grainFactory, chunkSize)` overload
 that flushes fixed-size chunks for datasets too large to hold in memory.
@@ -43,8 +44,9 @@ Done.
 
 ## When not to use
 
-- Ongoing or incremental writes into a tree that already holds data.
-  `BulkLoadAsync` requires empty shards and throws otherwise; use `SetAsync` /
+- Ongoing or incremental writes into a tree that already holds data. The
+  one-shot `BulkLoadAsync` requires empty shards and throws otherwise, and the
+  streaming overload checks neither emptiness nor key order; use `SetAsync` /
   `SetManyAsync` for continuous ingestion.
 - Streaming input that is not in ascending key order - each chunk is appended to
   the right edge of the tree, so unsorted input is not supported by the streaming

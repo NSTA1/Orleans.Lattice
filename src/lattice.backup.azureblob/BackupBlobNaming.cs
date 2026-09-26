@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Backup.AzureBlob;
 /// or reading a chain is a single ordered prefix scan:
 /// <list type="bullet">
 /// <item><description><c>manifests/{backupId}</c> - one block blob per manifest, keyed by backup id.</description></item>
-/// <item><description><c>artifacts/{artifactId}</c> - one append blob per content-addressed artifact.</description></item>
+/// <item><description><c>artifacts/{artifactId}</c> - one append blob per artifact id.</description></item>
 /// </list>
 /// Because Azure Blob Storage returns listings in lexicographical name order,
 /// listing a prefix yields ids in id order, matching the ordering the
@@ -55,7 +55,7 @@ internal static class BackupBlobNaming
     }
 
     /// <summary>Returns the append-blob name for an artifact keyed by <paramref name="artifactId"/>.</summary>
-    /// <param name="artifactId">The content-addressed artifact id. Must not be <c>null</c> or empty, and must be a relative path free of dot segments.</param>
+    /// <param name="artifactId">The artifact id. Must not be <c>null</c> or empty, and must be a relative path free of dot segments.</param>
     /// <returns>The artifact blob name.</returns>
     /// <exception cref="ArgumentException"><paramref name="artifactId"/> is <c>null</c>, empty, or would resolve outside <see cref="ArtifactPrefix"/>.</exception>
     internal static string ArtifactBlobName(string artifactId)

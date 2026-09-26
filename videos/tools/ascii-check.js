@@ -10,7 +10,7 @@ import path from "node:path";
 import { workspaceRoot } from "./lib/hyperframes.js";
 import { brandSiteDir } from "./lib/layout.js";
 
-const TEXT_EXTENSIONS = new Set([".html", ".css", ".js", ".json", ".md", ".txt", ".vtt", ".srt", ".jsonl"]);
+const TEXT_EXTENSIONS = new Set([".html", ".css", ".js", ".json", ".md", ".txt", ".vtt", ".srt", ".jsonl", ".py"]);
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "renders", "snapshots"]);
 // The copy of the site's design system (tools/lib/brand.js) is ignored by git;
 // its source files are already held to these rules by the repository's gates.

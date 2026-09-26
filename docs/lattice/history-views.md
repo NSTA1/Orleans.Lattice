@@ -36,7 +36,9 @@ A history view is created the **runtime** way - through `ILatticeViewFactory` -
 rather than declared at startup, because only a runtime-created view can be torn
 down again (the enable/disable contract). `LatticeHistoryView.Definition` builds
 the accumulative definition; resolve the factory and the silo service provider
-from the cluster.
+from the cluster. Create it with `CreateAsync`, which returns only once the view's
+runtime registration is durable; the synchronous `Create` overload persists the
+registration in the background and cannot report a failure to the caller.
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;
@@ -45,10 +47,11 @@ var factory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
 var source = grainFactory.GetGrain<ILattice>("orders");
 
 // Enable history: a runtime view named "orders-history" tailing "orders".
-var history = factory.Create(
+var history = await factory.CreateAsync(
     source,
     "orders-history",
-    LatticeHistoryView.Definition("orders-history", client.ServiceProvider));
+    LatticeHistoryView.Definition("orders-history", client.ServiceProvider),
+    cancellationToken);
 
 // Disable history later: deleting the runtime view stops recording and
 // releases the source WAL pin.
@@ -59,7 +62,8 @@ await factory.DeleteAsync("orders-history", cancellationToken);
 
 Storage cost is bounded and configurable per source tree. The retention policy is
 read by the maintainer at drain time and applied around the (pure) projection, so
-a change takes effect for revisions written after it and never rewrites or
+a change takes effect for the revisions the maintainer applies after it - including
+any backlog written before the change but not yet drained - and never rewrites or
 rebuilds existing rows.
 
 | Mode | LWW value bytes | Use when |

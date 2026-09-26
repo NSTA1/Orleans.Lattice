@@ -431,8 +431,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // any returned hint onto the ack. Failure is swallowed: a
         // policy outage must not unwind the successful apply, and a
         // subsequent push's ack will re-evaluate the policy. The
-        // default registration is NoOpReceiverFlowControlPolicy,
-        // which always returns ReceiverFlowControlHint.None - so the
+        // default AddLatticeReplication registration is WalSaturationReceiverFlowControlPolicy
+        // (a host can pre-register NoOpReceiverFlowControlPolicy to opt out), so the
         // ack carries SuggestedBatchSize = null / PauseForMs = null
         // and the sender resumes at its configured ShipBatchSize on
         // the next pump tick (the canonical re-acceleration shape).

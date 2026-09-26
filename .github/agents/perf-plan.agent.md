@@ -19,7 +19,7 @@ These are non-negotiable; each encodes a real failure mode from this program.
 
 3. **Change one scaling axis per arm.** Vary partitions *or* accounts *or* silo count, never two at once, or you cannot attribute the delta. Keep `Vehicles`, `TickHz`, `DurationSec` identical across the arms you are comparing.
 
-4. **Trust the silo's `FINAL` line, not the harness verdict parser.** The `ladder.ps1` CSV/verdict parser has historically mis-graded (`verdict=UNKNOWN steady=0`). Parse the `[silo] FINAL` line and the `=== Cohort complete ===` block directly from the silo log. A `FINAL active/s` printed alongside a non-zero `failed=` count is drain-inflated - ignore that number and treat the rung as wedged.
+4. **Trust the silo's `FINAL` line, not the harness verdict parser.** The `ladder.ps1` CSV/verdict parser has historically mis-graded (`verdict=UNKNOWN steady=0`). Parse the `[silo] FINAL` line (and the per-second `[silo] t=` samples) directly from the silo log, and read the `=== Cohort complete ===` block from `run-cohort.ps1`'s console output - it is printed with `Write-Host`, and only its `Verdict :` and `Drain tail :` lines are appended to the silo log. A `FINAL active/s` printed alongside a non-zero `failed=` count is drain-inflated - ignore that number and treat the rung as wedged.
 
 5. **Don't re-quote stale numbers.** Every issue update must cite the run that produced the number (cohort id + log path). Conversation summaries have overstated throughput before. Re-derive from the logs.
 
@@ -174,8 +174,8 @@ The real-Azure single-silo throughput harness lives in `benchmark/azure-throughp
 is the only benchmark backed by *real* Azure Storage (local scenarios use Azurite, which
 collapses RTT). **Its operating runbook is the `azure-throughput-rig` skill** - invoke
 that skill for the mechanics: provisioning (single- and multi-account), the inner loop,
-running a cohort, the `BENCH_*` knob table, reading the `[silo] FINAL` active-throughput
-line, verifying a multi-account `wal-placement` spread, driving a sweep, and
+running a cohort, the `BENCH_*` knob table, reading the cohort result (the `Steady mean`
+primary metric and the `[silo] FINAL` line), verifying a multi-account `wal-placement` spread, driving a sweep, and
 auto-shutdown/teardown. That skill documents every workload mode, every `BENCH_*`
 configuration knob, and every script parameter.
 

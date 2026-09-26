@@ -86,11 +86,9 @@ internal sealed class AtomicWriteGrain(
     /// because both paths would route through the same drained writer
     /// and fail identically, burning saga-retry budget against a
     /// writer that is provably not coming back this lifetime. The
-    /// prefix is consumed by <see cref="CompleteSagaAsync(bool)"/> to
-    /// emit the <c>shutdown_refused</c> outcome tag on
-    /// <see cref="LatticeMetrics.AtomicWriteCompleted"/> so operators
-    /// can distinguish saga failures caused by shutdown coincidence
-    /// from saga failures caused by genuine commit conflicts.
+    /// No current path stamps this prefix, so the <c>shutdown_refused</c>
+    /// outcome arm on <see cref="LatticeMetrics.AtomicWriteCompleted"/> is a
+    /// retained compatibility arm rather than a live producer.
     /// </summary>
     private const string ShutdownRefusedFailurePrefix = "[shutdown-refused] ";
 
@@ -3105,9 +3103,10 @@ internal sealed class AtomicWriteGrain(
             LatticeTenantLabel.ForTree(state.State.TreeId));
 
         // Publish AtomicWriteCompleted only when the saga committed all writes.
-        // Rolled-back sagas emitted per-key Set events during ExecutePhase but
-        // compensated them back via LWW tombstones/restores; there is no net
-        // write to notify subscribers about.
+        // Aborted sagas publish a transaction-registry abort and TxAbort terminal;
+        // prepared per-key writes are discarded rather than rolled back by per-key
+        // tombstone/restore writes, so there is no committed write to notify
+        // subscribers about.
         if (success)
         {
             await PublishCompletedEventAsync();

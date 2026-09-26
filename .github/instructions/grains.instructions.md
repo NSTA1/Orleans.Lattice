@@ -49,6 +49,24 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `LatticeLockGrain` | `{lockName}` (any non-empty string) | `"inventory/sku-42"` |
 | `AtomicActionGrain` | `{operationId}` (caller-supplied idempotency key, any non-empty string) | `"order-4711"` |
+| `LatticeCrossTreeTxGrain` | `{operationId}` (caller-supplied cross-tree idempotency key; must not contain `/`) | `"op-42"` |
+| `TxRegistryGrain` | `{treeId}` | `"my-tree"` |
+| `WalShardGrain` | `{treeId}/{walPartition}` | `"my-tree/0"` |
+| `LeafReplayCoordinatorGrain` | `{treeId}/{walPartition}` | `"my-tree/0"` |
+| `HotShardMonitorGrain` | `{treeId}` | `"my-tree"` |
+| `ShardHealingOrchestratorGrain` | `{treeId}` | `"my-tree"` |
+| `TreeShardSplitGrain` | `{treeId}/{sourceShardIndex}` | `"my-tree/3"` |
+| `TreeShardConsolidationGrain` | `{treeId}/{donorShardIndex}` | `"my-tree/3"` |
+| `ClusterSplitConcurrencyGrain` | Integer key `0` (cluster-wide singleton) | `0` |
+| `LatticeStatsGrain` | `{treeId}` | `"my-tree"` |
+| `LatticeStorageUsageGrain` | `{treeId}` | `"my-tree"` |
+| `LatticeWalUsageGrain` | `{treeId}` | `"my-tree"` |
+| `LatticeAdminGrain` | Singleton (`_lattice_admin`) | `"_lattice_admin"` |
+| `LeafSnapshotSegmentGrain` | `{leafGuid}/{index}`, or `{leafGuid}/g{generation}/{index}` past generation 0 | - |
+| `SnapshotLeafGrain` | `{treeId}/{shardIndex}/{baselineToken:N}` via `BuildBaselineKey`, or `{treeId}/{shardIndex}/{coordinateHash}` for a legacy from-zero coordinate | - |
+| `SnapshotBaselineStorageGrain` | `{treeId}/{shardIndex}/{baselineToken:N}` via `SnapshotLeafGrain.BuildBaselineKey` | - |
+| `ViewRegistryGrain` | Singleton (`_lattice_view_registry`) | `"_lattice_view_registry"` |
+| `ViewCrossTreeCoordinatorGrain` | `{crossTreeOperationId}` | - |
 
 Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 
@@ -102,7 +120,7 @@ So when a grain both persists via `[PersistentState]` and is addressed by a
 ## State Management
 
 - Each grain owns a single `IPersistentState<T>` injected via `[PersistentState]`.
-- All state classes live in `BPlusTree/State/` and carry `[GenerateSerializer]` + `[Alias]`.
+- All state classes live in `BPlusTree/State/` (the exceptions are `WalMaterialiserPinState`, beside its grain in `BPlusTree/Grains/`, and the view grains' states in `Views/`) and carry `[GenerateSerializer]` + `[Alias]`.
 - Always call `state.WriteStateAsync()` after mutations - group writes when possible.
 
 ## Options Access
@@ -121,7 +139,7 @@ private LatticeOptions Options => optionsMonitor.Get(TreeId);
 
 ## StatelessWorker
 
-`LatticeGrain` is annotated `[StatelessWorker]` - it holds no persistent state and routes requests to the correct `IShardRootGrain` via `LatticeSharding`.
+`LatticeGrain` is annotated `[StatelessWorker]` - it holds no persistent state and routes requests to the correct `IShardRootGrain` through the tree's `ShardMap` (key hash -> virtual slot -> physical shard, resolved by `GetRoutingAsync`). `LatticeSharding.GetShardIndex` survives only as a backward-compatible hash helper.
 
 ## Placement
 

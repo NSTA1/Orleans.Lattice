@@ -29,7 +29,7 @@ provisions the Prometheus data source and the dashboards shipped by
 
 | Head | Browse / call at | Container port (host:container) | Notes |
 |---|---|---|---|
-| Explorer web console | <http://localhost:8080> | `8080:8082` (declared on `silo`) | Blazor Server; auto-connects and auto-signs-in on first load (see below). Kestrel binds `8082` because `8080`/`8081` are the silo's in the shared namespace. |
+| Explorer web console | <http://localhost:8080> | `8080:8082` (declared on `silo`) | Blazor Server; auto-connects on first load, then you sign in as `local-dev-admin` (see below). Kestrel binds `8082` because `8080`/`8081` are the silo's in the shared namespace. |
 | MCP endpoint | <http://localhost:8090> | `8090:8080` | Streamable-HTTP MCP transport root; liveness at `/health`. Advertises the state, data, backup, auth, telemetry, replication, and tree-administration tool groups (the mutating auth-administration verbs stay off). |
 | Silo health / metrics | <http://localhost:18080> | `18080:8080` | `/health`, scaling signal, Prometheus `/metrics`. |
 | Silo gRPC (state / auth / replication) | `localhost:18081` | `18081:8081` | Exposed for host-side tooling; the heads dial it in-cluster (`silo:8081`, or loopback for the Explorer). |
@@ -87,14 +87,13 @@ provisions the Prometheus data source and the dashboards shipped by
 
    - **Explorer** - open <http://localhost:8080> and browse the live cluster. It
      **auto-connects** on first load (endpoint seeded from
-     `LATTICE_EXPLORER_ENDPOINT`) and **auto-signs-in** as the bootstrap
-     administrator `local-dev-admin` (seeded from `LATTICE_EXPLORER_USERNAME`) -
-     no dialog, no credentials to type. With Entra disabled the console would
-     otherwise connect anonymously, which the silo's state-visibility filter
-     fail-closes to an empty tree catalog and a denied Access area; the dev
-     sign-in forwards a trusted bootstrap-admin bearer token (the same mechanism
-     MCP uses) so the catalog and Access area are fully populated. See the
-     dev-auth note below.
+     `LATTICE_EXPLORER_ENDPOINT`); then sign in with the username
+     `local-dev-admin`, the bootstrap administrator (the password is ignored).
+     Until you sign in the console connects anonymously, which the silo's
+     state-visibility filter fail-closes to an empty tree catalog and a denied
+     Access area; the dev sign-in forwards a trusted bootstrap-admin bearer token
+     (the same mechanism MCP uses) so the catalog and Access area are fully
+     populated. See the dev-auth note below.
    - **MCP** - reachable at <http://localhost:8090> (Streamable-HTTP MCP transport
      root; liveness at `/health`). It advertises the state, data, backup, auth,
      telemetry, replication, and tree-administration tool groups (the mutating
@@ -176,7 +175,7 @@ they become in a real deployment (see
 | `Auth__DefaultEffect` (silo) | `Allow` | `Deny` (deny-by-default) |
 | `Mcp__DevAuthenticateAll` (mcp) | `true` (synthetic subject) | `false` (real Entra subject) |
 | `Auth__DevAuthenticateForwardedSubject` (silo) | `true` (trusts a forwarded bootstrap-admin bearer id) | unset (Entra authenticates every caller) |
-| `LATTICE_EXPLORER_USERNAME` (explorer) | `local-dev-admin` (dev bearer sign-in) | unset (interactive Entra OIDC sign-in) |
+| `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD` (explorer) | `local-dev-admin` / `local-dev-unused`, but inert: the web Explorer withholds this credential seed, so you sign in as `local-dev-admin` at the dialog (dev bearer sign-in) | unset (interactive Entra OIDC sign-in) |
 | `Replication__AllowPlaintext` (silo) | `true` (h2c) | `false` (server TLS via the region FQDN) |
 | Storage identity | Azurite connection string | managed identity (`DefaultAzureCredential`) |
 
@@ -200,7 +199,7 @@ The two ids **must match**. This is the same seeding mechanism a deployed estate
 uses for its designated security administrator; here it targets a throwaway
 synthetic subject instead of a real Entra `oid`.
 
-### Why the Explorer console auto-signs-in
+### Why the Explorer console signs in as the bootstrap administrator
 
 The Explorer's read-only surfaces (the tree catalog, per-tree structure, and the
 Access area) flow through the **same** fail-closed state-visibility filter: an
@@ -210,12 +209,15 @@ has no sign-in provider to authenticate against, so the reference host registers
 dev-only sign-in method (`DevBypassExplorerAuthMethod`, wired **only** when
 `Entra__Enabled=false`) that forwards `authorization: Bearer <username>` to the
 silo - the exact credential the silo's `DevBypassCredentialAuthenticator` trusts
-when the id is a configured bootstrap administrator. It is applied automatically by
-the console's launcher sign-in seed (`LATTICE_EXPLORER_USERNAME`), so the console
-comes up connected and authorized with no dialog. As with the MCP head this is
-inert under Entra (the real OIDC sign-in provider is used instead), so it can never
-weaken a real estate. The username **must match** the silo's bootstrap admin (and
-the MCP head's `Mcp__DevSubjectId`).
+when the id is a configured bootstrap administrator. You apply it at the console's
+sign-in dialog. The compose file does set `LATTICE_EXPLORER_USERNAME` /
+`LATTICE_EXPLORER_PASSWORD` on the `explorer` service, but they are inert: the web
+Explorer withholds that environment credential seed unless the host opts in with
+`LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed`, and this host does not.
+As with the MCP head this is inert under Entra (the real OIDC sign-in provider is
+used instead), so it can never weaken a real estate. The username you enter **must
+match** the silo's bootstrap admin (and the MCP head's `Mcp__DevSubjectId`); the
+password is ignored.
 
 ### The Access tab is display-only here
 
@@ -227,8 +229,8 @@ in this harness**, because the cluster is not actually enforcing authorization:
   permitted whether or not any grant covers it. (A real estate runs `Deny`, where
   grants are load-bearing.)
 - `StateApi__RequireAuthorization` / `Mcp__RequireAuthorization` are `false`, so the
-  coarse transport gates are open (`AllowAll...Authorizer`) and never consult a
-  policy.
+  coarse transport gates enforce nothing (the silo's gRPC bindings skip their
+  authorizer entirely) and never consult a policy.
 - With Entra off there is **no real identity population** to administer - the only
   subject is the single synthetic bootstrap admin (`local-dev-admin`), which already
   holds a cluster-wide grant.

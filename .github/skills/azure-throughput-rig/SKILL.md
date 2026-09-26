@@ -37,8 +37,11 @@ canonical result surface.
 az group delete --name rg-latperf --yes --no-wait                   # full teardown
 ```
 
-All scripts live under `benchmark/azure-throughput/scripts/` and accept `-NamePrefix` to
-target a named environment and `-ParametersFile` to point at an explicit parameters file.
+All scripts live under `benchmark/azure-throughput/scripts/`. The single-VM scripts
+(`deploy`, `update`, `run-cohort`, `ladder`, `vm`) accept `-NamePrefix` to target a named
+environment and `-ParametersFile` to point at an explicit parameters file; the Layer 3 ACA
+scripts (`deploy-aca`, `run-cohort-aca`) take a mandatory `-NamePrefix` and read no
+parameters file.
 
 ---
 
@@ -47,7 +50,7 @@ target a named environment and `-ParametersFile` to point at an explicit paramet
 ### `parameters.ps1` / `parameters.local.ps1`
 
 `parameters.ps1` holds the committed defaults; copy it to `parameters.local.ps1`
-(gitignored) and edit. Every script auto-discovers `parameters.local.ps1`. Fields:
+(gitignored) and edit. Every single-VM script auto-discovers `parameters.local.ps1`. Fields:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -84,7 +87,7 @@ producer on the VM, re-renders the systemd units, and restarts the silo.
 
 | Parameter | Effect |
 |-----------|--------|
-| `-NoBuild` | Skip rsync + publish; just bounce the silo. |
+| `-NoBuild` | Skip the source sync + publish; just bounce the silo. |
 | `-NoRestart` | Sync + publish but leave the service running (inspect before restart). |
 | `-Clean` | Wipe `/opt/lattice/publish*` before publishing (force a full rebuild). |
 | `-SkipUnitSync` | Don't re-render the systemd units (use when only source changed). |
@@ -138,7 +141,7 @@ Mandatory positional `-Action`, plus `-NamePrefix` / `-ParametersFile`.
 | `status` | Show power state. |
 | `ssh` | Open an SSH session to the VM. |
 | `logs` | Tail the silo journal (`journalctl -fu lattice-silo`). |
-| `refresh-ip` | Refresh the cached public IP in `~/.ssh/config`. |
+| `refresh-ip` | Point the NSG's `AllowSshFromOperator` SSH rule at your current public IP (`/32`); run it after moving to a new network. |
 
 ### `deploy-aca.ps1` and `run-cohort-aca.ps1` - Layer 3 (multi-silo, Azure Container Apps)
 
@@ -146,13 +149,14 @@ Layer 3 measures the same workloads against N silos. `deploy-aca.ps1` provisions
 resource group `rg-<prefix>` - a container registry (images are built remotely with
 `az acr build`, so no local Docker is needed), one storage account for the WAL, the
 Orleans clustering table and grain state, Log Analytics, a Container Apps environment,
-the silo app scaled to exactly N, and the producer as an ACA Job in Orleans-client mode -
+the silo app (created resting at zero replicas; `run-cohort-aca.ps1` scales it to exactly N
+per cohort), and the producer as an ACA Job in Orleans-client mode -
 and builds and pushes both images.
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `-NamePrefix <name>` | (required) | Names and tags every resource. |
-| `-SiloCount <1..30>` | `2` | Silo replicas (exactly; no autoscaling). |
+| `-SiloCount <1..30>` | `2` | Echoed in the banner and recorded in the saved rig context only: the silo app is created with `--min-replicas 0 --max-replicas 30` and rests at zero replicas until `run-cohort-aca.ps1 -SiloCount` scales it. |
 | `-Location <region>` | `westus3` | Azure region. |
 | `-SiloCpu <1..4>` | `4` | vCPU per silo replica, matching the Layer 2 VM's core count. |
 | `-SiloMemoryGi <1..8>` | `8` | Memory per replica; ACA Consumption caps a replica at 4 vCPU / 8 GiB. |
@@ -187,20 +191,29 @@ offers the same load per silo.
 | `-ResetStorage <bool>` | `$true` | Start every cohort against empty storage: delete every table except the clustering table and use freshly-named WAL and grain-state tables (#3458). |
 | `-SetManyFanOutBudgetSec <N>` / `-WalAdmissionCallBudgetSec <N>` | `30` / `15` | Set the two #3348 budgets explicitly; `0` = infinite (the library default). |
 | `-TxRegistryShards <N>` | `8` | Saga decision registry shards per tree (`BENCH_TX_REGISTRY_SHARDS`); `1` = the unsharded library default. |
-| `-WalAppendCoalescingInFlightThreshold <N>` | `-1` | `-1` leaves the env var unset (library default); `0` is the #3396 control arm. |
-| `-WalBatchedSingleEntryAppends <N>` | `-1` | `-1` leaves it unset (library default, on); `0` / `1` pin the #3408 control / fix arms. |
-| `-WalMaterialiserPinBuckets <N>` | `-1` | `-1` leaves it unset (library default, 1); any value from `1` up sets `BENCH_WAL_MATERIALISER_PIN_BUCKETS` (ACA only). |
-| `-WalSaturationRecoveryReleaseBatch <N>` | `-1` | `-1` leaves it unset; `0` is the #3402 release-everything control arm. |
-| `-WalSaturationAcuteOnly <N>` | `-1` | `-1` keeps the rig default (on); `1` / `0` force it on / off. |
-| `-ExtraSiloEnv <string[]>` | `@()` | Extra silo env as `NAME=value` strings, appended last so they win (a string array, not the hashtable `run-cohort.ps1` takes). |
+| `-WalAppendCoalescingInFlightThreshold <N>` | `-1` | `-1` sets nothing (see the note below the table); any value from `0` up is passed to the silos, but the silo ignores `0` and runs the default 4, so the #3396 control arm is not reachable on the rig. |
+| `-WalBatchedSingleEntryAppends <N>` | `-1` | `-1` sets nothing (see below); `0` / `1` pin the #3408 control / fix arms. |
+| `-WalMaterialiserPinBuckets <N>` | `-1` | `-1` sets nothing (see below); any value from `1` up sets `BENCH_WAL_MATERIALISER_PIN_BUCKETS` (ACA only). |
+| `-WalSaturationRecoveryReleaseBatch <N>` | `-1` | `-1` sets nothing (see below); `0` is the #3402 release-everything control arm. |
+| `-WalSaturationAcuteOnly <N>` | `-1` | `-1` sets nothing (see below); `1` / `0` force it on / off. |
+| `-ExtraSiloEnv <string[]>` | `@()` | Extra silo env as `NAME=value` strings, appended last so they win (a string array, not the hashtable `run-cohort.ps1` takes). Like every silo variable, they are removed from the next cohort that does not name them (see below). |
 | `-SettleSec <N>` | `30` | Wait after scaling for cluster membership before the producer starts. |
+
+**Silo env does not persist between cohorts.** Each cohort applies its silo env with one
+`az containerapp update --set-env-vars`, which merges into the app's existing environment, so
+the same update also passes `--remove-env-vars` for every variable an earlier cohort set that
+this cohort does not name (#3514). Secret-backed variables and the `deploy-aca.ps1` baseline are
+kept, and the removal rides the same update, so each cohort still mints exactly one revision. A
+`-1`-defaulted arm therefore runs the library default. The producer job is unaffected: every
+cohort sets its whole env list.
 
 ---
 
 ## Workload options (`BENCH_WORKLOAD_MODE`)
 
 Selects which `ILattice` operation the silo dispatches per producer batch. Case-insensitive
-kebab- or concatenated form. Unset/unknown => `set-many`.
+kebab- or concatenated form (`set` and `get` are also accepted for `set-point` and
+`get-point`). Unset/unknown => `set-many`.
 
 | Value | Operation exercised |
 |-------|---------------------|
@@ -211,8 +224,23 @@ kebab- or concatenated form. Unset/unknown => `set-many`.
 | `cross-tree-atomic-64` | Cross-tree atomic saga of 64 keys (32 per tree). |
 | `set-point` | One `ILattice.SetAsync` per key - fan-out point writes. |
 | `set-point-mv` | Identical write path to `set-point`, but the silo also attaches an asynchronous materialised view (key-preserving passthrough) over the tree via `AddLatticeViews`. The A/B partner of `set-point` for measuring whether maintaining a view perturbs the source tree's point-write path. |
-| `get-point` | One `ILattice.GetAsync` per key - fan-out point reads. Keyspace of `BENCH_VEHICLE_COUNT` keys is pre-seeded via `ILattice.SetManyAsync` before the measured window: by the silo at startup on the single-VM rig, and by the producer after warm-up in Layer 3 cluster mode (the silo returns early there). The producer logs `[producer] preseed treeId=.. entries=N`, and `performance-report.ps1` refuses a Layer 3 read cohort whose log lacks it, because an unseeded cohort measures only the miss path (#3474). |
-| `get-many` | `ILattice.GetManyAsync` - batched reads. Keyspace pre-seeded as for `get-point`. |
+| `get-point` | One `ILattice.GetAsync` per key - fan-out point reads, against a keyspace pre-seeded as described below the table. |
+| `get-many` | `ILattice.GetManyAsync` - batched reads, against the same pre-seeded keyspace. |
+
+**Read-mode pre-seed.** For `get-point` and `get-many` the silo seeds the keyspace at startup,
+before its TCP listener opens, with one `ILattice.SetManyAsync` of `BENCH_VEHICLE_COUNT` keys
+(the producer's key derivation, 245-byte values); `ILattice.BulkLoadAsync` is not used because it
+requires an empty shard and the warm-up has already materialised the root leaf. The seed runs only
+when the **silo** is given `BENCH_VEHICLE_COUNT` > 0 (its default is 0, no seed), and
+`run-cohort.ps1 -Vehicles` sets that variable for the producer only - so pass
+`-ExtraSiloEnv @{ BENCH_VEHICLE_COUNT = '<same as -Vehicles>' }`, or read a tree populated earlier
+through a pinned `BENCH_TREE_ID`; otherwise the read modes read keys that do not exist in the
+cohort's fresh tree. The silo logs `[silo] preseed treeId=.. entries=..` when the seed ran. On
+Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and the Orleans-client
+producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
+`performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line `UNSEEDED`, re-runs
+it, and never publishes it, because an unseeded cohort measures only the miss path (#3474).
+Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step and the Orleans-client
 
 The four atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
 one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
@@ -221,9 +249,9 @@ sequential chain: ops stayed at 0 until the chain's last saga returned, a satura
 re-committed the sagas that had landed, and one rolled-back saga booked the whole batch as failed.
 An atomic cohort that reads `ops=0` with a busy cluster on an older checkout is that artefact.
 
-> The `set-point-mv` workload and the multi-account knobs below only exist on a checkout
-> that includes the materialised-views work. On a checkout without it, use the other eight
-> modes and the single-account path.
+> The `set-point-mv` workload and the multi-account knobs below are on `main`. Only an
+> older checkout that predates the materialised-views work lacks them; there, use the
+> other eight modes and the single-account path.
 
 ---
 
@@ -236,7 +264,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_VEHICLE_COUNT` | 1000 (cohort sets 4000) | Fleet size = number of distinct keys. Also the read-mode pre-seed size on the silo. |
+| `BENCH_VEHICLE_COUNT` | producer 1000 (cohort sets `-Vehicles`, default 4000); silo 0 | Fleet size = number of distinct keys. On the silo it is the read-mode pre-seed size, and `run-cohort.ps1` does not set it there (see the read-mode pre-seed note under the workload table). |
 | `BENCH_TICK_HZ` | 5 | Samples/sec/vehicle. **Offered rate = vehicles x tickHz.** |
 | `BENCH_DURATION_SEC` | 300 (cohort sets per `-DurationSec`) | Producer run length; `0` = run forever. |
 | `BENCH_SILO_HOST` | `127.0.0.1` | Silo host the producer connects to. |
@@ -249,7 +277,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_STORAGE_URI` | - (required) | `https://{account}.table.core.windows.net` - WAL table endpoint for managed identity. |
 | `BENCH_STORAGE_CONN` | - | Connection-string fallback; overrides `BENCH_STORAGE_URI` when set. |
 | `BENCH_WAL_TABLE` | `OrleansLatticeWal` | WAL table name. **Use a distinct table per cohort whenever arms are to be compared** (on the VM path pass it through `-ExtraSiloEnv`; on Layer 3, `run-cohort-aca.ps1 -ResetStorage`, on by default, already does). Cohorts sharing one table accumulate each other's rows and produce bursts of 409 `EntityAlreadyExists` failures uncorrelated with anything under test; a distinct table per cohort removes them. Rotating `BENCH_TREE_ID` isolates cohorts logically but does not stop the table growing. |
-| `BENCH_TREE_ID` | rotating `azure-throughput-<utc>` | Tree id. Rotates per silo restart so prior offsets don't bias the run; **pin it to re-use existing rows** (cross-run replay). |
+| `BENCH_TREE_ID` | rotating `azure-throughput-<utc>` | Tree id. Rotates per silo restart so prior offsets don't bias the run; **pin it to re-use existing rows** (cross-run replay). `run-cohort.ps1` sets it to `cohort-<cohort-name>` unless `-ExtraSiloEnv` supplies one, so each cohort gets a fresh tree. |
 | `BENCH_TCP_PORT` | 7000 | Silo TCP listen port. |
 
 ### Workload shape
@@ -274,7 +302,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 |-----|---------|--------|
 | `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (8) | WAL grains per tree - the primary write-parallelism lever. Distinct partitions => distinct Azure Tables manifest partitions. |
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (16) | Per-`WalShardGrain` pipeline depth. `1` = strict single-in-flight ordering against the provider. |
-| `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` | `LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold` (4) | In-flight flush depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. `0` disables coalescing and restores the historical unconditional kick - **this is the control arm** when sweeping the threshold. The shipping default was chosen on the fan-out arithmetic (#3396), not measured, so a sweep over `{0, 1, 2, 4, 8}` is the way to pin it. |
+| `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` | `LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold` (4) | In-flight flush depth at or above which an arriving batch's final entry stops kicking its own flush, so small fanned-out slices accumulate into the next flush window instead of each paying a round trip. The library treats `0` as coalescing off (the historical unconditional kick), but **the rig cannot select it**: the silo reads this variable with its positive-only parser, so `0`, like any non-positive or unparseable value, silently runs the default 4 - `walAppendCoalescing=` in the silo banner shows the value that ran. Positive values apply as given. The shipping default was chosen on the fan-out arithmetic (#3396), not measured, so a sweep over positive values such as `{1, 2, 4, 8}` is the way to pin it; the `0` control arm is unreachable until the silo's parser accepts `0`. |
 | `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `SetManyAsync` awaits its per-shard fan-out before refusing with `LatticeSaturatedException` (`SetManyFanOut`). Deliberately does **not** inherit the library default (`Timeout.InfiniteTimeSpan`): an unbounded fan-out is the #3348 collapse, so the rig opts in to the finite budget. `0` = infinite. |
 | `BENCH_WAL_ADMISSION_CALL_BUDGET_SEC` | `15` | Bounds a call's total WAL-admission saturation back-off (`LatticeOptions.WalAdmissionSaturationCallBudget`). Deliberately does **not** inherit the library default (`Timeout.InfiniteTimeSpan`): left infinite, only the per-append wait budget applies and each nested retry layer buys a fresh one (#3348), so the rig opts in to the recommended 3x-per-append value. `0` = infinite. |
 | `BENCH_TX_REGISTRY_SHARDS` | `1` (silo), `8` (cohort script) | Saga decision registry shards per tree (`LatticeOptions.TxRegistryShardCount`, #3501). The library default `1` is unsharded; the cohort script opts in to `8` so atomic cohorts are not capped at ~100 sagas/s by one registry row. Clamped to `1..256`. |
@@ -310,7 +338,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op; the silo maps `0` to `Timeout.InfiniteTimeSpan`, the library's "disabled" value). On ACA pass it with `run-cohort-aca.ps1 -ExtraSiloEnv 'BENCH_SATURATION_SAMPLE_MS=0'`. The silo applies this row and the three below it as **global** `LatticeOptions`, because `WalSaturationSampler` reads only the unnamed options; applied per tree, as the rig did before #3348, they were silently ignored. |
+| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op; the silo maps `0` to `Timeout.InfiniteTimeSpan`, the library's "disabled" value). On ACA pass it with `run-cohort-aca.ps1 -ExtraSiloEnv 'BENCH_SATURATION_SAMPLE_MS=0'`. The silo applies this row and the four below it as **global** `LatticeOptions`, because the library's WAL saturation sampler reads only the unnamed options; applied per tree, as the rig did before #3348, they were silently ignored. |
 | `BENCH_SATURATION_THROTTLED_RATIO` | `LatticeOptions.DefaultWalSaturationThrottledRatio` (0.75) | Admission-depth ratio at/above which the tree raises Throttled. Range [0.0, 1.0]; lower = earlier throttle. |
 | `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` | `LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold` (1) | Min dispatch-timeout trips per window that raise Saturated regardless of depth. |
 | `BENCH_WAL_SATURATION_ACUTE_ONLY` | `1` (matches the library default `LatticeOptions.DefaultWalSaturationAcuteOnly`) | Sets `WalSaturationAcuteOnly` (#3348): an admission semaphore at its cap classifies Throttled instead of Saturated, and a gate-parked append resumes once its partition leaves Saturated. `0` measures the historical classification. `run-cohort-aca.ps1 -WalSaturationAcuteOnly 0|1`. |
@@ -377,20 +405,35 @@ into a variable yields nothing).
 
 Key lines in the silo log:
 
+- `[silo] t= ..s ops= .. ops/sec= .. inFlight= ..` - one per-second sample. `run-cohort.ps1`
+  averages the `ops/sec` of the samples at `t >= 15s` with a non-zero rate (trimming the
+  warm-up ramp and the post-producer drain) into its `Steady mean : .. e/s` summary line,
+  which is the **primary cohort metric** for an A/B.
 - `[silo] FINAL ops=.. failed=.. discarded=.. elapsed=..s active=..s ops/sec (avg)=.. (active avg)=..`
-  - the **active avg** is the sustained-ingest rate over the active window (it excludes the
-  pre-connect idle window and the post-FINAL drain). `failed` / `discarded` count
-  unsuccessful operations.
-- `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` - the run-cohort classification.
-- `Silo CPU : avg ..% / peak ..%` (of one vCPU) - from the sampler.
-- `Diagnostics : stall-watchdog=.. wal-slot=.. wal-append=..` - internal back-pressure/stall counters.
-- `[silo] wal-placement accounts=N partitions=M -> 0:default,1:acct1,...` - emitted when
+  - the **active avg** divides `ops` by the window from the first accepted batch to the last
+  drained flush, so it excludes the pre-connect idle window but not a post-producer drain
+  stall; the summary repeats it as the secondary `FINAL active` line, marked
+  `(drain-inflated; ignore)` on a WEDGE verdict. `failed` / `discarded` count unsuccessful
+  operations.
+- `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` and `Drain tail : N trailing rate=0 sample(s) post-producer`
+  - the run-cohort classification, appended to the log by `run-cohort.ps1` after the drain
+  (the silo does not emit it). A non-zero FINAL `failed` raises the verdict to at least
+  `FAILED`.
+- `[silo] wal-placement treeId=.. accounts=N partitions=M version=.. -> 0:default,1:acct1,...` - emitted when
   `BENCH_WAL_ACCOUNTS > 1`; confirms which account each WAL partition landed on. Its
   absence (with accounts >1) or an `ERROR wal-placement-spread` means the arm ran
   single-account.
 
-`ladder.ps1` additionally writes one CSV row per rung (`written`, `failed`, active-avg,
-CPU peak, RSS, verdict, timestamp) to its `-ResultsCsv`.
+The CPU, RSS, and diagnostics lines appear only in the printed summary, not in the log:
+`Silo CPU : avg ..% / peak ..%` (of one vCPU) and `Silo RSS peak` come from the per-second
+sampler (`sampler-<cohort>.csv`), and
+`Diagnostics : stall-watchdog=.. wal-slot=.. wal-append=.. exceptions=.. failed-samples=..`
+counts internal back-pressure/stall signals.
+
+`ladder.ps1` additionally writes one CSV row per rung to its `-ResultsCsv`, with the columns
+`vehicles, tickHz, durationSec, written, failed, activeSec, steadyMean, activeAvg,
+drainTailSamples, totalElapsedSec, siloCpuPeakPct, siloCpuAvgPct, sysCpuPeakPct,
+siloRssGiB, verdict, timestampUtc`.
 
 ---
 

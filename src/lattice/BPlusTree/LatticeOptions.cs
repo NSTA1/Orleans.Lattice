@@ -6,8 +6,9 @@ namespace Orleans.Lattice;
 /// <code>
 /// siloBuilder.Services.Configure&lt;LatticeOptions&gt;("my-tree", o => o.CacheTtl = TimeSpan.FromMilliseconds(100));
 /// </code>
-/// The unnamed (default) instance applies to all trees that do not have a
-/// named override.
+/// Global configuration registered with <c>ConfigureLattice(...)</c> uses
+/// <c>ConfigureAll</c> and applies to every named tree. A direct configuration of
+/// the unnamed options instance applies only when callers resolve that unnamed instance.
 /// <para>
 /// Structural sizing - the number of keys per leaf, the number of children
 /// per internal node, and the shard count - is <em>not</em> configured here.
@@ -429,7 +430,9 @@ public class LatticeOptions
     /// comparison on the primary is cheap but the RPC overhead remains. Setting
     /// a non-zero value (e.g. 100 ms) allows the cache to serve reads from its
     /// local dictionary without contacting the primary, trading freshness for
-    /// lower read latency. This option can be changed freely at any time.
+    /// lower read latency. When the primary leaf is on the same silo and its
+    /// revision cookie has not advanced, the cache can skip the cross-grain delta
+    /// call even before this TTL elapses. This option can be changed freely at any time.
     /// </summary>
     public TimeSpan CacheTtl { get; set; } = DefaultCacheTtl;
 
@@ -481,8 +484,8 @@ public class LatticeOptions
     /// <see cref="MinTombstoneRatioForCompaction"/> is non-default, so turning
     /// it on by default would start tagging previously untagged per-leaf
     /// instruments and silently break every dashboard filtering on the empty
-    /// trigger label. Second, the leaf evaluates the trigger by walking its whole
-    /// entry table on every successful foreground commit, which forces a
+    /// trigger label. Second, after delete and range-delete commits the leaf evaluates
+    /// the trigger by walking its whole entry table, which forces a
     /// partially hydrated leaf to materialise in full and works against
     /// <see cref="LeafPartialHydrationEnabled"/>. Nothing is lost by leaving it
     /// off: the reminder-driven compaction pass still reaps tombstones on its
@@ -830,12 +833,11 @@ public class LatticeOptions
     /// Optional cluster-wide ceiling on the total number of autonomic shard
     /// splits that may be in flight concurrently across <em>all</em> trees.
     /// <para>
-    /// <c>null</c> (the default) disables the cluster gate entirely: each tree's
-    /// autonomic monitor enforces only its own <see cref="MaxConcurrentAutoSplits"/>,
-    /// which is the current behaviour. In this mode no cluster singleton is
-    /// activated and no extra RPC is issued per monitor tick, so the disabled
-    /// path is byte-for-byte identical to running without this option and costs
-    /// nothing.
+    /// <c>null</c> (the default) disables admission limiting by the cluster gate:
+    /// each tree's autonomic monitor enforces only its own <see cref="MaxConcurrentAutoSplits"/>.
+    /// The monitor still publishes its split-footprint while splits are in flight
+    /// (and once more to clear it) so scaling and diagnostics can see active work;
+    /// an idle tree with no split in flight issues no extra cluster-gate RPC.
     /// </para>
     /// <para>
     /// A positive value opts in to a cluster-wide admission gate that caps the
@@ -950,7 +952,7 @@ public class LatticeOptions
 
     /// <summary>
     /// Whether a snapshot-isolated cursor open (the <c>OpenSnapshot*CursorAsync</c>
-    /// family) is shed fast with a retryable <see cref="LatticeSaturatedException"/>
+    /// family) is shed fast with a non-automatically-retryable <see cref="LatticeSaturatedException"/>
     /// when the tree's per-silo WAL saturation signal reports
     /// <see cref="WalSaturationState.Saturated"/> at the moment of the open,
     /// before the expensive per-shard baseline capture is fanned out.
@@ -961,8 +963,9 @@ public class LatticeOptions
     /// collapsing under write back-pressure, starving replication applies and
     /// reads queued on the same roots, and a client that retries on the resulting
     /// timeout sustains a scan storm. When enabled (the default), the open is
-    /// refused at admission: the caller receives a typed, retryable back-pressure
-    /// error and the fan-out never starts. Only
+    /// refused at admission: the caller receives a typed back-pressure error whose
+    /// <see cref="LatticeSaturatedException.SaturationSource"/> is
+    /// <see cref="LatticeSaturationSource.SnapshotCursorOpen"/>, and the fan-out never starts. Only
     /// <see cref="WalSaturationState.Saturated"/> (the "pause new appends" regime)
     /// sheds; a <see cref="WalSaturationState.Throttled"/> tree is unaffected and
     /// stays browsable, mirroring the atomic-write saga's quiesce gate.
@@ -1469,7 +1472,8 @@ public class LatticeOptions
     /// large to hold for the cursor. The cost is the materialised baseline
     /// row count rather than the captured WAL head, because after a WAL GC
     /// trim the head can be arbitrarily large while the projection is
-    /// small. A value of zero or less disables the gate.
+    /// small. Must be at least <c>1</c>; use a large value to make the gate
+    /// effectively non-binding.
     /// <para>
     /// The cap is the snapshot analogue of
     /// <see cref="MaxLeafReplayEntries"/>, which bounds activation-
@@ -1482,25 +1486,11 @@ public class LatticeOptions
     public const long DefaultMaxSnapshotReplayEntries = 10_000_000L;
 
     /// <summary>
-    /// Idle-eviction window for transient per-shard snapshot leaf
-    /// grains materialised by a zero-observable-writes snapshot
-    /// cursor. A snapshot leaf is seeded at open time with its shard's
-    /// frozen baseline, then stays activated for further pages against
-    /// the same shard. After this window elapses without activity the
-    /// grain self-evicts; the next <c>Next*Async</c> transparently
-    /// rebuilds it by reloading the same durable frozen baseline, with
-    /// no WAL replay, so the rebuild is unaffected by WAL trimming. The
-    /// exception is a leaf evicted before the cursor's first page made
-    /// the baseline durable: the unread snapshot is lost and the next
-    /// step throws <see cref="LatticeSnapshotExpiredException"/>, so the
-    /// caller reopens it.
-    /// <para>
-    /// Decoupled from <see cref="CursorIdleTtl"/> because, once the
-    /// baseline is durable, the snapshot-leaf activation is purely a
-    /// reload-cost cache, not part of the cursor's correctness
-    /// boundary - evicting it earlier only trades a baseline reload for
-    /// memory. Default 30 minutes.
-    /// </para>
+    /// Reserved idle-eviction window for transient per-shard snapshot leaf grains.
+    /// The current runtime does not read this option; snapshot leaves idle-evict
+    /// under Orleans activation collection policy instead. Kept for configuration
+    /// compatibility until a dedicated runtime-controlled snapshot-leaf eviction
+    /// path is wired.
     /// </summary>
     public TimeSpan SnapshotLeafIdleTtl { get; set; } = DefaultSnapshotLeafIdleTtl;
 
@@ -1716,11 +1706,9 @@ public class LatticeOptions
     /// <para>
     /// Crash-recovery cost on a worst-case unflushed checkpoint is
     /// bounded by this interval times the steady-state apply rate.
-    /// The seam itself ships dormant - the leaf grain still writes
-    /// through its existing storage provider on every commit. This
-    /// option becomes observable when the WAL-as-sole-commit-point
-    /// promotion lands and the activation path begins consulting the
-    /// persisted checkpoint.
+    /// The seam is live: leaf activation uses the persisted checkpoint to bound
+    /// WAL replay, and foreground apply coalesces checkpoint persistence through
+    /// this interval and <see cref="MaterialiserCheckpointEntries"/>.
     /// </para>
     /// </summary>
     public TimeSpan MaterialiserCheckpointInterval { get; set; } = DefaultMaterialiserCheckpointInterval;
@@ -3307,18 +3295,19 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultShardForwardTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
-    /// Ceiling on the emptiness probe that reshard initiation runs before
-    /// taking its empty-tree fast path.
+    /// Ceiling on the emptiness probe that reshard and resize initiation run before
+    /// taking their empty-tree fast paths.
     /// <para>
     /// <see cref="Orleans.Lattice.ILattice.ReshardAsync(int, System.Threading.CancellationToken)"/>
-    /// only needs a boolean - "does this tree hold any live key?" - but the
+    /// and <see cref="Orleans.Lattice.ILattice.ResizeAsync(int, int, System.Threading.CancellationToken)"/>
+    /// only need a boolean - "does this tree hold any live key?" - but the
     /// count that answers it is a strongly-consistent whole-tree fan-out that
     /// restarts whenever the shard map moves under it (see
     /// <see cref="MaxScanRetries"/>). Reshard initiation is precisely when
     /// that map is most likely to be churning: a caller may be writing
     /// concurrently, and a small leaf fan-out splits continuously. Unbounded,
     /// the probe can burn the whole caller-side response budget and time the
-    /// reshard out before it has even started.
+    /// operation out before it has even started.
     /// </para>
     /// <para>
     /// An inconclusive probe is treated as "not empty", which is not merely
@@ -3378,12 +3367,11 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultActivationReadyTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
-    /// Maximum time an internal-node digest publish (the upward
-    /// <c>ChildDigestSnapshot</c> propagation that a
-    /// <c>BPlusInternalGrain</c> issues to its parent after folding a
-    /// child's digest) may park before it is abandoned. The publish is a
-    /// cross-grain RPC that recurses up the internal-node chain toward the
-    /// shard root. It is sent only after the internal node has released its
+    /// Maximum time an upward digest publish (the
+    /// <c>ChildDigestSnapshot</c> propagation that a leaf or internal node issues
+    /// to its parent after its projection digest changes) may park before it is
+    /// abandoned. The publish is a cross-grain RPC that recurses up the
+    /// internal-node chain toward the shard root. It is sent only after the internal node has released its
     /// non-reentrant split gate, and a parent whose gate is busy parks the
     /// incoming snapshot for the gate holder to fold rather than waiting for
     /// the gate, but an upward await can still be left neither completing nor
@@ -3651,11 +3639,11 @@ public class LatticeOptions
     /// partitions. Below the ratio the tree stays
     /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/>; at or
     /// above the ratio it advances to
-    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>; at
-    /// the cap with a non-empty wait queue (or when the dispatch-timeout
-    /// rate crosses
-    /// <see cref="WalSaturationDispatchTimeoutThreshold"/>) it advances
-    /// to <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>.
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>. With
+    /// <see cref="WalSaturationAcuteOnly"/> at its default <see langword="true"/>,
+    /// even an at-cap partition with parked callers remains Throttled; acute signals
+    /// such as dispatch-timeout, provider-failure, or flush-latency thresholds drive
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>.
     /// Defaults to <see cref="DefaultWalSaturationThrottledRatio"/>
     /// (0.75) - far enough above steady-state pipeline depth that
     /// healthy bursts do not flap the state, while still leaving a
@@ -3721,7 +3709,7 @@ public class LatticeOptions
     /// concern. Set to <c>0</c> to disable the trigger entirely
     /// (matches the <c>InfiniteTimeSpan</c> sentinel on the other
     /// saturation options); the registered options validator rejects
-    /// any other non-negative value at first-resolve time.
+    /// negative values at first-resolve time.
     /// </summary>
     public int WalSaturationProviderFailureRateThreshold { get; set; } = DefaultWalSaturationProviderFailureRateThreshold;
 

@@ -14,8 +14,9 @@ This package is the control plane for the [`Orleans.Lattice.Tenancy`](../lattice
 companion. It mirrors the [TreeAdmin](../lattice.api.treeadmin/README.md) packaging
 convention exactly: the contracts live in `Orleans.Lattice.Api.Abstractions` (under
 `TenantAdmin/`), the implementations here, the gRPC binding in a sibling package, and
-an MCP `TenantAdmin` tool group. It **composes** the existing TreeAdmin, Schema,
-Backup, and Replication facades rather than reimplementing them.
+an MCP `TenantAdmin` tool group. It **composes** the existing tree-administration
+facade (`ILatticeTreeAdmin`) and the schema engine's in-process admin
+(`ILatticeSchemaAdmin`) rather than reimplementing them.
 
 The facades exposed are:
 
@@ -45,18 +46,21 @@ The facades exposed are:
 
 ## Core properties
 
-- **Fail-closed authorization.** Every operation authorizes the caller through the
-  Lattice access gate before it touches the tenant registry. An unauthenticated
-  caller, or one the gate denies, is refused with a
-  `LatticeAuthorizationDeniedException` and no change is made. The binding layer
+- **Fail-closed authorization.** Every lifecycle, region-residency, access, grant,
+  and quota-usage operation authorizes the caller before it changes anything. An
+  unauthenticated caller, or one the gate denies, is refused with a
+  `LatticeAuthorizationDeniedException` (unified into `TenantNotFoundException` on
+  the quota-usage read) and no change is made. The read-only self-service surface
+  scopes its answers to the caller instead of refusing, and the tenant-scoped tree
+  facade relies on the facades it wraps (see
+  [`ILatticeTenantScopedTreeAdmin`](#ilatticetenantscopedtreeadmin)). The binding layer
   additionally gates the whole surface behind an explicit opt-in capability, so a
   cluster that does not enable it exposes nothing.
 - **Two-tier governance.** Tenant lifecycle and allowed-region authorization are
   **platform-operator** actions (cluster-wide `Admin` on the reserved auth policy
   tree, which the gate's control-plane isolation grants only to a platform operator).
-  Setting residency, reading status, tenant-scoped tree administration, tenant
-  access administration, cross-tenant grant administration, and the quota-usage
-  read are **tenant-admin** actions, authorized when the caller is that operator or
+  Setting residency, reading status, tenant access administration, cross-tenant
+  grant administration, and the quota-usage read are **tenant-admin** actions, authorized when the caller is that operator or
   a live admin subject on the tenant record (for a grant step, the record of the
   tenant whose side of the agreement the step belongs to). Both tiers are independent of the data-plane
   `DefaultEffect`, so an unmatched request always resolves to deny even under
@@ -93,17 +97,24 @@ The facades exposed are:
   as a dangling grant that whoever later registers that id would inherit. The
   caller-seeded default is not directory-validated - it comes from the
   authenticated caller's own resolved subject, not from the wire.
-- **Authorize, then validate, then write.** Every mutating verb first parses the
-  tenant id (a purely syntactic step over the caller's own argument, which on create
-  also rejects an id shadowing the `sys-` or `_lattice_` reserved namespaces with
-  an `ArgumentException`), then authorizes through the fail-closed gate, and only
-  then inspects its remaining arguments or touches the registry. So a denied caller
-  learns nothing from the admin-subject list it supplied, from whether the tenant
-  already exists, or from whether it is the reserved `default` tenant: every one of
-  those checks sits behind the gate and cannot be used as an oracle.
-- **Cascading delete.** Deleting a tenant cascades the delete to every tree the
-  tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry record
-  is removed.
+- **Authorize, then validate, then write.** Every `ILatticeTenantAdmin` lifecycle
+  verb first parses the tenant id (a purely syntactic step over the caller's own
+  argument, which on create also rejects an id shadowing the `sys-` or `_lattice_`
+  reserved namespaces with an `ArgumentException`), then authorizes through the
+  fail-closed gate, and only then inspects its remaining arguments or touches the
+  registry. The region, access, and grant verbs also check their other arguments'
+  syntax (a region set, a subject id, a grant scope and operation set) before the
+  gate; their gate reads the tenant record to evaluate admin-subject membership, but
+  reports a missing tenant to a non-operator as a denial, and no reserved-tenant
+  check runs until it admits the call. So a denied caller learns nothing from the
+  admin-subject list it supplied, from whether the tenant already exists, or from
+  whether it is the reserved `default` tenant: every one of those checks sits behind
+  the gate and cannot be used as an oracle.
+- **Cascading delete.** Deleting a tenant first suspends it, so no new
+  tenant-scoped admission can race the delete, then cascades the delete to every tree
+  the tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry
+  record is removed. An interrupted delete therefore leaves a suspended, retriable
+  record rather than orphaned trees.
 - **Quota authoring.** `SetTenantQuotasAsync` replaces a tenant's resource quotas and
   burst allowance in one platform-operator action. Each ceiling (`MaxBytes`,
   `MaxKeys`, `MaxMemoryBytes`, `MaxTreeCount`, `MaxOpsPerSecond`) is `null` for
@@ -135,7 +146,7 @@ obscurely at silo start.
 |---|---|---|
 | `AddLatticeTenantAdminApi` | `AddLatticeTenancy()` | The facade operates on the tenancy engine's tenant registry, so it would otherwise have no lifecycle store to act on. |
 | `AddLatticeTenantScopedTreeAdminApi` | `AddLatticeTreeAdminApi()` | It delegates the whole-tree lifecycle verbs to that facade. |
-| `AddLatticeTenantScopedTreeAdminApi` | `AddLatticeSchemaEnforcement()` / `AddLatticeSchemaApi()` | It delegates the per-tree schema-policy verbs to that facade. |
+| `AddLatticeTenantScopedTreeAdminApi` | `AddLatticeSchemaEnforcement()` | It delegates the per-tree schema-policy verbs to the schema engine's in-process `ILatticeSchemaAdmin`, which that call registers. |
 
 Each is idempotent: repeating the call layers any supplied configuration delegate
 but performs the structural wiring only once.
@@ -219,7 +230,7 @@ specific status rather than an opaque fault:
 
 | Exception | Raised when |
 |---|---|
-| `TenantNotFoundException` | The tenant is not registered. |
+| `TenantNotFoundException` | The tenant is not registered - reported to a platform operator. A non-operator caller naming an unknown tenant on a tenant-admin-tier verb gets `LatticeAuthorizationDeniedException` instead, so it cannot probe for a tenant's existence. |
 | `TenantRegionNotAllowedException` | Residency was set to a region outside the allowed set, or an allowed region a tenant is still resident in was revoked. |
 | `TenantLastRegionException` | The change would remove the tenant's last resident region - either as submitted, or once merged with a concurrent removal (see [Concurrent residency changes](#concurrent-residency-changes)). |
 | `LatticeAuthorizationDeniedException` | The caller does not hold the required tier. |
@@ -272,6 +283,17 @@ Every method on this facade requires an active tenant. With none in scope the
 call fails closed with a `TenantScopeRequiredException` (declared in this package,
 namespace `Orleans.Lattice.Api.TenantAdmin`) rather than silently operating on the
 cluster-global namespace.
+
+The facade composes the target id from the ambient active-tenant assertion as
+supplied and does not use the two-tier gate above. Its tree verbs delegate to
+`ILatticeTreeAdmin`, which resolves and authorizes the composed id through the
+access gate as it would for any caller - whole-tree `Admin` to create (also checked
+here before any quota accounting), `TreeLifecycle` to delete, recover, or purge, and
+`Read` to check existence or deletion status - so the caller's membership
+validation and tenancy's isolation apply there. Its schema-policy verbs delegate to
+the in-process `ILatticeSchemaAdmin`, which performs no authorization of its own (see
+[Capability gate](../lattice.schema/README.md#capability-gate)), and the facade adds
+no check for them.
 
 ### `ILatticeTenantAccessAdmin`
 
@@ -336,6 +358,26 @@ ceiling, the live overage, and the accrued metered overage, together with the
 tenant and a live tenant admin only its own; an unauthorized tenant and an absent one
 are unified into a single `TenantNotFoundException`, so the call cannot probe for
 tenant existence. Authoring quotas remains the operator-only `SetTenantQuotasAsync`.
+
+## Authorization seams
+
+The two fail-closed authorizers the facades consult are public types of this package
+(namespace `Orleans.Lattice.Api.TenantAdmin`). Both honour a system-origin bypass for
+trusted co-hosted infrastructure and are independent of the data-plane
+`DefaultEffect`:
+
+- `TenantAdminAccessAuthorizer` - the platform-operator gate for the lifecycle verbs.
+  `AuthorizeTenantAdminAsync` throws `LatticeAuthorizationDeniedException` unless the
+  caller holds whole-scope `Admin` on `PlatformOperatorScope` (the reserved
+  authorization policy tree), refusing a key-filtered allow;
+  `IsTenantAdminAuthorizedAsync` is its non-throwing probe.
+- `TenantRegionResidencyAuthorizer` - the two-tier gate for the tenant-tier verbs.
+  `AuthorizeOperatorAsync` is the operator tier. `AuthorizeTenantAdminAsync` admits the
+  platform operator or a live admin subject on the tenant record and returns that
+  record, reporting an unknown tenant as `TenantNotFoundException` to the operator and
+  as a denial to anyone else. `TryAuthorizeTenantAdminAsync` returns `null` instead of
+  throwing - for a missing tenant as well as a denial - so a verb either of two
+  tenants may perform can consider both sides.
 
 ## Public model types
 

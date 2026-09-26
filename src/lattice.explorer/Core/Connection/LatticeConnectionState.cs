@@ -15,7 +15,7 @@ public enum LatticeConnectionState
     Connected,
 
     /// <summary>
-    /// A previously healthy connection hit a transient failure and is being
+    /// A connection hit a transient failure or has not completed its first probe and is being
     /// recovered within the degrade grace window. The UI may keep showing the
     /// last data with a subtle reconnecting indicator.
     /// </summary>

@@ -9,7 +9,7 @@ A Model Context Protocol (MCP) server for [Orleans.Lattice](../../README.md) - i
 It is built from four parts:
 
 - **A front door.** `AddLatticeMcp(...)` registers the MCP server, the streamable-HTTP transport, a fail-closed authorizer seam, and the credential bridge; `MapLatticeMcp()` maps the endpoint. The server starts with **no** tools - each tool module is opt-in.
-- **Permission-scoped discovery.** A per-session configurator computes the tool list from the authenticated caller's effective permissions and adds a `lattice_capabilities` meta-tool. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed.
+- **Permission-scoped discovery.** A per-session configurator computes the tool list from the authenticated caller's effective permissions and adds a `lattice_capabilities` meta-tool. A facade group's tools are listed only to a caller holding an Allow grant for an operation the group covers, so a caller never sees a group it holds no grant for; within a listed group, each call is still authorized per tree and per verb by the facade's access gate.
 - **Built-in tool modules.** `AddStateTools()`, `AddDataTools()`, `AddBackupTools()`, `AddAuthTools()`, `AddReplicationTools()`, and `AddTreeAdminTools()` each register a group of thin adapters over the matching facade, named `lattice_<group>_<verb>`; a tenancy-enabled cluster additionally exposes the tenant self-awareness and tenant-admin modules (`AddTenantSelfAwarenessTools()` and `AddTenantAdminTools()`). Destructive verbs (writes, backup control, auth administration, replication control, schema management, tree lifecycle/control, and tenant lifecycle operations) are opt-in. Every built-in module is served under both the in-silo and remote topologies, less the few tools the remote host defers because their gRPC method is not yet bound (see [Deferred tools](remote.md#deferred-tools)).
 - **In-silo or remote hosting.** Co-host the server on a silo that exposes the facades in-process, or run it out-of-silo with `AddLatticeMcpRemote(...)`, which binds the same tool modules over the `Orleans.Lattice.Api.*.Grpc` clients to front a cluster it is not co-located with.
 
@@ -17,7 +17,7 @@ It is built from four parts:
 
 - **Fail-closed by construction.** The default `DenyAllMcpAuthorizer`, the fail-closed credential bridge, and `RequireAuthorization` (default `true`) mean an unauthenticated session is default-denied: it can enumerate nothing and call nothing until the host opts in with a real authorizer and authenticator.
 - **No re-modelled surface.** Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and the same Orleans-serialized records the gRPC bindings adapt, so the MCP surface stays in lock-step with the rest of the API family with zero re-modelling.
-- **Permission-scoped, not deny-after-list.** Discovery filters the tool list to the caller's effective permissions before it is returned, so an agent never sees a tool it cannot use.
+- **Permission-scoped at the group level.** Discovery filters the tool list to the caller's effective permissions before it is returned, so an agent never sees the tools of a facade group it holds no grant for. The filter is coarse - one Allow grant for any operation a group covers lists the whole group - so the facade's access gate still refuses, per call, a verb, a tree, or a Deny rule the caller's grants do not cover.
 - **Opt-in and least-privilege.** The server ships no tools; each module is added explicitly, and within a module the destructive verbs stay hidden until the host enables them (`enableWrites`, `enableControl`, `enableAdministration`, `enableSchemaControl`, `enableLifecycle`).
 - **Credential flow-through.** The credential bridge lifts the authenticated MCP session identity onto the ambient `LatticeCredentialContext`, so per-tree / per-key enforcement runs through the same access gate the gRPC bindings and the data path already use. The binding adds no authorization path of its own.
 - **OAuth discovery (opt-in).** Advertise OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself instead of needing a pre-pasted token. See [Setup](setup.md#oauth-discovery-rfc-9728).
@@ -50,7 +50,7 @@ var app = builder.Build();
 app.MapLatticeMcp();
 ```
 
-An MCP client then connects to the mapped endpoint, calls `lattice_capabilities` to see which groups and tools its credential unlocks, and invokes tools such as `lattice_state_list_trees`, `lattice_data_get`, or `lattice_data_read_range`.
+An MCP client then connects to the mapped endpoint, calls `lattice_capabilities` to see which facade groups its credential unlocks (the session's tool list is itself already scoped to the caller's grants), and invokes tools such as `lattice_state_list_trees`, `lattice_data_get`, or `lattice_data_read_range`.
 
 For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`McpServer`](../../samples/McpServer) sample under [`samples/`](../../samples).
 

@@ -3,10 +3,12 @@
 ## What it shows
 
 The write-ahead log's garbage collector may only trim log entries that every
-consumer has durably acked, and it learns each consumer's progress from the WAL
-cursor registry. This sample makes the two registry properties that keep the GC
-safe observable at runtime, by driving the **real production registry**
-(`InMemoryWalCursorRegistry`) under concurrency:
+consumer has acked - unless the optional `LatticeOptions.WalRetention` ceiling
+(off by default) ages old entries out regardless of cursor position - and it
+learns each consumer's progress from the WAL cursor registry. This sample makes
+the two registry properties that keep the GC safe observable at runtime, by
+driving the **real production registry** (`InMemoryWalCursorRegistry`) under
+concurrency:
 
 1. **Per-consumer monotonicity** - a consumer's acked cursor is a max-merge, so a
    concurrent stale or duplicate re-delivery of an *older* cursor never regresses

@@ -32,7 +32,7 @@ One case is not left to operator discretion: enabling a WAL retention ceiling (`
 
 1. **Detect.** The digest probe is a low-frequency, read-only background pass that compares each shard's local content digest against every peer's digest. A sustained `Mismatch` for a `(tree, shard, peer)` triple is the signal that those clusters have genuinely diverged. The probe never mutates data and never advances a replication cursor.
 2. **Localise.** On a mismatch, the Merkle walk descends the local B+ tree top-down and narrows the divergence to a single leaf or a small set of leaves, using the clusters' one shared coordinate - separator-key ranges. It is strictly read-only.
-3. **Repair from the WAL.** Targeted leaf re-replay re-ships the retained WAL entries covering the localised ranges to the diverged peer. The repair travels the same TX-aware, causal-stable apply path as ordinary replication and is de-duplicated at the receiver on `(originClusterId, hlc)`, so it is idempotent.
+3. **Repair from the WAL.** Targeted leaf re-replay re-ships the retained WAL entries covering the localised ranges to the diverged peer. The repair travels the same TX-aware, causal-stable apply path as ordinary replication and is idempotent at the receiver: a recently applied `(originClusterId, hlc, key, op)` identity is suppressed, and anything else re-applies to the same state.
 4. **Repair when re-replay cannot reach the divergence.** When re-replay cannot supply the missing writes, the bootstrap-snapshot fallback re-derives the committed projection of only the divergent leaf range from the live tree and re-ships those committed rows. See [the bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) for the conditions that trigger it and the bounds it respects.
 5. **Guard.** The remediation guards wrap the repair stages with an operator opt-in gate, a per-`(tree, peer)` rate cap, and a per-`(tree, peer)` circuit breaker, so automatic repair is opt-in, bounded, and self-fencing.
 
@@ -64,7 +64,7 @@ siloBuilder.AddLatticeReplication(o =>
     o.LeafReReplayMaxEntries = 4096;
     o.LeafReReplayMaxBytes = 1024 * 1024;
 
-    // 4. Repair when the WAL is trimmed (off by default).
+    // 4. Repair when re-replay cannot reach the divergence (off by default).
     o.BootstrapFallbackEnabled = true;
     o.BootstrapFallbackMaxEntries = 4096;
     o.BootstrapFallbackMaxBytes = 1024 * 1024;

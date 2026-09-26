@@ -6,7 +6,7 @@ The package exposes a public typed client, two registration entry points, public
 
 | Member | Signature | Purpose |
 |---|---|---|
-| `AddLatticeReplicationApiGrpc` | `IServiceCollection AddLatticeReplicationApiGrpc(this IServiceCollection services, Action<LatticeReplicationApiGrpcOptions>? configure = null)` | Registers the server-side binding and its authorization interceptor. |
+| `AddLatticeReplicationApiGrpc` | `IServiceCollection AddLatticeReplicationApiGrpc(this IServiceCollection services, Action<LatticeReplicationApiGrpcOptions>? configure = null)` | Registers the server-side binding: the method definitions, the service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. |
 | `MapLatticeReplicationApiGrpc` | `IEndpointRouteBuilder MapLatticeReplicationApiGrpc(this IEndpointRouteBuilder endpoints)` | Maps the gRPC service onto the ASP.NET Core endpoint routing. |
 
 ## Client
@@ -31,7 +31,7 @@ The result and report types (`ReplicationEnableResult`, `ReplicationDisableResul
 | `DenyAllReplicationApiAuthorizer` | class | The default-deny authorizer used when a host registers no authorizer and leaves `RequireAuthorization` on. Rejects every guarded RPC. |
 | `AllowAllReplicationApiAuthorizer` | class | Opt-in authorizer that permits every guarded RPC. Register it explicitly only when an outer trust boundary already guards the endpoint. |
 | `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
-| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` (the target tree for enable / disable, `null` for the config read and discovery). |
+| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable request supplied it, before the facade's tenant-scoped resolution, or `null` for the config read and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
 | `ILatticeReplicationApiCredentialBridge` | interface | Resolves the caller credential from an inbound `ServerCallContext` into the ambient `LatticeCredential` the facade access gate authorizes. Runs after the transport authorizer; returning `null` leaves the caller anonymous, which auth-backed replication control denies. The default reads `CredentialHeaderName` / `CredentialScheme`. |
 | `ILatticeReplicationApiAuthSchemeSource` | interface | Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns; it must carry only public configuration. |
 | `GrpcReplicationTypeAliases` | static class | The binding's stable serialization aliases for its wire messages (prefix `oirg.`). |
@@ -42,7 +42,7 @@ The result and report types (`ReplicationEnableResult`, `ReplicationDisableResul
 
 ## Wire messages
 
-The request and response records the RPCs carry are public, `[GenerateSerializer]` / `[Immutable]` Orleans-serializable records aliased by `GrpcReplicationTypeAliases`. Fields are additive-only: a new `[Id(n)]` never renumbers an existing one.
+The request and response records the RPCs carry are public, `[GenerateSerializer]` / `[Immutable]` Orleans-serializable records aliased by `GrpcReplicationTypeAliases`. Fields are additive-only: a new `[Id(n)]` never renumbers an existing one. Each row lists its members in `[Id(n)]` order, starting at `0`.
 
 | Record | RPC | Members |
 |---|---|---|
@@ -65,7 +65,7 @@ The typed client maps these onto the facade model records, so a caller of `Latti
 |---|---|
 | Caller not authorized (interceptor or facade gate), or a fail-closed tenant resolution | `PermissionDenied` |
 | In-place mode change on an enabled tree; unmet enable precondition | `FailedPrecondition` |
-| Malformed request (for example null or empty tree id, unrecognized mode) | `InvalidArgument` |
+| Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
 | Any other fault | `Internal` (with a non-leaking message) |
 

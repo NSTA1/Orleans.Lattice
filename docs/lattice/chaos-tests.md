@@ -82,7 +82,7 @@ underneath it* - a policy is set or cleared, or a target schema version is advan
 and eagerly migrated - concurrently with a chain of atomic sagas. They run on a
 single-silo `TestCluster` with core lattice, schema enforcement, and schema
 versioning all registered (`SchemaAtomicChaosClusterFixture`), and are tagged
-`[Category("Chaos")]` `[NonParallelizable]` like every other suite.
+`[Category("Chaos")]` `[NonParallelizable]` like most other suites.
 
 | Test class | File | Purpose |
 |---|---|---|
@@ -109,8 +109,9 @@ production-shipper fixtures (WAL trim, liveness + inbound stats,
 compaction + shipping), and the downstream-package fixtures (gRPC
 transport, Azure Table WAL) do not follow this exact shape - each
 defines its own universe and worker mix appropriate to the invariant
-it targets. See the per-test sections (or the suite tables at the top
-of this document for the newer fixtures) for details.
+it targets. See the per-test sections, the suite tables at the top of
+this document, or [the replication chaos tests](../lattice.replication/chaos-tests.md)
+for the replication and storage fixtures.
 
 Fixture and parameter differences:
 
@@ -542,7 +543,10 @@ Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atom
 
 ## Test 9
 
-Four sibling fixtures - one per `LatticeMergeMode` dispatch path -
+Four of the replication suite's per-merge-mode convergence fixtures -
+last-writer-wins, OR-Set, PN-Counter and MV-Register; the suite covers
+most other `LatticeMergeMode` values too, catalogued in
+[the replication chaos tests](../lattice.replication/chaos-tests.md) -
 prove that the producer-side change-feed → shipper → receiver-side
 applier pipeline converges every site to the same final state under
 concurrent multi-site writes and mid-workload partitions. Every
@@ -853,8 +857,11 @@ topology grids above do not cover: per-call public-API invariants
 (multi-silo restart), the production replication pipeline (WAL trim,
 liveness + inbound stats, OR-Map convergence,
 compaction + shipping), and the two downstream-package suites (gRPC
-transport, Azure Table WAL). Columns map to the test rows in the
-suite tables at the top of this document.
+transport, Azure Table WAL). The range-delete, CAS, scan-cancel and
+multi-silo-restart columns map to rows of the core suite table at the top
+of this document; the WAL-trim, liveness, OR-Map, compaction, gRPC and
+Azure Table WAL columns map to fixtures catalogued in
+[the replication chaos tests](../lattice.replication/chaos-tests.md).
 
 | Surface | Range delete | CAS | Scan cancel | Multi-silo restart | WAL trim | Liveness + inbound | OR-Map | Compaction + shipping | gRPC transport | Azure Table WAL |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -924,7 +931,7 @@ cover this and are tracked by
 | Suite | Where | What it proves |
 |---|---|---|
 | Materialised-view recovery across an identity swap | `test/lattice.replication/Chaos/DerivedStateRecoveryAcrossIdentitySwapChaosTests.cs` | A folded view tails a logical source tree whose physical identity is repointed under its registry alias repeatedly, under a sustained mutation workload that accretes backlog between drains. The maintainer rebinds to the source's current physical id event-driven when the tree registry pushes an alias change (with a coarse backstop re-resolve as a safety net), and on a change rebuilds against the new physical source and rebinds its tail. After the workload quiesces the view reflects exactly the final identity's contents: keys dropped by a cutover are retracted (a WAL tail alone can never retract a key the restored source never had), changed values win, and a large abandoned backlog never survives. Complements the deterministic single-swap regression that landed with the maintainer heal. |
-| Tag-index reconcile under repeated restore | `test/lattice.backup/Chaos/BackupRestoreReconcileChaosTests.cs` | A tag index over a live subject tree is driven through a real shadow-cutover restore under a large tagged working set with a concurrent reader hammering the tag query. The restore fires a prompt reconcile that drops every membership row absent from the restored point-in-time; the reader never observes an out-of-universe key or a torn membership. Repeated restores to successively earlier point-in-times narrow membership monotonically to each restore's subject with no row stranded from a superseded restore. |
+| Tag-index reconcile under repeated restore | `test/lattice.backup/Chaos/BackupRestoreReconcileChaosTests.cs` | A tag index over a live subject tree is driven through a real shadow-cutover restore under a large tagged working set with a concurrent reader hammering the tag query. The restore fires a prompt reconcile that drops every membership row absent from the restored point-in-time; the reader never observes an out-of-universe key or a torn membership. A second case injects one aborted catalogue enumeration into the restore's tag-index discovery and requires the restore to recover that scan rather than swallow the abort and leave every orphan row in place (issue #3233). Repeated restores to successively earlier point-in-times narrow membership monotonically to each restore's subject with no row stranded from a superseded restore. |
 
 ## Routing and cross-tree recovery across a shadow-cutover restore
 

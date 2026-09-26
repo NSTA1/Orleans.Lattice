@@ -12,8 +12,10 @@ it is the only part of the package bound to Orleans.
 
 Exact k-nearest-neighbour search costs one distance computation per stored
 vector, so query cost grows with the corpus and nothing bounds it. `VectorIndex`
-replaces that with an inverted file: query cost grows with the **square root** of
-the corpus instead.
+replaces that with an inverted file: query cost grows **sub-linearly** instead -
+`C` centroid comparisons plus `probes * (n / C)` vector comparisons over roughly
+`sqrt(n)` cells - so the fraction of the corpus a query scans falls as the corpus
+grows.
 
 ## Structure
 
@@ -50,8 +52,9 @@ correct and exact.
 - **Zero steady-state query allocation.** Results are written into a
   caller-owned span, probe scratch is stack-allocated for up to 128 probed
   partitions and pooled beyond, and no metric needs a normalised copy of the
-  query. The build path allocates only the contiguous backing block (once, when
-  `EnsureCapacity` is called up front) and pooled training scratch.
+  query. The insert path allocates only the cell blocks - nothing at all after
+  `EnsureCapacity` is called up front - and training rents its scratch from the
+  array pool, allocating only the cells and centroids it keeps.
 - **Contiguous storage.** Each cell holds its members in one flat `float` block,
   never as a per-vector object graph and never as an index into a shared block. A
   delete backfills the hole with the cell's last member, so a block stays dense
@@ -85,9 +88,9 @@ await index.FlushAsync();                     // only the chunks that changed
 ```
 
 At 250,000 vectors a restart costs **1.1 s to reload** against **24.8 s to
-rebuild**. Opening lazily reads only the centroids - 0.52 s - and fetches a cell
-the first time a query probes it, so the box answers in 75 ms while holding 12%
-of the corpus, and warms as it serves. The answer is identical to the fully
+rebuild**. Opening lazily reads the centroids and the identifier mapping but no
+vector chunk - 0.52 s - and fetches a cell the first time a query probes it, so
+the box answers in 75 ms while holding 12% of the corpus, and warms as it serves. The answer is identical to the fully
 resident index, because a query is scored against exactly the cells it selects.
 
 **The coherence contract.** The index is a derived projection of the store of
@@ -118,8 +121,8 @@ already resident.
 
 ## The chunking seam underneath
 
-`CreateSnapshot(maxItemsPerChunk)` produces a bounded, version-stamped chunk plan
-- never a single unbounded record. Centroid chunks come first, so a reader that
+`CreateSnapshot(maxItemsPerChunk)` produces a bounded, version-stamped chunk
+plan - never a single unbounded record. Centroid chunks come first, so a reader that
 has applied only those can already call `SelectPartitions` to learn which cells a
 query needs, and fetch nothing else. Because a cell already stores its members
 contiguously, a vector chunk is a slice of that cell rather than a gather across
@@ -139,7 +142,8 @@ Every figure below is produced by a committed harness in the repository, not by
 reasoning. Recall runs in the ordinary unit lane on every build, so a regression
 breaks the suite rather than a document.
 
-At the default configuration (partitions `sqrt(n)`, probes `2 * sqrt(partitions)`)
+At the default configuration (partitions `round(sqrt(n))`, probes
+`2 * ceil(sqrt(partitions))`, at least 8 and never more than the partition count)
 over 20,000 vectors at 64 dimensions, k = 10:
 
 | Corpus geometry | recall@10 floor | measured |

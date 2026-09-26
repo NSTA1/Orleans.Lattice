@@ -39,9 +39,9 @@ public sealed class LatticeBackupOptions
     public bool EnableBackupCatalogIndexView { get; set; } = true;
 
     /// <summary>
-    /// The maximum total wall-clock time a cross-tree-consistent backup-set fence
-    /// waits for in-flight cross-tree atomic sagas touching the set to drain to a
-    /// terminal decision before it gives up and fails the capture. Must be
+    /// The maximum wall-clock time each cross-tree-consistent backup-set fence
+    /// attempt waits for in-flight cross-tree atomic sagas touching the set to
+    /// drain to a terminal decision before it gives up and fails that attempt. Must be
     /// strictly positive. Defaults to 30 seconds. Single-tree and non-flagged
     /// backups never consult this value.
     /// </summary>

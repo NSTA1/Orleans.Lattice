@@ -21,8 +21,9 @@ One combined admin surface carries:
   operation, and scope, plus the rules that apply, for debugging policy. The
   verdict is produced by the **same access gate** the data plane consults, so
   an explanation can never disagree with the enforced decision.
-- **`EffectivePermissionsAsync`.** Returns the rules currently in effect for a
-  subject, for dashboards and UX. It reads the live policy store, so it
+- **`EffectivePermissionsAsync`.** Returns every authored rule that names a
+  subject directly or through one of its groups, for dashboards and UX - a
+  listing, not a resolved verdict. It reads the live policy store, so it
   reflects a policy change as soon as the change commits.
 - **Identity directory and access model.** `SearchDirectoryAsync` and
   `ResolveDirectoryPrincipalAsync` search and resolve principals in the

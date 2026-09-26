@@ -87,9 +87,9 @@ public sealed class VectorIndexOptions
     public ulong Seed { get; set; } = 0x9E3779B97F4A7C15UL;
 
     /// <summary>
-    /// The largest number of vectors the training pass clusters over. Training
-    /// cost is proportional to this times the partition count, so capping it
-    /// keeps a build over a very large corpus bounded. Defaults to 32768.
+    /// The largest number of vectors the refinement pass clusters over. Training
+    /// refinement cost is proportional to this times the partition count, but the
+    /// build still has to ingest and map the whole corpus. Defaults to 32768.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
     public int TrainingSampleSize
@@ -140,8 +140,8 @@ public sealed class VectorIndexOptions
     /// <see cref="PartitionCount"/> is <c>0</c>: the square root of the count,
     /// clamped to <c>[1, </c><see cref="MaximumPartitionCount"/><c>]</c>. This
     /// balances the two halves of a probe - ranking the centroids and scanning
-    /// the probed posting lists - so total query cost grows with the square root
-    /// of the corpus rather than with the corpus.
+    /// the probed posting lists. With a fixed probe count this keeps query cost
+    /// near the square root of the corpus rather than the corpus.
     /// </summary>
     /// <param name="count">The number of live vectors to be partitioned.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is negative.</exception>

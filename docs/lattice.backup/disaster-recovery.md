@@ -12,8 +12,8 @@ see the [API reference](api.md) and the
 
 A backup has two distinct pieces of state:
 
-- **Payload** - the self-describing, content-addressed `BackupManifest` and its
-  artifacts, written to the external [sink](../lattice.backup.azureblob/README.md).
+- **Payload** - the self-describing, content-addressed `BackupManifest` and the
+  artifacts it references (named per capture, not by content), written to the external [sink](../lattice.backup.azureblob/README.md).
   This is the backup itself.
 - **Discovery index** - the per-cluster catalog in the reserved
   `sys-backup-catalog` tree, which lists the manifests a cluster knows about so
@@ -162,7 +162,9 @@ Key properties:
 - **Per-backup overrides.** An operator can enable or disable monitoring and set a
   custom interval per backup with `ConfigureBackupHealthAsync`, trigger an on-demand
   check with `CheckBackupHealthAsync`, and read the last stored report with
-  `GetBackupHealthAsync`.
+  `GetBackupHealthAsync`. A backup is re-verified only when a sweep runs, so its
+  effective interval is its configured one rounded up to a whole number of sweep
+  periods: an interval shorter than the sweep cadence takes effect as the cadence.
 - **Peer visibility for replicated trees.** For a backup of a replicated tree, each
   sweep also refreshes the cross-cluster sink-sharing verdict, and the report carries
   it as `PeerVisibility` plus the `PeerUnconfirmedClusterIds` that could not see the
@@ -199,14 +201,15 @@ modes and the probe timeout.
 
 ### Health in the Explorer
 
-The [`Orleans.Lattice.Explorer`](../lattice.explorer/managing-backups.md) **Existing Backups**
-tab renders a per-row health indicator (an OK marker when healthy, a warning marker
+The [`Orleans.Lattice.Explorer`](../lattice.explorer/managing-backups.md) **Existing backups**
+sub-tab of the Backups area renders a per-row health indicator (a not-yet-verified
+marker until the first check, an OK marker when healthy, and a warning marker
 when a backup is unresolvable, has a missing blob, has a hash mismatch, or - for a
 replicated tree - sits in a sink a peer cluster cannot read). Clicking
 the warning opens a diagnostics dialog that names exactly which artifact is missing,
 which hash mismatched, or which peer cluster could not see the sink, and when the
-backup was last checked. The New Backup form
-and the schedule dialog expose the per-backup health schedule. When no durable sink
+backup was last checked. The per-backup schedule dialog exposes the per-backup
+health schedule. When no durable sink
 is configured the health column and its controls are hidden.
 
 ## Sink durability posture

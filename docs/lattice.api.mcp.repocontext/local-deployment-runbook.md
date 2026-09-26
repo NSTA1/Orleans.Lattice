@@ -323,11 +323,14 @@ Stated plainly, because "documented and guarded" reads as "fixed" and it is not:
   words. See [Why the guard test cannot cover this](#why-the-guard-test-cannot-cover-this).
 
 Prevention requires the running system to make the wrong state *observable*, which is
-issue **#2617**: report the indexed root on every `repocontext_list_repos` row, log the
-resolved workspace root and every registered root at startup, warn when a registered
-root's basename differs from its `repoId`, and assert the indexed root from the
-running store in `Assert-ContainerProvenance.ps1`. Until that lands, the only defence
-is the two commands below, run by someone who already suspects something.
+what issue **#2617** delivered: every `repocontext_list_repos` row reports its
+`indexedRoot`, the host logs the resolved workspace root and every registered
+repository's indexed root at startup, it warns with an `id/root MISMATCH` line when a
+registered root's final path segment differs from its `repoId`, and check 7 of
+`Assert-ContainerProvenance.ps1` compares an `-IndexedRoot` read from
+`repocontext_list_repos` against `-ExpectedRepositoryRoot`. That makes the wrong state
+visible to someone who looks; nothing refuses to serve a wrongly-rooted index, so the
+two commands below remain the direct check.
 
 ### Verifying it
 
@@ -359,9 +362,10 @@ discriminate the states:
 | `repocontext_changed` on `/workspace/lattice` | refused: *"outside the indexed root of repository '/workspace/bucket4-merge'"* | returns a file list |
 
 The refusal is the useful part, and it is worth reading closely: it names the indexed
-root it is comparing against. That is the one place the wrong state is currently
-visible, and it is visible only because the call **failed**. Nothing reports it on
-success, which is what #2617 addresses.
+root it is comparing against. When this was exercised that was the one place the
+wrong state was visible, and it was visible only because the call **failed**. Since
+#2617 it is also reported on success - on every `repocontext_list_repos` row and in
+the startup log - as described above.
 
 ### Why the guard test cannot cover this
 
@@ -596,11 +600,20 @@ A rollback does **not** need a re-index in either direction, and it does not tou
 ### Rolling back the embedder
 
 The ONNX Runtime companion is the committed default. The original Onyx companion
-remains available and is selected by layering a third file:
+remains available and is selected by layering a third file on top of the two this
+deployment runs. Build the embedder first: both companions build under the same
+compose image name, so an `up` that finds the ONNX image already built reuses it
+rather than building the Onyx one, and building only that service leaves the pinned
+host image untouched:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml -f docker-compose.onyx.yml build embedder
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml -f docker-compose.onyx.yml up -d --no-build
 ```
+
+The container is then composed from three files, so pass `-ExpectedConfigFileCount 3`
+to `Assert-ContainerProvenance.ps1`. Switching back is the same two commands without
+the third file.
 
 Both serve the same contract on the same port and emit numerically identical vectors,
 so switching does not invalidate an existing `/data` volume and needs no re-index. The
@@ -677,9 +690,11 @@ says so.
 
 Three instances in this one deployment:
 
-1. **The WAL replay concurrency gate.** `BPlusLeafGrain` sizes a process-wide
-   semaphore from `Environment.ProcessorCount` when the option is left non-positive,
-   once, as a structural constant. `Environment.ProcessorCount` *is* cgroup-aware, so
+1. **The WAL replay concurrency gate.** The leaf grain's activation path sizes a
+   process-wide semaphore once, as a structural constant, when the option is left
+   non-positive - from `Environment.ProcessorCount` alone when this instance was found
+   (since #2816, from the lesser of that and the enforced cgroup grant; see below).
+   `Environment.ProcessorCount` *is* cgroup-aware, so
    adding `cpus: 2.0` silently shrank that gate from 16 permits to 2 - an 8x cut to
    leaf-activation concurrency, invisible in configuration and unattributable from the
    logs. That decoupling is a real requirement. `DOTNET_PROCESSOR_COUNT: "16"` used to
@@ -714,8 +729,9 @@ from the grant, or derived from the processor count) at startup.
 #2816.** The decoupling in instance 1 was introduced to stop a `cpus` limit shrinking
 the gate, and it did that. What it also did was remove the only thing holding the gate
 at the grant: with `DOTNET_PROCESSOR_COUNT: "16"` set against a 6.0-CPU grant, the gate
-resolved to **16 permits on 6 CPUs**, a 2.67x oversubscription of a CPU-bound path,
-measured live on this rig. The only remedy the library offered was to pin
+resolved to **16 permits on 6 CPUs**, a 2.67x oversubscription of a gate whose every
+permit holds a multi-MiB replay buffer, measured live on this rig. The only remedy
+the library offered was to pin
 `LATTICE_WAL_MAX_CONCURRENT_REPLAYS` by hand - an operator knob nobody had reason to
 know to set, which would drift from the `cpus` limit the moment either changed. Both
 halves are now closed, and from opposite directions. The gate's default is the
@@ -730,13 +746,17 @@ resolved ceiling, the configured option, the processor count, and the grant are 
 stated together in one startup log line, so the disagreement this passage describes is
 read rather than inferred.
 
-**It is not yet exercised in this deployment.** The tuning overlay sets
-`EMBED_INTRA_THREADS: "4"` explicitly, and the deployed embedder image predates
-#2610, so the value in force is the declared one and the derived path has never run
-here. The pin reproduces on the old image what the fixed image would choose for
+**It is not yet exercised in this deployment.** The tuning overlay still declares
+`EMBED_INTRA_THREADS` explicitly - no longer as a literal `"4"` but from
+`EMBEDDER_INTRA_THREADS`, derived from the same number as the embedder's `cpus` grant
+(#2779) - and the deployed embedder image predates #2610, so the value in force is the
+declared one and the derived path has never run here. The pin reproduces on the old
+image what the fixed image would choose for
 itself, which is the right call for the running stack and also means a green
-deployment tells you nothing about the fix. Removing the pin, on an image built from
-#2610 or later, and confirming the value still lands at 4 with derived-from-grant
+deployment tells you nothing about the fix. Setting `EMBEDDER_INTRA_THREADS=auto` on
+an image that understands the token (#2863, which also carries #2610's derivation),
+and confirming the startup line reports the grant
+with `DECLARED 'auto' ... then DERIVED from the enforced container CPU grant`
 provenance, is what would establish it. Until then the mechanism's only evidence is
 its unit tests, and what has been verified in production is the manual override it
 was built to replace.
@@ -918,8 +938,9 @@ rehydrate defect, here caused by a memory cap.
 
 ## Restart, drain, and verification
 
-`docker compose restart repocontext` is a full recreation: it evicts the in-memory
-projection and forces a WAL replay or cold rebuild on next access. That is the point
+`docker compose restart repocontext` is a full process restart - not a recreation: the
+container and its volumes are kept - so it evicts the in-memory projection and forces a
+WAL replay or cold rebuild on next access. That is the point
 of running it - it is the durability proof - but it is not free, and it is what the
 cold-start rig measures.
 
@@ -938,7 +959,22 @@ curl -fsS http://localhost:8080/health/ready
 
 # 3. Provenance: what this container actually received. See the warning at the top.
 pwsh -File ./scripts/Assert-ContainerProvenance.ps1
+
+# 4. Attribution: record what this deployment carries - declared by compose and
+#    effective in the running containers - before taking any reading you mean to
+#    compare with a previous run (#2931).
+pwsh -File ./scripts/Assert-DeployManifest.ps1 -Label run-14
 ```
+
+`Assert-DeployManifest.ps1` writes a manifest - by default under the untracked
+`.deploy/manifests/`, so keep the ones you will cite - diffs it against the previous
+run's, and exits `0` when at most one attribution-relevant variable moved. It exits
+`2` to refuse a step that moved several without `-AcceptMultipleDeltas -Reason '...'`
+given in advance, a divergence between declared and effective values, or a
+processor count whose source cannot be established; `3` when the baseline was written
+by a different instrument vintage and cannot be compared; `4` when the deployment
+could not be read; and `5` when the compose files it resolved are not the ones the
+container was created from.
 
 A persistent 503 has its own diagnosis section in the
 [sample README](../../samples/RepoContextContainer/README.md); do not skip it in
@@ -1022,8 +1058,9 @@ if ($stamped -ne $env:GIT_COMMIT) {
 #    displaced tag first - see Pin and roll back.)
 docker tag repocontext-mcp:candidate-<sha> repocontext-mcp:local
 
-# 4. Bring up the tuned stack. The embedder builds from its own small context;
-#    --no-build applies to the pinned host image.
+# 4. Bring up the tuned stack. No --no-build here: on a clean host the embedder has
+#    no image yet and builds from its own small context, while the pinned host image
+#    already exists, so compose uses it as tagged rather than rebuilding it.
 cd samples/RepoContextContainer
 docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d
 

@@ -8,7 +8,7 @@ Each facade operation is one gRPC `Method<TRequest, TResponse>` built from C# de
 
 ## Two-layer, fail-closed authorization
 
-Two independent gates both default to deny.
+Two independent gates guard every operation RPC. The transport meta-authorizer defaults to deny; the facade access gate denies by default once an authorization add-on such as `Orleans.Lattice.Auth` supplies it, and with only the core no-op gate registered it allows every call.
 
 1. **Transport meta-authorizer.** The interceptor consults `ILatticeReplicationApiAuthorizer` for every guarded RPC before the service runs. With `RequireAuthorization` on and no authorizer registered, `DenyAllReplicationApiAuthorizer` rejects every call with `PermissionDenied`. The interceptor maps the inbound method to a `LatticeReplicationApiOperation`; an unrecognized method maps to `Unknown`, which the default-deny posture never grants, so a new or malformed method can never fall through to an allow.
 2. **Facade access gate.** The identity bridge resolves the caller's credential from the configured header and stamps the ambient Lattice credential; the facade then re-authorizes that resolved caller against its own fail-closed access gate for the `LatticeOperation.Replication` capability on the target tree. This is the same gate an in-process caller passes through, so the wire path is no weaker than the local one.
@@ -25,15 +25,15 @@ The service maps facade outcomes to stable gRPC status codes so a client sees a 
 
 | Facade outcome | Status |
 |---|---|
-| `LatticeAuthorizationDeniedException` (interceptor or gate) | `PermissionDenied` |
-| `LatticeTenantAccessDeniedException` (no valid active tenant, or the caller may not act as the asserted one) | `PermissionDenied` |
+| `LatticeAuthorizationDeniedException` (the facade access gate) | `PermissionDenied` |
+| `LatticeTenantAccessDeniedException` (an asserted tenant the caller may not act as, or a `sys-` / malformed `t/` tree name under one) | `PermissionDenied` |
 | `LatticeReplicationPreconditionFailedException` | `FailedPrecondition` |
 | `LatticeReplicationModeChangeRejectedException` | `FailedPrecondition` |
-| `ArgumentException` (null / empty tree id, unrecognized mode) | `InvalidArgument` |
+| `ArgumentException` (for example a null / empty tree id) | `InvalidArgument` |
 | `OperationCanceledException` | `Cancelled` |
 | Any other exception | `Internal` (logged server-side; the client sees a non-leaking message) |
 
-An already-thrown `RpcException` is rethrown unchanged so an inner status is preserved.
+An already-thrown `RpcException` is rethrown unchanged so an inner status is preserved. A transport meta-authorizer denial never reaches the service: the interceptor raises it directly as `PermissionDenied` (and a cancelled authorization check as `Cancelled`).
 
 ## See also
 

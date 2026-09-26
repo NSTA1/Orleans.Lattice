@@ -4,17 +4,14 @@ namespace Orleans.Lattice.Schema;
 
 /// <summary>
 /// Ambient association of an in-flight merge with the tree whose policy governs
-/// it. The core post-merge seam (#1198) hands the observer a
-/// <see cref="LatticeMergeContext"/> that carries the merged key but not the tree
-/// id, so the observer cannot by itself resolve the per-tree policy. This scope
-/// stamps the tree id onto the ambient <see cref="RequestContext"/> for the
-/// lifetime of a <c>using</c> block; <see cref="Current"/> reads it back.
+/// it. The core post-merge seam hands the observer a <see cref="LatticeMergeContext"/>
+/// that can carry the tree id; this scope is the ambient fallback used by paths
+/// that stamp the tree id through <see cref="RequestContext"/>. <see cref="Current"/>
+/// reads the scoped value back.
 /// </summary>
 /// <remarks>
-/// Until the core merge context carries the tree id, production wiring of this
-/// scope requires a core hook; the type exists so the observer's resolution is
-/// exercised (in tests) and ready for that hook. See
-/// <see cref="LatticeSchemaMergeObserver"/>.
+/// Kept for compatibility with tests and older call paths that still provide the
+/// tree id through ambient request context. See <see cref="LatticeSchemaMergeObserver"/>.
 /// </remarks>
 internal static class LatticeSchemaMergeTree
 {

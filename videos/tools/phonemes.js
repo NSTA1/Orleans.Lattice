@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-// Shows how the series voice will read an episode before it is narrated: for
+// Shows how the Kokoro engine will read an episode before it is narrated: for
 // each cue, the written text, the spoken form the lexicon turns it into, and
 // the phonemes Kokoro's own phonemizer produces from that. Words with two
 // readings (voice/heteronyms.json) are flagged, because the phonemizer picks
 // one reading without looking at the sentence - it says "lives" as the plural
-// of life even in "the store lives in the cluster".
+// of life even in "the store lives in the cluster". The series voice,
+// Chatterbox, reads text directly rather than through a phonemizer, so this
+// applies when voice.json's provider is "kokoro".
 //
 //   npm run phonemes -- <slug>          every cue
 //   npm run phonemes -- <slug> --flagged only the cues with a word to check
 //
-// Needs the same Python as narration (HYPERFRAMES_PYTHON, with kokoro-onnx).
+// Needs the Python that Kokoro narration uses (HYPERFRAMES_PYTHON, with kokoro-onnx).
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -37,7 +39,7 @@ const voice = JSON.parse(readFileSync(path.join(workspaceRoot, "voice", "voice.j
 const lexicon = loadLexicon(path.join(workspaceRoot, "voice", "lexicon.json"));
 const heteronyms = loadHeteronyms(path.join(workspaceRoot, "voice", "heteronyms.json"));
 const { cues } = parseScript(readFileSync(paths.script, "utf8"), `episodes/${paths.slug}/SCRIPT.md`);
-const spoken = cues.map((cue) => applyLexicon(cue.text, lexicon));
+const spoken = cues.map((cue) => applyLexicon(cue.text, lexicon, "kokoro"));
 
 // One Python process phonemizes every cue, through kokoro-onnx's tokenizer:
 // exactly the path the text takes on its way to the voice.
@@ -50,7 +52,7 @@ const program = [
 ].join("\n");
 const python = process.env.HYPERFRAMES_PYTHON || (process.platform === "win32" ? "python" : "python3");
 const run = spawnSync(python, ["-c", program], {
-  input: JSON.stringify({ lang: voice.lang, texts: spoken }),
+  input: JSON.stringify({ lang: voice.kokoro.lang, texts: spoken }),
   encoding: "utf8",
   env: { ...process.env, PYTHONIOENCODING: "utf-8" },
 });

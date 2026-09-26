@@ -217,6 +217,14 @@ internal sealed class TombstoneCompactionGrain(
     {
         if (IsCompactionDisabled) return;
 
+        // Register only when absent (issue #3592). RegisterOrUpdateReminder
+        // restarts the schedule at now + dueTime, and every new LatticeGrain
+        // worker calls this on its first write, so an unconditional call moved
+        // the next pass a full period out each time, and a tree that kept getting
+        // new workers never compacted. A changed TombstoneGracePeriod is still
+        // applied: ReceiveReminder re-registers when a tick's period differs.
+        if (await reminderRegistry.GetReminder(context.GrainId, ReminderName) is not null) return;
+
         var period = ClampPeriod(Options.TombstoneGracePeriod);
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,

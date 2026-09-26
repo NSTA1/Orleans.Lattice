@@ -4,7 +4,7 @@ Generic OpenID Connect credential authenticator for [Orleans.Lattice.Membership]
 
 ## What is it?
 
-`Orleans.Lattice.Membership.Oidc` adds a provider-agnostic OIDC authenticator that plugs into the membership credential-authenticator seam. It specializes the built-in JWT authenticator rather than reimplementing token validation, so it inherits the same audience, signing-key, and lifetime checks and only layers on the OIDC-specific concerns. Nothing in it is tied to a particular vendor: everything it needs about a provider is read from that provider's OpenID Connect discovery document, so Okta, Auth0, Keycloak, Ping, Google, and any other conformant issuer are configured the same way.
+`Orleans.Lattice.Membership.Oidc` adds a provider-agnostic OIDC authenticator (`OidcCredentialAuthenticator`, registered through `AddLatticeOidc`) that plugs into the membership credential-authenticator seam. It specializes the built-in JWT authenticator rather than reimplementing token validation, so it inherits the same audience, signing-key, and lifetime checks and only layers on the OIDC-specific concerns. Nothing in it is tied to a particular vendor: everything it needs about a provider is read from that provider's OpenID Connect discovery document, so Okta, Auth0, Keycloak, Ping, Google, and any other conformant issuer are configured the same way.
 
 It is an **additive sibling** to [`Orleans.Lattice.Membership.Entra`](../lattice.membership.entra/README.md), not a replacement. Neither package depends on the other, and a silo can register both - plus the JWT and anonymous authenticators - at the same time.
 

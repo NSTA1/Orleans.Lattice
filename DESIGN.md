@@ -29,37 +29,37 @@ colors:
   chalk-blue: "#a9b8ff"
 typography:
   display:
-    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif"
     fontSize: "clamp(2.3rem, 1.2rem + 3.1vw, 3.6rem)"
     fontWeight: 780
     lineHeight: 1.04
     letterSpacing: "-0.034em"
   h1:
-    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif"
     fontSize: "2.25rem"
     fontWeight: 780
     lineHeight: 1.2
     letterSpacing: "-0.024em"
   h2:
-    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.5rem"
     fontWeight: 720
     lineHeight: 1.2
     letterSpacing: "-0.016em"
   h3:
-    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif"
     fontSize: "1.1875rem"
     fontWeight: 650
     lineHeight: 1.2
     letterSpacing: "-0.01em"
   body:
-    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.65
     letterSpacing: "normal"
   label:
-    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, sans-serif"
+    fontFamily: "Recursive Sans Linear, Segoe UI Variable Text, Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif"
     fontSize: "0.8125rem"
     fontWeight: 560
     lineHeight: 1.5

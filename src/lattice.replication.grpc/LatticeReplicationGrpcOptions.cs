@@ -25,24 +25,22 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// endpoint-mapping call.
 /// </para>
 /// <para>
-/// The push and snapshot transports share a per-peer
-/// <see cref="GrpcChannel"/> cache: one channel per
-/// <c>(sourceClusterId, sender URI)</c> tuple carries both live-push
-/// batches and snapshot pulls. The hardened-defaults pipeline (TLS
-/// enforced unless <see cref="AllowPlaintextEndpoints"/> opts out, the
-/// shared-secret authenticator on every call, the
-/// <c>x-lattice-replication-origin</c> header) applies uniformly.
+/// The public options project into three per-transport clients, each with its
+/// own per-peer <see cref="GrpcChannel"/> cache: live push, snapshot pulls,
+/// and saga-control RPCs. The hardened-defaults pipeline (TLS enforced unless
+/// <see cref="AllowPlaintextEndpoints"/> opts out, the shared-secret
+/// authenticator on every call, the <c>x-lattice-replication-origin</c> header)
+/// applies uniformly.
 /// </para>
 /// </remarks>
 public sealed class LatticeReplicationGrpcOptions
 {
     /// <summary>
     /// Map of remote cluster id to the gRPC endpoint URI it accepts
-    /// both push batches and snapshot pulls at. Each entry produces a
-    /// long-lived <see cref="GrpcChannel"/> that is reused across
-    /// every outbound call targeting that peer; HTTP/2 multiplexes
-    /// concurrent batches and snapshot streams on the underlying TCP
-    /// connection.
+    /// push batches, snapshot pulls, and saga-control calls at. Each entry can
+    /// produce one long-lived <see cref="GrpcChannel"/> per outbound transport
+    /// cache; HTTP/2 multiplexes concurrent calls within each transport's
+    /// underlying TCP connection.
     /// <para>
     /// A live-push batch whose <c>TargetClusterId</c> is not present
     /// in this map causes the push transport's <c>SendAsync</c> to

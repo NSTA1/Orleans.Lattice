@@ -14,15 +14,14 @@ namespace Orleans.Lattice.Scaling;
 /// <para>
 /// Every instrument on this meter is an <see cref="ObservableGauge{T}"/>: the
 /// live <see cref="ILatticeScalingSignal"/> facade samples cluster-aggregate
-/// pressure on its own timer and publishes a flat scalar snapshot
-/// (see <see cref="ScalingSignalGaugeRegistry"/>), and each gauge's measurement
-/// callback simply reads one already-computed scalar from that snapshot. The
+/// pressure on its own timer and publishes a flat scalar snapshot through an
+/// internal registry, and each gauge's measurement callback simply reads one
+/// already-computed scalar from that snapshot. The
 /// callbacks therefore allocate nothing, recompute nothing, and never touch the
 /// per-account list on the scrape path.
 /// </para>
 /// <para>
-/// The gauges are created when the facade starts (see
-/// <see cref="ScalingSignalGaugeRegistry.EnsureRegistered"/>), so a snapshot
+/// The gauges are created when the facade starts, so a snapshot
 /// <see cref="MeterListener"/> attached before any silo has started will not see
 /// them; subscribers should enumerate by the published <c>...Name</c> constants.
 /// </para>

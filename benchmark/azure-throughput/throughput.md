@@ -200,7 +200,7 @@ cohorts:
 
 ## 24. Phase 1 closeout 2026-06-04 (HEALTHY across the rung range; wedge does not reproduce)
 
-n=2 cohorts on the `Standard_F8as_v6` VM in westus3 (8 vCPU AMD Zen4, 32 GiB, accelerated networking confirmed end-to-end). Managed identity to a fresh storage account (`stlat01fid4svskfi27s`); silo+producer co-located via `lattice-silo.service` + `lattice-producer.service` systemd units; cohort runner extracts journals via `benchmark/vm/run-cohort.ps1`.
+n=2 cohorts on the `Standard_F8as_v6` VM in westus3 (8 vCPU AMD Zen4, 32 GiB, accelerated networking confirmed end-to-end). Managed identity to a fresh storage account (`stlat01fid4svskfi27s`); silo+producer co-located via `lattice-silo.service` + `lattice-producer.service` systemd units; cohort runner extracts journals via `benchmark/vm/run-cohort.ps1` (a path that never existed in the repository; the runner is `scripts/run-cohort.ps1` in this folder).
 
 | Cohort | Written | Failed | Active avg | Silo CPU peak | Diagnostics | Verdict |
 |---|---|---|---|---|---|---|
@@ -217,7 +217,7 @@ Phase 1 R2 verdict per section 3 decision gate: **<=1/5 wedges across the verifi
 - `TcpIngestService.FlushAsync` (benchmark/azure-throughput/Silo/Program.cs) now emits a named log line on `TimeoutException`:
   > `[silo] grain-rpc-deadline: SetManyAsync of N did not return within ResponseTimeout (BENCH_RESPONSE_TIMEOUT_SEC=Ns). Offered rate exceeds sustained Tables drain rate at this rung; raise BENCH_RESPONSE_TIMEOUT_SEC, drop tickHz/vehicles, or tune WAL fan-out.`
 - `IngestSettings` record carries `ResponseTimeoutSec` so the log line can stamp the configured value.
-- Cohort runner (`benchmark/vm/run-cohort.ps1`) parses FINAL and surfaces `failed=N` in the summary block so a degraded cohort can't pass for HEALTHY.
+- Cohort runner (`benchmark/vm/run-cohort.ps1`; the runner is `scripts/run-cohort.ps1` in this folder) parses FINAL and surfaces `failed=N` in the summary block so a degraded cohort can't pass for HEALTHY.
 
 ### 24.2 Updates to wedge-plan.md
 
@@ -327,11 +327,11 @@ The runner-printed `active avg = written / (last_flush_ts - first_accepted_ts)` 
 
 The correct cohort sample is the **mean of `[silo] t=` per-second rate samples over `t in [15s, last-non-zero-rate]`**. The `t >= 15` filter trims the warmup ramp (first ~10-15s); the `rate > 0` filter trims the post-producer drain. The silo's per-second sampler bucket-quantises rates to 12,288 or 16,384 e/s (it samples `flush_count * batch_size = 3-4 * 4096` per second window), so the **median** of those samples is also misleading - it always lands on one of the two quantised buckets - but the **mean** averages cleanly across the 4-or-5-batches-per-second jitter.
 
-PowerShell snippet, runnable against any cohort silo log:
+PowerShell snippet, runnable against any cohort silo log (it accepts both the current `ops=` / `ops/sec=` tokens and the older `written=` / `Entries written per second=` ones):
 
 ```powershell
 $samples = Select-String -Path $logPath -Pattern '^\[silo\] t=' | ForEach-Object { $_.Line } | ForEach-Object {
-  if ($_ -match 't=\s*([\d.]+)s\s+written=\s*([\d,]+)\s+Entries written per second=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
+  if ($_ -match 't=\s*([\d.]+)s\s+(?:ops|written)=\s*([\d,]+)\s+(?:ops/sec|Entries written per second)=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
     [pscustomobject]@{ t=[double]$matches[1]; rate=[long]($matches[3] -replace ',','') }
   }
 }
@@ -746,6 +746,8 @@ This means **a doc-update pass can land cells from a wedge cohort and silently m
 2. Re-run the affected workload mode (`-Layer 2 -Workloads set-many`) until all 3 cohorts are HEALTHY before quoting the doc cells.
 3. The §32-style discrepancy between "plausible cell" and "WEDGE verdict" is the canonical signal that the storage account is at its ceiling. Either drop the offered load one rung (3k:5) or move to multi-account fan-out (F-084 planned work) before publishing the cell.
 
+> **Superseded (current harness):** `run-cohort.ps1` now appends its verdict to each silo log, and `performance-report.ps1` aggregates only cohorts graded `HEALTHY` - it warns whenever it excludes any, and leaves a row un-updated when none is `HEALTHY` - so the manual inspection above is no longer what keeps wedge cohorts out of the doc cells.
+
 ### 32.6 Reliability surface re-confirmation
 
 The §30.6 item 2/3 / §31.2 tertiary finding stands: the drain-wedge family under storage saturation is real, reproducible at `>=4k:5 on D4` (one rung lower than previously catalogued), and not handled by the existing `WalAppendDispatchTimeout` / `WalFlushTimeout` / G-028 deactivation-drain bounds. The new evidence today:
@@ -766,13 +768,13 @@ In priority order:
 
 1. **No code change to ship from this observation.** The mechanism is already documented in §31.2 / §31.5; F-084 remains the planned structural fix. The new info (rung threshold drop, mid-window-failure variant, watchdog now visible) is recorded here for the next cycle's Phase 0.
 
-2. **Operator-facing recommendation for `performance-report.ps1` users:** the doc-update pass can publish wedge-cohort cells without warning. See §32.5 for the inspection checklist. A follow-up harness improvement (out of scope for the F-083 PR) would be teaching `Aggregate-Layer2Cells` to skip cohorts whose runner verdict is not HEALTHY, or at minimum emit a stderr warning when it aggregates a wedge cohort into a doc cell.
+2. **Operator-facing recommendation for `performance-report.ps1` users:** the doc-update pass can publish wedge-cohort cells without warning. See §32.5 for the inspection checklist. A follow-up harness improvement (out of scope for the F-083 PR) would be teaching `Aggregate-Layer2Cells` to skip cohorts whose runner verdict is not HEALTHY, or at minimum emit a stderr warning when it aggregates a wedge cohort into a doc cell. (Since shipped: see the note at the end of section 32.5.)
 
 3. **The `wal-tuning.md` amendment from §31.4 item 1 should also cover the rung drop.** The current text describes the ceiling as a D8 + 6k:5 phenomenon; reality is closer to "the ceiling is workload-density-bound, not VM-size-bound, and reproduces wherever the steady-state mean climbs into the ~22-24 ke/s band". A short clarification ("on the standard tier the ceiling is the storage account, not the silo, and can manifest at any rung whose steady-state mean approaches ~22 ke/s") would close the gap for operators.
 
 4. **The drain-wedge reliability hand-off is unchanged from §31.2.** Repeat for emphasis: this is a real, reproducible reliability gap; F-084 papers over it by reducing single-account pressure but does not eliminate it. The right long-term fix is upstream SDK-cancellation cooperation on drain - separate from the storage-fan-out work.
 
-5. **`Aggregate-Layer2Cells` doc-pipeline blindness** (item 2 above) is the cheapest near-term win and is independent of F-084 or any reliability work.
+5. **`Aggregate-Layer2Cells` doc-pipeline blindness** (item 2 above) is the cheapest near-term win and is independent of F-084 or any reliability work. (Since shipped: see the note at the end of section 32.5.)
 
 ## 33. Bench adoption of the F-085 saturation back-pressure surface (F-086)
 
@@ -786,7 +788,7 @@ The bench silo's `TcpIngestService.HandleConnectionAsync` now subscribes to the 
 
 - **Push observer (out-of-band).** A new `BenchSaturationLogger` registered as `IWalSaturationObserver` lands one `[silo:saturation]` line on stdout per transition, naming the direction (`previous -> new`), the underlying source attribution (partition for admission-depth-driven transitions, shard for dispatch-timeout-driven transitions), and the UTC instant the sampler observed it. The line is the cross-process correlation hook: the post-mortem analysis can grep `[silo:saturation]` in the silo log and align the producer's `slipMaxMs` spikes with the silo's recorded transition windows without scraping the OpenTelemetry meter.
 
-- **Three new `BENCH_*` knobs** to pin the F-085 sampler cadence and thresholds for per-cohort A/B sweeps:
+- **Three new `BENCH_*` knobs** (plus a fourth, added later by #3402) to pin the F-085 sampler cadence and thresholds for per-cohort A/B sweeps:
   - `BENCH_SATURATION_SAMPLE_MS` (default 200 ms) - sampler tick interval; lower for faster transition propagation, set to 0 to disable the sampler entirely.
   - `BENCH_SATURATION_THROTTLED_RATIO` (default 0.75) - admission-depth ratio at or above which the signal raises a tree to `Throttled`.
   - `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` (default 1) - minimum `WalAppendDispatchTimeout` trips per sample window that raise the tree to `Saturated`.
@@ -804,10 +806,14 @@ A `Saturated` regime under the §32 reproducer rung settles the reader on `WaitF
 
 A clean cohort sweep at the §32 reproducer rung serves as the acceptance test:
 
+```powershell
+./benchmark/performance-report.ps1 -Layer 2 -Workloads set-many -Rung '4000:5:45' -N 3
 ```
-./benchmark/performance-report.ps1 -Layer 2 -Workloads set-many \
-    -Rung '4000:5:45' -N 3
-```
+
+> The `set-many` Layer 2 row has since gained its own `1200:5:45` rung, which overrides
+> `-Rung`, so this command no longer reproduces the 4k:5 rung. For that, run
+> `scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 -ExtraSiloEnv @{ BENCH_RESPONSE_TIMEOUT_SEC = '180' }`
+> three times.
 
 | Surface | Pre-F-086 (reproduces §32) | Post-F-086 measured | F-086 closes? |
 |---|---|---|---|

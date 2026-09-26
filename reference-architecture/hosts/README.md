@@ -11,6 +11,15 @@ at 9.7.1), and the Explorer head pins the 9.4.x line of the
 `.csproj` holds the exact pins. They are not project references into `src/`, so
 each head consumes the released library exactly as a real deployment would.
 
+All three heads also reference `Common/Orleans.Lattice.ReferenceArchitecture.Hosting.csproj`,
+a shared hosting library that is not a published package (it references only the
+ASP.NET Core shared framework). It supplies the Front Door origin lock described
+below, the guard that confines the silo's `/metrics` and `/lattice/scale`
+endpoints to its internal HTTP port (404 on any other port), and the filter that
+drops informational request logs for successful requests on high-frequency probe
+paths. Its tests
+live in `Common.Tests/`.
+
 | Host | Project | Role |
 |------|---------|------|
 | Silo | `Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj` | The always-on Orleans silo: Azure Table clustering + durable Azure Table WAL, cross-region replication (shipper + receiver), the Azure Blob backup sink (primary/standby), the read-only State API, the read-write Data API, and the auth-admin, backup, schema, and tree-administration control planes over gRPC (plus the replication control plane when enabled), the `lattice.scaling` compute-axis signal, OpenTelemetry `/metrics`, and Entra auth. |
@@ -39,7 +48,7 @@ underscore separator, case-insensitive).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `Cluster:Id` / `Cluster:ServiceId` | `lattice` | Orleans cluster / service id. |
+| `Cluster:Id` / `Cluster:ServiceId` | `lattice` / `Cluster:Id` | Orleans cluster / service id. |
 | `Silo:HttpPort` / `Silo:GrpcPort` | `8080` / `8081` | HTTP port (health, scaling, `/metrics`) and HTTP/2 gRPC port (state, auth, replication). |
 | `Silo:SiloPort` / `Silo:GatewayPort` | `11111` / `30000` | Orleans silo-to-silo and gateway ports. |
 | `Silo:AdvertisedIp` | (auto) | Advertised IP for Orleans endpoints when the default NIC probe is not appropriate. |
@@ -63,7 +72,7 @@ underscore separator, case-insensitive).
 | `Auth:BootstrapAdministrators` | - | Comma-separated subject ids seeded as administrators. |
 | `Auth:DevAuthenticateForwardedSubject` | `false` | Local dev bypass, honoured only when Entra is off: trust a forwarded bearer token as its named subject when that id is a configured bootstrap administrator. |
 | `Entra:Enabled` | `false` | Enable Entra-backed authentication for the exposed facades. |
-| `Entra:TenantId` / `Entra:ClientId` / `Entra:Authority` / `Entra:Audiences` | - | Entra authenticator configuration. |
+| `Entra:TenantId` / `Entra:ClientId` / `Entra:Authority` / `Entra:Audiences` | - / - / `https://login.microsoftonline.com/{TenantId}/v2.0` / `ClientId` and `api://{ClientId}` | Entra authenticator configuration. `TenantId` and `ClientId` are required when Entra is on; `Audiences` is comma-separated. |
 | `Entra:Algorithms` | `RS256` | Comma-separated allow-list of accepted JWT signature algorithms (the header `alg`), pinned as defense-in-depth against algorithm-confusion attacks (CWE-347). Defaults to `RS256`, the algorithm Entra issues v2.0 tokens with; a token advertising any other algorithm is refused. |
 | `Entra:Graph:UseManagedIdentity` | `false` | Enables the app-only Microsoft Graph group resolver via a secret-less managed identity (`DefaultAzureCredential`). Compute sets this `true` on the silo when Entra is on. Ignored when `Entra:Graph:ClientSecret` is supplied. |
 | `Entra:Graph:ClientSecret` | - | Dev / back-compat override: enables the app-only Microsoft Graph group resolver with a client secret (injected from Key Vault). Takes precedence over managed identity when set. |
@@ -74,12 +83,12 @@ underscore separator, case-insensitive).
 |-----|---------|---------|
 | `Mcp:StateEndpoint` | (required) | The silo's State gRPC endpoint. |
 | `Mcp:AuthEndpoint` | `Mcp:StateEndpoint` | The silo's Auth gRPC endpoint (needed for permission-scoped discovery). |
-| `Mcp:DataEndpoint` / `Mcp:BackupEndpoint` | - | Data / backup gRPC endpoints. Compute sets `Mcp:DataEndpoint` to the silo gRPC FQDN by default (the write facade rides that endpoint); backup only if the silo exposes it. |
+| `Mcp:DataEndpoint` / `Mcp:BackupEndpoint` | - | Data / backup gRPC endpoints. Compute sets `Mcp:DataEndpoint` to the silo gRPC FQDN when the Data API is enabled (the default; the write facade rides that endpoint), and `Mcp:BackupEndpoint` to the same FQDN when the deployer's backup-control switch is on (also the default). The silo always co-hosts the backup facade. |
 | `Mcp:ReplicationEndpoint` | - | Replication control gRPC endpoint. Compute sets it to the silo gRPC FQDN when replication control is enabled. |
 | `Mcp:TreeAdminEndpoint` | `Mcp:StateEndpoint` | Tree-administration and schema-control gRPC endpoint (co-hosted on the silo gRPC port). |
 | `Mcp:RequireAuthorization` | `Entra:Enabled` | Fail-closed toggle on the MCP HTTP endpoint. |
 | `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableReplicationControl` / `Mcp:EnableAuthAdministration` | `false` | Advertise the mutating tool verbs of each group. Compute binds the first three to the deployer's Data API, backup-control, and replication-control switches (all on by default); `EnableAuthAdministration` stays `false`. |
-| `Mcp:EnableTreeAdminLifecycle` / `Mcp:EnableTreeAdminSchemaControl` | `true` / `true` | Advertise the tree-lifecycle (create, bulk load, restore, reshard, resize, snapshot, delete / recover / purge) and schema-mutation tools; every call is still gated at the silo. |
+| `Mcp:EnableTreeAdminLifecycle` / `Mcp:EnableTreeAdminSchemaControl` | `true` / `true` | Advertise the mutating tree-lifecycle tools (create, alias, per-tree config, delete / recover / purge, bulk load, restore, reshard, resize, snapshot, WAL moves, view and tag-index maintenance, compaction, retention, orphaned-leaf repair) and the schema-mutation tools. The read-only tree-administration tools are advertised either way, and every call is still gated at the silo. |
 | `Mcp:Stateless` | `true` | Stateless streamable-HTTP transport (no per-session server state), so a follow-up request can land on any region or replica behind Front Door. |
 | `Mcp:AdministratorToken` / `Mcp:AdministratorScheme` | - / `Bearer` | Service credential for discovery-time permission introspection of non-administrator callers. |
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |
@@ -108,7 +117,7 @@ underscore separator, case-insensitive).
 | `LATTICE_EXPLORER_ENDPOINT` | - | The remote State/Auth gRPC endpoint the console connects to (read by the explorer's own environment bootstrap). |
 | `LATTICE_EXPLORER_INSECURE_DEV` | - | `true` to allow the local h2c dev transport. |
 | `LATTICE_EXPLORER_TRANSPORT_HEADERS` | - | Semicolon-separated `Name=Value` non-secret headers sent on every call to the silo. Compute sets `X-Azure-FDID=<frontDoorId>` so the console, which dials the silo origin directly, passes its origin lock. |
-| `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD` | - | Optional first-run auto-sign-in (local dev). |
+| `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD` | - | Inert in this host. The web Explorer honours this first-run sign-in seed only when a host opts in with `LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed`, and this host does not, so sign-in is always interactive (Entra OIDC when enabled, otherwise the console's sign-in dialog). |
 
 ### Front Door origin lock (all hosts)
 
@@ -155,17 +164,20 @@ or culture-sensitive.
 
 **Result: PASS.**
 
-- The core library performs **487** ordinal / `OrdinalIgnoreCase` comparison
-  sites - the overwhelming default for keys, tree names, header names, and
-  identifiers.
+- The core library's string comparisons are overwhelmingly ordinal /
+  `OrdinalIgnoreCase` (**487** sites when this audit was taken) - the default for
+  keys, tree names, header names, and identifiers.
 - Every `ToLowerInvariant()` / `ToUpperInvariant()` site across the whole
   consumed surface operates on a **guaranteed-ASCII** input:
-  - lowercased gRPC header names in the five `Header*CredentialBridge` bridges;
-  - lowercased enum names (`ViewMaintainerGrain` WAL-saturation state,
-    `LatticeApiMcpGroupCapabilityMap` group name);
+  - lowercased gRPC header names - the credential-header lookup in each gRPC
+    facade's header credential bridge, and the active-tenant header lookups;
+  - lowercased enum names (the view maintainer's WAL-saturation metric tag, the
+    MCP head's tool-group name, and the Explorer UI's display and CSS-class
+    labels);
   - a boolean-ish config token in `EnvironmentExplorerBootstrap`
-    (`"true"` / `"false"`);
-  - lowercased hex digest strings in `RestoreSagaDispatcher`.
+    (`"1"` / `"true"` / `"yes"` / `"on"`);
+  - lowercased hex digest strings (the replication restore saga's deterministic
+    ids).
   ASCII invariant casing is code-point based and does **not** consult ICU, so it
   behaves identically with or without ICU.
 - Every remaining culture reference pins `CultureInfo.InvariantCulture`

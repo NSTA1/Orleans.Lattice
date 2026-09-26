@@ -14,7 +14,7 @@ chosen against five criteria:
 
 | Criterion | IVF as built | Graph alternative |
 |---|---|---|
-| Build cost | Bounded k-means over a capped sample, so build cost stops scaling with the corpus past the cap. About 10.7 s for 1,000,000 vectors at dimension 384. | Incremental graph construction, materially heavier and not capped. |
+| Build cost | Bounded k-means over a capped sample, so the iterative refinement stops scaling with the corpus past the cap; the final pass that assigns every vector to its nearest centroid and re-lays the cells still grows with the corpus and the partition count. About 10.7 s for 1,000,000 vectors at dimension 384. | Incremental graph construction, materially heavier and not capped. |
 | Query cost | Sub-linear: `C` centroid comparisons plus `probes * (n / C)`. Measured speedup over exhaustive grows from about 3x at 10,000 to about 14x at 1,000,000. | Also sub-linear, typically with a better constant factor. |
 | Memory per vector | `dimensions * 4 + 12` bytes. No per-vector object header and no adjacency structure. | Adds a whole adjacency graph per vector. |
 | Incremental insert | Assign to the nearest centroid and append. No retrain needed for correctness. | Supported, but each insert mutates shared graph structure. |
@@ -86,9 +86,17 @@ caller-chosen key prefix.
 
 ### Two counters
 
-- A **generation** covers a whole partitioning. Training and rebuilding change
-  every cell's membership, so they write a fresh generation and flip the manifest
-  to it rather than editing the live one.
+- A **generation** covers a whole partitioning. Training - the build's training
+  step and `RetrainAsync` alike - changes every cell's membership, so it writes a
+  fresh generation, flips the manifest to it, and only then deletes the generation
+  it superseded, rather than editing the live one. Each half of that commit
+  records its progress: a retry after a failed write writes only what the failed
+  attempt did not commit (or what has changed since), a retry after a failed
+  delete only deletes, and neither starts yet another generation. A writer that
+  reopens an index whose build committed its new generation but had not finished
+  the delete reports `Persisting` and finishes it on its next build step. A
+  rebuild is different: it deletes every generation first and starts again from
+  the store of record.
 - An **epoch** covers one flush inside a generation. A dirty partition's changed
   chunks are written under a new epoch and committed by rewriting that
   partition's state record, which records the epoch each of its chunks lives
@@ -96,8 +104,9 @@ caller-chosen key prefix.
   leaves an uncommitted epoch the loader ignores and the next flush sweeps, and
   the chunk keys a committed flush superseded are reclaimed after its state swap.
 
-Both are zero-padded so ordinal key order is numeric order, and neither is ever
-reused.
+Both are zero-padded so ordinal key order is numeric order, and neither is reused
+while the index's durable state survives: only a discard - the recovery path, or
+`RebuildAsync` - resets them, and it deletes everything under the prefix first.
 
 ### Write order is the durability mechanism
 

@@ -19,15 +19,13 @@ spec:
   # the autoscaler never scales past regardless of scaleValue.
   minReplicaCount: 1
   maxReplicaCount: 10
-  # pollingInterval should sit at or above the signal's producer-side EWMA
-  # smoothing window so KEDA samples a settled value rather than per-scrape
-  # jitter.
+  # pollingInterval should sit at or above LatticeScalingSignalOptions.SampleInterval
+  # so KEDA does not repeatedly read the same cached sample.
   pollingInterval: 30
-  # cooldownPeriod is the scale-to-min idle delay. Scale-in stabilization is
-  # configured under advanced.horizontalPodAutoscalerConfig below; because
-  # scaleValue is already EWMA-smoothed on the producer side, a shorter
-  # stabilization window is safe. Do not stack a long stabilization window on
-  # top of a long EWMA or scale-in lags twice.
+  # cooldownPeriod applies only when KEDA scales the target to 0; ordinary scale-in
+  # toward minReplicaCount is governed by the HPA behavior below. Because scaleValue
+  # is already EWMA-smoothed and gated on the producer side, choose the HPA
+  # stabilization window deliberately; stacking long windows makes scale-in lag twice.
   cooldownPeriod: 60
   advanced:
     horizontalPodAutoscalerConfig:

@@ -15,7 +15,8 @@
           "media/**",
           "figures/**",
           "llms.txt",
-          "llms-full.txt"
+          "llms-full.txt",
+          "docs/*/llms-full.txt"
         ],
         "src": "src"
       }

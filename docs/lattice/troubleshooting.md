@@ -47,9 +47,21 @@ foreach (var split in report.RecentSplits)
 }
 ```
 
-`deep: false` is the cheap mode and is safe to poll. `deep: true` is the mode
-that produces tombstone counts; see [the traps below](#traps-when-reading-a-report)
-before you draw a conclusion from a shallow report.
+`deep: true` is the mode that produces tombstone counts; see
+[the traps below](#traps-when-reading-a-report) before you draw a conclusion
+from a shallow report. Neither mode is asymptotically cheaper: both walk every shard's
+whole leaf chain, and `deep: true` only reads each leaf's tombstone count
+alongside its live count (see [Diagnostics](diagnostics.md#shallow-vs-deep)).
+What makes a dashboard poll affordable is the per-mode report cache described
+in the traps.
+
+On a cluster that registers the authorization add-on, `DiagnoseAsync` - and
+`GetStorageUsageAsync`, used further down - is authorized as a read of the
+whole tree. Run the investigation as a caller whose grant covers the whole
+tree: a grant scoped to a key prefix or single keys is refused with
+`LatticeAuthorizationDeniedException` rather than narrowed, because the
+report's per-shard counts would still disclose the keys they counted. See
+[Diagnostics](diagnostics.md#operational-notes).
 
 ---
 
@@ -59,7 +71,7 @@ before you draw a conclusion from a shallow report.
 
 | Field | What a healthy value looks like | What an unhealthy value points at |
 |---|---|---|
-| `ShardCount` | The tree's physical shard count. Stable between reshards. | A value you did not expect means you are looking at a different tree than you think, or a reshard changed the topology. See [Online reshard](online-reshard.md). |
+| `ShardCount` | The tree's physical shard count. It rises by one with each committed split - adaptive, or driven by an online reshard - and falls when automatic shard healing folds an over-split tree back towards its registry-pinned base shard count. | A value you did not expect means you are looking at a different tree than you think, or splits or healing changed the topology: check `RecentSplits` and `orleans.lattice.shard.splits_committed`. See [Shard splitting](shard-splitting.md), [Online reshard](online-reshard.md), and [`ShardHealingEnabled`](configuration.md#shardhealingenabled). |
 | `VirtualShardCount` | A compile-time constant (4096). Persisted shard maps reference virtual slots by index, so it is not configurable. | Nothing to act on - it is the routing map's resolution, not a load signal. See [Tree sizing](tree-sizing.md). |
 | `TotalLiveKeys` | Tracks your expected working-set size. | Growth that outruns your model points at [Slow scans](#slow-scans) and admission headroom. Compare against `LatticeOptions.MaxLiveKeys` if you have set one. |
 | `TotalTombstones` | Small relative to `TotalLiveKeys`. | A large share of the total points at [tombstone bloat](#slow-scans). Only populated when `deep: true`. |
@@ -73,14 +85,14 @@ before you draw a conclusion from a shallow report.
 | Field | What a healthy value looks like | What an unhealthy value points at |
 |---|---|---|
 | `Depth` | `0` for a shard with no root yet, `1` while the root is still a leaf, and small (single digits) once the shard has internal levels. | Depth climbing across shards means the shards hold far more keys than the tree was sized for. See [Tree sizing](tree-sizing.md) and [Tree structure](tree-structure.md). |
-| `RootIsLeaf` | `true` on a small or new shard, `false` once the shard has grown past one leaf. | Not a fault on its own; read it alongside `Depth`. |
-| `LiveKeys` | Roughly even across shards. | A shard carrying many times its peers' keys is a key-distribution problem, not a load problem. Review your key design; see [Tree structure](tree-structure.md). |
+| `RootIsLeaf` | `true` while the shard's root is still a single leaf, `false` once the shard has grown past one leaf. A shard with no root yet (`Depth = 0`) also reports `false`. | Not a fault on its own; read it alongside `Depth`. |
+| `LiveKeys` | In proportion to the virtual slots each shard owns: roughly even on a tree that has never split. A split moves half of the source shard's slots to a new shard, so each of the two then holds about half the keys of an unsplit peer. | Keys are placed by hashing the whole key into a virtual slot, so key design cannot concentrate keys on one shard. Uneven counts that track slot ownership are the footprint of past splits and healing, not a fault; see [Shard splitting](shard-splitting.md). |
 | `Tombstones` / `TombstoneRatio` | Low. `0.0` on a tree that never deletes. | A high ratio means deleted rows are still being walked on every scan. See [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md). |
 | `OpsPerSecond` | Comparable across shards. | One shard far above its peers is a hot shard - the exact condition adaptive splitting exists to relieve. See [Concurrent split activity](#concurrent-split-activity). |
 | `Reads` / `Writes` | The raw counters `OpsPerSecond` is derived from, over `HotnessWindow`: `(Reads + Writes) / HotnessWindow.TotalSeconds`. | A read-heavy shard and a write-heavy shard need different remedies; the split between the two counters tells you which you have. |
-| `HotnessWindow` | The sampling window the counters cover. | `TimeSpan.Zero` makes `OpsPerSecond` meaningless (it is reported as `0.0`); the shard has not accumulated a window yet. |
+| `HotnessWindow` | The window the counters cover: the time since the shard activated, so it restarts when the shard deactivates. Positive on every shard that answered the fan-out. | Exactly `TimeSpan.Zero` marks the placeholder entry of a shard whose diagnostics call failed (`OpsPerSecond` then reads `0.0`); see [the traps](#traps-when-reading-a-report). A very short window means the shard activated recently, so its counters and `OpsPerSecond` cover only that span. |
 | `SplitInProgress` | `false` on a stable tree. | `true` means this shard is the source of an in-flight split - adaptive, or driven by an online reshard. Normal if transient; see [Concurrent split activity](#concurrent-split-activity). |
-| `BulkOperationPending` | `false` on a stable tree. | `true` means the shard is holding a pending bulk graft. Normal during a bulk load; see [Bulk loading](bulk-loading.md). |
+| `BulkOperationPending` | `false` on a stable tree. | `true` means the shard has recorded a bulk-load graft it has not finished linking in: normal while a chunk of an append-based bulk load grafts, and cleared by the shard's next read or write if the graft was interrupted. While any shard reports it, autonomic splitting is suspended for the whole tree. See [Bulk loading](bulk-loading.md). |
 
 ### A worked reading
 
@@ -124,11 +136,13 @@ These are the report behaviours that most often lead to a wrong conclusion.
   diagnostics call throws, the aggregator logs a warning
   (`Diagnostics fan-out failed for shard {ShardIndex} in tree {TreeId}`) and
   substitutes an entry carrying only the shard index - every other field is
-  its default. An entry with `Depth = 0`, `LiveKeys = 0`, and
-  `HotnessWindow = TimeSpan.Zero` is therefore either a genuinely empty shard
-  or an unreachable one, and the silo log is the only way to tell them apart.
-  If one shard reads as empty on a tree you know holds data, check the log
-  before concluding the data is gone.
+  its default. A genuinely empty shard also reports `Depth = 0` and
+  `LiveKeys = 0`, but its `HotnessWindow` is positive, because a shard that
+  answers always reports the time since it activated. An entry whose
+  `HotnessWindow` is exactly `TimeSpan.Zero` is therefore the placeholder for
+  a shard that did not answer, and the silo log carries the exception. If one
+  shard reads as empty on a tree you know holds data, check `HotnessWindow`
+  and the log before concluding the data is gone.
 - **Reports are cached per mode.** Shallow and deep results are cached
   independently for `DiagnosticsCacheTtl` (default 5 s), so a shallow poll
   never refreshes the deep report and vice versa. `SampledAt` tells you how old
@@ -151,8 +165,10 @@ These are the report behaviours that most often lead to a wrong conclusion.
   `orleans.lattice.shard.splits_committed` counter in [Metrics](metrics.md) is
   the record that survives a deactivation.
 - **A split commit invalidates both cached reports.** Recording a split clears
-  the shallow and deep caches, so the report you take immediately after a split
-  is always freshly fanned out.
+  the shallow and deep caches, so the first report after the split is recorded
+  is freshly fanned out. The split coordinator sends that record best-effort
+  and does not wait for it, so if it is lost the cached report simply lives out
+  its TTL (see [Diagnostics](diagnostics.md#recent-splits)).
 
 ### What the report does not tell you
 
@@ -162,7 +178,7 @@ bytes, no latency percentiles, and no cache hit ratio. For those:
 | Question | Where to look |
 |---|---|
 | How many bytes is this tree holding? | `ILattice.GetStorageUsageAsync`; see [Tree storage](tree-storage.md). |
-| Is `storage_leaf_state_bytes` / `storage_snapshot_bytes` really zero, or just unmeasured? | `orleans.lattice.storage.usage_deep_published`: no series means the tree is unobserved, `0` means only the WAL-only poller has run so those gauges report no data, `1` means a deep publish ran and a zero is a real zero. See [Tree storage](tree-storage.md#self-populating-gauges-in-a-multi-silo-cluster). |
+| Is `orleans.lattice.storage.leaf_state_bytes` / `storage.snapshot_bytes` really zero, or just unmeasured? | `orleans.lattice.storage.usage_deep_published`: no series means the tree is unobserved, `0` means only the WAL-only poller has run so those gauges report no data, `1` means a deep publish ran and a zero is a real zero. See [Tree storage](tree-storage.md#self-populating-gauges-in-a-multi-silo-cluster). |
 | How slow are reads and writes? | The `orleans.lattice.get.duration` / `set.duration` histograms in [Metrics](metrics.md). |
 | Is the read cache helping? | `orleans.lattice.cache.hits` and `orleans.lattice.cache.misses`. |
 | Is the WAL backing up? | [WAL saturation signal](wal-saturation-signal.md) and [WAL tuning](wal-tuning.md). |
@@ -174,9 +190,11 @@ bytes, no latency percentiles, and no cache hit ratio. For those:
 
 ### Symptom
 
-A write fails with an exception thrown by the Orleans storage provider rather
-than by Lattice, surfacing from the provider's `WriteStateAsync`. The failure
-is usually reproducible for a particular key or leaf and unaffected by retry.
+A write fails with an exception thrown by a storage provider rather than by
+Lattice: the WAL provider's append when the mutation's WAL row is too large, or
+the Orleans grain-storage provider's `WriteStateAsync` when a grain-state row
+is. The failure is usually reproducible for a particular key or leaf and
+unaffected by retry.
 
 ### Likely cause
 
@@ -184,8 +202,11 @@ Lattice persists a tree across several storage rows, and each one is bounded
 independently by the provider's per-row or per-blob limit:
 
 - **The WAL row**, written once per mutation. Its size grows with the key and
-  value you wrote, plus causal metadata.
-- **The leaf snapshot blob**, capturing a leaf's live entries. Its size grows
+  value you wrote, plus causal metadata. On the Azure Table WAL provider the
+  whole encoded entry is stored in one binary property, which Azure Table caps
+  at 64 KiB.
+- **The leaf snapshot blob**, capturing every entry a leaf holds - tombstones
+  included, until compaction reaps them. Its size grows
   with the entries the leaf holds, which are bounded by that tree's pinned
   `MaxLeafKeys` and by `LatticeOptions.MaxLeafBytes` (default 64 MiB). A
   payload larger than `LeafSnapshotSegmentBytes` (default 4 MiB) is written
@@ -237,9 +258,11 @@ Two things this is *not*:
 ### How to fix
 
 - **Bound what callers can write, at the edge.** Both guards are opt-in and
-  both default to `null`; each throws an `ArgumentException` before the write
-  reaches storage, which is a far better failure than a provider error deep in
-  the persistence path:
+  both default to `null`; on `SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`,
+  `SetManyAsync` and the CRDT delta paths each throws an `ArgumentException`
+  before the write reaches storage, which is a far better failure than a
+  provider error deep in the persistence path. The bulk-load paths do not
+  check them:
 
   ```csharp verify
   siloBuilder.ConfigureLattice("orders", options =>
@@ -270,11 +293,14 @@ Two things this is *not*:
   same named grain-storage provider as the rest of the tree, so the levers
   there are `LeafSnapshotSegmentBytes`, `MaxLeafKeys`, `MaxLeafBytes`, the
   value sizes you write, and swapping that provider.
-- **Turn on admission control** so the tree refuses writes with a typed,
-  actionable `LatticeQuotaExceededException` before it grows into provider
-  limits, rather than after. See `MaxLiveKeys`, `MaxEstimatedBytes`, and the
-  non-enforcing `AdmissionAdvisoryLiveKeys` / `AdmissionAdvisoryBytes`
-  dry-run ceilings in [Configuration](configuration.md).
+- **Admission control caps total growth, not row size.** `MaxLiveKeys` and
+  `MaxEstimatedBytes` make the tree refuse point, batch and CRDT writes with a
+  typed, actionable `LatticeQuotaExceededException` once the whole tree
+  reaches a ceiling, and the non-enforcing `AdmissionAdvisoryLiveKeys` /
+  `AdmissionAdvisoryBytes` dry-run ceilings help you size them; see
+  [Configuration](configuration.md). They bound the tree's total footprint,
+  not any single row, and the bulk-load paths do not check them, so they
+  complement the fixes above rather than replace them.
 
 ---
 
@@ -298,8 +324,11 @@ per-shard throughput and triggers when a shard's observed operations per second 
 surfaces as `OpsPerSecond`, so the report shows you exactly what the splitter
 is reacting to. `AutoSplitEnabled` defaults to `true`.
 
-`BulkOperationPending` is the analogous flag for a pending bulk graft, set
-while a [bulk load](bulk-loading.md) is staged but not yet committed.
+`BulkOperationPending` is the analogous flag for a pending bulk graft. An
+append-based [bulk load](bulk-loading.md) records each chunk's graft on the
+shard before linking it in and clears it once the graft completes, so the flag
+is normally set only while a chunk is grafting; an interrupted graft is
+finished by the next read or write that reaches the shard.
 
 **A split in progress is normal operation, not a fault.** Callers do not see
 topology exceptions during one: routing staleness is caught and retried inside
@@ -339,17 +368,23 @@ Then decide which case you are in:
 
 For the last two cases, the metrics tell you which: `orleans.lattice.split.in_flight`
 shows what is actually running; `orleans.lattice.split.candidates_suppressed`
-counts hot, eligible shards held back because a concurrency cap
-(`MaxConcurrentAutoSplits` or `MaxClusterConcurrentAutoSplits`) was already
-reached; `orleans.lattice.split.admission.deferred` counts hot shards the
+counts hot, eligible shards a monitor pass found but could not start, because
+the per-tree cap (`MaxConcurrentAutoSplits`) had fewer free slots than
+candidates or the cluster-wide gate (`MaxClusterConcurrentAutoSplits`) withheld
+a slot; `orleans.lattice.split.admission.deferred` counts hot shards the
 admission policy held back, by `reason`: `cluster_cap` (the cluster-wide
 gate), `uniform_load` (the whole tree is hot - typically a bulk ingest - so a
-split would relieve nothing), `low_occupancy` (too few live entries to
-redistribute), or `shard_ceiling` (the tree's physical shard ceiling); and
-`orleans.lattice.shard.splits_committed` counts the splits that completed. A
-shard held off by the minimum tree age, by the per-shard cooldown, or because
-it owns fewer than two virtual slots is counted on neither. See
-[Metrics](metrics.md).
+split would relieve nothing; governed by `HotShardMinSkewRatio`),
+`low_occupancy` (too few live entries to redistribute; `HotShardMinShardEntries`),
+or `shard_ceiling` (the tree's physical shard ceiling; `MaxPhysicalShardsPerTree`);
+and `orleans.lattice.shard.splits_committed` counts the splits that completed.
+A pass that starts with the per-tree cap already fully occupied evaluates no
+candidates at all, so while `split.in_flight` sits at `MaxConcurrentAutoSplits`
+a hot shard waiting its turn is counted on neither counter. Nor is a shard held
+off by the minimum tree age, by the per-shard cooldown, or because it owns
+fewer than two virtual slots, or any shard while a pass is suspended outright
+because a resize, reshard, merge or snapshot is in flight or a shard holds a
+pending bulk graft. See [Metrics](metrics.md).
 
 ### How to fix
 
@@ -363,15 +398,21 @@ it owns fewer than two virtual slots is counted on neither. See
   `orleans.lattice.split.admission.deferred`: `uniform_load` means the whole
   tree is hot, so splitting would not help.
 - **Splits triggering too eagerly on a bursty workload**: raise
-  `HotShardOpsPerSecondThreshold`, or lengthen `HotShardSampleInterval`
-  (default 30 s) so a short burst does not look like sustained load.
+  `HotShardOpsPerSecondThreshold`. The rate the splitter compares against it
+  is averaged over the shard's whole activation (the same `HotnessWindow` the
+  report shows), not over one sampling interval, so a short burst barely moves
+  it on a long-lived shard but dominates it on a recently activated one.
+  Lengthening `HotShardSampleInterval` (default 30 s) only makes the monitor
+  poll less often; it does not change the window the rate is averaged over.
 - **The split itself is too disruptive**: lower `SplitDrainBatchSize`
   (default 1024) to make each drain step smaller, at the cost of a longer
   overall split.
-- **Splitting cannot fix an uneven `LiveKeys` distribution.** Splitting
-  redistributes virtual shards to relieve *request* load. If one shard holds
-  many times its peers' keys, the key design is skewed and no amount of
-  splitting will even it out.
+- **Uneven `LiveKeys` needs no fix.** Splitting redistributes virtual slots
+  to relieve *request* load, and each split itself leaves the source shard and
+  its new sibling holding about half the keys of an unsplit peer. Placement
+  hashes the whole key, so key design cannot concentrate keys on one shard: a
+  `LiveKeys` column that is uneven in proportion to slot ownership is the
+  footprint of past splits.
 
 ---
 
@@ -410,7 +451,10 @@ Four things dominate scan cost:
 - **Watch `orleans.lattice.leaf.scan.duration`** to see whether the time is
   going into per-leaf work, and `orleans.lattice.leaf.tombstone.ratio` for the
   distribution of per-leaf ratios within each tree (the histogram is tagged by
-  tree, not by leaf). See [Metrics](metrics.md).
+  tree, not by leaf, and is sampled only when a compaction pass visits a leaf -
+  by default once per `TombstoneGracePeriod`, or on demand through
+  `CompactShardAsync` - so it can trail a deep report by up to that period).
+  See [Metrics](metrics.md).
 - **Compare per-shard figures in the report.** Because every scan fans out to
   every shard, the slowest shard sets the pace. Look for the shard whose
   `TombstoneRatio` or `OpsPerSecond` is the outlier and treat that shard as the
@@ -458,14 +502,17 @@ Four things dominate scan cost:
   and the round-trip count dominates.
 
 If a scan does not just run slowly but *fails*, that is a different problem.
-Strongly-consistent scans (`CountAsync`, `KeysAsync`, `EntriesAsync`) reconcile
-against shard-map changes that land mid-scan, bounded by `MaxScanRetries`
-(default 3); exhausting the budget throws an `InvalidOperationException` whose
-message names the operation and tells you to raise `MaxScanRetries` or reduce
-concurrent split activity. If you see it, read [Concurrent split
+Strongly-consistent scans (`CountAsync`, `CountPerShardAsync`, `KeysAsync`,
+`EntriesAsync`) reconcile against shard-map changes that land mid-scan, bounded
+by `MaxScanRetries` (default 3); exhausting the budget throws an
+`InvalidOperationException` whose message names the operation and tells you to
+raise `MaxScanRetries` or reduce concurrent split activity. If you see it, read [Concurrent split
 activity](#concurrent-split-activity) first - the scan is a symptom of the
-topology churn, not the cause. See [Consistency](consistency.md) for the
-enumeration guarantees.
+topology churn, not the cause. `GetManyAsync` spends the same budget when a
+shard-map change or a concurrently committing atomic-write saga races its
+batched read; its exhaustion message tells you to reduce the concurrent saga
+rate instead. See [Consistency](consistency.md) for the enumeration
+guarantees.
 
 ---
 
@@ -523,10 +570,11 @@ Two secondary checks:
 
 - `orleans.lattice.cache.hits` and `orleans.lattice.cache.misses` in
   [Metrics](metrics.md) tell you whether the cache is answering at all.
-- If you have set `MaxCacheValueBytes`, large payloads are evicted **value
-  first** while their metadata envelope stays resident; a read landing on an
-  evicted payload transparently fetches from the primary and counts as a miss.
-  That costs an RPC but cannot return a stale value.
+- If you have set `MaxCacheValueBytes`, the cache evicts value payloads only -
+  least recently used first, once the payload bytes it holds for a leaf exceed
+  the budget - while each row's metadata envelope stays resident; a read
+  landing on an evicted payload transparently fetches from the primary and
+  counts as a miss. That costs an RPC but cannot return a stale value.
 
 ### How to fix
 
@@ -563,14 +611,16 @@ Two secondary checks:
 
 | Symptom | Section |
 |---|---|
-| Provider exception out of `WriteStateAsync` | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) |
+| Provider exception from a WAL append or `WriteStateAsync` | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) |
 | `LatticeQuotaExceededException` on write | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) (admission control, not a provider limit) |
 | Repeating "Proactive snapshot capture ... failed" warning | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) |
 | One shard far hotter than its peers | [Concurrent split activity](#concurrent-split-activity) |
 | `SplitInProgress` stuck on for a long time | [Concurrent split activity](#concurrent-split-activity) |
 | `BulkOperationPending` stuck on | [Concurrent split activity](#concurrent-split-activity) and [Bulk loading](bulk-loading.md) |
 | Scan latency climbing while live keys stay flat | [Slow scans](#slow-scans) |
-| `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity) |
+| `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity); from `GetManyAsync`, concurrent [atomic writes](atomic-writes.md) |
+| `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry |
+| Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |
 | Read returns an overwritten value | [Stale reads and cache behaviour](#stale-reads-and-cache-behaviour) |
 | One shard reports all zeros on a tree that holds data | [Traps when reading a report](#traps-when-reading-a-report) |

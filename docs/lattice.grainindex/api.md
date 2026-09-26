@@ -48,7 +48,7 @@ See [Configuration](configuration.md) for defaults and semantics.
 | `IGrainIndexQuery<TGrain>` | A planned, immutable query. See below. |
 | `GrainIndexQueryExecution` | `DurableCursor` (default), `Stream`, `SnapshotCursor`. |
 | `GrainIndexMatch` | A matched grain paired with the entry that matched it. |
-| `GrainIndexQueryDefaults` | The default page size and execution mode. |
+| `GrainIndexQueryDefaults` | The defaults a planned query starts from: `PageSize` (`256`) and `Execution` (`DurableCursor`). |
 
 ### `IGrainIndexQuery<TGrain>`
 
@@ -76,7 +76,7 @@ See [Queries](queries.md).
 | `GrainIndexBackfillState` | `NotStarted`, `Running`, `Paused`, `Completed`, `Failed`. |
 | `GrainIndexBackfillStatus` | A crawl's state, checkpoint, and progress. |
 | `GrainIndexBackfillBatchResult` | The outcome of one pass. |
-| `GrainIndexProgress` | Processed count, optional total, and percentage. |
+| `GrainIndexProgress` | Processed count, optional total and percentage, the last key visited (`LastProcessedKey`, the crawl's resume point), and why the last pass failed (`LastError`, retained across a resume). |
 
 See [Backfill](backfill.md).
 
@@ -87,7 +87,7 @@ See [Backfill](backfill.md).
 | `IGrainIndexAdmin` | `DeclaredIndexes`, `GetStatusAsync`, `ListStatusAsync`, `PauseBackfillAsync`, `ResumeBackfillAsync`, `RebuildAsync`, `RunBackfillPassAsync`. |
 | `GrainIndexStatus` | `IndexName`, `Definition`, `Registered`, `Fingerprint`, `KeyCodecId`, `NeedsBackfill`, `Drift`, `Backfill`, `Progress`, `EntryCount`. |
 | `GrainIndexDriftStatus` | Whether the declaration drifted, and on which fields. |
-| `GrainIndexMetrics` | Instrument names, tag names, and tag values. |
+| `GrainIndexMetrics` | `MeterName` and `Meter` - the shared core meter (`LatticeMetrics.Meter`), not a package meter - plus the eight instruments and their names, the tag names and `path` values, and `IndexTag(string)`, which caches one `index` tag per index name. |
 
 See [Observability](observability.md).
 

@@ -29,7 +29,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// workspace mode the read-only
 /// <c>repocontext_list_repos</c> is added and the single-repository
 /// <c>repocontext_bootstrap</c> is replaced by the mutating
-/// <c>repocontext_add_repo</c> and <c>repocontext_remove_repo</c>.
+/// <c>repocontext_add_repo</c>, <c>repocontext_reset_index</c>, and
+/// <c>repocontext_remove_repo</c>.
 /// </para>
 /// <para>
 /// The tool list is built <b>once</b> in the constructor, so the per-session
@@ -51,8 +52,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// <see langword="true"/> the host mounts a broad parent workspace read-only
     /// and the client manages repositories dynamically: the read-only
     /// <c>repocontext_list_repos</c> is added, and <c>repocontext_bootstrap</c> is
-    /// replaced by the workspace-scoped <c>repocontext_add_repo</c> and
-    /// <c>repocontext_remove_repo</c>.
+    /// replaced by the workspace-scoped <c>repocontext_add_repo</c>,
+    /// <c>repocontext_reset_index</c>, and <c>repocontext_remove_repo</c>.
     /// </para>
     /// The tools resolve any collaborators from the request service provider at
     /// call time, so no per-session state is captured here.

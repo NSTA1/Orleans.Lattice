@@ -686,16 +686,17 @@ public static class LatticeMetrics
             description: "Individual records written by a shard root, incremented by the entry count of each write operation (1 for a single-key write, the batch size for SetManyAsync / MergeManyAsync / bulk load, the affected count for DeleteRangeAsync / SetManyWherePredicateAsync). The per-record companion to orleans.lattice.shard.writes.");
 
     /// <summary>
-    /// Counter incremented once per <c>IShardRootGrain.GetShardProjectionDigestAsync</c>
-    /// call, tagged with <see cref="TagTree"/> and <see cref="TagShard"/>. Lets operators
-    /// (and integration tests) verify that a whole-tree poll of
+    /// Counter incremented once per shard-root projection-digest read, tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>. Covers both whole-shard
+    /// digest reads and public key-range digest reads. Lets operators (and
+    /// integration tests) verify that a whole-tree poll of
     /// <see cref="ILattice.GetLeafProjectionDigestAsync"/> issues exactly one grain
     /// call per physical shard - the chained-fold design's headline operational
     /// invariant - rather than degrading to an O(shardCount x leafCount) walk.
     /// </summary>
     public static readonly Counter<long> ShardDigestReads =
         Meter.CreateCounter<long>("orleans.lattice.shard.digest_reads", unit: "{op}",
-            description: "Projection-digest reads served by a shard root (one per GetShardProjectionDigestAsync call).");
+            description: "Projection-digest reads served by a shard root, covering whole-shard and key-range digest reads.");
 
     /// <summary>
     /// Counter incremented once for every leaf-side projection-digest decision
@@ -1817,10 +1818,9 @@ public static class LatticeMetrics
         new(TagTrigger, "ceiling");
 
     /// <summary>
-    /// <see cref="TagTrigger"/> value on <see cref="WalCompactions"/> for the
-    /// unconditional activation-time compaction. Note this fires only when a
-    /// WAL shard grain activates, so it never rescues an actively-written tree,
-    /// whose shard grain does not deactivate.
+    /// <see cref="TagTrigger"/> value on <see cref="WalCompactions"/> for
+    /// recovery reconciliation: activation-time compaction after a shard load and
+    /// the resync path that runs after a provider failure.
     /// </summary>
     public static readonly KeyValuePair<string, object?> WalCompactionTriggerReconcile =
         new(TagTrigger, "reconcile");
@@ -9462,12 +9462,15 @@ public static class LatticeMetrics
     /// Counter incremented once per per-tree WAL saturation-state
     /// transition observed by the silo-scoped sampler. Tagged with
     /// <see cref="TagTree"/>, <see cref="TagWalSaturationState"/>
-    /// (the new state), and
-    /// <see cref="TagWalSaturationPreviousState"/> (the state the tree
-    /// was in before the transition). Optional <see cref="TagPartition"/>
-    /// and <see cref="TagShard"/> tags are added when the transition
-    /// is attributable to a single partition (admission-depth-driven)
-    /// or shard (dispatch-timeout-driven).
+    /// (the new state), <see cref="TagWalSaturationPreviousState"/> (the state the tree
+    /// was in before the transition), and <see cref="TagWalSaturationCause"/>
+    /// (the sampler input attributed as the cause). Optional <see cref="TagPartition"/>
+    /// and <see cref="TagShard"/> tags are added independently of the cause: the
+    /// partition whenever a WAL partition carried admission depth or parked callers
+    /// on that tick (the highest depth ratio, otherwise the first with parked
+    /// callers), and the shard whenever a shard-attributed input - dispatch
+    /// timeouts, provider failures, flush-latency trips or durable pin-write
+    /// latency trips - advanced in the window (the first such shard observed).
     /// <para>
     /// Wedge-investigation intent: a healthy silo's series is a flat
     /// zero. A rising rate of <c>state=throttled</c> transitions on a
@@ -9483,7 +9486,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalSaturationTransitions =
         Meter.CreateCounter<long>("orleans.lattice.wal.saturation.transitions", unit: "{transition}",
-            description: "Count of per-tree WAL saturation-state transitions observed by the silo-scoped sampler.");
+            description: "Count of per-tree WAL saturation-state transitions observed by the silo-scoped sampler, tagged by tree, new state, previous state, cause, and optional partition/shard attribution.");
 
     /// <summary>
     /// Instrument name of the observable gauge that reports the current
@@ -9735,29 +9738,27 @@ public static class LatticeMetrics
             description: "Per-tree autonomic splits in flight, sampled every monitor pass (sum across tree for the cluster total).");
 
     /// <summary>
-    /// Counter of hot, otherwise-eligible shards that could not trigger an
-    /// autonomic split this pass because a concurrency cap (the per-tree
-    /// <see cref="LatticeOptions.MaxConcurrentAutoSplits"/> or the cluster-wide
-    /// <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>) was already
-    /// reached. Tagged with <see cref="TagTree"/>. Emitted regardless of whether
-    /// the cluster gate is enabled; a chronically non-zero value across many
-    /// trees signals aggregate split pressure the per-tree cap alone cannot see.
+    /// Counter of hot shards that passed the admission filters but could not start
+    /// because candidate count exceeded the remaining per-tree slots, or because the
+    /// cluster gate granted fewer slots than requested. If the per-tree cap is
+    /// already full before candidates are evaluated, no candidate is counted here.
+    /// Tagged with <see cref="TagTree"/>.
     /// </summary>
     public static readonly Counter<long> SplitCandidatesSuppressed =
         Meter.CreateCounter<long>("orleans.lattice.split.candidates_suppressed", unit: "{shard}",
-            description: "Hot eligible shards that could not split this pass because a concurrency cap was reached.");
+            description: "Hot shards admitted as candidates but not started because they exceeded remaining per-tree slots or cluster-gate grants; a full per-tree cap before candidate evaluation records no shard here.");
 
     /// <summary>
-    /// Counter incremented only when the <em>cluster-wide</em> admission gate
-    /// denied an otherwise-eligible autonomic split (no permit available under
-    /// <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>). Tagged with
-    /// <see cref="TagTree"/> and <see cref="TagReason"/> (<c>cluster_cap</c>).
-    /// Flat-zero means the ceiling never binds; sustained non-zero alongside
-    /// rising hot-shard latency means the ceiling is set too low.
+    /// Counter incremented for shards deferred by explicit admission filters. The
+    /// <c>cluster_cap</c> arm records candidate shards held back by the cluster-wide
+    /// gate after candidates were evaluated; <c>uniform_load</c>,
+    /// <c>low_occupancy</c>, and <c>shard_ceiling</c> record shards rejected by
+    /// those filters. If the per-tree cap is already full before candidate
+    /// evaluation, no shard is counted here.
     /// </summary>
     public static readonly Counter<long> SplitAdmissionDeferred =
         Meter.CreateCounter<long>("orleans.lattice.split.admission.deferred", unit: "{shard}",
-            description: "Otherwise-eligible autonomic splits held back by the cluster-wide admission gate.");
+            description: "Hot shards held back from an autonomic split, by reason: cluster_cap (the cluster-wide gate), uniform_load, low_occupancy, or shard_ceiling. A full per-tree cap before candidate evaluation records no shard here.");
 
     /// <summary><see cref="TagReason"/> = <c>cluster_cap</c> on <see cref="SplitAdmissionDeferred"/>.</summary>
     public static readonly KeyValuePair<string, object?> SplitDeferredClusterCapReasonTag = new(TagReason, "cluster_cap");

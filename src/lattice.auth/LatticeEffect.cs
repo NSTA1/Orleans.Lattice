@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Auth;
 /// The decision an authorization rule contributes when it matches a request:
 /// grant access or forbid it. A matching <see cref="Deny"/> rule takes
 /// precedence over a matching <see cref="Allow"/> rule under the deny-overrides
-/// combination the decision engine applies (implemented by a later feature).
+/// combination the decision engine applies.
 /// </summary>
 public enum LatticeEffect
 {

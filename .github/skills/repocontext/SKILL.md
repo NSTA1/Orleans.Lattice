@@ -30,6 +30,9 @@ to drift. It covers:
   present, silently fall back); plus the two guardrails that make leading with it
   safe (locate with `repocontext` but read the real file with `view`; fall back
   when the index is degraded or stale).
+- **The repo id** - how a `repoId` is derived (the final segment of the indexed
+  path, never your current directory), and why a git worktree still queries the
+  base repository's id.
 - **Retrieval** - `list_topics` (the memory topic map), `search` (relevance, how to
   read the `mode` field, and the
   per-hit `reasons` explaining why a hit ranked), `scan` (ordered completeness over
@@ -59,6 +62,11 @@ to drift. It covers:
 - **Safety and health** - write tools are destructive and fail-closed;
   `repocontext_health` and `repocontext_index_status`; and what a `keyword` /
   `Failed` degraded state means.
+- **Freshness and re-ingest** - the background reconcile that keeps an onboarded
+  repository converged with no client call, and when an explicit `add_repo`
+  re-walk is still worth forcing.
+- **Regions** - the optional `region` argument every tool accepts (omit it to
+  target the current region; see `lattice_list_regions`).
 
 Open that file and follow it directly.
 

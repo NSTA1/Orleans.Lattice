@@ -49,19 +49,19 @@ journald-backed log capture with no scraper indirection.
 | `Silo/Program.cs` | Lattice silo host; TCP listener (or, on Layer 3, cluster ingest) -> the `BENCH_WORKLOAD_MODE` operation (default `ILattice.SetManyAsync`). |
 | `Engine/` | Shared ingest engine both the silo and the Orleans-client producer run: batching, workload dispatch, and the per-second and `FINAL` report lines. |
 | `Producer/Dockerfile`, `Silo/Dockerfile` | Container images for the Layer 3 (Azure Container Apps) rig. |
-| `infra/main.bicep` | VM + NIC (accelerated networking) + NSG + storage account + role assignments. |
+| `infra/main.bicep` | VM + VNet + public IP + NIC (accelerated networking) + NSG + one storage account per `-WalAccountCount` + managed-identity role assignments (Table, Blob and Queue Data Contributor) + the auto-shutdown schedule. |
 | `infra/cloud-init.yaml` | First-boot bootstrap (`.NET 10 SDK`, dotnet diagnostic tools, `/opt/lattice` tree). |
 | `infra/bootstrap.sh` | Manual / fallback bootstrap path; idempotent. |
 | `infra/lattice-silo.service` | systemd unit template for the silo (placeholders filled in by `update.ps1`). |
 | `infra/lattice-producer.service` | systemd unit template for the co-located producer. |
 | `scripts/parameters.ps1` | Default parameters (subscription, region, prefix, VM size). |
-| `scripts/parameters.local.ps1` | **Gitignored** operator overrides. Created by `deploy.ps1` if missing. |
+| `scripts/parameters.local.ps1` | **Gitignored** operator overrides; create it by copying `parameters.ps1` (no script creates it). The VM-path scripts prefer it over `parameters.ps1` when present; the Layer 3 scripts take no parameters file. |
 | `scripts/deploy.ps1` | End-to-end provision: key gen, `~/.ssh/config`, Bicep deploy, cloud-init wait, bootstrap fallback, chained `update.ps1`. |
 | `scripts/update.ps1` | Inner loop: `git ls-files \| tar \| ssh` -> `dotnet publish` silo+producer on the VM -> `systemctl restart`. |
 | `scripts/run-cohort.ps1` | Single cohort: applies env drop-ins, restarts silo, starts producer, waits for FINAL, extracts journals, prints summary. |
 | `scripts/ladder.ps1` | Thin loop over `run-cohort.ps1` for rung sweeps; writes `.ladder-results.csv`. |
 | `scripts/vm.ps1` | Day-to-day helper: `start` / `stop` / `status` / `ssh` / `logs` / `refresh-ip`. |
-| `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources. |
+| `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
 | `scripts/run-cohort-aca.ps1` | Layer 3: one cohort - by default empties the rig's storage first (`-ResetStorage`), pins the silos to exactly N, runs the producer job, parks the silos at zero, then harvests the producer and silo logs from Log Analytics into one cohort log. |
@@ -70,7 +70,9 @@ journald-backed log capture with no scraper indirection.
 ## One-time setup
 
 1. Sign in to Azure (`az login`).
-2. Copy the parameters template (or just let `deploy.ps1` do it for you):
+2. Copy the parameters template. No script does this for you: without
+   `parameters.local.ps1` the VM-path scripts read the committed `parameters.ps1`, whose
+   blank `SubscriptionId` makes `deploy.ps1` stop.
    ```powershell
    Copy-Item benchmark/azure-throughput/scripts/parameters.ps1 `
 			 benchmark/azure-throughput/scripts/parameters.local.ps1
@@ -93,6 +95,18 @@ To spin up a second environment side-by-side (e.g. an experimental SKU):
 The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becomes
 `lat-exp` so the day-to-day scripts all accept `-NamePrefix lat-exp`.
 
+`deploy.ps1` flags:
+- `-NamePrefix <name>` -- names the resource group (`rg-<name>`), the VM resources and
+  the `~/.ssh/config` host alias.
+- `-VmSize <sku>` -- VM SKU override (`parameters.ps1` defaults to `Standard_D2as_v5`).
+- `-ParametersFile <path>` -- explicit parameters file instead of auto-discovery.
+- `-WalAccountCount <1..8>` -- WAL storage accounts to provision (default 1).
+  `update.ps1` passes the extra accounts' table endpoints to the silo, which
+  registers them as keyed WAL providers (`acct1`, `acct2`, ...), and
+  `BENCH_WAL_ACCOUNTS` (through `-ExtraSiloEnv`) spreads
+  the tree's WAL partitions across that many accounts, clamped to the number
+  provisioned; the silo then logs a `[silo] wal-placement ...` line.
+
 ## Daily workflow
 
 ```powershell
@@ -105,10 +119,11 @@ The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becom
 ```
 
 `update.ps1` flags:
-- `-NoBuild` -- just bounce the silo (no rsync, no publish).
+- `-NoBuild` -- just bounce the silo (no source sync, no publish).
 - `-NoRestart` -- sync + publish, leave the service alone (inspect first).
 - `-Clean` -- wipe `/opt/lattice/publish*` before publishing (force full rebuild).
 - `-SkipUnitSync` -- skip re-rendering the systemd units when only source changed.
+- `-NamePrefix <name>`, `-ParametersFile <path>` -- as for `run-cohort.ps1` below.
 
 `run-cohort.ps1` flags:
 - `-Vehicles <N>` -- synthetic fleet size (default 4000).
@@ -122,11 +137,25 @@ The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becom
 - `-CaptureCounters` -- attach `dotnet-counters` to the silo for the cohort.
 
 Every cohort writes three artefacts under `benchmark/.run/azure-throughput/`:
-- `silo-<cohort>.log` -- silo journal (between cohort start and silo stop)
+- `silo-<cohort>.log` -- silo journal (between cohort start and silo stop), with the
+  runner's verdict block appended
 - `producer-<cohort>.log` -- producer journal
 - `sampler-<cohort>.csv` -- per-second CPU% / RSS samples from the VM
 
 plus `counters-<cohort>.csv` when `-CaptureCounters` is set.
+
+`ladder.ps1` flags:
+- `-Rungs '<vehicles>:<tickHz>',...` -- rungs to sweep (default `1000:5`, `5000:5`,
+  `10000:5`, `20000:5`, `50000:5`).
+- `-DurationSec <N>` -- producer seconds per rung (default 30).
+- `-CooldownSec <N>` -- pause between rungs (default 5).
+- `-ResponseTimeoutSec <N>` -- `BENCH_RESPONSE_TIMEOUT_SEC` for every rung (default
+  180; 30 reproduces the grain-RPC-deadline failure mode).
+- `-ExtraSiloEnv @{...}` -- extra silo env merged into every cohort.
+- `-DegradeThresholdPct <N>` -- stop the sweep once a rung's throughput falls below
+  `(1 - N/100)` of the best rung so far (default 0: never stop early).
+- `-ResultsCsv <path>` -- output CSV (default `scripts/.ladder-results.csv`).
+- `-NamePrefix <name>`, `-ParametersFile <path>` -- as for `run-cohort.ps1`.
 
 ## Workloads
 
@@ -142,8 +171,8 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `cross-tree-atomic-64` | The same cross-tree saga with 64 keys (32 per tree). |
 | `set-point` | One `SetAsync` per key. |
 | `set-point-mv` | `set-point` with an asynchronous materialised view attached to the tree - the A/B partner that shows whether maintaining a view perturbs the source write path. |
-| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys (the silo reads the producer's variable; 0, its default there, skips the pre-seed). In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
-| `get-many` | `GetManyAsync` over the same pre-seeded keyspace. |
+| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
+| `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
 
 In the four atomic modes each saga is its own flush unit: it takes its own
 `BENCH_FLUSH_CONCURRENCY` slot, is retried on its own, and is counted in `ops` or
@@ -252,12 +281,15 @@ the silo wedges, so it is flagged `(drain-inflated; ignore)` on a `WEDGE` verdic
 `Diagnostics` counts `[stall-watchdog] WEDGE DETECTED` bursts, the `[wal-slot*`
 and `[wal-append*` lifecycle token families, exceptions attributable to the cohort,
 and per-second samples that reported failures. A non-zero watchdog, wal-slot, or
-wal-append count indicates a real wedge-shape; combined with a non-zero `failed`
-count it's the evidence triad for re-opening `wedge-plan.md` (see section 23 of
-that file for the policy).
+wal-append count indicates a real wedge-shape. Re-opening `wedge-plan.md` takes the
+evidence triad its section 23.4 sets out: a `[stall-watchdog]` firing, a non-trivial
+dominant `[wal-slot]` / `[wal-append]` lifecycle stage, and no `[silo] grain-rpc-deadline`
+line (failures that come with that line are the harness's own RPC deadline, not a wedge).
 
-`ladder.ps1` produces a CSV with one row per rung covering written, failed,
-active-avg, CPU peak, RSS, verdict, and a UTC timestamp. Default location:
+`ladder.ps1` produces a CSV with one row per rung: vehicles, tickHz, duration,
+written, failed, active seconds, steady mean, active-avg, drain-tail samples, total
+elapsed, silo CPU peak and average, system CPU peak, silo RSS, verdict, and a UTC
+timestamp. Default location:
 `scripts/.ladder-results.csv` (gitignored).
 
 ## Saturation knobs
@@ -280,8 +312,15 @@ current short version, in the order an investigator reaches for them:
 | `BENCH_TX_REGISTRY_SHARDS` | `1` (silo), `8` (via `-TxRegistryShards`) | Saga decision registry shards per tree (`LatticeOptions.TxRegistryShardCount`, [#3501](https://github.com/NSTA1/Orleans.Lattice/issues/3501)). The library default of `1` is the unsharded layout; `run-cohort-aca.ps1` opts in to `8` so atomic cohorts measure the sharded ceiling of about 100 sagas/s per shard. Clamped to `1..256`. |
 | `BENCH_TREE_ID` | rotates per cohort | Pin to re-use an existing WAL partition; otherwise every cohort starts on an empty manifest. |
 
-All of these can be passed via `-ExtraSiloEnv @{ BENCH_FOO = 'bar' }` to
-`run-cohort.ps1`.
+All of these can be passed via `-ExtraSiloEnv @{ BENCH_FOO = 'bar' }` to `run-cohort.ps1`,
+except that the offered rate comes from `-Vehicles` / `-TickHz`: on the silo,
+`BENCH_VEHICLE_COUNT` only sizes the read-mode pre-seed and `BENCH_TICK_HZ` is not read.
+
+The silo and producer read many more `BENCH_*` variables (WAL pipeline and coalescing
+toggles, saturation-sampler thresholds, the leaf-storage kind, multi-account WAL
+fan-out, the Layer 3 clustering knobs). The
+[`azure-throughput-rig` skill](../../.github/skills/azure-throughput-rig/SKILL.md)
+catalogues them; the rig's `Silo/`, `Producer/` and `Engine/` sources are the authority.
 
 ## A/B-ing a WAL optimisation
 
@@ -329,7 +368,8 @@ az group delete --name rg-lat --yes --no-wait
   (the F8-on-VM re-verification cohorts).
 - `throughput.md` -- performance follow-up. Section 25 is the 2026-06-04
   `Standard_F8as_v6` sweep; the later `Standard_D4as_v5` baselines are in sections
-  27, 30, 31 and 34.5. The saturation-knobs catalogue is in `wedge-plan.md`
+  27, 30 and 34.5 (section 31 is the `Standard_D8as_v5` ceiling and section 32 a D4
+  wedge observation). The saturation-knobs catalogue is in `wedge-plan.md`
   section 23.3.
 
 ## Layer 3 (multi-silo, Azure Container Apps)
@@ -387,13 +427,20 @@ marker or no window was productive.
 | `-WalReplayQueueDepth` | `64` | `BENCH_WAL_REPLAY_QUEUE_DEPTH` for the silos. |
 | `-SetManyFanOutBudgetSec`, `-WalAdmissionCallBudgetSec` | `30`, `15` | The two saturation budgets from [Saturation knobs](#saturation-knobs); `0` means infinite, the library default. |
 | `-TxRegistryShards` | `8` | Saga decision registry shards per tree, passed as `BENCH_TX_REGISTRY_SHARDS`. Pass `1` for the unsharded library default. |
-| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default; any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. |
+| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default (see below); any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. The silo honours only a positive coalescing threshold, so `0` for that arm falls back to the default. |
 | `-WalMaterialiserPinBuckets` | `-1` | Floor on the durable pin buckets per pin shard (#3576). `-1` sets nothing, so the silo keeps the library default; any value from `1` up is passed as `BENCH_WAL_MATERIALISER_PIN_BUCKETS`. |
 | `-ResetStorage` | `$true` | Empty the rig's storage before the cohort (above). |
 | `-WalTable`, `-GrainStateTable` | `OrleansLatticeWal`, `OrleansLatticeGrainState` | Table names. Under `-ResetStorage` they are replaced by fresh `Wal<stamp>` / `Gs<stamp>` names unless passed explicitly. |
 | `-TreeId`, `-CohortTag` | generated, none | Tree name (default `l3-<workload>-n<N>-<stamp>`), and a tag that keeps repeated cohorts' logs apart. |
-| `-ExtraSiloEnv` | none | Extra `NAME=value` silo environment variables, applied last. |
+| `-ExtraSiloEnv` | none | Extra `NAME=value` silo environment variables, applied last; a later cohort that does not name them removes them (see below). |
 | `-SettleSec` | `30` | Wait for cluster membership before starting the producer. |
+
+Silo environment variables do not persist across cohorts on one rig. Each cohort applies
+its variables with one `az containerapp update --set-env-vars`, which merges into the app's
+environment, so the same update also passes `--remove-env-vars` for every variable an
+earlier cohort set that this cohort does not name (#3514). Secret-backed variables and the
+`deploy-aca.ps1` baseline are kept. A `-1` arm therefore runs the silo's own default, and
+the removal rides the same update, so each cohort still mints exactly one revision.
 
 Neither script deletes the rig. `performance-report.ps1` tears down the rigs it
 provisions; for a rig deployed by hand, delete `rg-<prefix>` yourself, or dot-source

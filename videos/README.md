@@ -23,11 +23,9 @@ workspace smoke test that proves the toolchain end to end.
 
 ## Getting started
 
-You need Node.js 22 or newer and FFmpeg on your `PATH`. Narration also needs
-Python 3 with Kokoro (`pip install kokoro-onnx soundfile`); if the CLI cannot
-find it, for example because it is in a virtual environment, set
-`HYPERFRAMES_PYTHON` to that interpreter. Docker is optional, for
-byte-reproducible renders.
+You need Node.js 22 or newer and FFmpeg on your `PATH`. Docker is optional,
+for byte-reproducible renders. Narration also needs the series voice's Python
+environment (see [The series voice](#the-series-voice)).
 
 The videos are drawn in the documentation site's design system, which the
 workspace reads from `docs-site/`: its tokens, fonts and mark in
@@ -45,11 +43,41 @@ npm run preview                                   # HyperFrames Studio with live
 npm run check                                     # lint, runtime, layout, motion and WCAG contrast
 npm run render -- --quality draft -o renders/smoke.mp4
 
-npm run narrate -- introduction                   # speak the script, master the track
+npm run narrate -- introduction                   # speak the script, check every clip, master the track
 npm run timeline -- introduction                  # stamp its timing into the composition
 npm run check -- --episode introduction           # check the episode
 npm run render -- --episode introduction --quality draft -o renders/introduction.mp4
 ```
+
+## The series voice
+
+The narration is Emma, read by Chatterbox (Resemble AI, MIT licence) and
+cloned from [voice/reference.wav](voice/reference.wav); the settings are in
+[voice/voice.json](voice/voice.json) and the reasons in
+[series.md, "Voice"](series.md#voice). It runs locally on the CPU, in a Python
+3.11 environment of its own:
+
+```bash
+uv python install 3.11                            # or any Python 3.11
+python3.11 -m venv ~/.venvs/lattice-voice         # outside the repository
+~/.venvs/lattice-voice/bin/python -m pip install -r voice/requirements.txt
+export VIDEOS_VOICE_PYTHON=~/.venvs/lattice-voice/bin/python   # on Windows: ...\Scripts\python.exe
+```
+
+The first narration downloads the voice model (about 3 GB, pinned to one
+revision) and two speech recognisers (about 0.6 GB) from Hugging Face; after
+that it needs no network. `npm run narrate` starts
+[tools/voice_worker.py](tools/voice_worker.py) once, which loads them in a
+minute or two, then speaks each cue and transcribes it; a clip that is not
+heard exactly as the script says it is made again with the next seed. Expect
+the voice to take eight to twenty times as long as the speech it makes, so a
+three-minute episode takes the better part of an hour on a laptop, and a
+re-run speaks only the cues that changed. `VIDEOS_VOICE_THREADS` sets how many
+CPU threads it uses (8 by default).
+
+The first engine, Kokoro, remains available for auditions (`"provider":
+"kokoro"`; `pip install kokoro-onnx soundfile`, and `HYPERFRAMES_PYTHON` when
+the CLI cannot find that interpreter).
 
 ## Commands
 
@@ -63,8 +91,10 @@ npm run render -- --episode introduction --quality draft -o renders/introduction
 | `npm run check:episodes` | `check` on every episode; one not narrated on this machine is checked against silence of its stamped length |
 | `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4` | render an episode; naming the output also writes the render's receipt, a digest of what it was rendered from, which `publish` checks |
 | `npm run render -- --docker ...` | render in Docker (pinned Chromium, fonts and FFmpeg) when output must be byte-reproducible |
-| `npm run narrate -- <slug>` | speak `episodes/<slug>/SCRIPT.md` in the series voice, one cached clip per cue, and master the joined track to the series loudness; also writes the cue timeline and WebVTT captions |
-| `npm run phonemes -- <slug>` | how the voice will read each cue - its spoken form and phonemes - with words that have two readings flagged; run it before narrating (`--flagged` for only those cues) |
+| `npm run narrate -- <slug>` | speak `episodes/<slug>/SCRIPT.md` in the series voice, one cached clip per cue, each heard back by two local recognisers and made again until it matches the script; then master the joined track to the series loudness, and write the cue timeline and WebVTT captions |
+| `npm run review -- <slug> --audio` | a page with the narration alone, every cue listed to play from, highlighting what changed and what the checks could not settle: approve the voice by ear before rendering |
+| `npm run audition -- <slug> <cue>... [--takes N]` | several takes of a line (4 by default), each checked, on a page to listen and pick from; `--pick <cue>=<take>` uses a take in the narration. Takes and picks stay on this machine, under `renders/`; only the published cut is committed |
+| `npm run phonemes -- <slug>` | for the Kokoro engine: how its phonemizer will read each cue, with words that have two readings flagged (`--flagged` for only those cues) |
 | `npm run timeline -- <slug>` | stamp the narration's timeline into the episode's composition (`--check` fails if it is out of date) |
 | `npm run review -- <slug>` | a local review page for the episode's latest render: the player with captions, its size, bit rate and delivered loudness, and the transcript (serve `videos/` over HTTP to watch it) |
 | `npm run voice:samples` | the voice audition set, under `renders/voice-samples/` |
@@ -112,9 +142,10 @@ videos/
     episode.json                    its path, its place on it, its poster's moment, and its published cut
     composition.html                the episode: shared scenes, its words, stamped timing
     assets/                         media no other episode uses, if any
-  voice/                            series voice, audition candidates, pronunciation lexicon, heteronyms
+  voice/                            the series voice: its settings, reference clip, Python environment and lexicon;
+                                    the Kokoro audition candidates, their audition script and heteronyms
   tools/                            workspace tooling and its tests
-  renders/, snapshots/              output, never committed
+  renders/, snapshots/              output, never committed: renders, narration, takes, review pages
 ```
 
 Nothing that belongs to one episode sits at the root, and nothing two episodes
@@ -161,21 +192,25 @@ committed to `docs-site/media/`, which the site plays (`npm run publish`).
 8. **One place for each thing.** An episode's own material stays in its
    folder, anything reused lives once in `shared/`, and nothing goes at the
    root.
-9. **Commit no renders and no narration audio.** What is committed is each
-   episode's published cut, in `docs-site/media/`, which `npm run publish`
+9. **Commit no renders, no narration audio and no takes.** What is committed is
+   each episode's published cut, in `docs-site/media/`, which `npm run publish`
    writes from a reviewed render (see
-   [series.md, Hosting - decided](series.md#hosting---decided)).
+   [series.md, Hosting - decided](series.md#hosting---decided)), and the
+   voice's reference clip, `voice/reference.wav`, which defines the voice.
+   Takes made to pick from (`npm run audition`) live in `renders/takes/`, and a
+   picked take in the local clip cache.
 
 ## CI
 
-The videos lane ([videos.yml](../.github/workflows/videos.yml)) runs on pull
-requests that touch this folder, the companion pages, the published media
-(`docs-site/media`), or the parts of the site it reads
+The videos lane ([videos.yml](../.github/workflows/videos.yml)) is advisory, not a
+required check. It runs on pull requests that touch this folder, the companion
+pages, the published media (`docs-site/media`), the parts of the site it reads
 (`docs-site/template/public`, `docs-site/figures`, `docs-site/pages`,
-`PACKAGES.md`). It runs the unit tests, the ASCII check, the snippet and
-companion-page checks, `lint` and `check` on the smoke test and
-`check:episodes` on every episode, then draft-renders the smoke test and
-uploads it as an artifact. Narration audio is not committed, so CI checks each
+`PACKAGES.md`) or the workflow itself, on pushes to `*/epic/**` integration
+branches that touch the same paths, and by hand. It runs the unit tests, the
+ASCII check, the snippet and companion-page checks, `lint` and `check` on the
+smoke test and `check:episodes` on every episode, then draft-renders the smoke
+test and uploads it as an artifact. Narration audio is not committed, so CI checks each
 episode's pictures, timing and structure against silence of its stamped
 length; hearing it means narrating it locally, or watching its published cut.
 
@@ -185,7 +220,10 @@ gates still scan every file here.
 
 ## Licences
 
-HyperFrames and the Kokoro-82M voice model are Apache-2.0. GSAP is used under
-its standard no-charge licence. None of them is vendored: HyperFrames and GSAP
-arrive from npm, Kokoro's runtime from pip, and the Kokoro-82M model is
-downloaded the first time narration runs.
+HyperFrames and the Kokoro-82M voice model are Apache-2.0. Chatterbox
+(`chatterbox-tts` and its model) and faster-whisper are MIT, and the Whisper
+models it runs are MIT too. GSAP is used under its standard no-charge licence.
+None of them is vendored: HyperFrames and GSAP arrive from npm, the Python
+runtimes from pip, and the models are downloaded the first time narration
+runs. The reference clip, `voice/reference.wav`, is Kokoro's Emma reading this
+series' own script.

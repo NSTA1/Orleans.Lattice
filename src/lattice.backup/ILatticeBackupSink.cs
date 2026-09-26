@@ -2,18 +2,18 @@ namespace Orleans.Lattice.Backup;
 
 /// <summary>
 /// The pluggable storage sink a backup is written to and restored from. A sink
-/// stores two kinds of content: streamed, content-addressed <b>artifacts</b> (the
-/// captured bytes) and the self-describing <b>manifest</b> that describes them.
+/// stores two kinds of content: streamed <b>artifacts</b> (the captured bytes,
+/// addressed by per-capture artifact ids) and the self-describing
+/// <b>manifest</b> that describes them.
 /// The artifact surface is async-streaming-friendly - both write and read move
 /// the payload as an ordered sequence of chunks rather than a single buffered
 /// blob - so the capture engine can stream a large tree without materializing it
 /// whole.
 /// <para>
 /// The default in-cluster implementation dogfoods a reserved <c>sys-backup-*</c>
-/// tree; a durable provider (for example an Azure append-blob backend) is a later
-/// sub-issue that implements this same interface. Artifact ids are expected to be
-/// content-addressed (see <see cref="BackupContentHash"/>) so re-writing identical
-/// content is idempotent and never produces a duplicate.
+/// tree; durable providers implement this same interface. Artifact ids are stable
+/// within a capture and may be retried with identical content; sinks make
+/// re-writing the same id idempotent and never produce a duplicate.
 /// </para>
 /// </summary>
 public interface ILatticeBackupSink
@@ -39,10 +39,9 @@ public interface ILatticeBackupSink
     /// <summary>
     /// Writes an artifact as an ordered stream of chunks under
     /// <paramref name="artifactId"/>. Re-writing the same id with the same content
-    /// is idempotent. When the id is content-addressed, an identical retry is a
-    /// no-op that does not duplicate the artifact.
+    /// is idempotent and does not duplicate the artifact.
     /// </summary>
-    /// <param name="artifactId">The content-addressed artifact id. Must not be <c>null</c> or empty.</param>
+    /// <param name="artifactId">The artifact id. Must not be <c>null</c> or empty.</param>
     /// <param name="content">The ordered chunk stream of the artifact bytes. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentException"><paramref name="artifactId"/> is <c>null</c> or empty.</exception>
