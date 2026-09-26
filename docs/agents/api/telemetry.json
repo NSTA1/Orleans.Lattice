@@ -1,0 +1,600 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "telemetry",
+  "packages": [
+    "Orleans.Lattice.Api.Telemetry",
+    "Orleans.Lattice.Api.Telemetry.Grpc"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#ILatticeTelemetry",
+    "src/lattice.api.telemetry/LatticeTelemetry.cs#LatticeTelemetry",
+    "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#TelemetryTenantScopeResolver",
+    "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#LatticeTelemetryGrpcMethods",
+    "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#LatticeTelemetryGrpcService"
+  ],
+  "in_process": {
+    "interface": "ILatticeTelemetry",
+    "registration": "IServiceCollection.AddLatticeTelemetryApi.",
+    "source": "src/lattice.api.telemetry/LatticeApiTelemetryServiceCollectionExtensions.cs#AddLatticeTelemetryApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.telemetry",
+    "methods_source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#LatticeTelemetryGrpcMethods",
+    "marshalling": "LatticeTelemetryGrpcMarshallers.Create delegates to the Orleans serializer.",
+    "metadata": [
+      {
+        "name": "authorization",
+        "purpose": "Credential token header; the default bridge strips the configured Bearer scheme and stamps a LatticeCredential.",
+        "source": "src/lattice.api.telemetry.grpc/HeaderLatticeTelemetryApiCredentialBridge.cs#HeaderLatticeTelemetryApiCredentialBridge"
+      },
+      {
+        "name": "active tenant header",
+        "purpose": "Configured active tenant assertion header; it is re-validated downstream and never widens telemetry scope by itself.",
+        "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryApiGrpcOptions.cs#ActiveTenantHeaderName"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeTelemetryApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeTelemetryApiAuthorizer",
+      "decision": "Default deny when RequireAuthorization is true; GetAuthScheme is exempt; facade still scopes catalogue and query results server-side.",
+      "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs#LatticeTelemetryApiGrpcAuthInterceptor"
+    }
+  },
+  "types": {
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.telemetry.grpc/Model/AuthSchemeAdvertisement.cs#AuthSchemeAdvertisement"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.telemetry.grpc/Model/AuthSchemeAdvertisementRequest.cs#AuthSchemeAdvertisementRequest"
+    },
+    "AuthSchemeDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Parameters",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.telemetry.grpc/Model/AuthSchemeDescriptor.cs#AuthSchemeDescriptor"
+    },
+    "TelemetryBoundsViolation": {
+      "kind": "enum",
+      "values": [
+        "None",
+        "RangeNotAscending",
+        "StepBelowMinimum",
+        "StepAboveMaximum",
+        "RangeTooLong",
+        "LookbackTooOld",
+        "TooManyPoints"
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryBoundsViolation.cs#TelemetryBoundsViolation"
+    },
+    "TelemetryCatalogRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.telemetry.grpc/Model/TelemetryCatalogRequest.cs#TelemetryCatalogRequest"
+    },
+    "TelemetryDataPoint": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Timestamp",
+          "type": "DateTimeOffset",
+          "required": false
+        },
+        {
+          "name": "Value",
+          "type": "double",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryDataPoint.cs#TelemetryDataPoint"
+    },
+    "TelemetryInstrumentReference": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Meter",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Unit",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Semantic",
+          "type": "TelemetryMeasurementSemantic",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryInstrumentReference.cs#TelemetryInstrumentReference"
+    },
+    "TelemetryLabel": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Value",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryLabel.cs#TelemetryLabel"
+    },
+    "TelemetryMeasurementSemantic": {
+      "kind": "enum",
+      "values": [
+        "Unspecified",
+        "PerOperation",
+        "PerRecord",
+        "PerBatch",
+        "Duration",
+        "Level",
+        "Ratio"
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryMeasurementSemantic.cs#TelemetryMeasurementSemantic"
+    },
+    "TelemetryQueryBounds": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "MinStep",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "MaxStep",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "DefaultStep",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "MaxRange",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "MaxLookback",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "MaxPoints",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryBounds.cs#TelemetryQueryBounds"
+    },
+    "TelemetryQueryCatalog": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Version",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "Queries",
+          "type": "IReadOnlyList<TelemetryQueryDescriptor>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryCatalog.cs#TelemetryQueryCatalog"
+    },
+    "TelemetryQueryDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "QueryId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Title",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Description",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Unit",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "TelemetryQueryKind",
+          "required": false
+        },
+        {
+          "name": "Semantic",
+          "type": "TelemetryMeasurementSemantic",
+          "required": false
+        },
+        {
+          "name": "Parameters",
+          "type": "TelemetryQueryParameters",
+          "required": false
+        },
+        {
+          "name": "Bounds",
+          "type": "TelemetryQueryBounds",
+          "required": false
+        },
+        {
+          "name": "Instruments",
+          "type": "IReadOnlyList<TelemetryInstrumentReference>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryDescriptor.cs#TelemetryQueryDescriptor"
+    },
+    "TelemetryQueryKind": {
+      "kind": "enum",
+      "values": [
+        "Instant",
+        "Range"
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryKind.cs#TelemetryQueryKind"
+    },
+    "TelemetryQueryParameters": {
+      "kind": "enum",
+      "values": [
+        "None",
+        "TimeRange",
+        "Step",
+        "TreeFilter"
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryParameters.cs#TelemetryQueryParameters"
+    },
+    "TelemetryQueryRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "QueryId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Range",
+          "type": "TelemetryTimeRange",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "RequestedVisibility",
+          "type": "TelemetryTenantVisibility",
+          "required": false
+        },
+        {
+          "name": "RequestedTenantId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryRequest.cs#TelemetryQueryRequest"
+    },
+    "TelemetryQueryResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "QueryId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "TelemetryTenantScope",
+          "required": true
+        },
+        {
+          "name": "ResultKind",
+          "type": "TelemetryResultKind",
+          "required": false
+        },
+        {
+          "name": "Series",
+          "type": "IReadOnlyList<TelemetryTimeSeries>",
+          "required": true
+        },
+        {
+          "name": "Range",
+          "type": "TelemetryTimeRange",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryQueryResponse.cs#TelemetryQueryResponse"
+    },
+    "TelemetryResultKind": {
+      "kind": "enum",
+      "values": [
+        "Empty",
+        "Vector",
+        "Matrix",
+        "Scalar"
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryResultKind.cs#TelemetryResultKind"
+    },
+    "TelemetryTenantScope": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "RequestedVisibility",
+          "type": "TelemetryTenantVisibility",
+          "required": false
+        },
+        {
+          "name": "EffectiveVisibility",
+          "type": "TelemetryTenantVisibility",
+          "required": false
+        },
+        {
+          "name": "TenantId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryTenantScope.cs#TelemetryTenantScope"
+    },
+    "TelemetryTenantVisibility": {
+      "kind": "enum",
+      "values": [
+        "ActiveTenant",
+        "AllTenants",
+        "SingleTenant"
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryTenantVisibility.cs#TelemetryTenantVisibility"
+    },
+    "TelemetryTimeRange": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "StartUtc",
+          "type": "DateTimeOffset",
+          "required": false
+        },
+        {
+          "name": "EndUtc",
+          "type": "DateTimeOffset",
+          "required": false
+        },
+        {
+          "name": "Step",
+          "type": "TimeSpan",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryTimeRange.cs#TelemetryTimeRange"
+    },
+    "TelemetryTimeSeries": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Labels",
+          "type": "IReadOnlyList<TelemetryLabel>",
+          "required": true
+        },
+        {
+          "name": "Points",
+          "type": "IReadOnlyList<TelemetryDataPoint>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Telemetry/Model/TelemetryTimeSeries.cs#TelemetryTimeSeries"
+    }
+  },
+  "operations": [
+    {
+      "id": "get-auth-scheme",
+      "in_process": "ILatticeTelemetryApiAuthSchemeSource.GetAdvertisement",
+      "grpc_method": "/orleans.lattice.api.telemetry/GetAuthScheme",
+      "transport_scope": "both",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [],
+      "retry": {
+        "safe": true,
+        "policy": "Unauthenticated read of configured public advertisement.",
+        "source": "src/lattice.api.telemetry.grpc/Security/OptionsLatticeTelemetryApiAuthSchemeSource.cs#GetAdvertisement"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Returns the configured advertised auth schemes and has no side effects.",
+        "source": "src/lattice.api.telemetry.grpc/Security/OptionsLatticeTelemetryApiAuthSchemeSource.cs#GetAdvertisement"
+      },
+      "concurrency": {
+        "rule": "Exempt from the authorization interceptor so clients can discover how to sign in.",
+        "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs#IsUnauthenticatedMethod"
+      },
+      "sources": [
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#GetAuthSchemeMethodName",
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#GetAuthScheme"
+      ]
+    },
+    {
+      "id": "get-catalog",
+      "in_process": "ILatticeTelemetry.GetCatalogAsync",
+      "grpc_method": "/orleans.lattice.api.telemetry/GetCatalog",
+      "transport_scope": "both",
+      "request": "TelemetryCatalogRequest",
+      "response": "TelemetryQueryCatalog",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "Unauthorized callers receive the empty catalogue."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only discovery; unauthorized or unconfigured clusters return an empty catalog.",
+        "source": "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#GetCatalogAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation returns scoped catalogue entries in ascending QueryId order.",
+        "source": "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#GetCatalogAsync"
+      },
+      "concurrency": {
+        "rule": "Catalogue is scoped to caller entitlement; unoffered entries are absent rather than present-and-denied.",
+        "source": "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#GetCatalogAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#GetCatalogAsync",
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#GetCatalogMethodName",
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#GetCatalog"
+      ]
+    },
+    {
+      "id": "query",
+      "in_process": "ILatticeTelemetry.QueryAsync",
+      "grpc_method": "/orleans.lattice.api.telemetry/Query",
+      "transport_scope": "both",
+      "request": "TelemetryQueryRequest",
+      "response": "TelemetryQueryResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request or QueryId is null, or the tree filter contains a control character."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized or cannot be attributed to a tenant."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "The query id is absent, unoffered to the caller, or no backend is configured."
+        },
+        {
+          "error_id": "out-of-range",
+          "condition": "The requested window violates catalogue or deployment guardrails."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The metrics backend was unreachable, timed out, or answered unusably."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry Unavailable with backoff; do not retry NotFound or OutOfRange without changing inputs.",
+        "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Read-only; if EndUtc is omitted, the facade defaults it to the current time and a retry may evaluate a different instant.",
+        "source": "src/lattice.api.telemetry/LatticeTelemetry.cs#ResolveRange"
+      },
+      "concurrency": {
+        "rule": "Tenant scope is derived server-side; unvalidated widening requests degrade to the active tenant and are reported in the response scope.",
+        "source": "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#ResolveAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#QueryAsync",
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#QueryMethodName",
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#Query"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": false,
+      "meaning": "The request or authorization check was cancelled.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "Unhandled server failure.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "invalid-argument",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "The request is invalid.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "not-found",
+      "type": "TelemetryQueryNotFoundException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "Unknown, unoffered, or unavailable query id; these cases are indistinguishable.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "out-of-range",
+      "type": "TelemetryQueryBoundsException",
+      "grpc_status": "OutOfRange",
+      "retryable": false,
+      "meaning": "The requested telemetry window violates declared bounds or host guardrails.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "permission-denied",
+      "type": "LatticeAuthorizationDeniedException or LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The caller is not authorized or cannot act as the asserted tenant.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "unavailable",
+      "type": "TelemetryBackendException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "The metrics backend failed rather than the request.",
+      "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#InvokeAsync"
+    }
+  ]
+}

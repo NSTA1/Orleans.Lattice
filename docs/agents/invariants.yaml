@@ -1,0 +1,1301 @@
+schema: lattice.agents/invariants/v1
+invariants:
+  - id: atomic-action-compensation-terminal
+    name: "Atomic action terminal outcome"
+    description: "An atomic action reaches one terminal outcome and compensates prepared participants on failure without exposing a partial plan as successful."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "AtomicActionGrain"
+        - "Atomic action handlers"
+    violation_modes:
+      - "A participant commit is reported successful after a sibling participant failed."
+      - "Compensation failure is hidden from the caller as a completed plan."
+      - "A crashed coordinator is not resumed to a terminal state."
+    detection_signals:
+      - type: test
+        name: "AtomicActionCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/AtomicActionCoyoteTests.cs"
+      - type: metric
+        name: "orleans.lattice.atomic_write.completed"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: exception
+        name: "CompensationFailedException"
+        source: "src/lattice/Sagas/CompensationFailedException.cs"
+    remediation:
+      - step: "On CompensationFailedException, use the failed step index for operator intervention."
+        source: "docs/lattice/atomic-action.md"
+      - step: "Allow reminder-driven recovery to resume from persisted state and reach the terminal outcome exactly once."
+        source: "docs/lattice/atomic-action.md"
+    sources:
+      - "docs/lattice/atomic-action.md"
+      - "test/lattice/BPlusTree/Coyote/AtomicActionCoyoteTests.cs"
+  - id: atomic-batch-all-or-nothing
+    name: "Atomic batch all-or-nothing visibility"
+    description: "A single-tree atomic batch is either fully visible or fully hidden on every read path and on every replicated cluster."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "AtomicWriteGrain"
+        - "TxRegistryGrain"
+        - "AtomicVisibilityGate"
+        - "ReaderStabilityGate"
+    violation_modes:
+      - "A reader observes only some keys from an in-flight saga."
+      - "A commit decision is recorded after a leaf terminal is applied."
+      - "A transaction registry decision flips or is retired before all prepared buckets drain."
+    detection_signals:
+      - type: test
+        name: "AtomicCommitInvariantCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/AtomicCommitInvariantCoyoteTests.cs"
+      - type: test
+        name: "TlcModelCheckTests"
+        source: "test/lattice/Formal/TlcModelCheckTests.cs"
+      - type: metric
+        name: "orleans.lattice.atomic_write.completed"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "docs/lattice/atomic-writes.md"
+    remediation:
+      - step: "Retry transport-level failures with the same operation id so the call re-attaches to the original saga."
+        source: "docs/lattice/atomic-writes.md"
+      - step: "Keep the registry decision recorded until every participant has drained its prepared bucket."
+        source: "spec/AtomicCommit.tla"
+      - step: "Run the paired non-vacuous guard when changing a catalogued property."
+        source: "docs/lattice/verified-atomic-commit.md"
+    sources:
+      - "docs/lattice/atomic-writes.md"
+      - "docs/lattice/consistency.md"
+      - "docs/lattice/verified-atomic-commit.md"
+      - "spec/AtomicCommit.tla"
+      - "spec/README.md"
+      - "test/lattice/Formal/TlcModelCheckTests.cs"
+  - id: atomic-cross-cluster-receiver-gate
+    name: "Cross-cluster atomic receiver gate"
+    description: "A receiver does not flip a replicated atomic batch visible until every producer shard terminal for that saga has arrived."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ReplicationApplier"
+        - "TxRegistryGrain"
+        - "TerminalArrivalTally"
+        - "LatticeGrain.ApplyTxTerminalAsync"
+    violation_modes:
+      - "The first replicated terminal flips the receiver registry before all source shards arrive."
+      - "Prepared records enter the batched visible merge path instead of the pending bucket."
+      - "Conflicting terminal outcomes are absorbed instead of rejected."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.apply.duration"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: test
+        name: "TerminalArrivalTallyTests"
+        source: "test/lattice/BPlusTree/TerminalArrivalTallyTests.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "docs/lattice/atomic-writes.md"
+    remediation:
+      - step: "Leave the receiver registry mark unset and pending buckets undrained until the final terminal arrival."
+        source: "docs/lattice/atomic-writes.md"
+      - step: "Route prepared Set and Delete records through the per-entry prepared apply hops."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Reject a terminal arrival whose outcome conflicts with an already recorded decision."
+        source: "docs/lattice/atomic-writes.md"
+    sources:
+      - "docs/lattice/atomic-writes.md"
+      - "docs/lattice.replication/replication-apply.md"
+  - id: atomic-cross-tree-global-decision
+    name: "Cross-tree global decision"
+    description: "A cross-tree atomic write has one coordinator decision that all participating trees resolve before exposing any prepared key."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "LatticeCrossTreeTxGrain"
+        - "LatticeCrossTreeReceiverGrain"
+        - "TxRegistryGrain"
+    violation_modes:
+      - "A participating tree commits while a sibling tree aborts or remains in flight."
+      - "A delegated registry read returns pre-saga instead of indeterminate when the coordinator is unreachable."
+      - "A remote receiver flips one participating tree before the receiver coordinator hears from the rest of its local wait set."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.atomic_write.cross_tree.completed"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.atomic_write.cross_tree.participants"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "docs/lattice/atomic-writes.md"
+    remediation:
+      - step: "Resolve delegated txids against the coordinator and return Indeterminate when the coordinator cannot be reached."
+        source: "docs/lattice/atomic-writes.md"
+      - step: "Use a stable operation id for safe retry."
+        source: "docs/lattice/atomic-writes.md"
+      - step: "Wait for the receiver coordinator decision before finalizing participating trees on the receiver."
+        source: "docs/lattice/atomic-writes.md"
+    sources:
+      - "docs/lattice/atomic-writes.md"
+      - "docs/lattice/consistency.md"
+      - "spec/AtomicCommit.tla"
+  - id: auth-fail-closed-access-gates
+    name: "Authorization fails closed"
+    description: "Authorization denies on missing rules, ambiguous security context, or direct external grain calls, and denied mutations leave no partial state."
+    scope:
+      packages:
+        - "Orleans.Lattice.Auth"
+        - "Orleans.Lattice.Api.Auth"
+        - "Orleans.Lattice"
+      components:
+        - "ILatticeDecisionEngine"
+        - "Access gate"
+        - "Incoming grain call filter"
+    violation_modes:
+      - "A missing allow rule or null collaborator permits a mutation."
+      - "A denied mutation writes any leaf, WAL, or coordinator state."
+      - "A forged RequestContext capability bypasses the facade gate."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.auth.decisions"
+        source: "src/lattice.auth/LatticeAuthMetrics.cs"
+      - type: log
+        name: "LatticeAuthDecisionObserver"
+        source: "src/lattice.auth/LatticeAuthDecisionObserver.cs"
+      - type: exception
+        name: "LatticeAuthorizationDeniedException"
+        source: "src/lattice/LatticeAuthorizationDeniedException.cs"
+    remediation:
+      - step: "Deny unmatched decisions by default on the recommended configuration."
+        source: "docs/lattice.auth/security-posture.md"
+      - step: "Register explicit grants for access that should be allowed."
+        source: "docs/lattice.auth/security-posture.md"
+      - step: "Keep gate enforcement on the facade grains and internal-origin assertions on physical grains."
+        source: "docs/lattice.auth/security-posture.md"
+    sources:
+      - ".github/instructions/security.instructions.md"
+      - "docs/lattice.auth/security-posture.md"
+  - id: backup-content-address-integrity
+    name: "Backup content-address integrity"
+    description: "A restore verifies every manifest artifact against its recorded content digest before installing any backup data."
+    scope:
+      packages:
+        - "Orleans.Lattice.Backup"
+        - "Orleans.Lattice.Api.Backup"
+        - "Orleans.Lattice.Api.Backup.Grpc"
+      components:
+        - "ILatticeBackupRestoreService"
+        - "BackupManifest"
+        - "BackupContentDescriptor"
+        - "BackupHealthReport"
+    violation_modes:
+      - "A missing or uncommitted artifact is treated as restorable."
+      - "An artifact whose bytes no longer match its content hash is installed."
+      - "A health report marks a mismatched backup healthy."
+    detection_signals:
+      - type: health
+        name: "BackupHealthReport.Status"
+        source: "src/lattice.backup/BackupHealthReport.cs"
+      - type: metric
+        name: "orleans.lattice.backup.restore.failures"
+        source: "src/lattice.backup/LatticeBackupMetrics.cs"
+      - type: exception
+        name: "LatticeRestoreValidationException"
+        source: "src/lattice.backup/LatticeRestoreValidationException.cs"
+    remediation:
+      - step: "Abort the restore before installing anything when artifact digest verification fails."
+        source: "docs/lattice.backup/architecture.md"
+      - step: "Read BackupHealthReport to identify missing and hash-mismatched artifact ids."
+        source: "docs/lattice.backup/api.md"
+    sources:
+      - "docs/lattice.backup/api.md"
+      - "docs/lattice.backup/architecture.md"
+      - "docs/lattice.backup/observability.md"
+  - id: backup-cross-tree-fence
+    name: "Backup cross-tree fence"
+    description: "A cross-tree-consistent backup set captures all member trees at one shared causal fence after in-flight cross-tree sagas touching the set have drained."
+    scope:
+      packages:
+        - "Orleans.Lattice.Backup"
+        - "Orleans.Lattice"
+      components:
+        - "ILatticeBackupCaptureService"
+        - "BackupSetFence"
+        - "Cross-tree atomic registry"
+    violation_modes:
+      - "A member backup is stamped into a set while a touching cross-tree saga remains in flight."
+      - "A capture set selects different fences for different members."
+      - "A fence that cannot stabilize is recorded as a successful selection."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.backup.cross_tree_fence.retries"
+        source: "src/lattice.backup/BackupMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.backup.cross_tree_fence.selections"
+        source: "src/lattice.backup/BackupMetrics.cs"
+      - type: exception
+        name: "LatticeBackupCrossTreeFenceException"
+        source: "src/lattice.backup/LatticeBackupCrossTreeFenceException.cs"
+    remediation:
+      - step: "Wait for in-flight cross-tree sagas touching the set to drain before selecting the fence."
+        source: "docs/lattice.backup/architecture.md"
+      - step: "Retry fence selection up to the configured attempt and timeout bounds."
+        source: "docs/lattice.backup/architecture.md"
+      - step: "Fail the capture with LatticeBackupCrossTreeFenceException when the fence cannot stabilize."
+        source: "docs/lattice.backup/api.md"
+    sources:
+      - "docs/lattice.backup/architecture.md"
+      - "docs/lattice.backup/api.md"
+      - "docs/lattice.backup/observability.md"
+  - id: backup-restore-coordinated-cutover
+    name: "Coordinated restore cutover"
+    description: "A restore of any currently replicated tree or backup set with a replicated member commits the restored cut on every current peer or compensates everywhere."
+    scope:
+      packages:
+        - "Orleans.Lattice.Backup"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ILatticeCoordinatedRestoreEngine"
+        - "IRestoreSagaDispatcher"
+        - "Backup sink sharing probe"
+    violation_modes:
+      - "A replicated restore runs only on the local cluster."
+      - "A peer is unreachable but the restore starts anyway."
+      - "A prepared participant leaks its write fence after coordinator loss."
+      - "A replicated deployment captures to sinks that peers cannot read."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.saga.phase.duration"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.saga.compensations"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: health
+        name: "BackupHealthReport.PeerVisibility"
+        source: "src/lattice.backup/BackupHealthReport.cs"
+      - type: exception
+        name: "LatticeRestoreValidationException"
+        source: "src/lattice.backup/LatticeRestoreValidationException.cs"
+    remediation:
+      - step: "Refuse to start a coordinated restore when any current peer cannot be reached."
+        source: "docs/lattice.replication/coordinated-restore.md"
+      - step: "Compensate every prepared participant on abort."
+        source: "docs/lattice.replication/coordinated-restore.md"
+      - step: "Configure replicated clusters to use the same backup sink before relying on coordinated restore."
+        source: "docs/lattice.replication/coordinated-restore.md"
+    sources:
+      - "docs/lattice.replication/coordinated-restore.md"
+      - "docs/lattice.backup/architecture.md"
+  - id: crdt-buffer-ownership
+    name: "CRDT byte-buffer ownership"
+    description: "A CRDT stores caller-authored byte arrays by handoff, copies peer-folded winners, and copies every public egress projection."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "ICrdt"
+        - "BoundedRegister"
+        - "MvRegister"
+        - "Rga"
+        - "OrMap"
+    violation_modes:
+      - "A public projection returns a reference into durable CRDT state."
+      - "A peer merge aliases a winning candidate buffer into local state."
+      - "A losing candidate allocation adds steady-state duplicate-delivery cost."
+    detection_signals:
+      - type: test
+        name: "CrdtBufferOwnershipContractTestsBase"
+        source: "test/lattice/Primitives/CrdtBufferOwnershipContractTests.cs"
+    remediation:
+      - step: "Copy only the winning candidate when folding peer or delta state."
+        source: ".github/instructions/primitives.instructions.md"
+      - step: "Copy every public egress buffer and keep aliasing views internal."
+        source: ".github/instructions/primitives.instructions.md"
+      - step: "Register a specimen for every new byte-bearing CRDT in the ownership contract tests."
+        source: ".github/instructions/primitives.instructions.md"
+    sources:
+      - ".github/instructions/primitives.instructions.md"
+      - "docs/crdt/readme.md"
+  - id: crdt-merge-laws
+    name: "CRDT merge laws"
+    description: "Every CRDT primitive merge except HLC successor merge is commutative, associative, and idempotent."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ICrdt"
+        - "LwwValue"
+        - "VersionVector"
+        - "OrSet"
+        - "RwSet"
+        - "MvRegister"
+        - "OrMap"
+        - "Rga"
+    violation_modes:
+      - "A duplicate delta changes visible state."
+      - "Two replicas converge to different values after applying the same states in different orders."
+      - "A sender-side combined delta is not equivalent to sequential receiver apply."
+    detection_signals:
+      - type: test
+        name: "primitive merge law tests"
+        source: "test/lattice/Primitives/CrdtMergeLawTests.cs"
+      - type: test
+        name: "typed delta apply tests"
+        source: "test/lattice.replication/PublicApiContract/PublicReplicationApiContractTests.CrdtDeltas.cs"
+      - type: metric
+        name: "orleans.lattice.replication.coalesce.deltas_merged"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+    remediation:
+      - step: "Write convergent values through typed CRDT accessors when last-writer-wins would lose concurrent updates."
+        source: "docs/lattice/state-primitives.md"
+      - step: "Dead-letter enrolled replication entries whose wire mode disagrees with the locally resolved mode."
+        source: "docs/lattice.replication/replication-apply.md"
+    sources:
+      - ".github/instructions/primitives.instructions.md"
+      - "docs/crdt/readme.md"
+      - "docs/lattice/state-primitives.md"
+      - "docs/lattice.replication/deltas.md"
+  - id: distributed-lock-fencing
+    name: "Distributed lock fencing"
+    description: "Every lock grant has a durable, strictly increasing fencing token and stale holders cannot renew, release, or write through lower tokens."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "LatticeLockGrain"
+        - "LockAdmissionCore"
+        - "LockToken"
+    violation_modes:
+      - "A fencing token is reused after a crash or reactivation."
+      - "An expired holder writes after a later holder receives a higher token."
+      - "A timed-out waiter remains in the FIFO queue."
+    detection_signals:
+      - type: test
+        name: "LockAdmissionCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/LockAdmissionCoyoteTests.cs"
+      - type: metric
+        name: "orleans.lattice.lock.lease_reclaimed"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: status-field
+        name: "LockStatus.CurrentFencingToken"
+        source: "docs/lattice/distributed-lock.md"
+    remediation:
+      - step: "Forward the granted fencing token to the guarded resource with every write."
+        source: "docs/lattice/distributed-lock.md"
+      - step: "Have the guarded resource reject writes carrying a token lower than the highest token it has accepted."
+        source: "docs/lattice/distributed-lock.md"
+      - step: "Renew periodically for work that outlives a single lease."
+        source: "docs/lattice/distributed-lock.md"
+    sources:
+      - "docs/lattice/distributed-lock.md"
+      - "test/lattice/BPlusTree/Coyote/LockAdmissionCoyoteTests.cs"
+  - id: explorer-circuit-scope-isolation
+    name: "Explorer circuit scoped credentials"
+    description: "Explorer authentication, connection, and credential services are scoped per Blazor circuit and are never captured by singletons or hosted services."
+    scope:
+      packages:
+        - "Orleans.Lattice.Explorer.Core"
+        - "Orleans.Lattice.Explorer.Web"
+        - "Orleans.Lattice.Explorer.WebHost"
+        - "Orleans.Lattice.Explorer.Entra"
+        - "Orleans.Lattice.Explorer.Entra.Web"
+      components:
+        - "Explorer web head"
+        - "Circuit services"
+        - "Security headers middleware"
+    violation_modes:
+      - "A singleton captures per-user credential state."
+      - "One circuit can reuse another operator's auth session."
+      - "Security response headers are omitted on the Explorer branch."
+    detection_signals:
+      - type: test
+        name: "Explorer service lifetime tests"
+        source: "test/lattice.explorer/Authentication/ExplorerAuthCircuitIsolationTests.cs"
+      - type: health
+        name: "security response headers"
+        source: ".github/instructions/security.instructions.md"
+    remediation:
+      - step: "Register per-user auth, connection, and credential services as scoped."
+        source: ".github/instructions/security.instructions.md"
+      - step: "Audit new Explorer services so no singleton or hosted service captures the scoped auth or connection graph."
+        source: ".github/instructions/security.instructions.md"
+      - step: "Emit the Explorer security response headers through middleware on the Explorer branch."
+        source: ".github/instructions/security.instructions.md"
+    sources:
+      - ".github/instructions/security.instructions.md"
+  - id: grain-key-storage-safe
+    name: "Persistent grain keys are storage safe"
+    description: "A persistent grain composite key uses one marked builder that cannot emit storage-unsafe control or URL-forbidden characters."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Backup"
+      components:
+        - "Persistent grain key builders"
+        - "LatticeCrossTreeReceiverGrain"
+        - "BackupScopeKey"
+    violation_modes:
+      - "A composite persistent key contains a control character or '/', '\\', '#', or '?'."
+      - "Two distinct inputs encode to one persistent grain key."
+      - "A key-shape change strands existing durable state without a read-migration path."
+    detection_signals:
+      - type: test
+        name: "GrainKeyStorageSafetyContractTestsBase"
+        source: "test/lattice/GrainKeyStorageSafetyContractTests.cs"
+      - type: exception
+        name: "HTTP 400 Invalid URL from storage provider"
+        source: ".github/instructions/grains.instructions.md"
+    remediation:
+      - step: "Compose each persistent composite key in a single static method marked GrainKeyBuilder."
+        source: ".github/instructions/grains.instructions.md"
+      - step: "Use length-prefixing or another deterministic storage-safe encoding rather than unsafe delimiters."
+        source: ".github/instructions/grains.instructions.md"
+      - step: "Keep reading the old key shape until the durable state written under it has aged out."
+        source: ".github/instructions/grains.instructions.md"
+    sources:
+      - ".github/instructions/grains.instructions.md"
+  - id: hlc-monotonic-successor
+    name: "Hybrid logical clock successor"
+    description: "A local tick or merge returns an HLC that is strictly greater than the event inputs while LWW state compares HLC values without advancing them."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "HybridLogicalClock"
+        - "LwwValue"
+        - "VersionVector"
+    violation_modes:
+      - "A merge returns an HLC equal to or lower than one input."
+      - "An LWW tie-break depends on replica observation order."
+      - "A version vector update regresses a replica component."
+    detection_signals:
+      - type: test
+        name: "HybridLogicalClockTests"
+        source: "test/lattice/Primitives/HybridLogicalClockTests.cs"
+      - type: test
+        name: "VersionVectorTests"
+        source: "test/lattice/Primitives/VersionVectorTests.cs"
+    remediation:
+      - step: "Use HLC merge to mint a successor timestamp for an event."
+        source: "docs/lattice/state-primitives.md"
+      - step: "Resolve stored LWW values by comparing timestamps and deterministic tie-breakers."
+        source: "docs/lattice/state-primitives.md"
+      - step: "Merge version vectors by pointwise maximum."
+        source: "docs/lattice/state-primitives.md"
+    sources:
+      - "docs/lattice/state-primitives.md"
+      - ".github/instructions/primitives.instructions.md"
+  - id: mcp-tool-authorization-lockstep
+    name: "MCP tool authorization lockstep"
+    description: "The same MCP authorizer gates both tool advertisement and tool invocation, with only the capabilities meta-tool ungated."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Mcp"
+        - "Orleans.Lattice.Api.Mcp.RepoContext"
+        - "Orleans.Lattice.Api.Mcp.RepoContext.Replication"
+        - "Orleans.Lattice.Api.Mcp.Telemetry"
+      components:
+        - "MCP session configurator"
+        - "Credential stamping tool"
+        - "DenyAllMcpAuthorizer"
+    violation_modes:
+      - "A denied tool is hidden from tools/list but callable through tools/call."
+      - "A null HttpContext or null authorizer allows a tool invocation."
+      - "A second ungated tool is advertised without authorization."
+    detection_signals:
+      - type: test
+        name: "MCP authorization lockstep tests"
+        source: "test/lattice.api.mcp/McpToolAuthorizationGateTests.cs"
+    remediation:
+      - step: "Route tool advertisement and invocation through one shared lock-step gate."
+        source: ".github/instructions/security.instructions.md"
+      - step: "Keep DenyAllMcpAuthorizer as the default until a host explicitly opts in."
+        source: ".github/instructions/security.instructions.md"
+      - step: "Leave lattice_capabilities as the only ungated advertisement."
+        source: ".github/instructions/security.instructions.md"
+    sources:
+      - ".github/instructions/security.instructions.md"
+  - id: membership-directory-validation-fail-closed
+    name: "Membership directory validation fails closed"
+    description: "Membership reference writes validate principal existence and kind before the system-origin write when validation is required and a real directory is available."
+    scope:
+      packages:
+        - "Orleans.Lattice.Membership"
+        - "Orleans.Lattice.Api.Auth"
+      components:
+        - "Identity directory"
+        - "Membership reference admin"
+        - "LatticeDirectoryValidationException"
+    violation_modes:
+      - "An unresolvable user or group id is written to membership state."
+      - "A user id is accepted where a group id is required or the reverse."
+      - "Validation runs after the system-origin write."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.membership.directory.search.misses"
+        source: "src/lattice.membership/LatticeMembershipMetrics.cs"
+      - type: exception
+        name: "LatticeDirectoryValidationException"
+        source: "src/lattice.membership/LatticeDirectoryValidationException.cs"
+      - type: test
+        name: "directory validation tests"
+        source: "test/lattice.membership/LatticeDirectoryValidationExceptionTests.cs"
+    remediation:
+      - step: "Authorize, then validate, then perform the system-origin write."
+        source: ".github/instructions/security.instructions.md"
+      - step: "Reject an unresolvable id or kind mismatch with LatticeDirectoryValidationException before any write."
+        source: ".github/instructions/security.instructions.md"
+    sources:
+      - ".github/instructions/security.instructions.md"
+      - "src/lattice.membership/LatticeMembershipMetrics.cs"
+  - id: replication-causal-dependency-gate
+    name: "Replication causal dependency gate"
+    description: "A receiver parks a causal-plus entry until the local vector clock dominates every non-exempt dependency in the entry frontier."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ReplicationApplier"
+        - "Causal apply buffer"
+        - "VersionVector"
+    violation_modes:
+      - "An entry is applied before a causal dependency from another origin is present locally."
+      - "The entry's own-origin diagonal or receiver self-component is not exempted and the buffer deadlocks."
+      - "A bounded buffer eviction is silent."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.apply.causal_violations_blocked"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.apply.buffered_entries"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.apply.dependency_wait"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+    remediation:
+      - step: "Park entries with unsatisfied causal dependencies in the per-tree bounded causal-apply buffer."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Retry parked entries each time a later apply advances the local vector clock."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Monitor causal_violations_blocked, buffered_entries, and dependency_wait together."
+        source: "docs/lattice.replication/observability.md"
+    sources:
+      - "docs/lattice.replication/replication-apply.md"
+      - "docs/lattice.replication/observability.md"
+  - id: replication-change-feed-offset-cursor
+    name: "Replication change-feed offset cursor"
+    description: "The public change feed resumes from WAL offsets rather than HLC filters so it never skips entries whose HLC order differs from partition order."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication"
+      components:
+        - "IChangeFeed"
+        - "ChangeFeedCursor"
+        - "WalRecord"
+    violation_modes:
+      - "A consumer resumes by HLC and skips a lower-HLC entry committed later in a partition."
+      - "Tombstone reap envelopes are surfaced to a consumer that has no apply rule for them."
+      - "CRDT-mode consumers read stripped Value payloads instead of Delta payloads."
+    detection_signals:
+      - type: test
+        name: "change feed tests"
+        source: "test/lattice.replication/ChangeFeedTests.cs"
+      - type: status-field
+        name: "ChangeFeedCursor"
+        source: "docs/lattice.replication/change-feed.md"
+    remediation:
+      - step: "Capture GetCurrentCursorAsync and resubscribe from that offset cursor."
+        source: "docs/lattice.replication/change-feed.md"
+      - step: "Treat equal-HLC ordering as unspecified."
+        source: "docs/lattice.replication/change-feed.md"
+      - step: "Read WalRecord.Delta for CRDT-mode Set entries whose Value slot is stripped."
+        source: "docs/lattice.replication/change-feed.md"
+    sources:
+      - "docs/lattice.replication/change-feed.md"
+  - id: replication-delta-idempotence
+    name: "Replication delta idempotence"
+    description: "Every typed CRDT delta apply and sender-side delta combine is order-independent, idempotent, and equivalent to sequential receiver apply."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "WalRecord.Delta"
+        - "Crdt delta records"
+        - "Pre-ship coalescing"
+    violation_modes:
+      - "A duplicate delta changes state a second time."
+      - "A coalesced same-key run loses or double-counts a primitive contribution."
+      - "An unregistered OrMap shape is applied as an opaque value instead of faulting."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.coalesce.deltas_merged"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.coalesce.entries_elided"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "docs/lattice.replication/replication-apply.md"
+    remediation:
+      - step: "Apply each typed delta through its documented receiver merge rule."
+        source: "docs/lattice.replication/deltas.md"
+      - step: "Register the concrete OrMap shape at startup before applying OrMap-mode entries."
+        source: "docs/lattice.replication/replication-apply.md"
+    sources:
+      - "docs/lattice.replication/deltas.md"
+      - "docs/lattice.replication/replication-apply.md"
+  - id: replication-enrollment-mode-gate
+    name: "Replication enrollment and mode gate"
+    description: "A receiver re-resolves local tree enrollment and merge mode before applying peer data and never trusts the wire classification."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication"
+        - "Orleans.Lattice.Tenancy"
+      components:
+        - "ReplicationApplier"
+        - "ILatticeReplicationContext"
+        - "Dead-letter queue"
+    violation_modes:
+      - "A peer writes a tree that is not locally enrolled."
+      - "A peer changes local merge algebra by sending a different wire mode."
+      - "A non-enrolled tree is dead-lettered and creates unbounded activations."
+      - "A tenant-offline or foreign-tenant record mutates local state."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.apply.duration"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: log
+        name: "one-time missing enrollment warning"
+        source: "docs/lattice.replication/replication-apply.md"
+      - type: status-field
+        name: "dead-letter reason mode_mismatch"
+        source: "docs/lattice.replication/dead-letter-queue.md"
+    remediation:
+      - step: "Drop non-enrolled tree entries without dead-lettering them."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Dead-letter enrolled entries whose wire mode mismatches the locally resolved mode."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Replay tenant-gated dead-letter entries only after the tenant exists, becomes resident, or is reinstated."
+        source: "docs/lattice.replication/replication-apply.md"
+    sources:
+      - ".github/instructions/security.instructions.md"
+      - "docs/lattice.replication/replication-apply.md"
+  - id: replication-local-origin-rejection
+    name: "Replication local-origin rejection"
+    description: "A receiver rejects records whose origin cluster id matches the local cluster to prevent replication loops."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ReplicationApplier"
+        - "LatticeOriginContext"
+        - "Outbound shipper"
+    violation_modes:
+      - "A hand-built apply path re-applies the receiver's own mutation."
+      - "The receiver relies only on the sender-side outbound origin filter."
+      - "Local-origin CRDT deltas are folded and re-emitted indefinitely."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.apply.duration"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: test
+        name: "replication apply tests"
+        source: "test/lattice.replication/ReplicationApplierTests.cs"
+    remediation:
+      - step: "Return Applied=false for records whose origin cluster id matches the local cluster id."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Preserve foreign origin through receiver writes with LatticeOriginContext."
+        source: "docs/lattice.replication/replication-apply.md"
+    sources:
+      - "docs/lattice.replication/replication-apply.md"
+  - id: replication-pinned-causal-floor
+    name: "Replication pinned causal floor"
+    description: "Steady-state receiver dedupe drops only entries at or below a pinned snapshot floor and not entries below the per-origin high-water mark."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ReplicationApplier"
+        - "TxRegistryHighWaterGrain"
+        - "Bootstrap handoff"
+    violation_modes:
+      - "A genuinely new point write with a source HLC below the running high-water mark is dropped."
+      - "Snapshot-pinned backlog is re-applied above an already-installed snapshot frontier."
+      - "High-water-mark advance regresses under a lower applied HLC."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.apply.fifo_violations"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.apply.lag"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: status-field
+        name: "pinned causal floor"
+        source: "docs/lattice.replication/replication-apply.md"
+    remediation:
+      - step: "Apply point writes above the pinned floor even when their HLC is below the running high-water mark."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Advance the per-origin high-water mark monotonically after successful point apply."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Run snapshot bootstrap when incremental replication has fallen off the WAL."
+        source: "docs/lattice.replication/snapshot-bootstrap.md"
+    sources:
+      - "docs/lattice.replication/replication-apply.md"
+      - "docs/lattice.replication/observability.md"
+      - "docs/lattice.replication/snapshot-bootstrap.md"
+  - id: replication-restore-fence-defer
+    name: "Replication restore receive fence"
+    description: "While a coordinated restore has paused inbound apply for a tree, the receiver defers entries without advancing the sender cursor."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication"
+        - "Orleans.Lattice.Backup"
+      components:
+        - "ReplicationApplier"
+        - "Coordinated restore saga"
+        - "Receive fence"
+    violation_modes:
+      - "A fenced tree applies inbound entries during a restore cutover."
+      - "A deferred entry is acknowledged as applied and the sender advances permanently."
+      - "A custom applier fails to propagate Deferred through ApplyBatchAsync."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.saga.fence.duration"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.apply.duration"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: status-field
+        name: "Deferred"
+        source: "docs/lattice.replication/replication-apply.md"
+    remediation:
+      - step: "Return Applied=false and Deferred=true while the restore receive fence is active."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Keep the sender cursor unchanged so the entry re-ships after the fence lifts."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Override ApplyBatchAsync in custom appliers that can return deferred results."
+        source: "docs/lattice.replication/replication-apply.md"
+    sources:
+      - "docs/lattice.replication/replication-apply.md"
+      - "docs/lattice.replication/coordinated-restore.md"
+  - id: replication-source-hlc-preservation
+    name: "Replication source HLC preservation"
+    description: "Receiver apply preserves the authoring cluster's HLC and origin where documented so last-writer-wins and provenance stay deterministic across clusters."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "ReplicationApplier"
+        - "WalRecord"
+        - "LatticeOriginContext"
+        - "LwwValue"
+    violation_modes:
+      - "A replicated LWW point write is restamped with a local HLC."
+      - "A range delete loses its producer issue HLC."
+      - "Receiver-side observer emits a foreign-origin mutation as local."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.replication.apply.fifo_violations"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: test
+        name: "replication HLC preservation tests"
+        source: "test/lattice.replication/ReplicationApplierTests.PreparedNonMonotonicHlc.cs"
+      - type: exception
+        name: "ArgumentException"
+        source: "docs/lattice.replication/replication-apply.md"
+    remediation:
+      - step: "Persist LwwRegister entries with the supplied source timestamp and origin cluster id verbatim."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Wrap receiver CRDT folds in a LatticeOriginContext for the source origin."
+        source: "docs/lattice.replication/replication-apply.md"
+      - step: "Preserve the producer HLC on range delete tombstones."
+        source: "docs/lattice.replication/replication-apply.md"
+    sources:
+      - "docs/lattice.replication/replication-apply.md"
+      - "docs/lattice.replication/deltas.md"
+  - id: snapshot-consistency
+    name: "Snapshot consistency"
+    description: "Offline snapshots copy an exact lock-instant state and online snapshots converge to the source state at drain completion while preserving HLCs and TTLs."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "TreeSnapshotGrain"
+        - "SnapshotLeafGrain"
+        - "ShardRootGrain"
+    violation_modes:
+      - "A destination tree includes a tombstoned key from the source."
+      - "An online snapshot drops or double-applies a write racing with drain."
+      - "A copied TTL is refreshed instead of preserving its absolute expiry."
+      - "A crash loses snapshot phase progress or makes retry non-idempotent."
+    detection_signals:
+      - type: status-field
+        name: "TreeSnapshotStatus"
+        source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeSnapshotStatus.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "docs/lattice/snapshots.md"
+      - type: metric
+        name: "orleans.lattice.coordinator.completed"
+        source: "src/lattice/LatticeMetrics.cs"
+    remediation:
+      - step: "Resume snapshot progress from the last completed persisted phase after a silo restart."
+        source: "docs/lattice/snapshots.md"
+      - step: "Use deterministic operation ids for retrying destination bulk-load operations."
+        source: "docs/lattice/snapshots.md"
+      - step: "Reject a snapshot whose destination exists, equals the source, or uses a reserved namespace."
+        source: "docs/lattice/snapshots.md"
+    sources:
+      - "docs/lattice/snapshots.md"
+      - "docs/lattice/consistency.md"
+      - "docs/lattice/ttl.md"
+  - id: split-reshard-shadow-forwarding
+    name: "Split and reshard shadow forwarding"
+    description: "During a split or reshard, every moved-slot write or prepared mutation is drained, shadow-forwarded, or conservatively retried so ownership changes do not lose or duplicate authority."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "TreeShardSplitGrain"
+        - "TreeReshardGrain"
+        - "ShardMap"
+        - "ShadowedMigrationReadGuard"
+    violation_modes:
+      - "The registry map flips before the source shard rejects stale moved-slot operations."
+      - "Prepared mutations present before the shadow window are not replayed to the target."
+      - "A migrated pre-saga value is served while the saga may have committed."
+      - "After swap, both source and target are reachable authorities for a moved slot."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.split.retroactive_forward.entries"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.shard_root.reshard.rejected"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: exception
+        name: "StaleShardRoutingException"
+        source: "src/lattice/BPlusTree/StaleShardRoutingException.cs"
+      - type: test
+        name: "ReshardMigrationCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/ReshardMigrationCoyoteTests.cs"
+    remediation:
+      - step: "Persist coordinator state before side effects and resume from the last persisted phase after a crash."
+        source: "docs/lattice/shard-splitting.md"
+      - step: "Run the retroactive prepared-mutation sweep before the drain begins."
+        source: "docs/lattice/shard-splitting.md"
+      - step: "Seal and reject the source for moved slots before updating the registry map."
+        source: "docs/lattice/shard-splitting.md"
+      - step: "Retry stale-routed calls after refreshing the shard map."
+        source: "docs/lattice/shard-splitting.md"
+    sources:
+      - "docs/lattice/shard-splitting.md"
+      - "docs/lattice/online-reshard.md"
+      - "docs/lattice/consistency.md"
+  - id: telemetry-metric-allow-list-fail-closed
+    name: "Telemetry metric allow-list fails closed"
+    description: "PromQL queries are authorized only when their metric-name matcher parses to an exact allowed name."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Telemetry"
+        - "Orleans.Lattice.Api.Telemetry.Grpc"
+        - "Orleans.Lattice.Api.Mcp.Telemetry"
+        - "Orleans.Lattice.Api.Mcp.Telemetry.Azure"
+      components:
+        - "TelemetryMetricAccessPolicy"
+        - "PromQlMetricExtractor"
+        - "TelemetryQueryAuthorizer"
+    violation_modes:
+      - "An unparseable or ambiguous __name__ matcher bypasses the allow-list."
+      - "A query catalogue route omits the shared authorizer."
+      - "Matcher parsing allocates per label on the steady path."
+    detection_signals:
+      - type: test
+        name: "telemetry authorization tests"
+        source: "test/lattice.api.telemetry/TelemetryMetricAccessPolicyTests.cs"
+    remediation:
+      - step: "Deny unparseable, ambiguous, or non-exact __name__ matchers."
+        source: ".github/instructions/security.instructions.md"
+      - step: "Authorize MCP telemetry tools and facade query catalogue entries through TelemetryQueryAuthorizer."
+        source: ".github/instructions/security.instructions.md"
+    sources:
+      - ".github/instructions/security.instructions.md"
+  - id: tenant-isolation-namespace
+    name: "Tenant namespace isolation"
+    description: "Tenant-scoped surfaces compose tree ids under t/{tenant}/ and refuse platform or foreign namespaces unless the access gate authorizes the crossing."
+    scope:
+      packages:
+        - "Orleans.Lattice.Tenancy"
+        - "Orleans.Lattice.Api.TenantAdmin"
+        - "Orleans.Lattice.Api.TenantAdmin.Grpc"
+        - "Orleans.Lattice.Backup"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "LatticeTenantTrees"
+        - "Tenant resolver"
+        - "Tenant access gate"
+    violation_modes:
+      - "A non-default tenant creates or writes a sys- namespace tree."
+      - "A malformed t/ id resolves to platform ownership and is allowed."
+      - "A split-head binding omits the active-tenant bridge and serves the default namespace."
+      - "A denied assertion reports a live tenant descriptor."
+    detection_signals:
+      - type: exception
+        name: "LatticeTenantAccessDeniedException"
+        source: "src/lattice/LatticeTenantAccessDeniedException.cs"
+      - type: test
+        name: "tenant isolation tests"
+        source: "test/lattice.tenancy/ReplicationTenantIsolationGateTests.cs"
+      - type: metric
+        name: "orleans.lattice.tenancy.tenants"
+        source: "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    remediation:
+      - step: "Compose unqualified tree names with the active tenant through LatticeTenantTrees."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Refuse sys- and malformed t/ namespace access outside system-origin scope."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Lift the active-tenant assertion at every split-head transport binding."
+        source: "docs/lattice.tenancy/README.md"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - ".github/instructions/security.instructions.md"
+  - id: tenant-quota-admission
+    name: "Tenant quota admission"
+    description: "Tenant writes and charged reads are admitted against the compiled quota policy after authorization and are refused only at the documented admission seams."
+    scope:
+      packages:
+        - "Orleans.Lattice.Tenancy"
+        - "Orleans.Lattice.Api.Data"
+        - "Orleans.Lattice.Api.Data.Grpc"
+        - "Orleans.Lattice.Backup"
+      components:
+        - "TenantQuotas"
+        - "TenantUsageAccountingOptions"
+        - "Tenant rate limiter"
+        - "Quota admission gate"
+    violation_modes:
+      - "A read is charged before the access gate validates the tenant assertion."
+      - "A footprint breach refuses reads needed for cleanup."
+      - "A tree creation evaluates quota admission twice and charges two rate tokens."
+      - "A first usage sample below hysteresis never publishes and leaves admission fail-open forever."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.tenancy.usage.bytes"
+        source: "src/lattice.tenancy/LatticeTenantMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.tenancy.overage.keys"
+        source: "src/lattice.tenancy/LatticeTenantMetrics.cs"
+      - type: exception
+        name: "LatticeQuotaExceededException"
+        source: "src/lattice/LatticeQuotaExceededException.cs"
+    remediation:
+      - step: "Charge reads strictly after the access gate authorizes the read."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Apply footprint admission to writes and tree creation, not ordinary reads."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Treat ops-per-second breaches as transient back-pressure and retry after backoff."
+        source: "docs/lattice.tenancy/README.md"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+  - id: tenant-region-residency
+    name: "Tenant region residency invariants"
+    description: "A tenant's resident regions are non-empty, are a subset of allowed regions, and cannot be revoked while resident."
+    scope:
+      packages:
+        - "Orleans.Lattice.Tenancy"
+        - "Orleans.Lattice.Api.TenantAdmin"
+        - "Orleans.Lattice.Api.TenantAdmin.Grpc"
+        - "Orleans.Lattice.Api.Mcp"
+      components:
+        - "ILatticeTenantRegionAdmin"
+        - "Tenant region status"
+    violation_modes:
+      - "Residency is set to a region outside the allowed set."
+      - "The last resident region is removed."
+      - "An allowed region is revoked before the tenant is drained from it."
+      - "A non-operator distinguishes unknown tenant from denied tenant."
+    detection_signals:
+      - type: exception
+        name: "TenantRegionNotAllowedException"
+        source: "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionNotAllowedException.cs"
+      - type: exception
+        name: "TenantLastRegionException"
+        source: "src/lattice.api.abstractions/TenantAdmin/Model/TenantLastRegionException.cs"
+      - type: exception
+        name: "TenantNotFoundException"
+        source: "src/lattice.api.abstractions/TenantAdmin/Model/TenantNotFoundException.cs"
+      - type: status-field
+        name: "TenantRegionStatus"
+        source: "docs/lattice.tenancy/README.md"
+    remediation:
+      - step: "Authorize allowed regions before setting residency into them."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Drain residency away from a region before revoking that region."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Keep at least one resident region for every tenant."
+        source: "docs/lattice.tenancy/README.md"
+      - step: "Return the generic authorization-denied shape to non-operator callers for unknown tenants."
+        source: "docs/lattice.tenancy/README.md"
+    sources:
+      - "docs/lattice.tenancy/README.md"
+  - id: tombstone-ttl-retention
+    name: "Tombstone and TTL retention"
+    description: "Expired live entries and tombstones are hidden from user reads but retained through the grace window for convergence before physical compaction."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "BPlusLeafGrain"
+        - "TombstoneCompactionGrain"
+        - "LeafCacheGrain"
+        - "LwwValue"
+    violation_modes:
+      - "An expired entry is returned by GetAsync, scan, count, cursor, or cache."
+      - "A TTL'd CRDT merge shortens expiry instead of using the max-absolute-ticks join."
+      - "Replication drops expired entries and loses the HLC needed for convergence."
+      - "Compaction reaps before TombstoneGracePeriod and a lagging replica resurrects data."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.leaf.tombstones.expired"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.compaction.shard.skipped"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: test
+        name: "TTL and tombstone compaction tests"
+        source: "test/lattice/BPlusTree/TtlIntegrationTests.cs"
+    remediation:
+      - step: "Filter expired entries at every user-facing read path and cache hit."
+        source: "docs/lattice/ttl.md"
+      - step: "Preserve absolute expiry across replication, replay, snapshots, splits, resize, and merge."
+        source: "docs/lattice/ttl.md"
+      - step: "Tune TombstoneGracePeriod to at least expected clock drift plus replication delay."
+        source: "docs/lattice/ttl.md"
+    sources:
+      - "docs/lattice/ttl.md"
+      - "docs/lattice/tombstone-compaction.md"
+      - "docs/lattice/consistency.md"
+  - id: tree-resize-shadow-swap
+    name: "Tree resize shadow swap"
+    description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves callers with at most one transparent retry."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "TreeResizeGrain"
+        - "TreeSnapshotGrain"
+        - "LatticeRegistryGrain"
+    violation_modes:
+      - "A write during drain reaches only the old tree and is not captured later."
+      - "The destination is bulk-loaded after shadow-forwarded writes populated it."
+      - "The alias swap leaves callers observing StaleTreeRoutingException."
+      - "Resize and reshard run concurrently on one tree."
+    detection_signals:
+      - type: status-field
+        name: "TreeResizeStatus"
+        source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeResizeStatus.cs"
+      - type: exception
+        name: "StaleTreeRoutingException"
+        source: "src/lattice/BPlusTree/StaleTreeRoutingException.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "docs/lattice/tree-sizing.md"
+    remediation:
+      - step: "Drain with MergeManyAsync rather than BulkLoadRawAsync when shadow-forwarded writes may already exist."
+        source: "docs/lattice/tree-sizing.md"
+      - step: "Resume resize from the last completed persisted phase after a silo crash."
+        source: "docs/lattice/tree-sizing.md"
+      - step: "Undo a resize before the old tree leaves the soft-delete window when rollback is required."
+        source: "docs/lattice/tree-sizing.md"
+    sources:
+      - "docs/lattice/tree-sizing.md"
+      - "docs/lattice/consistency.md"
+      - "docs/lattice/ttl.md"
+  - id: wal-append-durability-boundary
+    name: "WAL append durability boundary"
+    description: "A foreground write mutates the in-memory projection only after the per-shard WAL append succeeds, making the WAL the commit linearization point."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "WalShardGrain"
+        - "WalCommitLogWriter"
+        - "BPlusLeafGrain"
+    violation_modes:
+      - "The leaf projection changes after a failed WAL append."
+      - "A successful SetAsync lacks a durable WAL record for replay."
+      - "Append-failure latch permits later successes to mask an earlier failed window."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.leaf.commit.duration"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.wal.append_dispatch.timeouts"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: exception
+        name: "storage exception from WAL append"
+        source: "docs/lattice/wal.md"
+    remediation:
+      - step: "Fault every caller in the failed and later in-flight windows."
+        source: "docs/lattice/wal.md"
+      - step: "Run ReconcileAsync and reread the provider tail before clearing the sticky failure."
+        source: "docs/lattice/wal.md"
+      - step: "Request WAL shard deactivation when resync fails so activation-time reconcile reruns."
+        source: "docs/lattice/wal.md"
+    sources:
+      - "docs/lattice/wal.md"
+      - "samples/VerifiedWalDurability/README.md"
+  - id: wal-gc-consumer-frontier
+    name: "WAL GC consumer frontier"
+    description: "WAL GC trims only entries admitted by every applicable consumer cursor, causal-stable frontier, durable materializer floor, and blocked-floor pin except when hard wall-clock retention is configured."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "WalGcTrimCore"
+        - "IWalCursorRegistry"
+        - "ILatticeWalGc"
+    violation_modes:
+      - "GC trims by the maximum consumer cursor and strands a lagging consumer."
+      - "A live buffer pin is ignored and entries still needed by that buffer are removed."
+      - "An advisory byte ceiling trims past the safe consumer frontier."
+      - "A consumer never registers and later reads a gap without detecting it."
+    detection_signals:
+      - type: test
+        name: "WalGcTrimFloorCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/WalGcTrimFloorCoyoteTests.cs"
+      - type: metric
+        name: "orleans.lattice.wal.gc.trim_stop"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.wal.gc.passes"
+        source: "src/lattice/LatticeMetrics.cs"
+    remediation:
+      - step: "Report each consumer cursor monotonically after successfully applying a batch."
+        source: "docs/lattice/wal.md"
+      - step: "Trim only within the minimum registered consumer frontier and below blocked-floor pins."
+        source: "docs/lattice/wal.md"
+      - step: "Use bootstrap or projection rebuild when a consumer falls off the retained log."
+        source: "docs/lattice.replication/snapshot-bootstrap.md"
+    sources:
+      - "docs/lattice/wal.md"
+      - "docs/lattice/verified-wal.md"
+      - "test/lattice/BPlusTree/Coyote/WalGcTrimFloorCoyoteTests.cs"
+  - id: wal-offset-contiguity
+    name: "WAL offset contiguity"
+    description: "Each WAL shard assigns dense, strictly ascending offsets and never hands two concurrent appends the same sequence number."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "WalOffsetAllocationCore"
+        - "WalShardGrain"
+    violation_modes:
+      - "Two concurrent appends receive the same offset."
+      - "An offset gap is exposed as durable after a failed flush window."
+      - "A shard move admits an append after the move fence is raised."
+    detection_signals:
+      - type: test
+        name: "WalOffsetContiguityCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/WalOffsetContiguityCoyoteTests.cs"
+      - type: test
+        name: "WalMoveQuiesceCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/WalMoveQuiesceCoyoteTests.cs"
+      - type: metric
+        name: "orleans.lattice.wal.shard.start_flush.calls"
+        source: "src/lattice/LatticeMetrics.cs"
+    remediation:
+      - step: "Keep read-and-advance of the offset counter atomic."
+        source: "docs/lattice/verified-wal.md"
+      - step: "Pair the move fence check atomically with offset assignment."
+        source: "docs/lattice/verified-wal.md"
+      - step: "Resync from the provider tail after a flush failure before accepting new appends."
+        source: "docs/lattice/wal.md"
+    sources:
+      - "docs/lattice/verified-wal.md"
+      - "docs/lattice/wal.md"
+  - id: wal-replay-reconstructability
+    name: "WAL replay reconstructability"
+    description: "A leaf activation reconstructs its visible projection from the latest durable snapshot plus retained WAL records and refuses activation when the required prefix is gone."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+      components:
+        - "BPlusLeafGrain"
+        - "LeafReplayCoordinatorGrain"
+        - "LeafSnapshotStorageGrain"
+        - "WalShardGrain"
+    violation_modes:
+      - "Leaf grain state is treated as a fallback copy of committed values."
+      - "Replay applies records outside the leaf's current ownership filter."
+      - "A leaf replays only a surviving suffix after falling off the log."
+      - "A checkpoint flush failure is treated as a durability failure."
+    detection_signals:
+      - type: exception
+        name: "LeafProjectionStaleException"
+        source: "src/lattice/LeafProjectionStaleException.cs"
+      - type: metric
+        name: "orleans.lattice.leaf.activation_replays_over_budget"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.leaf.commit.duration"
+        source: "src/lattice/LatticeMetrics.cs"
+    remediation:
+      - step: "Replay retained WAL tail records from the persisted projection checkpoint."
+        source: "docs/lattice/wal.md"
+      - step: "Use the WAL key filter and the leaf apply check together during replay."
+        source: "docs/lattice/wal.md"
+      - step: "Refuse activation with LeafProjectionStaleException when no snapshot covers a trimmed WAL gap."
+        source: "docs/lattice/wal.md"
+    sources:
+      - "docs/lattice/wal.md"
+      - "docs/lattice/state-model.md"
+      - "docs/lattice/projection-rebuild.md"
+  - id: wal-shipping-prefix-hole
+    name: "WAL shipping prefix-hole guard"
+    description: "A cursor-advancing reader sees only WAL offsets below the durable contiguous tail so an out-of-order flush cannot ship past a prefix hole."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "WalShippingWatermark"
+        - "WalShardGrain"
+        - "Replication shipper"
+        - "View maintainer"
+    violation_modes:
+      - "A reader advances its cursor past a lower offset whose flush is still in flight."
+      - "Out-of-order flush completion exposes a higher window before the lower prefix is durable."
+      - "A placement move resumes with duplicate or missing retained offsets."
+    detection_signals:
+      - type: test
+        name: "WalShippingWatermarkCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/WalShippingWatermarkCoyoteTests.cs"
+      - type: test
+        name: "WalMoveRedriveCoyoteTests"
+        source: "test/lattice/BPlusTree/Coyote/WalMoveRedriveCoyoteTests.cs"
+      - type: metric
+        name: "orleans.lattice.replication.wal.entries_shipped"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+    remediation:
+      - step: "Clamp cursor-advancing readers below the oldest in-flight flush start."
+        source: "docs/lattice/verified-wal.md"
+      - step: "Resume a redriven WAL move just past the clean prefix already present at the target."
+        source: "docs/lattice/verified-wal.md"
+      - step: "Use bootstrap when a peer has fallen below the oldest retained log entry."
+        source: "docs/lattice.replication/snapshot-bootstrap.md"
+    sources:
+      - "docs/lattice/verified-wal.md"
+      - "docs/lattice/wal.md"
+      - "docs/lattice.replication/observability.md"

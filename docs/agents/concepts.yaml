@@ -1,0 +1,2259 @@
+schema: lattice.agents/concepts/v1
+concepts:
+  - id: access-gate
+    name: "Access gate"
+    category: identity
+    definition: "An access gate is the fail-closed authorization seam consulted before data and control operations mutate or reveal protected state."
+    packages:
+      - "Orleans.Lattice.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "Authorizes data-plane and facade operations before the implementation touches engine state."
+          source: "docs/lattice.api.replication/README.md"
+      out_of_scope:
+        - statement: "Does not authenticate credentials by itself."
+          source: "docs/lattice.membership/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/security.md"
+      - "docs/lattice.auth/README.md"
+  - id: administration-seam
+    name: "Administration seam"
+    category: seam
+    definition: "The administration seam groups operator control surfaces around tree, tenant, schema, backup, and restore operations."
+    packages:
+      - "Orleans.Lattice.Api.Backup"
+      - "Orleans.Lattice.Api.TenantAdmin"
+      - "Orleans.Lattice.Api.TreeAdmin"
+    capability_boundary:
+      in_scope:
+        - statement: "Exposes control facades for tree administration, tenant administration, and backup operations."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not replace the ILattice data path for normal reads and writes."
+          source: "README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "PACKAGES.md"
+      - "docs/lattice.api.treeadmin/README.md"
+  - id: api-auth-facade
+    name: "Auth API facade"
+    category: api
+    definition: "The auth facade administers membership and authorization policy and explains access decisions."
+    packages:
+      - "Orleans.Lattice.Api.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "ExplainAsync consults the same access gate the data plane consults."
+          source: "docs/lattice.api.auth/README.md"
+      out_of_scope:
+        - statement: "Ships no transport of its own."
+          source: "docs/lattice.api.auth/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.auth/README.md"
+  - id: api-backup-facade
+    name: "Backup API facade"
+    category: api
+    definition: "The backup facade drives backup capture, catalog listing, restore, revert, and health operations through a transport-agnostic contract."
+    packages:
+      - "Orleans.Lattice.Api.Backup"
+    capability_boundary:
+      in_scope:
+        - statement: "Catalog listing is cursor-resumable and page-bounded."
+          source: "docs/lattice.api.backup/README.md"
+      out_of_scope:
+        - statement: "Capability probes are advisory and do not replace per-operation authorization."
+          source: "docs/lattice.api.backup/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.backup/README.md"
+  - id: api-data-facade
+    name: "Data API facade"
+    category: api
+    definition: "The data facade exposes external write-capable point, range, CRDT, and atomic batch operations."
+    packages:
+      - "Orleans.Lattice.Api.Data"
+    capability_boundary:
+      in_scope:
+        - statement: "Every operation routes through the gated ILattice surface."
+          source: "docs/lattice.api.data/configuration.md"
+      out_of_scope:
+        - statement: "Does not add an authorization posture of its own."
+          source: "docs/lattice.api.data/configuration.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.data/README.md"
+  - id: api-facade
+    name: "API facade"
+    category: api
+    definition: "An API facade is a transport-neutral service contract projected by gRPC, MCP, or Explorer heads."
+    packages:
+      - "Orleans.Lattice.Api.Abstractions"
+    capability_boundary:
+      in_scope:
+        - statement: "Shared DTOs and interfaces are referenced by facade implementations and bindings."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not by itself host a network listener."
+          source: "docs/lattice.api.auth/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "PACKAGES.md"
+      - "docs/lattice.api.abstractions/README.md"
+  - id: api-replication-facade
+    name: "Replication API facade"
+    category: api
+    definition: "The replication facade enables, disables, and inspects per-tree replication configuration at runtime."
+    packages:
+      - "Orleans.Lattice.Api.Replication"
+    capability_boundary:
+      in_scope:
+        - statement: "Enable and disable authorize the target tree through the access gate before touching engine state."
+          source: "docs/lattice.api.replication/README.md"
+      out_of_scope:
+        - statement: "A conflicting concurrent enable can leave the mode ambiguous until disable and re-enable."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.replication/README.md"
+  - id: api-schema-facade
+    name: "Schema API facade"
+    category: api
+    definition: "The schema facade manages schema policy, dead letters, versioning, remediation, and compliance audits."
+    packages:
+      - "Orleans.Lattice.Api.Schema"
+    capability_boundary:
+      in_scope:
+        - statement: "Capability probes report allowed operation sets and remain advisory."
+          source: "docs/lattice.api.schema/api.md"
+      out_of_scope:
+        - statement: "Does not replace per-operation fail-closed authorization."
+          source: "docs/lattice.api.schema/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.schema/README.md"
+  - id: api-state-facade
+    name: "State API facade"
+    category: api
+    definition: "The state facade exposes read-only cluster state, tree, entry, change-feed, and metrics queries."
+    packages:
+      - "Orleans.Lattice.Api.State"
+    capability_boundary:
+      in_scope:
+        - statement: "Provides read-only state-API facade operations."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not expose mutating data-plane verbs."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.state/README.md"
+  - id: api-telemetry-facade
+    name: "Telemetry API facade"
+    category: api
+    definition: "The telemetry facade answers named backend-neutral metric queries while deriving tenant scope server-side."
+    packages:
+      - "Orleans.Lattice.Api.Telemetry"
+    capability_boundary:
+      in_scope:
+        - statement: "Callers name a query id and never supply PromQL."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not derive tenant scope in the gRPC binding."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.telemetry/README.md"
+  - id: api-tenantadmin-facade
+    name: "Tenant admin API facade"
+    category: api
+    definition: "The tenant-admin facade exposes tenant lifecycle, quota, region, admin-subject, and grant control operations."
+    packages:
+      - "Orleans.Lattice.Api.TenantAdmin"
+    capability_boundary:
+      in_scope:
+        - statement: "Operator control includes create, suspend, resume, delete, quota, grants, and residency."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Tenant administrators cannot change their own quota."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.tenantadmin/README.md"
+  - id: api-treeadmin-facade
+    name: "Tree admin API facade"
+    category: api
+    definition: "The tree-admin facade composes whole-tree lifecycle, topology, history, WAL, view, tag-index, and schema administration."
+    packages:
+      - "Orleans.Lattice.Api.TreeAdmin"
+    capability_boundary:
+      in_scope:
+        - statement: "Exposes an advisory per-operation capability probe."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "The server still authorizes each real operation fail-closed."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.treeadmin/README.md"
+  - id: atomic-action-saga
+    name: "Atomic action saga"
+    category: coordination
+    definition: "An atomic action is a generic saga keyed by operation id with ordered forward steps and reverse-order compensation."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Compensates completed steps in strict reverse order when a later step faults."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Does not make irreversible side effects safe without a compensating effect."
+          source: "docs/lattice/atomic-action.md"
+    operational_envelope:
+      limits:
+        - name: "default-retention"
+          value: 48
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-max-steps"
+          value: 64
+          unit: "steps"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/atomic-action.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: atomic-batch
+    name: "Atomic batch"
+    category: coordination
+    definition: "An atomic batch is a SetManyAtomicAsync operation with all-or-nothing visibility across multiple keys in one tree."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "No reader observes a partial-set state."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Does not coordinate non-tree side effects."
+          source: "docs/lattice/atomic-writes.md"
+    operational_envelope:
+      limits:
+        - name: "default-retention"
+          value: 48
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/atomic-writes.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: auth-group
+    name: "Auth group"
+    category: identity
+    definition: "An auth group is a durable membership grouping used by the authorization control plane."
+    packages:
+      - "Orleans.Lattice.Api.Auth"
+      - "Orleans.Lattice.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "AuthGroup records are serializable facade DTOs."
+          source: "docs/lattice.api.auth/README.md"
+      out_of_scope:
+        - statement: "Group membership list endpoints are not paged."
+          source: "docs/lattice.api.auth/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.auth/README.md"
+  - id: auth-rule
+    name: "Auth rule"
+    category: identity
+    definition: "An auth rule is a durable LatticeAuthorizationRule policy entry surfaced through the auth facade."
+    packages:
+      - "Orleans.Lattice.Api.Auth"
+      - "Orleans.Lattice.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "Rules are surfaced as the durable LatticeAuthorizationRule policy model."
+          source: "docs/lattice.api.auth/README.md"
+      out_of_scope:
+        - statement: "Matched rules in explanations are advisory debugging detail."
+          source: "docs/lattice.api.auth/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.auth/README.md"
+  - id: autoscaling-signal
+    name: "Autoscaling signal"
+    category: observability
+    definition: "The autoscaling signal reports compute demand and advisory storage-axis WAL rebalance recommendations for external autoscalers."
+    packages:
+      - "Orleans.Lattice.Scaling"
+    capability_boundary:
+      in_scope:
+        - statement: "Serves an HTTP endpoint and ASP.NET Core health check."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "The storage-axis recommendation is advisory and signal-only."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.scaling/README.md"
+      - "FEATURES.md"
+  - id: azure-table-storage-provider
+    name: "Azure Table storage provider"
+    category: storage
+    definition: "The Azure Table storage provider is a durable WAL backend for production clusters."
+    packages:
+      - "Orleans.Lattice.Storage.AzureTable"
+    capability_boundary:
+      in_scope:
+        - statement: "Replaces the default in-memory WAL with a durable Azure Table-backed provider."
+          source: "docs/lattice/api.md"
+      out_of_scope:
+        - statement: "Does not configure Orleans grain storage by itself."
+          source: "docs/lattice/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.storage.azuretable/README.md"
+      - "docs/lattice/wal-storage-providers.md"
+  - id: backup
+    name: "Backup"
+    category: operation
+    definition: "A backup captures tree state into a backup sink as full, incremental, or backup-set artifacts."
+    packages:
+      - "Orleans.Lattice.Backup"
+    capability_boundary:
+      in_scope:
+        - statement: "Capture operations authorize their target scope before touching backup data."
+          source: "docs/lattice.api.backup/README.md"
+      out_of_scope:
+        - statement: "A backup id is already an effective id and is not tenant-composed again."
+          source: "docs/lattice.api.backup/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.backup/README.md"
+  - id: bplus-internal-node
+    name: "B+ internal node"
+    category: core
+    definition: "A B+ internal node stores separator keys and child references for non-leaf levels of a shard subtree."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Routes a key to the correct child and accepts promoted splits from below."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Is only allocated once shard depth exceeds one."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-max-internal-children"
+          value: 128
+          unit: "children"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: bplus-leaf-node
+    name: "B+ leaf node"
+    category: core
+    definition: "A B+ leaf node owns live key entries for a key range and commits each mutation through the WAL before applying it."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The persisted leaf state row carries topology and checkpoint metadata, never per-key entries."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Cannot split a single entry into smaller pieces when one entry exceeds the byte bound."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    operational_envelope:
+      limits:
+        - name: "default-max-leaf-keys"
+          value: 128
+          unit: "keys"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+        - name: "default-max-leaf-bytes"
+          value: 67108864
+          unit: "bytes"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: bplus-tree
+    name: "B+ tree"
+    category: core
+    definition: "A B+ tree is the sorted per-tree data structure composed of shard roots, internal nodes, leaves, and sibling leaf links."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Each shard owns an independent sub-tree."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Keys in different shards have no ordering relationship until scatter-gather scan merge."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-max-leaf-keys"
+          value: 128
+          unit: "keys"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+        - name: "default-max-internal-children"
+          value: 128
+          unit: "children"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: caching
+    name: "Caching"
+    category: observability
+    definition: "Caching covers the per-silo read-through leaf cache and companion distributed cache backends."
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Caching.AzureBlob"
+    capability_boundary:
+      in_scope:
+        - statement: "Leaf cache pulls deltas from the primary leaf and merges LWW entries."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Distributed cache backend does not provide tree WAL durability."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits:
+        - name: "default-cache-ttl"
+          value: 0
+          unit: "seconds"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-leaf-cache-prewarm-count"
+          value: 8
+          unit: "leaves"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/caching.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: compaction
+    name: "Compaction"
+    category: core
+    definition: "Compaction reaps expired tombstones and rewrites storage structures that are safe to reclaim."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Tombstone compaction permanently removes tombstones older than the configured grace period."
+          source: "docs/lattice/tombstone-compaction.md"
+      out_of_scope:
+        - statement: "Compaction does not change live values."
+          source: "docs/lattice/tombstone-compaction.md"
+    operational_envelope:
+      limits:
+        - name: "default-tombstone-grace-period"
+          value: 24
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-compaction-leaf-batch-size"
+          value: 64
+          unit: "leaves"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/tombstone-compaction.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: compression-dictionary
+    name: "Compression dictionary"
+    category: durability
+    definition: "A compression dictionary is optional shared state used by the pluggable compression subsystem to reduce framed payload size."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Auto-training samples payloads under bounded reservoir and sample counts."
+          source: "src/lattice/CompressionDictionaryTrainingOptions.cs"
+      out_of_scope:
+        - statement: "Dictionary compression is opt-in beyond dictionary-less Zstandard framing."
+          source: "docs/lattice/compression.md"
+    operational_envelope:
+      limits:
+        - name: "default-max-sample-count"
+          value: 1024
+          unit: "samples"
+          source: "src/lattice/CompressionDictionaryTrainingOptions.cs"
+        - name: "default-max-reservoir-bytes"
+          value: 8388608
+          unit: "bytes"
+          source: "src/lattice/CompressionDictionaryTrainingOptions.cs"
+    sources:
+      - "docs/lattice/compression.md"
+      - "src/lattice/CompressionDictionaryTrainingOptions.cs"
+  - id: conflict-resolution-merge
+    name: "Conflict resolution merge"
+    category: crdt
+    definition: "Conflict resolution merge is the algebraic merge rule that converges LWW entries and CRDT states without consensus."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "CRDT merge functions are commutative, associative, and idempotent."
+          source: "docs/crdt/readme.md"
+      out_of_scope:
+        - statement: "Plain SetAsync last-writer-wins can silently discard one concurrent write."
+          source: "docs/crdt/readme.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/crdt/readme.md"
+      - "docs/lattice/state-primitives.md"
+  - id: cross-tree-atomic
+    name: "Cross-tree atomic"
+    category: coordination
+    definition: "Cross-tree atomic writes extend all-or-nothing visibility to a batch spanning multiple trees."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "IGrainFactory.SetManyAtomicAsync extends atomic visibility to a batch spanning multiple trees."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Does not cover arbitrary non-Lattice side effects."
+          source: "docs/lattice/atomic-writes.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/atomic-writes.md"
+      - "FEATURES.md"
+  - id: cursor
+    name: "Cursor"
+    category: core
+    definition: "A cursor is a server-checkpointed iterator over keys or entries with persisted scan position."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Durable cursors resume after failovers, client restarts, and topology changes."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Durable cursors are not snapshot-isolated unless opened through snapshot cursor APIs."
+          source: "docs/lattice/snapshot-cursors.md"
+    operational_envelope:
+      limits:
+        - name: "default-cursor-idle-ttl"
+          value: 48
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/durable-cursors.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: dashboards
+    name: "Dashboards"
+    category: observability
+    definition: "Dashboards are bundled Grafana panels and provisioning templates for Lattice meters."
+    packages:
+      - "Orleans.Lattice.Dashboards"
+    capability_boundary:
+      in_scope:
+        - statement: "Dashboard package covers the core, replication, auth, membership, backup, scaling, and tenancy meters."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not collect metrics by itself."
+          source: "docs/lattice.dashboards/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.dashboards/README.md"
+      - "PACKAGES.md"
+  - id: dead-letter
+    name: "Dead letter"
+    category: governance
+    definition: "A dead letter is a strict-ingest schema rejection diverted for inspection instead of being applied."
+    packages:
+      - "Orleans.Lattice.Schema"
+    capability_boundary:
+      in_scope:
+        - statement: "Strict ingest dead-letters a non-compliant replicated or restored item."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Dead-letter listing is a bounded read surface, not a mutating remediation by itself."
+          source: "docs/lattice.api.schema/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.schema/README.md"
+      - "docs/lattice.api.schema/README.md"
+  - id: distributed-lock-lease
+    name: "Distributed lock lease"
+    category: coordination
+    definition: "A distributed lock lease grants bounded exclusive ownership and expires so a crashed holder cannot wedge progress."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The lock is FIFO-fair and cluster-wide."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "A protected resource must validate fencing tokens to reject stale holders."
+          source: "docs/lattice/distributed-lock.md"
+    operational_envelope:
+      limits:
+        - name: "default-lease-duration"
+          value: 30
+          unit: "seconds"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/distributed-lock.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: explorer
+    name: "Explorer"
+    category: administration
+    definition: "The Explorer is an opt-in auth-aware web console that uses gRPC APIs to browse and administer a cluster."
+    packages:
+      - "Orleans.Lattice.Explorer.Web"
+    capability_boundary:
+      in_scope:
+        - statement: "The Explorer never joins cluster membership."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Its surface area and navigation are documented as in progress."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.explorer/README.md"
+      - "FEATURES.md"
+  - id: fencing-token
+    name: "Fencing token"
+    category: coordination
+    definition: "A fencing token is a monotonic value issued by a lock and checked by the guarded resource to reject stale holders."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Distributed lock admission decisions include monotonic fencing tokens."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "A token alone does not protect a resource that ignores it."
+          source: "docs/lattice/distributed-lock.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/distributed-lock.md"
+      - "FEATURES.md"
+  - id: file-storage-provider
+    name: "File WAL storage provider"
+    category: storage
+    definition: "The file WAL storage provider is a durable local-disk append-and-fsync log per shard."
+    packages:
+      - "Orleans.Lattice.Storage.File"
+    capability_boundary:
+      in_scope:
+        - statement: "It provides crash-safe reconciliation and background compaction."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "It is intended for single-node and containerized deployments."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.storage.file/README.md"
+      - "PACKAGES.md"
+  - id: governance-seam
+    name: "Governance seam"
+    category: seam
+    definition: "The governance seam adds policy over data shape and tenant boundaries around the core tree."
+    packages:
+      - "Orleans.Lattice.Schema"
+      - "Orleans.Lattice.Tenancy"
+    capability_boundary:
+      in_scope:
+        - statement: "Schema and tenancy are opt-in companion packages."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not provide credential authentication."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.schema/README.md"
+      - "docs/lattice.tenancy/README.md"
+  - id: grpc-binding
+    name: "gRPC binding"
+    category: api
+    definition: "A gRPC binding projects a transport-agnostic facade onto a code-first remotely callable service and typed client."
+    packages:
+      - "Orleans.Lattice.Api.State.Grpc"
+    capability_boundary:
+      in_scope:
+        - statement: "Bindings adapt facade DTOs into their wire request and response envelopes."
+          source: "docs/lattice.api.auth/README.md"
+      out_of_scope:
+        - statement: "The matching facade package intentionally ships no transport of its own."
+          source: "docs/lattice.api.auth/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.state.grpc/README.md"
+      - "docs/lattice.api.auth/README.md"
+  - id: history-retention
+    name: "History retention"
+    category: view
+    definition: "History retention controls how much per-key revision data a history view keeps."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "History views support metadata-only, full-value, and hybrid retention modes."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Change history can fall back only to the retained WAL window when no durable history view is enabled."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits:
+        - name: "default-history-hybrid-full-value-window"
+          value: 5
+          unit: "minutes"
+          source: "src/lattice/Views/LatticeViewOptions.cs"
+    sources:
+      - "docs/lattice/history-views.md"
+      - "src/lattice/Views/LatticeViewOptions.cs"
+  - id: hlc
+    name: "Hybrid logical clock"
+    category: primitive
+    definition: "A hybrid logical clock combines wall-clock ticks with a logical counter to stamp writes in total order."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Each grain maintains an HLC for local events and merges."
+          source: "docs/lattice/state-primitives.md"
+      out_of_scope:
+        - statement: "HLC merge is deliberately not a join-semilattice operation."
+          source: "docs/lattice/state-primitives.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/state-primitives.md"
+  - id: identity-seam
+    name: "Identity seam"
+    category: seam
+    definition: "The identity seam authenticates credentials and resolves them to durable subjects and groups."
+    packages:
+      - "Orleans.Lattice.Membership"
+    capability_boundary:
+      in_scope:
+        - statement: "Membership supplies identity directory and credential-to-subject resolution."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not enforce policy without the auth access gate."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.membership/README.md"
+      - "PACKAGES.md"
+  - id: in-memory-storage-provider
+    name: "In-memory WAL storage provider"
+    category: storage
+    definition: "The in-memory WAL storage provider is the core default WAL backend for development, tests, and samples."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "AddLattice registers the in-memory WAL provider by default."
+          source: "docs/lattice/api.md"
+      out_of_scope:
+        - statement: "It is suitable only where durability across silo restarts is not required."
+          source: "docs/lattice/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/api.md"
+      - "docs/lattice/wal-storage-providers.md"
+  - id: leaf-split
+    name: "Leaf split"
+    category: core
+    definition: "A leaf split divides an oversized leaf into sibling ranges and promotes a separator through the B+ tree."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Leaf splitting is idempotent and recovered through persisted split state."
+          source: "docs/lattice/state-primitives.md"
+      out_of_scope:
+        - statement: "A single entry larger than MaxLeafBytes is irreducible and left intact."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    operational_envelope:
+      limits:
+        - name: "default-max-leaf-keys"
+          value: 128
+          unit: "keys"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+        - name: "default-max-leaf-bytes"
+          value: 67108864
+          unit: "bytes"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/state-primitives.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: lww-register
+    name: "LWW register"
+    category: primitive
+    definition: "An LWW register keeps the value or tombstone with the highest HLC timestamp and deterministic tie-breaks."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Leaf entries are wrapped in LwwValue<byte[]> and merge by higher HLC."
+          source: "docs/lattice/state-primitives.md"
+      out_of_scope:
+        - statement: "LWW is safe only when concurrent writes to one key can be lost."
+          source: "docs/crdt/readme.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/state-primitives.md"
+      - "docs/crdt/readme.md"
+  - id: materialised-view
+    name: "Materialised view"
+    category: view
+    definition: "A materialised view is an asynchronous derived tree maintained from a source tree write-ahead log."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Views include filter, projection, key-remap, aggregation, and user-defined fold shapes."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Views are eventually consistent rather than synchronously updated with the source write."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits:
+        - name: "default-batch-size"
+          value: 256
+          unit: "records"
+          source: "src/lattice/Views/LatticeViewOptions.cs"
+        - name: "default-max-staged-transactions"
+          value: 1024
+          unit: "transactions"
+          source: "src/lattice/Views/LatticeViewOptions.cs"
+    sources:
+      - "docs/lattice/materialised-views.md"
+      - "src/lattice/Views/LatticeViewOptions.cs"
+  - id: mcp-tool-group
+    name: "MCP tool group"
+    category: api
+    definition: "An MCP tool group exposes one authorized facade area as discoverable Model Context Protocol tools."
+    packages:
+      - "Orleans.Lattice.Api.Mcp"
+    capability_boundary:
+      in_scope:
+        - statement: "MCP tools are fail-closed and scoped to caller authorization grants."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Unregistered facades are not exposed as tools."
+          source: "docs/lattice.api.mcp/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.mcp/README.md"
+      - "FEATURES.md"
+  - id: membership-provider
+    name: "Membership provider"
+    category: identity
+    definition: "A membership provider authenticates credentials and resolves users or groups for the membership layer."
+    packages:
+      - "Orleans.Lattice.Membership"
+    capability_boundary:
+      in_scope:
+        - statement: "Membership supports static in-process roster and provider plug-ins."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Does not create authorization rules by itself."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.membership/README.md"
+      - "FEATURES.md"
+  - id: merge-observer
+    name: "Merge observer"
+    category: replication
+    definition: "A merge observer is a seam that observes merge activity for replication or projection workflows."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The tree exposes observer seams that companion packages attach to rather than baking concerns into core."
+          source: "README.md"
+      out_of_scope:
+        - statement: "Observer seams do not own WAL durability."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/api.md"
+      - "README.md"
+  - id: mutation-observer
+    name: "Mutation observer"
+    category: core
+    definition: "A mutation observer is notified after the leaf applies a committed mutation in the wal-apply-observer-digest pipeline."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The replication package attaches to the mutation observer seam."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Observers run after the WAL append commit point."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/architecture.md"
+  - id: observability-seam
+    name: "Observability seam"
+    category: seam
+    definition: "The observability seam exposes metrics, diagnostics, telemetry, dashboards, events, and scaling signals."
+    packages:
+      - "Orleans.Lattice.Api.Telemetry"
+      - "Orleans.Lattice.Dashboards"
+      - "Orleans.Lattice.Scaling"
+    capability_boundary:
+      in_scope:
+        - statement: "Metrics are published on System.Diagnostics.Metrics meters."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Telemetry facades answer named queries rather than caller-supplied PromQL."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/metrics.md"
+      - "docs/lattice.api.telemetry/README.md"
+  - id: page
+    name: "Page"
+    category: api
+    definition: "A page is a bounded batch returned by scan, catalog, cursor, or facade enumeration surfaces."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "KeysPageSize controls the number of keys per page returned by shard-root sorted-key batches."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+      out_of_scope:
+        - statement: "A page is not a durable cursor by itself."
+          source: "docs/lattice/durable-cursors.md"
+    operational_envelope:
+      limits:
+        - name: "default-keys-page-size"
+          value: 512
+          unit: "keys"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+      - "docs/lattice/durable-cursors.md"
+  - id: predicate
+    name: "Predicate"
+    category: core
+    definition: "A predicate is an Expression<Func<T,bool>> evaluated server-side to filter typed reads, writes, scans, batches, cursors, and range deletes."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Only matching keys or values cross the wire."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Does not run arbitrary client-side code outside the documented expression surface."
+          source: "docs/lattice/predicated-operations.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/predicated-operations.md"
+      - "FEATURES.md"
+  - id: region
+    name: "Region"
+    category: deployment
+    definition: "A region identifies a deployment location used by replication, MCP routing, telemetry, and tenancy residency."
+    packages:
+      - "Orleans.Lattice.Api.Abstractions"
+    capability_boundary:
+      in_scope:
+        - statement: "MCP remote hosting can front several regions and route each tool call to the named region."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "A region is not an authorization grant."
+          source: "docs/lattice.tenancy/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.mcp/remote.md"
+      - "docs/lattice.tenancy/README.md"
+  - id: regions-tenants
+    name: "Regions and tenants"
+    category: deployment
+    definition: "Regions and tenants are deployment and governance scopes used for routing, residency, telemetry, and keyspace isolation."
+    packages:
+      - "Orleans.Lattice.Tenancy"
+    capability_boundary:
+      in_scope:
+        - statement: "Tenancy can enforce optional per-tenant region residency."
+          source: "docs/lattice.tenancy/README.md"
+      out_of_scope:
+        - statement: "Region and tenant scope do not replace authorization policy."
+          source: "docs/lattice/security.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - "docs/lattice.api.mcp/remote.md"
+  - id: replication-cursor-watermark
+    name: "Replication cursor and watermark"
+    category: replication
+    definition: "Replication cursors and watermarks track shipped and applied WAL progress across peers."
+    packages:
+      - "Orleans.Lattice.Replication"
+    capability_boundary:
+      in_scope:
+        - statement: "The replication package includes producer, WAL, shipper, apply, bootstrap, and anti-entropy."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "A cursor does not change the source tree merge mode."
+          source: "docs/lattice.replication/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.replication/README.md"
+      - "PACKAGES.md"
+  - id: replication-peer
+    name: "Replication peer"
+    category: replication
+    definition: "A replication peer is a remote cluster endpoint that receives or supplies replicated WAL traffic."
+    packages:
+      - "Orleans.Lattice.Replication"
+    capability_boundary:
+      in_scope:
+        - statement: "Peer membership configures who this silo ships its WAL to."
+          source: "docs/lattice/api.md"
+      out_of_scope:
+        - statement: "Peer configuration is outside the core LatticeOptions surface."
+          source: "docs/lattice/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.replication/README.md"
+      - "docs/lattice/api.md"
+  - id: replication-seam
+    name: "Replication seam"
+    category: seam
+    definition: "The replication seam lets an optional package ship and apply WAL-derived mutations between clusters."
+    packages:
+      - "Orleans.Lattice.Replication"
+    capability_boundary:
+      in_scope:
+        - statement: "Any cluster can write to any enrolled tree."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "A host without the replication package runs the core library alone."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.replication/README.md"
+      - "PACKAGES.md"
+  - id: repocontext-store
+    name: "RepoContext store"
+    category: ai
+    definition: "The RepoContext store indexes repository files, symbols, memories, vectors, graph edges, and context receipts in Lattice trees."
+    packages:
+      - "Orleans.Lattice.Api.Mcp.RepoContext"
+    capability_boundary:
+      in_scope:
+        - statement: "Provides repository onboarding, recall, memory, semantic search, graph navigation, context packing, and usage accounting."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Semantic search is approximate by default unless exact retrieval is configured."
+          source: "docs/lattice.api.mcp.repocontext/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.api.mcp.repocontext/README.md"
+      - "FEATURES.md"
+  - id: reshard
+    name: "Reshard"
+    category: operation
+    definition: "Reshard grows the physical shard count by migrating virtual slots to new physical shards online."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Online reshard is grow-only."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Target shard count cannot exceed the virtual shard space."
+          source: "src/lattice/BPlusTree/Grains/TreeReshardGrain.cs"
+    operational_envelope:
+      limits:
+        - name: "max-target-shards"
+          value: 4096
+          unit: "shards"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/online-reshard.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: resize
+    name: "Resize"
+    category: operation
+    definition: "Resize changes MaxLeafKeys or MaxInternalChildren on a live tree through an undoable migration."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Resize can change MaxLeafKeys or MaxInternalChildren on a live tree."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Resize does not change the virtual shard count."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    operational_envelope:
+      limits:
+        - name: "default-max-leaf-keys"
+          value: 128
+          unit: "keys"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+        - name: "default-max-internal-children"
+          value: 128
+          unit: "children"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/tree-sizing.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: restore
+    name: "Restore"
+    category: operation
+    definition: "Restore materializes backup or snapshot state into a target tree with optional revert support."
+    packages:
+      - "Orleans.Lattice.Backup"
+    capability_boundary:
+      in_scope:
+        - statement: "Backup restore authorizes the target scope before touching data."
+          source: "docs/lattice.api.backup/README.md"
+      out_of_scope:
+        - statement: "A restore target is tenant-composed at the entry point rather than after authorization."
+          source: "docs/lattice.api.backup/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.backup/README.md"
+      - "docs/lattice.api.backup/README.md"
+  - id: scan-range
+    name: "Scan and range"
+    category: core
+    definition: "A scan or range operation enumerates keys or entries in lexicographic order over optional bounds."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Strong scans return the exact live key set even during concurrent rebalancing."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "A global range scan requires scatter-gather across shards followed by merge."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-max-scan-retries"
+          value: 3
+          unit: "attempts"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-max-leaves-per-scan-page"
+          value: 64
+          unit: "leaves"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/consistency.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: schema-version-policy
+    name: "Schema version policy"
+    category: governance
+    definition: "A schema/version policy validates writes and stamps or upcasts self-describing value versions."
+    packages:
+      - "Orleans.Lattice.Schema"
+    capability_boundary:
+      in_scope:
+        - statement: "Local writes that break policy are rejected."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Schema enforcement has zero overhead when unused."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.schema/README.md"
+      - "FEATURES.md"
+  - id: secondary-grain-index
+    name: "Secondary grain index"
+    category: index
+    definition: "A secondary grain index tracks declared Orleans grain state properties in Lattice trees for predicate queries."
+    packages:
+      - "Orleans.Lattice.GrainIndex"
+    capability_boundary:
+      in_scope:
+        - statement: "Properties are declared explicitly with Include."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Startup rejects a declaration change that would invalidate stored entries."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.grainindex/README.md"
+      - "PACKAGES.md"
+  - id: shard
+    name: "Shard"
+    category: core
+    definition: "A shard is an independent physical B+ subtree that owns a subset of a tree keyspace."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Sharding eliminates a single-root bottleneck by giving each key range its own subtree."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Keys in different shards have no ordering relationship until scan merge."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-shard-count"
+          value: 64
+          unit: "shards"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: shard-map
+    name: "Shard map"
+    category: core
+    definition: "A shard map persists the mapping from fixed virtual slots to mutable physical shard indexes."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Shard map indirection enables adaptive shard splitting without rehashing existing keys."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Changing virtual shard count would invalidate persisted shard maps."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-virtual-shard-count"
+          value: 4096
+          unit: "slots"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: shard-root
+    name: "Shard root"
+    category: core
+    definition: "A shard root grain manages the root pointer and routing for one physical shard subtree."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "ShardRootGrain is keyed by tree id and shard index."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "It does not store per-key leaf entries."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/architecture.md"
+  - id: shard-split
+    name: "Shard split"
+    category: core
+    definition: "A shard split moves virtual slots from a hot physical shard into a new physical shard online."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Splits happen fully online via shadow-writing."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+      out_of_scope:
+        - statement: "Autonomic splitting can be disabled by option."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    operational_envelope:
+      limits:
+        - name: "default-auto-split-enabled"
+          value: true
+          unit: "boolean"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-hot-shard-threshold"
+          value: 200
+          unit: "operations-per-second"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/shard-splitting.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: shipper
+    name: "Replication shipper"
+    category: replication
+    definition: "A replication shipper reads local WAL progress and sends mutations to peers."
+    packages:
+      - "Orleans.Lattice.Replication"
+    capability_boundary:
+      in_scope:
+        - statement: "Replication package includes producer, WAL, shipper, apply, bootstrap, and anti-entropy."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not exist when the replication package is not registered."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.replication/README.md"
+      - "PACKAGES.md"
+  - id: snapshot
+    name: "Snapshot"
+    category: operation
+    definition: "A snapshot is a point-in-time copy of a tree in offline or online mode."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Snapshots can be offline or online."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "A snapshot is not an external backup sink artifact."
+          source: "docs/lattice/snapshots.md"
+    operational_envelope:
+      limits:
+        - name: "default-max-snapshot-replay-entries"
+          value: 10000000
+          unit: "entries"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-snapshot-baseline-ttl"
+          value: 6
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/snapshots.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: storage-provider
+    name: "Storage provider"
+    category: storage
+    definition: "A storage provider fills a replaceable durability or cache backend seam."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Storage backends are substitutable implementations behind public seams."
+          source: "README.md"
+      out_of_scope:
+        - statement: "Storage providers do not change merge semantics."
+          source: "README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/wal-storage-providers.md"
+      - "README.md"
+  - id: storage-seam
+    name: "Storage seam"
+    category: seam
+    definition: "The storage seam separates WAL, grain state, backup artifact, and cache backend choices from core semantics."
+    packages:
+      - "Orleans.Lattice.Backup.AzureBlob"
+      - "Orleans.Lattice.Storage.AzureTable"
+      - "Orleans.Lattice.Storage.File"
+    capability_boundary:
+      in_scope:
+        - statement: "Storage backends include Azure Table WAL, File WAL, Azure Blob backup sink, and Azure Blob distributed cache."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Does not perform identity or schema governance."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/wal-storage-providers.md"
+      - "PACKAGES.md"
+  - id: tag-index
+    name: "Tag index"
+    category: index
+    definition: "A tag index associates tags with tree keys and queries keys by tag union or intersection."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Supports WithAllTags and WithAnyTags queries."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Membership is eventually reconciled unless using combined atomic write paths."
+          source: "docs/lattice/api.md"
+    operational_envelope:
+      limits:
+        - name: "default-reconcile-interval"
+          value: 1
+          unit: "hour"
+          source: "src/lattice/BPlusTree/LatticeTagIndexReconciliationOptions.cs"
+        - name: "default-reconcile-chunk-size"
+          value: 16
+          unit: "entries"
+          source: "src/lattice/BPlusTree/LatticeTagIndexReconciliationOptions.cs"
+    sources:
+      - "docs/lattice/api.md"
+      - "src/lattice/BPlusTree/LatticeTagIndexReconciliationOptions.cs"
+  - id: tenant
+    name: "Tenant"
+    category: governance
+    definition: "A tenant is a keyspace-partitioned logical owner under a t/{tenant}/ prefix with lifecycle and policy state."
+    packages:
+      - "Orleans.Lattice.Tenancy"
+    capability_boundary:
+      in_scope:
+        - statement: "Tenancy partitions keyspace under t/{tenant}/ prefixes."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "A tenant is not a physical Orleans cluster boundary."
+          source: "docs/lattice.tenancy/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - "PACKAGES.md"
+  - id: tenant-admission
+    name: "Tenant admission"
+    category: governance
+    definition: "Tenant admission evaluates tenant quotas, usage, rate limits, and residency before admitting tenant operations."
+    packages:
+      - "Orleans.Lattice.Tenancy"
+    capability_boundary:
+      in_scope:
+        - statement: "Tenancy supports per-tenant quotas, usage metering, rate limiting, and optional region residency."
+          source: "PACKAGES.md"
+      out_of_scope:
+        - statement: "Rate limiting is enforced per cluster."
+          source: "PACKAGES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.tenancy/README.md"
+      - "PACKAGES.md"
+  - id: tombstone
+    name: "Tombstone"
+    category: core
+    definition: "A tombstone is an LWW entry state representing a logical delete or expired value until compaction reaps it."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Deletes are represented as tombstones with timestamps."
+          source: "docs/lattice/state-primitives.md"
+      out_of_scope:
+        - statement: "Physical deletion is deferred to compaction rather than immediate at logical delete time."
+          source: "docs/lattice/tombstone-compaction.md"
+    operational_envelope:
+      limits:
+        - name: "default-tombstone-grace-period"
+          value: 24
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/state-primitives.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: tree
+    name: "Tree"
+    category: core
+    definition: "A tree is a sorted durable key-value namespace whose string keys map to byte-array values or CRDT state."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The core supports point reads, writes, deletes, TTL, ordered scans, atomic writes, bulk load, cursors, resize, reshard, snapshots, soft delete, events, diagnostics, and metrics."
+          source: "README.md"
+      out_of_scope:
+        - statement: "The core is not an external database tier outside the Orleans cluster."
+          source: "README.md"
+    operational_envelope:
+      limits:
+        - name: "default-shard-count"
+          value: 64
+          unit: "shards"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+        - name: "default-max-leaf-keys"
+          value: 128
+          unit: "keys"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/api.md"
+      - "README.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: tree-alias
+    name: "Tree alias"
+    category: core
+    definition: "A tree alias maps a logical tree name to a physical tree id for resize or restore cutover."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Tree alias is stored in the registry entry as optional indirection."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Alias indirection does not change the virtual shard count."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/architecture.md"
+      - "docs/lattice.api.treeadmin/README.md"
+  - id: ttl
+    name: "Time-to-live"
+    category: core
+    definition: "TTL is an absolute server-side expiry attached to a value or CRDT write and preserved across topology operations."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Per-entry TTL is available on LWW SetAsync writes and typed CRDT writes."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "TTL expiry does not immediately purge storage without compaction."
+          source: "docs/lattice/ttl.md"
+    operational_envelope:
+      limits:
+        - name: "default-tombstone-grace-period"
+          value: 24
+          unit: "hours"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/ttl.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: value-codec-envelope
+    name: "Value codec and envelope"
+    category: durability
+    definition: "A value codec or envelope carries serialized value bytes, merge metadata, compression framing, or API wire fields."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Typed payload helpers layer automatic serialization over opaque byte values."
+          source: "README.md"
+      out_of_scope:
+        - statement: "The core tree cannot infer which CRDT a key holds from raw bytes alone."
+          source: "docs/crdt/readme.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/api.md"
+      - "README.md"
+  - id: vector-index
+    name: "Vector index"
+    category: index
+    definition: "A vector index is a persisted approximate nearest-neighbour index over Lattice-held vectors."
+    packages:
+      - "Orleans.Lattice.Vector"
+    capability_boundary:
+      in_scope:
+        - statement: "Query cost is sub-linear in the corpus."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Approximate search does not promise exact nearest-neighbour recall unless exact mode answers."
+          source: "docs/lattice.vector/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.vector/README.md"
+      - "FEATURES.md"
+  - id: version-vector
+    name: "Version vector"
+    category: primitive
+    definition: "A version vector maps replica ids to highest observed HLC values and merges by pointwise maximum."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Leaf version vectors enable delta extraction."
+          source: "docs/lattice/state-primitives.md"
+      out_of_scope:
+        - statement: "It is internal machinery rather than the recommended external projection API."
+          source: "docs/lattice/state-primitives.md"
+    operational_envelope:
+      limits:
+        - name: "default-min-version-vector-retention"
+          value: 1
+          unit: "hour"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/state-primitives.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: virtual-slot
+    name: "Virtual slot"
+    category: core
+    definition: "A virtual slot is a fixed hash-space bucket that the shard map assigns to a physical shard."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Keys hash into one of 4096 virtual slots."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "Changing the virtual slot count would invalidate every stored shard map."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-virtual-shard-count"
+          value: 4096
+          unit: "slots"
+          source: "src/lattice/BPlusTree/LatticeConstants.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: wal
+    name: "Write-ahead log"
+    category: durability
+    definition: "The write-ahead log is the canonical commit boundary for tree mutations and the source for replay and derived projections."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "A successful SetAsync or DeleteAsync returns after the per-shard WAL append durability point."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "A WAL failure surfaces before in-memory mutation happens."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-wal-partitions"
+          value: 8
+          unit: "partitions"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-wal-max-batch-entries"
+          value: 100
+          unit: "entries"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/wal.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: wal-cursor
+    name: "WAL cursor"
+    category: durability
+    definition: "A WAL cursor records consumer progress through WAL records for replay, views, replication, backup, or retention."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Cursor lineage identifies the cluster that authored backup capture."
+          source: "docs/lattice.api.backup/api.md"
+      out_of_scope:
+        - statement: "A cursor does not itself retain records unless pinned by a consumer policy."
+          source: "docs/lattice/wal.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/wal.md"
+      - "docs/lattice.api.backup/api.md"
+  - id: wal-gc
+    name: "WAL garbage collection"
+    category: durability
+    definition: "WAL garbage collection trims records no retained consumer still needs."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "WAL GC uses trim floors derived from materialiser pins and consumers."
+          source: "docs/lattice/wal.md"
+      out_of_scope:
+        - statement: "A leaf without durable snapshot coverage can keep the tree WAL untrimmable."
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    operational_envelope:
+      limits:
+        - name: "default-wal-gc-interval"
+          value: 1
+          unit: "hour"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/wal.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: wal-move-placement
+    name: "WAL placement and move"
+    category: durability
+    definition: "WAL placement and move operations inspect, plan, copy, quiesce, and reclaim WAL provider placement for partitions."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Tree administration includes WAL placement audit and movement."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Default max concurrent partition moves is one."
+          source: "src/lattice/WalMoveOptions.cs"
+    operational_envelope:
+      limits:
+        - name: "default-copy-page-size"
+          value: 256
+          unit: "records"
+          source: "src/lattice/WalMoveOptions.cs"
+        - name: "default-max-concurrent-partition-moves"
+          value: 1
+          unit: "move"
+          source: "src/lattice/WalMoveOptions.cs"
+    sources:
+      - "docs/lattice.api.treeadmin/README.md"
+      - "src/lattice/WalMoveOptions.cs"
+  - id: wal-partition
+    name: "WAL partition"
+    category: durability
+    definition: "A WAL partition is the stable per-tree append stream chosen for a key by hash modulo WalPartitions."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "WalShardGrain is keyed by tree id and partition."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "The WAL partition hash is stable and non-cryptographic."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-wal-partitions"
+          value: 8
+          unit: "partitions"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: wal-saturation-signal
+    name: "WAL saturation signal"
+    category: durability
+    definition: "The WAL saturation signal reports healthy, throttled, or saturated state so callers can apply back-pressure."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Publishes a per-tree three-state back-pressure signal."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Callers must observe the signal to throttle offered load."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits:
+        - name: "default-sample-interval"
+          value: 200
+          unit: "milliseconds"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+        - name: "default-throttled-ratio"
+          value: 0.75
+          unit: "ratio"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/wal-saturation-signal.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: wal-shard
+    name: "WAL shard"
+    category: durability
+    definition: "A WAL shard grain appends and reads records for one tree partition against the configured WAL storage provider."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "WalShardGrain appends directly to IWalStorageProvider and recovers its next offset from the provider on activation."
+          source: "docs/lattice/architecture.md"
+      out_of_scope:
+        - statement: "WalShardGrain has no Orleans grain state of its own."
+          source: "docs/lattice/architecture.md"
+    operational_envelope:
+      limits:
+        - name: "default-wal-max-pending-batches"
+          value: 16
+          unit: "batches"
+          source: "src/lattice/BPlusTree/LatticeOptions.cs"
+    sources:
+      - "docs/lattice/architecture.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+  - id: wal-storage-provider
+    name: "WAL storage provider"
+    category: storage
+    definition: "A WAL storage provider implements durable append and read semantics behind the IWalStorageProvider seam."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "AddLattice registers an in-memory provider by default."
+          source: "docs/lattice/api.md"
+      out_of_scope:
+        - statement: "Hosts needing restart durability must replace the in-memory WAL with a persistent provider."
+          source: "docs/lattice/api.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/wal-storage-providers.md"
+      - "docs/lattice/api.md"
+  - id: write-interceptor
+    name: "Write interceptor"
+    category: governance
+    definition: "A write interceptor is a governance seam that inspects or rejects writes before core mutation proceeds."
+    packages:
+      - "Orleans.Lattice.Schema"
+    capability_boundary:
+      in_scope:
+        - statement: "Schema enforcement validates every local write against per-tree policy."
+          source: "FEATURES.md"
+      out_of_scope:
+        - statement: "Strict ingest dead-letters replicated or restored items instead of applying them."
+          source: "FEATURES.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.schema/README.md"
+      - "FEATURES.md"
+relationships:
+  - from: access-gate
+    relation: guards
+    to: api-facade
+    sources:
+      - "docs/lattice/security.md"
+  - from: administration-seam
+    relation: implements
+    to: api-treeadmin-facade
+    sources:
+      - "PACKAGES.md"
+  - from: agent-operated-backlog
+    relation: depends-on
+    to: fencing-token
+    sources:
+      - "docs/lattice.api.mcp.repocontext/backlog.md"
+  - from: agent-operated-backlog
+    relation: part-of
+    to: repocontext-store
+    sources:
+      - "docs/lattice.api.mcp.repocontext/backlog.md"
+  - from: api-auth-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.auth/README.md"
+  - from: api-backup-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.backup/README.md"
+  - from: api-data-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.data/README.md"
+  - from: api-replication-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.replication/README.md"
+  - from: api-schema-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.schema/README.md"
+  - from: api-state-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.state/README.md"
+  - from: api-telemetry-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.telemetry/README.md"
+  - from: api-tenantadmin-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.tenantadmin/README.md"
+  - from: api-treeadmin-facade
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.treeadmin/README.md"
+  - from: atomic-action-saga
+    relation: extends
+    to: atomic-batch
+    sources:
+      - "docs/lattice/atomic-action.md"
+  - from: atomic-batch
+    relation: consumes
+    to: wal
+    sources:
+      - "docs/lattice/atomic-writes.md"
+  - from: auth-group
+    relation: part-of
+    to: identity-seam
+    sources:
+      - "docs/lattice.api.auth/README.md"
+  - from: auth-rule
+    relation: guards
+    to: access-gate
+    sources:
+      - "docs/lattice.api.auth/README.md"
+  - from: autoscaling-signal
+    relation: observes
+    to: wal-saturation-signal
+    sources:
+      - "docs/lattice.scaling/README.md"
+  - from: azure-table-storage-provider
+    relation: implements
+    to: wal-storage-provider
+    sources:
+      - "docs/lattice.storage.azuretable/README.md"
+  - from: backup
+    relation: stores
+    to: storage-provider
+    sources:
+      - "docs/lattice.backup/README.md"
+  - from: bplus-internal-node
+    relation: part-of
+    to: bplus-tree
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: bplus-leaf-node
+    relation: consumes
+    to: wal
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: bplus-leaf-node
+    relation: part-of
+    to: bplus-tree
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: caching
+    relation: consumes
+    to: version-vector
+    sources:
+      - "docs/lattice/state-primitives.md"
+  - from: compaction
+    relation: consumes
+    to: tombstone
+    sources:
+      - "docs/lattice/tombstone-compaction.md"
+  - from: compression-dictionary
+    relation: configures
+    to: value-codec-envelope
+    sources:
+      - "docs/lattice/compression.md"
+  - from: conflict-resolution-merge
+    relation: depends-on
+    to: crdt-primitives
+    sources:
+      - "docs/crdt/readme.md"
+  - from: cross-tree-atomic
+    relation: extends
+    to: atomic-batch
+    sources:
+      - "docs/lattice/atomic-writes.md"
+  - from: cursor
+    relation: consumes
+    to: scan-range
+    sources:
+      - "docs/lattice/durable-cursors.md"
+  - from: dashboards
+    relation: observes
+    to: observability-seam
+    sources:
+      - "docs/lattice.dashboards/README.md"
+  - from: dead-letter
+    relation: produces
+    to: schema-version-policy
+    sources:
+      - "docs/lattice.schema/README.md"
+  - from: distributed-lock-lease
+    relation: produces
+    to: fencing-token
+    sources:
+      - "docs/lattice/distributed-lock.md"
+  - from: explorer
+    relation: consumes
+    to: grpc-binding
+    sources:
+      - "docs/lattice.explorer/README.md"
+  - from: file-storage-provider
+    relation: implements
+    to: wal-storage-provider
+    sources:
+      - "docs/lattice.storage.file/README.md"
+  - from: governance-seam
+    relation: guards
+    to: write-interceptor
+    sources:
+      - "PACKAGES.md"
+  - from: grpc-binding
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.state.grpc/README.md"
+  - from: history-retention
+    relation: configures
+    to: materialised-view
+    sources:
+      - "docs/lattice/history-views.md"
+  - from: identity-seam
+    relation: produces
+    to: membership-provider
+    sources:
+      - "PACKAGES.md"
+  - from: in-memory-storage-provider
+    relation: implements
+    to: wal-storage-provider
+    sources:
+      - "docs/lattice/api.md"
+  - from: leaf-split
+    relation: configures
+    to: bplus-leaf-node
+    sources:
+      - "docs/lattice/state-primitives.md"
+  - from: lww-register
+    relation: depends-on
+    to: hlc
+    sources:
+      - "docs/lattice/state-primitives.md"
+  - from: materialised-view
+    relation: consumes
+    to: wal-cursor
+    sources:
+      - "docs/lattice/materialised-views.md"
+  - from: mcp-tool-group
+    relation: implements
+    to: api-facade
+    sources:
+      - "docs/lattice.api.mcp/README.md"
+  - from: membership-provider
+    relation: produces
+    to: auth-group
+    sources:
+      - "docs/lattice.membership/README.md"
+  - from: merge-observer
+    relation: observes
+    to: conflict-resolution-merge
+    sources:
+      - "docs/lattice/api.md"
+  - from: mutation-observer
+    relation: observes
+    to: bplus-leaf-node
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: observability-seam
+    relation: observes
+    to: bplus-tree
+    sources:
+      - "PACKAGES.md"
+  - from: page
+    relation: part-of
+    to: scan-range
+    sources:
+      - "docs/lattice/api.md"
+  - from: predicate
+    relation: guards
+    to: scan-range
+    sources:
+      - "docs/lattice/predicated-operations.md"
+  - from: region
+    relation: configures
+    to: replication-peer
+    sources:
+      - "docs/lattice.replication/README.md"
+  - from: replication-cursor-watermark
+    relation: observes
+    to: wal
+    sources:
+      - "docs/lattice.replication/README.md"
+  - from: replication-peer
+    relation: part-of
+    to: replication-seam
+    sources:
+      - "docs/lattice.replication/README.md"
+  - from: replication-seam
+    relation: replicates
+    to: wal
+    sources:
+      - "PACKAGES.md"
+  - from: repocontext-store
+    relation: stores
+    to: vector-index
+    sources:
+      - "docs/lattice.api.mcp.repocontext/README.md"
+  - from: reshard
+    relation: configures
+    to: shard-map
+    sources:
+      - "docs/lattice/online-reshard.md"
+  - from: resize
+    relation: configures
+    to: tree-alias
+    sources:
+      - "docs/lattice/tree-sizing.md"
+  - from: restore
+    relation: consumes
+    to: backup
+    sources:
+      - "docs/lattice.backup/README.md"
+  - from: scan-range
+    relation: consumes
+    to: page
+    sources:
+      - "docs/lattice/api.md"
+  - from: schema-version-policy
+    relation: guards
+    to: write-interceptor
+    sources:
+      - "docs/lattice.schema/README.md"
+  - from: secondary-grain-index
+    relation: extends
+    to: predicate
+    sources:
+      - "docs/lattice.grainindex/README.md"
+  - from: shard
+    relation: part-of
+    to: bplus-tree
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: shard-map
+    relation: configures
+    to: shard
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: shard-root
+    relation: part-of
+    to: shard
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: shard-split
+    relation: configures
+    to: shard-map
+    sources:
+      - "docs/lattice/shard-splitting.md"
+  - from: shipper
+    relation: replicates
+    to: wal
+    sources:
+      - "docs/lattice.replication/README.md"
+  - from: snapshot
+    relation: stores
+    to: bplus-leaf-node
+    sources:
+      - "docs/lattice/snapshots.md"
+  - from: storage-provider
+    relation: implements
+    to: storage-seam
+    sources:
+      - "README.md"
+  - from: storage-seam
+    relation: stores
+    to: wal-storage-provider
+    sources:
+      - "docs/lattice/wal-storage-providers.md"
+  - from: tag-index
+    relation: extends
+    to: bplus-tree
+    sources:
+      - "docs/lattice/api.md"
+  - from: tenant
+    relation: part-of
+    to: regions-tenants
+    sources:
+      - "docs/lattice.tenancy/README.md"
+  - from: tenant-admission
+    relation: guards
+    to: tenant
+    sources:
+      - "docs/lattice.tenancy/README.md"
+  - from: tombstone
+    relation: part-of
+    to: lww-register
+    sources:
+      - "docs/lattice/state-primitives.md"
+  - from: tree
+    relation: stores
+    to: bplus-tree
+    sources:
+      - "README.md"
+  - from: tree-alias
+    relation: configures
+    to: tree
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: ttl
+    relation: produces
+    to: tombstone
+    sources:
+      - "docs/lattice/ttl.md"
+  - from: value-codec-envelope
+    relation: stores
+    to: lww-register
+    sources:
+      - "docs/lattice/api.md"
+  - from: vector-index
+    relation: stores
+    to: repocontext-store
+    sources:
+      - "docs/lattice.vector/README.md"
+  - from: version-vector
+    relation: produces
+    to: caching
+    sources:
+      - "docs/lattice/state-primitives.md"
+  - from: virtual-slot
+    relation: part-of
+    to: shard-map
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: wal
+    relation: stores
+    to: wal-shard
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: wal-cursor
+    relation: observes
+    to: wal
+    sources:
+      - "docs/lattice/wal.md"
+  - from: wal-gc
+    relation: consumes
+    to: wal-cursor
+    sources:
+      - "docs/lattice/wal.md"
+  - from: wal-move-placement
+    relation: configures
+    to: wal-storage-provider
+    sources:
+      - "docs/lattice.api.treeadmin/README.md"
+  - from: wal-partition
+    relation: part-of
+    to: wal
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: wal-saturation-signal
+    relation: observes
+    to: wal
+    sources:
+      - "docs/lattice/wal-saturation-signal.md"
+  - from: wal-shard
+    relation: part-of
+    to: wal-partition
+    sources:
+      - "docs/lattice/architecture.md"
+  - from: wal-storage-provider
+    relation: implements
+    to: storage-seam
+    sources:
+      - "docs/lattice/wal-storage-providers.md"
+  - from: write-interceptor
+    relation: guards
+    to: bplus-tree
+    sources:
+      - "docs/lattice.schema/README.md"

@@ -1,0 +1,423 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "replication",
+  "packages": [
+    "Orleans.Lattice.Api.Replication",
+    "Orleans.Lattice.Api.Replication.Grpc"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
+    "src/lattice.api.replication/LatticeReplicationControl.cs#LatticeReplicationControl",
+    "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
+    "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+    "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#ILatticeReplicationConfigAuthority"
+  ],
+  "in_process": {
+    "interface": "ILatticeReplicationControl",
+    "registration": "ISiloBuilder.AddLatticeReplicationApi after AddLatticeReplication(..., enableRuntimeConfig: true).",
+    "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#AddLatticeReplicationApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.replication",
+    "methods_source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
+    "marshalling": "LatticeReplicationGrpcMarshallers.Create delegates to the Orleans serializer.",
+    "metadata": [
+      {
+        "name": "authorization",
+        "purpose": "Credential token header; the default bridge strips the configured Bearer scheme and stamps a LatticeCredential.",
+        "source": "src/lattice.api.replication.grpc/HeaderLatticeReplicationApiCredentialBridge.cs#HeaderLatticeReplicationApiCredentialBridge"
+      },
+      {
+        "name": "active tenant header",
+        "purpose": "Configured active tenant assertion header; the assertion is re-validated downstream and grants no access by itself.",
+        "source": "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcOptions.cs#ActiveTenantHeaderName"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeReplicationApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeReplicationApiAuthorizer",
+      "decision": "Default deny when RequireAuthorization is true; GetAuthScheme is exempt.",
+      "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
+    }
+  },
+  "types": {
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/AuthSchemeAdvertisement.cs#AuthSchemeAdvertisement"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.replication.grpc/Model/AuthSchemeAdvertisementRequest.cs#AuthSchemeAdvertisementRequest"
+    },
+    "AuthSchemeDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Parameters",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/AuthSchemeDescriptor.cs#AuthSchemeDescriptor"
+    },
+    "LatticeMergeMode": {
+      "kind": "enum",
+      "values": [
+        "LwwRegister",
+        "OrSet",
+        "PnCounter",
+        "VersionVector",
+        "MvRegister",
+        "OrMap",
+        "Sequence",
+        "OrFlag",
+        "RwFlag",
+        "GCounter",
+        "GSet",
+        "RwSet",
+        "MaxRegister",
+        "MinRegister"
+      ],
+      "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
+    },
+    "ReplicationConfigResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Trees",
+          "type": "IReadOnlyList<ReplicationTreeConfigMessage>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationConfigResponse.cs#ReplicationConfigResponse"
+    },
+    "ReplicationDisableRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationDisableRequestMessage.cs#ReplicationDisableRequestMessage"
+    },
+    "ReplicationDisableResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "AlreadyDisabled",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationDisableResponse.cs#ReplicationDisableResponse"
+    },
+    "ReplicationEnableRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeMergeMode",
+          "required": false
+        },
+        {
+          "name": "BootstrapSourceClusterId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationEnableRequestMessage.cs#ReplicationEnableRequestMessage"
+    },
+    "ReplicationEnableResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeMergeMode",
+          "required": false
+        },
+        {
+          "name": "AlreadyEnabled",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "BootstrapRequested",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationEnableResponse.cs#ReplicationEnableResponse"
+    },
+    "ReplicationEnrollmentSource": {
+      "kind": "enum",
+      "values": [
+        "Runtime",
+        "Static",
+        "RuntimeAndStatic"
+      ],
+      "source": "src/lattice.api.abstractions/Replication/Model/ReplicationEnrollmentSource.cs#ReplicationEnrollmentSource"
+    },
+    "ReplicationGetConfigRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationGetConfigRequest.cs#ReplicationGetConfigRequest"
+    },
+    "ReplicationTreeConfigMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Enabled",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "HasMode",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeMergeMode",
+          "required": false
+        },
+        {
+          "name": "Ambiguous",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Source",
+          "type": "ReplicationEnrollmentSource",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.replication.grpc/Model/ReplicationTreeConfigMessage.cs#ReplicationTreeConfigMessage"
+    }
+  },
+  "operations": [
+    {
+      "id": "disable-replication",
+      "in_process": "ILatticeReplicationControl.DisableReplicationAsync",
+      "grpc_method": "/orleans.lattice.api.replication/DisableReplication",
+      "transport_scope": "both",
+      "request": "ReplicationDisableRequestMessage",
+      "response": "ReplicationDisableResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is null or empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "A real disable would be authored but no local replica id is configured."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Idempotent; absent or already disabled trees author no new dot and report AlreadyDisabled=true.",
+        "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#DisableReplicationAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Disabling a tree that is absent or already disabled authors no new dot.",
+        "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#DisableReplicationAsync"
+      },
+      "concurrency": {
+        "rule": "Disable authors a disable-wins flag dot and does not tear down already-active shippers or purge peer data.",
+        "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#DisableReplicationAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#DisableReplicationAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#DisableReplicationMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#DisableReplication"
+      ]
+    },
+    {
+      "id": "enable-replication",
+      "in_process": "ILatticeReplicationControl.EnableReplicationAsync",
+      "grpc_method": "/orleans.lattice.api.replication/EnableReplication",
+      "transport_scope": "both",
+      "request": "ReplicationEnableRequestMessage",
+      "response": "ReplicationEnableResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is null or empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Runtime preconditions are not met or the requested mode changes an already-enabled tree."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Safe for the same mode when already enabled; a different or ambiguous mode is rejected.",
+        "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#EnableReplicationAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Already enabled under the same unambiguous mode is an idempotent no-op; different or ambiguous mode is rejected.",
+        "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#EnableReplicationAsync"
+      },
+      "concurrency": {
+        "rule": "Merge mode is fixed at enable time; disable then re-enable to change mode.",
+        "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#EnableReplicationAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#EnableReplicationAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#EnableReplicationMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#EnableReplication"
+      ]
+    },
+    {
+      "id": "get-auth-scheme",
+      "in_process": "ILatticeReplicationApiAuthSchemeSource.GetAdvertisement",
+      "grpc_method": "/orleans.lattice.api.replication/GetAuthScheme",
+      "transport_scope": "both",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [],
+      "retry": {
+        "safe": true,
+        "policy": "Unauthenticated read of configured public advertisement.",
+        "source": "src/lattice.api.replication.grpc/Security/OptionsLatticeReplicationApiAuthSchemeSource.cs#GetAdvertisement"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Returns the configured advertised auth schemes and has no side effects.",
+        "source": "src/lattice.api.replication.grpc/Security/OptionsLatticeReplicationApiAuthSchemeSource.cs#GetAdvertisement"
+      },
+      "concurrency": {
+        "rule": "Exempt from the authorization interceptor so clients can discover how to sign in.",
+        "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#IsUnauthenticatedMethod"
+      },
+      "sources": [
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#GetAuthSchemeMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#GetAuthScheme"
+      ]
+    },
+    {
+      "id": "get-replication-config",
+      "in_process": "ILatticeReplicationControl.GetReplicationConfigAsync",
+      "grpc_method": "/orleans.lattice.api.replication/GetReplicationConfig",
+      "transport_scope": "both",
+      "request": "ReplicationGetConfigRequest",
+      "response": "ReplicationConfigResponse",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "Trees outside the caller grant are silently omitted."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only permission-scoped status report.",
+        "source": "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation.",
+        "source": "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync"
+      },
+      "concurrency": {
+        "rule": "Denied trees are silently omitted, so discovery never reveals trees outside the caller grant.",
+        "source": "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#GetReplicationConfigMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#GetReplicationConfig"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": false,
+      "meaning": "The request or authorization check was cancelled.",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "failed-precondition",
+      "type": "LatticeReplicationPreconditionFailedException or LatticeReplicationModeChangeRejectedException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "Replication runtime preconditions failed or a mode change was rejected.",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "Unhandled server failure.",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "invalid-argument",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "The request is invalid.",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "permission-denied",
+      "type": "LatticeAuthorizationDeniedException or LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The caller is not authorized or cannot act as the asserted tenant.",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    }
+  ]
+}

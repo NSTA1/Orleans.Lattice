@@ -1,0 +1,378 @@
+{
+  "schema": "lattice.agents/governance-policies/v1",
+  "role_permission_catalogue": {
+    "operations": [
+      "Admin",
+      "AtomicWrite",
+      "Backup",
+      "BulkLoad",
+      "CrdtApply",
+      "Delete",
+      "RangeDelete",
+      "RangeRead",
+      "Read",
+      "Replication",
+      "Restore",
+      "SchemaAdmin",
+      "Telemetry",
+      "TreeLifecycle",
+      "Write"
+    ],
+    "effects": [
+      "Allow",
+      "Deny"
+    ],
+    "subjects": [
+      "Group",
+      "User"
+    ],
+    "scopes": [
+      "ClusterWide",
+      "Key",
+      "Prefix",
+      "Tree"
+    ],
+    "source": "src/lattice/LatticeOperation.cs"
+  },
+  "policy_definitions": [
+    {
+      "id": "cross-tenant-grant",
+      "fields": [
+        "granter_tenant_id",
+        "grantee_tenant_id",
+        "scope",
+        "operations",
+        "state"
+      ],
+      "definition": "A grant is pending until the grantee approves and then authorizes the requested access.",
+      "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+    },
+    {
+      "id": "lattice-authorization-rule",
+      "fields": [
+        "rule_id",
+        "subject",
+        "scope",
+        "operations",
+        "effect",
+        "condition"
+      ],
+      "definition": "A rule grants or denies operation flags over a tree, key, or prefix to a user or group.",
+      "source": "src/lattice.auth/LatticeAuthorizationRule.cs"
+    },
+    {
+      "id": "tenant-quotas",
+      "fields": [
+        "max_bytes",
+        "max_keys",
+        "max_memory_bytes",
+        "max_tree_count",
+        "max_ops_per_second",
+        "burst_percent"
+      ],
+      "definition": "Nullable quota dimensions are unbounded and BurstPercent is transient headroom above bounded ceilings.",
+      "source": "src/lattice.tenancy/TenantQuotas.cs"
+    },
+    {
+      "id": "tenant-region-policy",
+      "fields": [
+        "allowed_regions",
+        "region_status"
+      ],
+      "definition": "Allowed regions are operator authored and residency must stay within that allowed set.",
+      "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+    }
+  ],
+  "security_options": [
+    {
+      "id": "api-auth-grpc-options",
+      "type": "LatticeAuthApiGrpcOptions",
+      "properties": [
+        {
+          "name": "CredentialHeaderName",
+          "type": "string",
+          "default": "authorization"
+        },
+        {
+          "name": "CredentialScheme",
+          "type": "string",
+          "default": "Bearer"
+        },
+        {
+          "name": "RequireAuthorization",
+          "type": "bool",
+          "default": true
+        }
+      ],
+      "source": "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs"
+    },
+    {
+      "id": "api-tenantadmin-grpc-options",
+      "type": "LatticeTenantAdminApiGrpcOptions",
+      "properties": [
+        {
+          "name": "ActiveTenantHeaderName",
+          "type": "string",
+          "default": "lattice-active-tenant"
+        },
+        {
+          "name": "AdvertisedAuthSchemes",
+          "type": "IList<AuthSchemeDescriptor>",
+          "default": "empty"
+        },
+        {
+          "name": "CredentialHeaderName",
+          "type": "string",
+          "default": "authorization"
+        },
+        {
+          "name": "CredentialScheme",
+          "type": "string",
+          "default": "Bearer"
+        },
+        {
+          "name": "RequireAuthorization",
+          "type": "bool",
+          "default": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcOptions.cs"
+    },
+    {
+      "id": "auth-options",
+      "type": "LatticeAuthOptions",
+      "properties": [
+        {
+          "name": "AccessAdministrationDelegationEnabled",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "name": "AllTreesGrantsEnabled",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "name": "AuditSamplingRatio",
+          "type": "double",
+          "default": 1.0
+        },
+        {
+          "name": "AuditVerbosity",
+          "type": "LatticeAuthAuditVerbosity",
+          "default": "DenyOnly"
+        },
+        {
+          "name": "BootstrapAdministrators",
+          "type": "ISet<string>",
+          "default": "empty"
+        },
+        {
+          "name": "DefaultEffect",
+          "type": "LatticeEffect",
+          "default": "Deny"
+        },
+        {
+          "name": "EnableAuditSink",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "name": "EnableDurableAuditTrail",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "name": "UserRuleBeatsGroupRuleAtEqualScope",
+          "type": "bool",
+          "default": true
+        }
+      ],
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "entra-authenticator-options",
+      "type": "LatticeEntraAuthenticatorOptions",
+      "properties": [
+        {
+          "name": "Algorithms",
+          "type": "IList<string>",
+          "default": "RS256"
+        },
+        {
+          "name": "Audiences",
+          "type": "IList<string>",
+          "default": "empty invalid until configured"
+        },
+        {
+          "name": "GroupResolutionMode",
+          "type": "EntraGroupResolutionMode",
+          "default": "TokenOnly"
+        },
+        {
+          "name": "TenantIds",
+          "type": "IList<string>",
+          "default": "empty allow-list"
+        }
+      ],
+      "source": "src/lattice.membership.entra/LatticeEntraAuthenticatorOptions.cs"
+    },
+    {
+      "id": "identity-directory-options",
+      "type": "LatticeIdentityDirectoryOptions",
+      "properties": [
+        {
+          "name": "DefaultPageSize",
+          "type": "int",
+          "default": 25
+        },
+        {
+          "name": "MaxPageSize",
+          "type": "int",
+          "default": 100
+        },
+        {
+          "name": "ValidationRequired",
+          "type": "bool",
+          "default": false
+        }
+      ],
+      "source": "src/lattice.membership/LatticeIdentityDirectoryOptions.cs"
+    },
+    {
+      "id": "jwt-authenticator-options",
+      "type": "JwtAuthenticatorOptions",
+      "properties": [
+        {
+          "name": "Algorithms",
+          "type": "IList<string>",
+          "default": "derived from key families"
+        },
+        {
+          "name": "Audiences",
+          "type": "IList<string>",
+          "default": "empty invalid when ValidateAudience true"
+        },
+        {
+          "name": "Issuer",
+          "type": "string",
+          "default": "empty invalid until configured"
+        },
+        {
+          "name": "RequireAlgorithmPin",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "name": "ValidateAudience",
+          "type": "bool",
+          "default": true
+        }
+      ],
+      "source": "src/lattice.membership/JwtAuthenticatorOptions.cs"
+    },
+    {
+      "id": "membership-options",
+      "type": "LatticeMembershipOptions",
+      "properties": [
+        {
+          "name": "ClaimToGroups",
+          "type": "Func<IReadOnlyDictionary<string,string>,IEnumerable<string>>",
+          "default": null
+        },
+        {
+          "name": "EnableDurableHistoryView",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "GroupMergeMode",
+          "type": "SubjectGroupMergeMode",
+          "default": "Union"
+        },
+        {
+          "name": "ResolutionCacheTtl",
+          "type": "TimeSpan",
+          "default": "00:05:00"
+        }
+      ],
+      "source": "src/lattice.membership/LatticeMembershipOptions.cs"
+    },
+    {
+      "id": "oidc-authenticator-options",
+      "type": "LatticeOidcAuthenticatorOptions",
+      "properties": [
+        {
+          "name": "Algorithms",
+          "type": "IList<string>",
+          "default": "provider discovery"
+        },
+        {
+          "name": "Audiences",
+          "type": "IList<string>",
+          "default": "empty invalid until configured"
+        },
+        {
+          "name": "Issuer",
+          "type": "string",
+          "default": "empty invalid until configured"
+        },
+        {
+          "name": "SubjectClaimTypes",
+          "type": "IList<string>",
+          "default": "sub"
+        }
+      ],
+      "source": "src/lattice.membership.oidc/LatticeOidcAuthenticatorOptions.cs"
+    },
+    {
+      "id": "tenancy-options",
+      "type": "LatticeTenancyOptions",
+      "properties": [
+        {
+          "name": "EnableDurableHistoryView",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "HistoryRetentionMode",
+          "type": "HistoryRetentionMode",
+          "default": "MetadataOnly"
+        },
+        {
+          "name": "HistoryRetentionWindow",
+          "type": "TimeSpan?",
+          "default": null
+        },
+        {
+          "name": "SeedDefaultTenant",
+          "type": "bool",
+          "default": true
+        }
+      ],
+      "source": "src/lattice.tenancy/LatticeTenancyOptions.cs"
+    }
+  ],
+  "allow_lists": [
+    {
+      "id": "bootstrap-administrators",
+      "definition": "Subject ids listed here are treated as Admin on every tree and operation.",
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "entra-tenant-ids",
+      "definition": "Only tokens whose tid is in TenantIds are handled by the Entra authenticator.",
+      "source": "src/lattice.membership.entra/LatticeEntraAuthenticatorOptions.cs"
+    },
+    {
+      "id": "jwt-algorithms",
+      "definition": "Configured or derived token signature algorithm allow-list; required pins fail closed when configured by provider options.",
+      "source": "src/lattice.membership/JwtAuthenticatorOptions.cs"
+    },
+    {
+      "id": "strict-consistency-trees",
+      "definition": "Tree ids listed here reject user writes when the required policy epoch floor has not converged locally.",
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    }
+  ]
+}

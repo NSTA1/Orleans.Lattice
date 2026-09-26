@@ -1,0 +1,2254 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "backup",
+  "packages": [
+    "Orleans.Lattice.Api.Backup",
+    "Orleans.Lattice.Api.Backup.Grpc",
+    "Orleans.Lattice.Api.Abstractions",
+    "Orleans.Lattice.Backup"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+    "src/lattice.api.backup/LatticeBackupControl.cs",
+    "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs",
+    "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs",
+    "src/lattice.backup/BackupManifest.cs"
+  ],
+  "in_process": {
+    "interface": "ILatticeBackupControl",
+    "registration": "AddLatticeBackupApi",
+    "source": "src/lattice.api.backup/LatticeApiBackupServiceCollectionExtensions.cs#AddLatticeBackupApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.backup",
+    "methods_source": "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods",
+    "marshalling": "LatticeBackupGrpcMarshallers.Create uses Orleans Serializer<T> for gRPC payloads.",
+    "metadata": [
+      {
+        "name": "active-tenant",
+        "purpose": "Carries the asserted active tenant header into LatticeActiveTenantContext.",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#StampActiveTenant"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeBackupApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeBackupApiAuthorizer",
+      "decision": "RequireAuthorization defaults to true; GetAuthScheme is exempt and unknown operations deny by default.",
+      "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs#LatticeBackupApiGrpcAuthInterceptor"
+    }
+  },
+  "types": {
+    "ArtifactChunk": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Data",
+          "type": "byte[]",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/ArtifactChunk.cs#ArtifactChunk"
+    },
+    "ArtifactExportRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ArtifactId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/ArtifactExportRequest.cs#ArtifactExportRequest"
+    },
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/AuthSchemeAdvertisement.cs#AuthSchemeAdvertisement"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/AuthSchemeAdvertisementRequest.cs#AuthSchemeAdvertisementRequest"
+    },
+    "BackupCancelScheduleRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        },
+        {
+          "name": "Incremental",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCancelScheduleRequestMessage.cs#BackupCancelScheduleRequestMessage"
+    },
+    "BackupCancelScheduleResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCancelScheduleResponse.cs#BackupCancelScheduleResponse"
+    },
+    "BackupCapabilityProbeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCapabilityProbeRequest.cs#BackupCapabilityProbeRequest"
+    },
+    "BackupCaptureRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCaptureRequestMessage.cs#BackupCaptureRequestMessage"
+    },
+    "BackupCaptureResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Manifest",
+          "type": "BackupManifest",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupCaptureResponse.cs#BackupCaptureResponse"
+    },
+    "BackupCatalogPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<BackupManifest>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Backup/Model/BackupCatalogPage.cs#BackupCatalogPage"
+    },
+    "BackupCatalogRebuildReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ScannedCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "RegisteredCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "ReconciledCount",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.backup/BackupCatalogRebuildReport.cs#BackupCatalogRebuildReport"
+    },
+    "BackupCatalogRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "OrderByCreatedDescending",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "BackupKind?",
+          "required": false
+        },
+        {
+          "name": "NamePrefix",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "TreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "CreatedPrefix",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Backup/Model/BackupCatalogRequest.cs#BackupCatalogRequest"
+    },
+    "BackupCatalogScrubReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ScannedCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "OrphanCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "RemovedCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Pruned",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "OrphanBackupIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.backup/BackupCatalogScrubReport.cs#BackupCatalogScrubReport"
+    },
+    "BackupChainResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Manifest",
+          "type": "BackupManifest?",
+          "required": false
+        },
+        {
+          "name": "ChainBackupIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupChainResponse.cs#BackupChainResponse"
+    },
+    "BackupDeleteRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupDeleteRequest.cs#BackupDeleteRequest"
+    },
+    "BackupDeleteResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Deleted",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupDeleteResponse.cs#BackupDeleteResponse"
+    },
+    "BackupDescribeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupDescribeRequest.cs#BackupDescribeRequest"
+    },
+    "BackupHealthAvailabilityRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthAvailabilityRequest.cs#BackupHealthAvailabilityRequest"
+    },
+    "BackupHealthAvailabilityResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Available",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthAvailabilityResponse.cs#BackupHealthAvailabilityResponse"
+    },
+    "BackupHealthCheckRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthCheckRequestMessage.cs#BackupHealthCheckRequestMessage"
+    },
+    "BackupHealthConfig": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "MonitoringEnabled",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Interval",
+          "type": "TimeSpan",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.backup/BackupHealthConfig.cs#BackupHealthConfig"
+    },
+    "BackupHealthConfigureRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "MonitoringEnabled",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "IntervalTicks",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthConfigureRequestMessage.cs#BackupHealthConfigureRequestMessage"
+    },
+    "BackupHealthConfigureResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthConfigureResponse.cs#BackupHealthConfigureResponse"
+    },
+    "BackupHealthGetRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthGetRequestMessage.cs#BackupHealthGetRequestMessage"
+    },
+    "BackupHealthReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "BackupHealthStatus",
+          "required": true
+        },
+        {
+          "name": "ManifestPresent",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "MissingArtifactIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "HashMismatchArtifactIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "CheckedAtUtc",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Explanation",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PeerVisibility",
+          "type": "BackupSinkSharingStatus",
+          "required": true
+        },
+        {
+          "name": "PeerUnconfirmedClusterIds",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.backup/BackupHealthReport.cs#BackupHealthReport"
+    },
+    "BackupHealthReportResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Report",
+          "type": "BackupHealthReport?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupHealthReportResponse.cs#BackupHealthReportResponse"
+    },
+    "BackupIncrementalCaptureRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        },
+        {
+          "name": "BaseBackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupIncrementalCaptureRequestMessage.cs#BackupIncrementalCaptureRequestMessage"
+    },
+    "BackupInventoryReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TotalBackupCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalCatalogBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "FullBackupCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "IncrementalBackupCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "OldestBackupUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "NewestBackupUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "CaptureFailureCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "RestoreFailureCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "BytesReclaimed",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Backup/Model/BackupInventoryReport.cs#BackupInventoryReport"
+    },
+    "BackupManifest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "CreatedAtUtc",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "BackupKind",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        },
+        {
+          "name": "ConsistencyCut",
+          "type": "BackupConsistencyCut",
+          "required": true
+        },
+        {
+          "name": "Topology",
+          "type": "BackupTopologySnapshot",
+          "required": true
+        },
+        {
+          "name": "StructuralDigest",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "KeyDescriptors",
+          "type": "IReadOnlyList<BackupKeyDescriptor>",
+          "required": false
+        },
+        {
+          "name": "ContentDescriptors",
+          "type": "IReadOnlyList<BackupContentDescriptor>",
+          "required": false
+        },
+        {
+          "name": "Provenance",
+          "type": "IReadOnlyList<BackupOriginProvenance>",
+          "required": false
+        },
+        {
+          "name": "BaseBackupId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "CompressionDictionary",
+          "type": "BackupCompressionDictionaryRef?",
+          "required": false
+        },
+        {
+          "name": "SetId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SetName",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SetCreatedAtUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "CapturingClusterId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.backup/BackupManifest.cs#BackupManifest"
+    },
+    "BackupScheduleRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        },
+        {
+          "name": "Incremental",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "IntervalTicks",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupScheduleRequestMessage.cs#BackupScheduleRequestMessage"
+    },
+    "BackupScheduleResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Scheduled",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "EffectiveIntervalTicks",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupScheduleResponse.cs#BackupScheduleResponse"
+    },
+    "BackupScopeCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        },
+        {
+          "name": "CanList",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanCapture",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanCaptureIncremental",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanRestore",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanDelete",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Backup/Model/BackupScopeCapabilities.cs#BackupScopeCapabilities"
+    },
+    "BackupScopeSelector": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Kind",
+          "type": "BackupScopeKind",
+          "required": true
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "KeyOrPrefix",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.backup/BackupScopeSelector.cs#BackupScopeSelector"
+    },
+    "BackupScopeStatusRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupScopeStatusRequestMessage.cs#BackupScopeStatusRequestMessage"
+    },
+    "BackupScopeStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector?",
+          "required": false
+        },
+        {
+          "name": "FullScheduleRegistered",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "IncrementalScheduleRegistered",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "LastFullRunUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "LastFullSuccessUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "LastIncrementalRunUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "LastIncrementalSuccessUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "LastRunOutcome",
+          "type": "BackupScopeRunOutcome",
+          "required": true
+        },
+        {
+          "name": "ChainDepth",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "RuntimeFullBackupIntervalTicks",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "RuntimeIncrementalBackupIntervalTicks",
+          "type": "long?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupScopeStatusResponse.cs#BackupScopeStatusResponse"
+    },
+    "BackupSetCaptureRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Scopes",
+          "type": "IReadOnlyList<BackupScopeSelector>",
+          "required": true
+        },
+        {
+          "name": "CrossTreeConsistent",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetCaptureRequestMessage.cs#BackupSetCaptureRequestMessage"
+    },
+    "BackupSetCaptureResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SetManifest",
+          "type": "BackupSetManifest",
+          "required": true
+        },
+        {
+          "name": "Members",
+          "type": "IReadOnlyList<BackupCaptureResponse>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetCaptureResponse.cs#BackupSetCaptureResponse"
+    },
+    "BackupStreamRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/BackupStreamRequest.cs#BackupStreamRequest"
+    },
+    "LatticeRestoreRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector?",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeRestoreMode",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ApplyBatchSize",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.backup/LatticeRestoreRequest.cs#LatticeRestoreRequest"
+    },
+    "LatticeRestoreResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeRestoreMode",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ManifestChain",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "EntriesApplied",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "ShadowPhysicalTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PreviousPhysicalTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "DeadLetteredCrossTenant",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "DeadLetteredOverQuota",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.backup/LatticeRestoreResult.cs#LatticeRestoreResult"
+    },
+    "RestoreRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Scope",
+          "type": "BackupScopeSelector?",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeRestoreMode",
+          "required": false
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ApplyBatchSize",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/RestoreRequestMessage.cs#RestoreRequestMessage"
+    },
+    "RestoreResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeRestoreMode",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ManifestChain",
+          "type": "IReadOnlyList<string>",
+          "required": false
+        },
+        {
+          "name": "EntriesApplied",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "ShadowPhysicalTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PreviousPhysicalTreeId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/RestoreResponse.cs#RestoreResponse"
+    },
+    "RevertRestoreResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/RevertRestoreResponse.cs#RevertRestoreResponse"
+    },
+    "NoRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ILatticeBackupControl"
+    },
+    "BackupCatalogScrubRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "pruneOrphans",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync"
+    }
+  },
+  "operations": [
+    {
+      "id": "cancel-schedule",
+      "in_process": "ILatticeBackupControl.CancelScheduleAsync",
+      "grpc_method": "/orleans.lattice.api.backup/CancelSchedule",
+      "transport_scope": "both",
+      "request": "BackupCancelScheduleRequestMessage",
+      "response": "BackupCancelScheduleResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelScheduleAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Schedule removal is idempotent.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelScheduleAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelScheduleAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelScheduleAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CancelSchedule"
+      ]
+    },
+    {
+      "id": "check-backup-health",
+      "in_process": "ILatticeBackupControl.CheckBackupHealthAsync",
+      "grpc_method": "/orleans.lattice.api.backup/CheckBackupHealth",
+      "transport_scope": "both",
+      "request": "BackupHealthCheckRequestMessage",
+      "response": "BackupHealthReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CheckBackupHealthAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CheckBackupHealthAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CheckBackupHealthAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CheckBackupHealth"
+      ]
+    },
+    {
+      "id": "cold-restore",
+      "in_process": "ILatticeBackupControl.ColdRestoreAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods",
+      "request": "LatticeRestoreRequest",
+      "response": "LatticeRestoreResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Re-running converges to the same state.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
+      ]
+    },
+    {
+      "id": "configure-backup-health",
+      "in_process": "ILatticeBackupControl.ConfigureBackupHealthAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ConfigureBackupHealth",
+      "transport_scope": "both",
+      "request": "BackupHealthConfigureRequestMessage",
+      "response": "BackupHealthConfigureResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ConfigureBackupHealthAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ConfigureBackupHealthAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ConfigureBackupHealthAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ConfigureBackupHealth"
+      ]
+    },
+    {
+      "id": "create-backup",
+      "in_process": "ILatticeBackupControl.CreateBackupAsync",
+      "grpc_method": "/orleans.lattice.api.backup/CreateBackup",
+      "transport_scope": "both",
+      "request": "BackupCaptureRequestMessage",
+      "response": "BackupCaptureResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CreateBackup"
+      ]
+    },
+    {
+      "id": "create-backup-set",
+      "in_process": "ILatticeBackupControl.CreateBackupSetAsync",
+      "grpc_method": "/orleans.lattice.api.backup/CreateBackupSet",
+      "transport_scope": "both",
+      "request": "BackupSetCaptureRequestMessage",
+      "response": "BackupSetCaptureResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+      },
+      "concurrency": {
+        "rule": "Cross-tree consistent multi-tree sets use one causal fence.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CreateBackupSet"
+      ]
+    },
+    {
+      "id": "create-incremental-backup",
+      "in_process": "ILatticeBackupControl.CreateIncrementalBackupAsync",
+      "grpc_method": "/orleans.lattice.api.backup/CreateIncrementalBackup",
+      "transport_scope": "both",
+      "request": "BackupIncrementalCaptureRequestMessage",
+      "response": "BackupCaptureResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CreateIncrementalBackup"
+      ]
+    },
+    {
+      "id": "delete-backup",
+      "in_process": "ILatticeBackupControl.DeleteBackupAsync",
+      "grpc_method": "/orleans.lattice.api.backup/DeleteBackup",
+      "transport_scope": "both",
+      "request": "BackupDeleteRequest",
+      "response": "BackupDeleteResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Missing backup returns false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#DeleteBackup"
+      ]
+    },
+    {
+      "id": "describe-backup",
+      "in_process": "ILatticeBackupControl.DescribeBackupAsync",
+      "grpc_method": "/orleans.lattice.api.backup/DescribeBackup",
+      "transport_scope": "both",
+      "request": "BackupDescribeRequest",
+      "response": "BackupChainResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Missing backup returns null or Found=false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#DescribeBackup"
+      ]
+    },
+    {
+      "id": "export-artifact",
+      "in_process": "ILatticeBackupControl.ExportArtifactAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ExportArtifact",
+      "transport_scope": "both",
+      "request": "ArtifactExportRequest",
+      "response": "ArtifactChunk",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "Requested resource was not found."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ExportArtifactAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only bounded stream.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ExportArtifactAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ExportArtifactAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ExportArtifactAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ExportArtifact"
+      ]
+    },
+    {
+      "id": "get-auth-scheme",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.api.backup/GetAuthScheme",
+      "transport_scope": "grpc_only",
+      "transport_scope_source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#GetAuthScheme",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#GetAuthScheme"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Unauthenticated discovery has no side effects.",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#GetAuthScheme"
+      },
+      "concurrency": {
+        "rule": "GetAuthScheme is exempt from authorization.",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#GetAuthScheme"
+      },
+      "sources": [
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#GetAuthScheme",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetAuthScheme"
+      ]
+    },
+    {
+      "id": "get-backup-health",
+      "in_process": "ILatticeBackupControl.GetBackupHealthAsync",
+      "grpc_method": "/orleans.lattice.api.backup/GetBackupHealth",
+      "transport_scope": "both",
+      "request": "BackupHealthGetRequestMessage",
+      "response": "BackupHealthReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only report lookup.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetBackupHealth"
+      ]
+    },
+    {
+      "id": "get-inventory",
+      "in_process": "ILatticeBackupControl.GetInventoryAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods",
+      "request": "NoRequest",
+      "response": "BackupInventoryReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetInventoryAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only inventory summary.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetInventoryAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetInventoryAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetInventoryAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
+      ]
+    },
+    {
+      "id": "get-scope-status",
+      "in_process": "ILatticeBackupControl.GetScopeStatusAsync",
+      "grpc_method": "/orleans.lattice.api.backup/GetScopeStatus",
+      "transport_scope": "both",
+      "request": "BackupScopeStatusRequestMessage",
+      "response": "BackupScopeStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetScopeStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only scope status.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetScopeStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetScopeStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetScopeStatusAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetScopeStatus"
+      ]
+    },
+    {
+      "id": "is-health-monitoring-available",
+      "in_process": "ILatticeBackupControl.IsHealthMonitoringAvailableAsync",
+      "grpc_method": "/orleans.lattice.api.backup/IsHealthMonitoringAvailable",
+      "transport_scope": "both",
+      "request": "BackupHealthAvailabilityRequest",
+      "response": "BackupHealthAvailabilityResponse",
+      "errors": [
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#IsHealthMonitoringAvailableAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Advisory flag; no authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#IsHealthMonitoringAvailableAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#IsHealthMonitoringAvailableAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#IsHealthMonitoringAvailableAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#IsHealthMonitoringAvailable"
+      ]
+    },
+    {
+      "id": "list-backups",
+      "in_process": "ILatticeBackupControl.ListBackupsAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ListBackups",
+      "transport_scope": "both",
+      "request": "BackupCatalogRequest",
+      "response": "BackupCatalogPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Cursor-resumable read-only page.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupsAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ListBackups"
+      ]
+    },
+    {
+      "id": "probe-capabilities",
+      "in_process": "ILatticeBackupControl.ProbeCapabilitiesAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ProbeCapabilities",
+      "transport_scope": "both",
+      "request": "BackupCapabilityProbeRequest",
+      "response": "BackupScopeCapabilities",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "No side effects; denials are flags.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ProbeCapabilitiesAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ProbeCapabilities"
+      ]
+    },
+    {
+      "id": "rebuild-catalog-from-sink",
+      "in_process": "ILatticeBackupControl.RebuildCatalogFromSinkAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods",
+      "request": "NoRequest",
+      "response": "BackupCatalogRebuildReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RebuildCatalogFromSinkAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Idempotent and safe to re-run.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RebuildCatalogFromSinkAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RebuildCatalogFromSinkAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RebuildCatalogFromSinkAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
+      ]
+    },
+    {
+      "id": "restore-backup",
+      "in_process": "ILatticeBackupControl.RestoreBackupAsync",
+      "grpc_method": "/orleans.lattice.api.backup/RestoreBackup",
+      "transport_scope": "both",
+      "request": "RestoreRequestMessage",
+      "response": "RestoreResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RestoreBackup"
+      ]
+    },
+    {
+      "id": "revert-restore",
+      "in_process": "ILatticeBackupControl.RevertRestoreAsync",
+      "grpc_method": "/orleans.lattice.api.backup/RevertRestore",
+      "transport_scope": "both",
+      "request": "RestoreResponse",
+      "response": "RevertRestoreResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Shadow-cutover revert is idempotent.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RevertRestore"
+      ]
+    },
+    {
+      "id": "schedule-backup",
+      "in_process": "ILatticeBackupControl.ScheduleBackupAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ScheduleBackup",
+      "transport_scope": "both",
+      "request": "BackupScheduleRequestMessage",
+      "response": "BackupScheduleResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Register or update is idempotent.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupAsync"
+      },
+      "concurrency": {
+        "rule": "Intervals below minimum are clamped.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ScheduleBackup"
+      ]
+    },
+    {
+      "id": "scrub-catalog-against-sink",
+      "in_process": "ILatticeBackupControl.ScrubCatalogAgainstSinkAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods",
+      "request": "BackupCatalogScrubRequest",
+      "response": "BackupCatalogScrubReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "Transient infrastructure failure."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Idempotent and safe to re-run.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync"
+      },
+      "concurrency": {
+        "rule": "PruneOrphans false is non-destructive.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
+      ]
+    },
+    {
+      "id": "stream-backups",
+      "in_process": "ILatticeBackupControl.StreamBackupsAsync",
+      "grpc_method": "/orleans.lattice.api.backup/StreamBackups",
+      "transport_scope": "both",
+      "request": "BackupStreamRequest",
+      "response": "BackupManifest",
+      "errors": [
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#StreamBackupsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only bounded stream.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#StreamBackupsAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#StreamBackupsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#StreamBackupsAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StreamBackups"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": true,
+      "meaning": "Request was cancelled.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "Unhandled failure.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "invalid-argument",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "Request validation failed.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "not-found",
+      "type": "KeyNotFoundException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "Backup or artifact not found.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "permission-denied",
+      "type": "LatticeAuthorizationDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "Authorization denied.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "restore-validation",
+      "type": "LatticeRestoreValidationException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "Restore validation failed.",
+      "source": "src/lattice.backup/LatticeRestoreValidationException.cs#LatticeRestoreValidationException"
+    },
+    {
+      "id": "tenant-access-denied",
+      "type": "LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "Active tenant was denied.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "tenant-isolation",
+      "type": "LatticeBackupTenantIsolationException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "Tenant-scoped backup boundary refused the tree.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#LatticeBackupTenantIsolationException"
+    },
+    {
+      "id": "transient-reminder",
+      "type": "BackupReminderResilience",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "Transient reminder infrastructure failure.",
+      "source": "src/lattice.backup/BackupReminderResilience.cs#BackupReminderResilience"
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+schema: lattice.agents/procedure/v1
+id: restore
+name: "Restore or revert tree and backup restore points"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.RestoreTreeAsync and ILatticeBackupControl.RestoreBackupAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/RestoreTree and orleans.lattice.api.backup/RestoreBackup"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTreeMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_restore and lattice_backup_restore"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: backup-exists
+    check: "Backup id or set id exists and its chain can be described."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+  - id: engine-registered
+    check: "A backup engine is registered for tree-admin restore verbs."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: restore-authority
+    check: "Caller has Restore authority for each target scope."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "Describe the backup or set before restore."
+    api: "ILatticeBackupControl.DescribeBackupAsync / DescribeBackup"
+    expects: "Returns manifest and base-first restore chain, or null when absent."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+  - n: 2
+    action: "Restore one tree through shadow cutover."
+    api: "ILatticeTreeAdmin.RestoreTreeAsync / RestoreTree"
+    expects: "Returns TreeRestoreResult including shadow and previous physical tree ids."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+  - n: 3
+    action: "Restore every tree in a backup set as one unit when set restore is intended."
+    api: "ILatticeTreeAdmin.RestoreTreeSetAsync / RestoreTreeSet"
+    expects: "Returns per-member restore results this cluster applied."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+  - n: 4
+    action: "For backup-facade restore, select mode according to rollback semantics."
+    api: "ILatticeBackupControl.RestoreBackupAsync / RestoreBackup"
+    expects: "InPlace converges by HLC; ShadowCutover is a true point-in-time replacement."
+    source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+  - n: 5
+    action: "Revert a wrong shadow-cutover using the restore result fields."
+    api: "ILatticeTreeAdmin.RevertTreeRestoreAsync or ILatticeBackupControl.RevertRestoreAsync"
+    expects: "Idempotently swaps back the pre-restore physical tree."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+postconditions:
+  - check: "Tree-admin RestoreTreeAsync uses ShadowCutover and returns the identifiers needed for revert."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#Mode"
+  - check: "Backup-facade InPlace mode repairs missing or stale entries but does not overwrite newer live data."
+    source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+failure_modes:
+  - id: inplace-not-rollback
+    signal: "InPlace restore is chosen for a rollback objective."
+    effect: "Newer live entries remain."
+    response: "Use ShadowCutover when a point-in-time replacement is required."
+  - id: missing-engine
+    signal: "Restore verb is rejected when no backup engine is registered."
+    effect: "No restore is started."
+    response: "Register AddLatticeBackup before AddLatticeTreeAdminApi or Backup API."
+  - id: unreachable-peer
+    signal: "Coordinated restore of a replicated tree refuses to start unless every peer is reachable."
+    effect: "No fleet cutover occurs."
+    response: "Restore peer reachability and retry."
+rollback:
+  supported: true
+  mechanism: "ShadowCutover restore is reverted by passing the restore result back to the revert API; InPlace restore is not undoable."
+  steps:
+    - action: "Preserve the restore result."
+      api: "TreeRestoreResult or LatticeRestoreResult"
+      source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs"
+    - action: "Call RevertTreeRestoreAsync or RevertRestoreAsync."
+      api: "ILatticeTreeAdmin.RevertTreeRestoreAsync / ILatticeBackupControl.RevertRestoreAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+concurrency:
+  - rule: "Backup set restore applies as all-or-nothing over its member trees."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+  - rule: "Replicated tree restore is promoted to coordinated restore across current replication peers."
+    source: "reference-architecture.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice.backup/disaster-recovery.md"
+  - "docs/lattice.replication/coordinated-restore.md"
