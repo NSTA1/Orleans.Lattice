@@ -96,6 +96,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - Telemetry tools were ungated.** The MCP telemetry tools ran caller-supplied PromQL against the metrics backend without consulting the telemetry capability, so any caller able to reach the group could read every series. Each tool now authorizes before any backend work. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp.Telemetry`)
+
+- **Security - An asserted tenant was never validated.** The MCP region catalog scoped its answer to the caller-supplied active-tenant assertion without validating it, so any caller could enumerate another tenant's routable regions. The assertion is now validated and a refusal fails closed. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp`)
+
+- **Auth - A tree-scoped rule granted a cluster-wide capability.** MCP discovery read the telemetry bit off an Allow rule at any scope, so a grant on a single tree conferred the scopeless telemetry capability. Cluster-wide-only operations are now carried only from a cluster-wide rule. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp`)
+
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Container - Memory and GC.** Server GC is selected and its heap count written in the hexadecimal form the CLR reads, memory grants derive from the ingested corpus rather than the deploy checkout, and the host is no longer starved against its own corpus into large-object exhaustion. ([#2596](https://github.com/NSTA1/Orleans.Lattice/issues/2596), [#2928](https://github.com/NSTA1/Orleans.Lattice/issues/2928), [#2930](https://github.com/NSTA1/Orleans.Lattice/issues/2930), [#3036](https://github.com/NSTA1/Orleans.Lattice/issues/3036)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
