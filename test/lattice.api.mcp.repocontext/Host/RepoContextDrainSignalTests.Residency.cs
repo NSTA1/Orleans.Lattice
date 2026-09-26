@@ -184,6 +184,52 @@ public sealed partial class RepoContextDrainSignalTests
     }
 
     [Test]
+    public void An_abandoned_drain_records_the_activations_stranded_when_the_host_stopped_waiting()
+    {
+        // Issue #3628: the stranded count was only ever in the abandonment log line,
+        // which a container recreate throws away. It has to reach the record, and it
+        // has to survive the completion path superseding the alarm's record.
+        var readings = new Queue<int?>([10_000, 2_500]);
+        var clock = new FakeClock(0, TicksFor(TimeSpan.FromSeconds(90)), TicksFor(TimeSpan.FromSeconds(118.4)));
+        var recorded = new List<RepoContextDrainObservation>();
+        var signal = SignalWithRecorder(
+            recorded,
+            resident: () => readings.Count > 0 ? readings.Dequeue() : null,
+            timestamp: clock.Next,
+            alarm: FiresImmediately);
+
+        signal.BeginDrain();
+        SpinWait.SpinUntil(() => recorded.Count > 1, TimeSpan.FromSeconds(5));
+        signal.CompleteDrain();
+
+        Assert.That(recorded, Has.Count.EqualTo(3));
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded[0].StrandedActivations, Is.Null, "a start marker has stranded nothing yet");
+            Assert.That(recorded[1].StrandedActivations, Is.EqualTo(2_500));
+            Assert.That(recorded[2].Outcome, Is.EqualTo(RepoContextDrainOutcome.Abandoned));
+            Assert.That(
+                recorded[2].StrandedActivations,
+                Is.EqualTo(2_500),
+                "the fuller completion record must not drop the loss the alarm measured");
+            Assert.That(recorded[2].ResidentActivations, Is.EqualTo(10_000));
+        });
+    }
+
+    [Test]
+    public void A_completed_drain_records_no_stranded_count()
+    {
+        var clock = new FakeClock(0, TicksFor(TimeSpan.FromSeconds(41.5)));
+        var recorded = new List<RepoContextDrainObservation>();
+        var signal = SignalWithRecorder(recorded, resident: () => 900, timestamp: clock.Next);
+
+        signal.BeginDrain();
+        signal.CompleteDrain();
+
+        Assert.That(recorded[1].StrandedActivations, Is.Null);
+    }
+
+    [Test]
     public void A_repeated_completion_records_nothing_new_so_a_completed_drain_stays_completed()
     {
         // The completion record latches. Without that, a duplicate lifetime callback

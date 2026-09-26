@@ -428,4 +428,33 @@ public sealed class RepoContextDrainForecastTests
 
         Assert.That(forecast.TryProject(-1, out _), Is.False);
     }
+
+    [Test]
+    public void A_projection_from_an_abandoned_drains_cost_is_marked_as_a_floor()
+    {
+        // Issue #3628: the verdict already treated an abandoned duration as a lower
+        // bound; the projection scaled the same floor as though it were a measurement.
+        var forecast = RepoContextDrainForecast.Evaluate(
+            Drain(RepoContextDrainOutcome.Abandoned, 90, resident: 1_000),
+            TimeSpan.FromSeconds(180));
+
+        Assert.That(forecast.TryProject(500, out var projection), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(forecast.PerActivationCostIsLowerBound, Is.True);
+            Assert.That(projection.IsLowerBound, Is.True);
+            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(45).Within(1e-6));
+        });
+    }
+
+    [Test]
+    public void A_projection_from_a_completed_drains_cost_is_not_a_floor()
+    {
+        var forecast = RepoContextDrainForecast.Evaluate(
+            Drain(RepoContextDrainOutcome.Completed, 30),
+            Budget);
+
+        Assert.That(forecast.TryProject(1_000, out var projection), Is.True);
+        Assert.That(projection.IsLowerBound, Is.False);
+    }
 }

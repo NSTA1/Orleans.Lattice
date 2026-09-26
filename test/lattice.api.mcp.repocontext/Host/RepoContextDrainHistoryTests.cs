@@ -285,4 +285,142 @@ public sealed class RepoContextDrainHistoryTests
             observation.PerActivationCost!.Value.TotalMilliseconds,
             Is.EqualTo(10.21).Within(0.001));
     }
+
+    [Test]
+    public void The_stranded_count_of_an_abandoned_drain_round_trips_through_the_file()
+    {
+        // Issue #3628: the abandonment log line reported how many activations were
+        // torn down unbanked, but that line went with the container on a recreate and
+        // the count was lost. The file is the only channel that survives it.
+        var observation = new RepoContextDrainObservation(
+            Observed,
+            RepoContextDrainOutcome.Abandoned,
+            TimeSpan.FromSeconds(180),
+            TimeSpan.FromSeconds(180.0663826),
+            ResidentActivations: 1791,
+            StrandedActivations: 412);
+
+        Assert.That(RepoContextDrainHistory.TryWrite(Path_(), observation), Is.True);
+        Assert.That(File.ReadAllText(Path_()), Does.Contain("strandedActivations=412"));
+
+        var read = RepoContextDrainHistory.Read(Path_());
+
+        Assert.That(read, Is.Not.Null);
+        Assert.That(read!.Value.StrandedActivations, Is.EqualTo(412));
+    }
+
+    [Test]
+    public void A_record_written_before_the_stranded_count_existed_reads_with_the_count_absent()
+    {
+        var read = RepoContextDrainHistory.Parse(
+        [
+            "version=1",
+            "observedAtUtc=2026-09-26T14:40:32.1444349+00:00",
+            "outcome=Abandoned",
+            "budgetSeconds=180",
+            "durationSeconds=180.0663826",
+            "residentActivations=1791",
+        ]);
+
+        Assert.That(read, Is.Not.Null);
+        Assert.That(read!.Value.StrandedActivations, Is.Null, "absent is unknown, never zero");
+    }
+
+    [Test]
+    public void A_negative_stranded_count_reads_as_no_history_rather_than_as_a_count()
+    {
+        var read = RepoContextDrainHistory.Parse(
+        [
+            "version=1",
+            "observedAtUtc=2026-09-26T14:40:32.1444349+00:00",
+            "outcome=Abandoned",
+            "budgetSeconds=180",
+            "durationSeconds=180",
+            "residentActivations=1791",
+            "strandedActivations=-3",
+        ]);
+
+        Assert.That(read, Is.Null);
+    }
+
+    [Test]
+    public void An_abandoned_drain_with_no_stranded_count_reports_its_cost_as_a_floor()
+    {
+        // Issue #3628: an abandoned drain's duration is the budget, not the drain, so
+        // dividing it by the whole starting set understates the cost. The forecast
+        // already treated that duration as a lower bound for the verdict; the cost
+        // it projects from has to say so too.
+        var observation = new RepoContextDrainObservation(
+            Observed,
+            RepoContextDrainOutcome.Abandoned,
+            TimeSpan.FromSeconds(180),
+            TimeSpan.FromSeconds(180),
+            1791);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observation.PerActivationCostIsLowerBound, Is.True);
+            Assert.That(observation.DrainedActivations, Is.Null);
+            Assert.That(
+                observation.PerActivationCost!.Value.TotalMilliseconds,
+                Is.EqualTo(180_000d / 1791).Within(0.001));
+        });
+    }
+
+    [Test]
+    public void An_abandoned_drain_with_a_stranded_count_is_costed_over_the_part_it_got_through()
+    {
+        var observation = new RepoContextDrainObservation(
+            Observed,
+            RepoContextDrainOutcome.Abandoned,
+            TimeSpan.FromSeconds(180),
+            TimeSpan.FromSeconds(180),
+            ResidentActivations: 1800,
+            StrandedActivations: 600);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observation.DrainedActivations, Is.EqualTo(1200));
+            Assert.That(observation.PerActivationCost!.Value.TotalMilliseconds, Is.EqualTo(150).Within(0.001));
+            Assert.That(observation.PerActivationCostIsLowerBound, Is.False);
+        });
+    }
+
+    [Test]
+    public void A_stranded_count_at_or_above_the_starting_set_leaves_the_cost_a_floor()
+    {
+        // Activations created during the drain can leave more resident at the alarm
+        // than at the start. Nothing can honestly be called the drained set then.
+        var observation = new RepoContextDrainObservation(
+            Observed,
+            RepoContextDrainOutcome.Abandoned,
+            TimeSpan.FromSeconds(180),
+            TimeSpan.FromSeconds(180),
+            ResidentActivations: 1000,
+            StrandedActivations: 1400);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observation.DrainedActivations, Is.Null);
+            Assert.That(observation.PerActivationCostIsLowerBound, Is.True);
+            Assert.That(observation.PerActivationCost!.Value.TotalMilliseconds, Is.EqualTo(180).Within(0.001));
+        });
+    }
+
+    [Test]
+    public void A_completed_drain_is_never_a_floor()
+    {
+        var observation = new RepoContextDrainObservation(
+            Observed,
+            RepoContextDrainOutcome.Completed,
+            TimeSpan.FromSeconds(180),
+            TimeSpan.FromSeconds(60),
+            ResidentActivations: 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observation.PerActivationCostIsLowerBound, Is.False);
+            Assert.That(observation.DrainedActivations, Is.EqualTo(1000));
+        });
+    }
 }

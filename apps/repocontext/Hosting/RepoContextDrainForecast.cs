@@ -125,6 +125,13 @@ public readonly record struct RepoContextDrainForecast(
     public TimeSpan? PerActivationCost => Last?.PerActivationCost;
 
     /// <summary>
+    /// Whether <see cref="PerActivationCost"/> is only a floor, because the last
+    /// drain was abandoned and its duration is the budget it was cut at rather than
+    /// the drain (issue #3628). A projection made from a floor is itself a floor.
+    /// </summary>
+    public bool PerActivationCostIsLowerBound => Last?.PerActivationCostIsLowerBound ?? false;
+
+    /// <summary>
     /// Evaluates the forecast for a derived budget against the last recorded drain.
     /// </summary>
     /// <param name="last">The last recorded drain, or <see langword="null"/>.</param>
@@ -255,7 +262,8 @@ public readonly record struct RepoContextDrainForecast(
             residentActivations,
             projected,
             Budget,
-            projected.TotalSeconds / Budget.TotalSeconds);
+            projected.TotalSeconds / Budget.TotalSeconds,
+            PerActivationCostIsLowerBound);
         return true;
     }
 }
@@ -268,11 +276,17 @@ public readonly record struct RepoContextDrainForecast(
 /// <param name="ProjectedDrain">The projected drain duration.</param>
 /// <param name="Budget">The budget the projection is compared against.</param>
 /// <param name="ConsumedFraction">The fraction of the budget the projection consumes.</param>
+/// <param name="IsLowerBound">
+/// Whether the projection is only a floor, because the per-activation cost it was
+/// made from came from an abandoned drain (issue #3628). A floor that exceeds the
+/// budget is a certain overrun; a floor that fits proves nothing.
+/// </param>
 public readonly record struct RepoContextDrainProjection(
     int ResidentActivations,
     TimeSpan ProjectedDrain,
     TimeSpan Budget,
-    double ConsumedFraction)
+    double ConsumedFraction,
+    bool IsLowerBound = false)
 {
     /// <summary>Whether the projected drain does not fit the budget.</summary>
     public bool ExceedsBudget => ProjectedDrain >= Budget;

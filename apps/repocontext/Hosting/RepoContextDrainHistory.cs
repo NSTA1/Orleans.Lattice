@@ -51,6 +51,7 @@ public static class RepoContextDrainHistory
     private const string BudgetKey = "budgetSeconds";
     private const string DurationKey = "durationSeconds";
     private const string ResidentKey = "residentActivations";
+    private const string StrandedKey = "strandedActivations";
 
     /// <summary>
     /// Resolves the history file's path inside <paramref name="directory"/>.
@@ -156,19 +157,13 @@ public static class RepoContextDrainHistory
             return null;
         }
 
-        int? resident = null;
-        if (fields.TryGetValue(ResidentKey, out var rawResident))
+        if (!TryReadCount(fields, ResidentKey, out var resident)
+            || !TryReadCount(fields, StrandedKey, out var stranded))
         {
-            if (!int.TryParse(rawResident, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
-                || parsed < 0)
-            {
-                return null;
-            }
-
-            resident = parsed;
+            return null;
         }
 
-        return new RepoContextDrainObservation(observedAt, outcome, budget.Value, duration, resident);
+        return new RepoContextDrainObservation(observedAt, outcome, budget.Value, duration, resident, stranded);
     }
 
     /// <summary>
@@ -180,7 +175,7 @@ public static class RepoContextDrainHistory
     /// <returns>The file content.</returns>
     public static string Render(RepoContextDrainObservation observation)
     {
-        var lines = new List<string>(6)
+        var lines = new List<string>(7)
         {
             $"{VersionKey}={FormatVersion.ToString(CultureInfo.InvariantCulture)}",
             $"{ObservedAtKey}={observation.ObservedAtUtc.ToUniversalTime():O}",
@@ -196,6 +191,11 @@ public static class RepoContextDrainHistory
         if (observation.ResidentActivations is { } resident)
         {
             lines.Add($"{ResidentKey}={resident.ToString(CultureInfo.InvariantCulture)}");
+        }
+
+        if (observation.StrandedActivations is { } stranded)
+        {
+            lines.Add($"{StrandedKey}={stranded.ToString(CultureInfo.InvariantCulture)}");
         }
 
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
@@ -232,6 +232,26 @@ public static class RepoContextDrainHistory
         {
             return false;
         }
+    }
+
+    private static bool TryReadCount(
+        IReadOnlyDictionary<string, string> fields,
+        string key,
+        out int? value)
+    {
+        value = null;
+        if (!fields.TryGetValue(key, out var raw))
+        {
+            return true;
+        }
+
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 0)
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
     }
 
     private static bool TryReadSeconds(

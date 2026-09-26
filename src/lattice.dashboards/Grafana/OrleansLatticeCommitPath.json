@@ -1218,6 +1218,24 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason, origin) (rate(orleans_lattice_leaf_span_fail_open_commits_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} {{origin}} keys/s" }
       ]
+    },
+    {
+      "id": 166,
+      "title": "Leaf deactivation BARRIER duration (mean ms) by barrier - issue #3628 (where a drain spends its time)",
+      "description": "Mean wall-clock duration of each graceful-deactivation barrier (orleans.lattice.leaf.deactivation.barrier.duration), split by barrier - issue #3628. Panel 163 counts barriers that did NOT complete; this panel says how long each one takes, which is what decomposes a drain. It exists because the repocontext container's per-activation drain cost rose about 4x in three days and nothing on the deactivation path could say which barrier the time went to. One sample per barrier that ran, WHATEVER ITS OUTCOME: a barrier that faulted or skipped after consuming the deadline spent that time all the same, so read 163 beside it to tell a slow barrier from a failing one. digest_publish includes the teardown persist's deferred inline digest publish, which is the same upward publish. The per-barrier means summed approximate one activation's serial teardown cost; Orleans deactivates activations concurrently, so a drain's wall-clock is less than that sum multiplied by the resident count. Plotted as an interval mean, delta _sum over delta _count, because that is the one form every exporter of this histogram supports. ABSENT means no graceful deactivation ran in the window, not that barriers are free: crash and process-kill teardowns bypass the hook and contribute no sample.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 412 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_duration_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} mean ms" }
+      ]
     }
   ]
 }
