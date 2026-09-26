@@ -1699,9 +1699,15 @@ function Set-Layer3ProducerEvidence {
 	# measurement as a lower bound and drop its curve from every chart.
 	$clusterKeptPace = ($null -eq $generated) -or ($generated -le 0) -or ($null -eq $achieved) -or
 		([double]$achieved -ge (0.9 * $generated))
+	# Slip is a maximum, so one start-up stall can push it past the threshold
+	# while the generator then runs on schedule for the rest of the cohort. A
+	# generator that generated at least 90% of the offered rate did not bound
+	# the cell: the cohort reached its offered load and is a candidate for
+	# escalation, not a producer ceiling.
+	$generatorBehind = ($null -eq $generated) -or ($offered -le 0) -or ([double]$generated -lt (0.9 * $offered))
 	$bound = ($null -ne $slip -and $slip -gt 1000) -and
 		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2) -and
-		$clusterKeptPace
+		$clusterKeptPace -and $generatorBehind
 	$Cohort['producerSlipMaxMs'] = $slip
 	$Cohort.Remove('producerGenBlockedFracMax')
 	$Cohort['producerGenBlockedFrac'] = $blocked
