@@ -90,6 +90,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Indexing - Gap-scan diagnostics misreported.** A skip after an unmeasurable scan claimed coverage was observed complete, a pass offered no unchanged file was logged as convergence, and a gap-scan cadence collapsed to every pass without warning. Each now says what held. ([#3483](https://github.com/NSTA1/Orleans.Lattice/issues/3483), [#3350](https://github.com/NSTA1/Orleans.Lattice/issues/3350)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **Replication - Deferred and dead-lettered entries could be lost.** A custom applier's batch default dropped a receive-fence deferral, so the batch was acknowledged past it, and a causal-buffer eviction kept its dedupe reservation, so a dead-letter replay was discarded as a duplicate. ([#3629](https://github.com/NSTA1/Orleans.Lattice/issues/3629), [#3630](https://github.com/NSTA1/Orleans.Lattice/issues/3630)) (`Orleans.Lattice.Replication`)
+
+- **Scan - An uncapped point-in-time cursor pin expired after 60 seconds.** Setting `MaxCursorSnapshotPinTtl` to `Timeout.InfiniteTimeSpan` floored the pin to `TxDecisionRetention`, or expired it at once with retention off; it now disables the cap as documented. ([#3631](https://github.com/NSTA1/Orleans.Lattice/issues/3631)) (`Orleans.Lattice`)
+
 ### Security
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
