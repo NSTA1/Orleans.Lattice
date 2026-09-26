@@ -1,0 +1,73 @@
+schema: lattice.agents/procedure/v1
+id: reshard
+name: "Grow a tree with online reshard"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.ReshardTreeAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/ReshardTree"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReshardTreeMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_reshard"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: grow-only-target
+    check: "Target shard count is at least 2, at most 4096, and not below the current physical shard count."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+  - id: no-resize
+    check: "No resize is already in flight."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+  - id: tree-lifecycle
+    check: "Caller has whole-tree TreeLifecycle authority."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "Read current reshard status."
+    api: "ILatticeTreeAdmin.GetReshardStatusAsync / GetReshardStatus"
+    expects: "Returns in-flight flag, physical shard fan-out, virtual-slot space, and map version."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync"
+  - n: 2
+    action: "Trigger the grow-only reshard."
+    api: "ILatticeTreeAdmin.ReshardTreeAsync / ReshardTree"
+    expects: "Returns accepted intent and observed fan-out."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+  - n: 3
+    action: "Poll status until in-flight is false and target fan-out is observed."
+    api: "ILatticeTreeAdmin.GetReshardStatusAsync / GetReshardStatus"
+    expects: "Reports whether a reshard remains in flight."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync"
+postconditions:
+  - check: "The tree keeps serving reads and writes throughout the migration."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "Virtual-slot routing is atomically swapped per split and map version advances."
+    source: "docs/lattice.api.treeadmin/README.md"
+failure_modes:
+  - id: different-inflight
+    signal: "InvalidOperationException for a different in-flight reshard target."
+    effect: "Existing reshard remains authoritative."
+    response: "Poll status and retry after completion."
+  - id: resize-conflict
+    signal: "InvalidOperationException when resize is in flight."
+    effect: "No reshard is started."
+    response: "Wait for resize completion or undo."
+  - id: shrink-request
+    signal: "ArgumentOutOfRangeException for a target below current fan-out."
+    effect: "No reshard is started."
+    response: "Pick a grow-only target."
+rollback:
+  supported: false
+  mechanism: "Reshard is grow-only; no shrink or revert operation is documented."
+  steps: []
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+concurrency:
+  - rule: "A matching in-flight target is idempotent; a different target is rejected."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+  - rule: "Reshard and resize are mutually exclusive in-flight operations."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/online-reshard.md"

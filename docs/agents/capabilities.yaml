@@ -1,0 +1,3175 @@
+schema: lattice.agents/capabilities/v1
+capabilities:
+  - id: adaptive-shard-splitting
+    name: "Adaptive shard splitting"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - leaf-split
+      - shard-split
+    guarantees:
+      - statement: "Hot physical shards can split online without taking the shard offline."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "The source shard continues serving reads and writes while moved-slot writes are mirrored to the target shard."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "The split coordinator persists phase state before side effects and resumes idempotently after crash."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "Committed source writes and in-flight prepared atomic mutations are drained, mirrored, or replayed to the target shard."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "After swap, stale routers are forced through a stale-routing retry against the new shard owner."
+        source: "docs/lattice/shard-splitting.md"
+    non_guarantees:
+      - statement: "Shard splitting is internal infrastructure with no public API to trigger or control a split."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "Autonomic splitting can be disabled by option."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "A shard that owns one virtual slot cannot be subdivided further."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "Scans can throw when concurrent topology churn exhausts MaxScanRetries."
+        source: "docs/lattice/shard-splitting.md"
+    unsafe_sequences:
+      - sequence:
+          - "flip the shard map before the source shard rejects moved-slot operations"
+          - "serve stale-routing reads from the source shard"
+        hazard: "A stale router could read the pre-split value after new routers route to the target shard."
+        source: "docs/lattice/shard-splitting.md"
+    concurrency_rules:
+      - statement: "MaxConcurrentAutoSplits caps concurrent splits per tree."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "MaxClusterConcurrentAutoSplits, when set, adds a cluster-wide gate that can only reduce split admission."
+        source: "docs/lattice/shard-splitting.md"
+      - statement: "Shard-map reassignment re-reads the live map and writes a fresh version so concurrent topology changes are not erased."
+        source: "docs/lattice/shard-splitting.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/shard-splitting.md"
+  - id: agent-operated-backlog
+    name: "Agent-operated backlog"
+    packages:
+      - "Orleans.Lattice.Api.Mcp.RepoContext"
+    concepts:
+      - distributed-lock-lease
+      - fencing-token
+      - repocontext-store
+    guarantees:
+      - statement: "Backlog items live as repository-context memory entries and are mirrored to GitHub issues."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "Claims wrap the distributed lock for exclusion, FIFO fairness, bounded leases, and monotonic fencing tokens."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "A stopped worker frees its item by lease expiry and later reclaim rather than by clearing a flag."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "remember, update, and forget refuse writes whose fencing token does not pass the memory-record fence."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "Losing a claim race is returned as granted false rather than thrown as an exception."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+    non_guarantees:
+      - statement: "The fence guarantees authorship of a record write, not correctness of the written content."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "repocontext_claim_status is advisory and never grants entitlement to write."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "Claims apply only to memory records."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "A backlog item never carries a TTL."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+    unsafe_sequences:
+      - sequence:
+          - "read repocontext_claim_status"
+          - "write as if the status read granted ownership"
+        hazard: "The claim can lapse or be superseded before the write."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - sequence:
+          - "renew a long claim without leaseSeconds"
+          - "continue assuming the prior expiry was preserved"
+        hazard: "The renew can shorten the lease to the default and later report superseded."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - sequence:
+          - "release a claim"
+          - "write results with the released token"
+        hazard: "Released tokens remain refused, so results owed to the record must be written before release."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+    concurrency_rules:
+      - statement: "A live claim excludes unfenced writes to the claimed memory record."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "A token below the record high-water mark is refused even after release."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+      - statement: "A renew result with reason superseded tells the holder to stop writing and re-claim."
+        source: "docs/lattice.api.mcp.repocontext/backlog.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.mcp.repocontext/README.md"
+      - "docs/lattice.api.mcp.repocontext/backlog.md"
+      - "docs/lattice.api.mcp.repocontext/tools.md"
+      - "samples/AgentBacklog/template/backlog-protocol.md"
+  - id: atomic-action
+    name: "Atomic action"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - atomic-action-saga
+    guarantees:
+      - statement: "IAtomicActionGrain runs an ordered plan of forward effects paired with compensating effects."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "If a forward step faults, completed steps are compensated in strict reverse order."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "The built-in tree-write step delegates to the verified atomic-write machinery."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "The operation id is the idempotency key and terminal outcomes are memoized for retry."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "Crash recovery resumes from persisted state and reaches one terminal outcome."
+        source: "docs/lattice/atomic-action.md"
+    non_guarantees:
+      - statement: "Atomic action does not isolate the visible path across multiple steps."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "A custom step is only as atomic as its forward effect and compensation contract."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "If compensation itself fails after retry, the saga parks in CompensationFailed for operator intervention."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "A single tree-write step never targets more than one tree."
+        source: "docs/lattice/atomic-action.md"
+    unsafe_sequences:
+      - sequence:
+          - "use a non-idempotent external forward effect"
+          - "resume after a crash"
+        hazard: "The external effect can be duplicated."
+        source: "docs/lattice/atomic-action.md"
+      - sequence:
+          - "change handler semantics without changing versionTag"
+          - "resume an in-flight saga"
+        hazard: "A partially completed plan can replay against changed semantics."
+        source: "docs/lattice/atomic-action.md"
+      - sequence:
+          - "use several tree-write steps"
+          - "assume cross-step read isolation"
+        hazard: "Readers can observe one step committed before a later step runs or compensates."
+        source: "docs/lattice/atomic-action.md"
+    concurrency_rules:
+      - statement: "Re-issuing the same terminal plan under the same operation id returns the memoized outcome."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "Re-issuing a different plan under a used operation id is rejected."
+        source: "docs/lattice/atomic-action.md"
+      - statement: "A handler version-tag change while a saga is in flight parks resume instead of replaying a changed effect."
+        source: "docs/lattice/atomic-action.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/atomic-action.md"
+  - id: atomic-writes
+    name: "Atomic writes"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - atomic-batch
+      - cross-tree-atomic
+    guarantees:
+      - statement: "SetManyAtomicAsync commits a batch so every entry is durably written or none becomes visible."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "Prepared writes stay invisible until the transaction registry records one commit or abort decision."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "The atomicity guarantee holds locally and across every cluster the tree replicates to."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "Mixed upsert and delete batches flip as one atomic unit."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "Cross-tree atomic writes layer one global decision over each participating tree saga."
+        source: "docs/lattice/atomic-writes.md"
+    non_guarantees:
+      - statement: "SetManyAsync is not atomic and can leave a partial batch applied."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "A single ILattice SetManyAtomicAsync call is bound to one tree."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "Concurrent atomic writes over overlapping keys have no global transaction order beyond per-key LWW resolution."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "Cross-tree atomic write is not a cross-tree read snapshot across separate reads."
+        source: "docs/lattice/atomic-writes.md"
+    unsafe_sequences:
+      - sequence:
+          - "reuse a cross-tree operationId"
+          - "change the participating tree set or key set"
+        hazard: "The retry is rejected with an idempotency-key mismatch."
+        source: "docs/lattice/atomic-writes.md"
+      - sequence:
+          - "span a cross-tree write across trees with different resolved ClusterId values"
+          - "admit the participant set"
+        hazard: "The coordinator rejects the write before anything is staged."
+        source: "docs/lattice/atomic-writes.md"
+    concurrency_rules:
+      - statement: "The per-tree registry write is the single tree-wide visibility flip."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "Registry writes and terminal fan-out are idempotent and re-driven until complete."
+        source: "docs/lattice/atomic-writes.md"
+      - statement: "A replicated cross-tree batch waits at the receiver barrier for every replicated participant tree."
+        source: "docs/lattice/atomic-writes.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/atomic-writes.md"
+      - "docs/lattice/bulk-loading.md"
+  - id: autoscaling-signal
+    name: "Autoscaling signal"
+    packages:
+      - "Orleans.Lattice.Scaling"
+    concepts:
+      - autoscaling-signal
+    guarantees:
+      - statement: "The scaling signal is a read-only cluster-aggregate pressure snapshot for external autoscalers."
+        source: "docs/lattice.scaling/README.md"
+      - statement: "The compute axis reports normalized activation, host-resource, and WAL-dispatch pressure."
+        source: "docs/lattice.scaling/README.md"
+      - statement: "The signal carries ScaleValue and RecommendedReplicas."
+        source: "docs/lattice.scaling/README.md"
+      - statement: "The storage axis reports retained-WAL pressure and an optional WAL rebalance recommendation."
+        source: "docs/lattice.scaling/README.md"
+      - statement: "The signal can be exposed through HTTP and an ASP.NET Core health check."
+        source: "docs/lattice.scaling/README.md"
+    non_guarantees:
+      - statement: "The storage axis never contributes to ScaleValue."
+        source: "docs/lattice.scaling/README.md"
+      - statement: "The storage-axis recommendation is signal-only and never moves a replica."
+        source: "docs/lattice.scaling/README.md"
+      - statement: "Adding silos is not the documented fix for a storage-account throughput bottleneck."
+        source: "docs/lattice.scaling/README.md"
+    unsafe_sequences: []
+    concurrency_rules: []
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.scaling/README.md"
+  - id: backup-and-restore
+    name: "Backup & restore"
+    packages:
+      - "Orleans.Lattice.Backup"
+    concepts:
+      - backup
+      - restore
+    guarantees:
+      - statement: "Full capture exports a scoped point-in-time snapshot into a self-describing manifest."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Incremental capture layers a forward WAL differential on a base backup and can fall back to full capture."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Restore replays captured HLC, version vector, origin cluster id, expiry, and tombstone metadata."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Restore validates every artifact against its digest before applying anything."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Retried identical captures and repeated restores converge without duplicate backups or data."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Cold restore can recover a tree into a fresh cluster from the sink alone."
+        source: "docs/lattice.backup/disaster-recovery.md"
+    non_guarantees:
+      - statement: "Capture schedules and retention are opt-in."
+        source: "docs/lattice.backup/README.md"
+      - statement: "The in-cluster sink shares the fate of the cluster and is not a disaster-recovery target."
+        source: "docs/lattice.backup/disaster-recovery.md"
+      - statement: "Health monitoring is inert when the registered sink is not durable."
+        source: "docs/lattice.backup/disaster-recovery.md"
+      - statement: "Cold restore restores one tree per backup id, so a backup set is recovered one member at a time."
+        source: "docs/lattice.backup/disaster-recovery.md"
+    unsafe_sequences:
+      - sequence:
+          - "configure each replicated cluster with an isolated backup sink"
+          - "attempt coordinated restore"
+        hazard: "The restore aborts because each cluster resolves manifests from its own sink."
+        source: "docs/lattice.backup/disaster-recovery.md"
+      - sequence:
+          - "use the default in-cluster sink for a replicated tree"
+          - "start the replicated backup deployment"
+        hazard: "Startup rejects the configuration because peer clusters cannot read the sink."
+        source: "docs/lattice.backup/disaster-recovery.md"
+    concurrency_rules:
+      - statement: "A cross-tree backup set can use a shared-HLC fence so a cross-tree atomic write is not torn across the set boundary."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Chain-aware retention never prunes the base chain of a retained incremental backup."
+        source: "docs/lattice.backup/README.md"
+      - statement: "Every catalogued backup is auto-enrolled in periodic health verification."
+        source: "docs/lattice.backup/disaster-recovery.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.backup/README.md"
+      - "docs/lattice.backup/disaster-recovery.md"
+  - id: bulk-loading
+    name: "Bulk loading"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "BulkLoadAsync seeds a brand-new tree from a complete list and sorts the entries internally."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "BulkLoadAsync computes final tree shape up front, packs leaves, and writes levels bottom-up."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "SetManyAsync and BulkLoadAsync both fan out across shards and batch WAL appends per leaf."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "The streaming bulk-load extension flushes different shard buffers in parallel and the same shard sequentially."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "BulkAppendChunkAsync can be safely re-driven for the same chunk with the same operation id."
+        source: "docs/lattice/bulk-loading.md"
+    non_guarantees:
+      - statement: "SetManyAsync is not atomic."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "BulkLoadAsync is one-shot and requires every shard to be empty."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "The streaming extension does not resume and does not validate key order or tree emptiness."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "The streaming extension bypasses ILattice facade checks and write interception."
+        source: "docs/lattice/bulk-loading.md"
+    unsafe_sequences:
+      - sequence:
+          - "bulk-load a tree whose shards already have roots"
+          - "expect the import to succeed"
+        hazard: "Non-empty shards reject the one-shot bulk load."
+        source: "docs/lattice/bulk-loading.md"
+      - sequence:
+          - "stream keys out of ascending order"
+          - "append chunks to the right edge"
+        hazard: "The extension requires ascending order but does not validate it."
+        source: "docs/lattice/bulk-loading.md"
+      - sequence:
+          - "re-drive an earlier chunk after a later same-shard chunk completed"
+          - "resume from that earlier chunk"
+        hazard: "The shard remembers only its most recently completed chunk id."
+        source: "docs/lattice/bulk-loading.md"
+    concurrency_rules:
+      - statement: "Flushes to the same shard are sequential so key order is preserved per shard."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "BulkAppendChunkAsync requires keys to ascend within each chunk and across the whole stream."
+        source: "docs/lattice/bulk-loading.md"
+      - statement: "An empty BulkAppendChunkAsync chunk is a no-op."
+        source: "docs/lattice/bulk-loading.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/bulk-loading.md"
+      - "docs/lattice/external-store-migration.md"
+  - id: change-history
+    name: "Change history"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - history-retention
+      - wal
+    guarantees:
+      - statement: "Change history exposes a per-key revision timeline for LWW keys and CRDT keys."
+        source: "docs/lattice/change-history.md"
+      - statement: "ILattice.ScanEntryHistoryAsync returns a key timeline as paged EntryRevision records."
+        source: "docs/lattice/change-history.md"
+      - statement: "Core, State API, and Explorer surfaces read the same underlying timeline."
+        source: "docs/lattice/change-history.md"
+      - statement: "A durable history view stores each source mutation as an append-only revision row."
+        source: "docs/lattice/change-history.md"
+      - statement: "When no history view is enabled, reads fall back to the retained WAL window."
+        source: "docs/lattice/change-history.md"
+    non_guarantees:
+      - statement: "The WAL-window fallback is best-effort and can be truncated by WAL garbage collection."
+        source: "docs/lattice/change-history.md"
+      - statement: "A durable history view is bounded by retention age and by rebuilds."
+        source: "docs/lattice/change-history.md"
+      - statement: "MetadataOnly retention strips LWW value bytes to hash and length."
+        source: "docs/lattice/change-history.md"
+      - statement: "The live feed is forward-only for new revisions."
+        source: "docs/lattice/change-history.md"
+    unsafe_sequences: []
+    concurrency_rules:
+      - statement: "ScanEntryHistoryAsync is side-effect-free and does not perturb a maintainer or WAL pin."
+        source: "docs/lattice/change-history.md"
+      - statement: "On the history-view path, page.Truncated is always false."
+        source: "docs/lattice/change-history.md"
+      - statement: "Live-follow appends new revisions and later upgrades metadata-only markers after a debounced refetch."
+        source: "docs/lattice/change-history.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/change-history.md"
+  - id: compression
+    name: "Compression"
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Replication"
+      - "Orleans.Lattice.Storage.AzureTable"
+    concepts:
+      - compression-dictionary
+    guarantees:
+      - statement: "The public compression seam is ILatticeCompressor."
+        source: "docs/lattice/compression.md"
+      - statement: "Compression framing carries a single-byte LatticeCompression tag in plaintext."
+        source: "docs/lattice/compression.md"
+      - statement: "The encoder dispatches on the raw byte value of the algorithm tag."
+        source: "docs/lattice/compression.md"
+      - statement: "Dict-less Zstandard is the default replication framing algorithm for AddLatticeReplication."
+        source: "docs/lattice/compression.md"
+      - statement: "Azure Table WAL row payload compression is enabled by default with Zstandard."
+        source: "docs/lattice/compression.md"
+      - statement: "Azure Table WAL reads use the row's stored compression tag rather than the reader's current option."
+        source: "docs/lattice/compression.md"
+    non_guarantees:
+      - statement: "Host compressors cannot claim core-reserved tags from 0x00 through 0x7F."
+        source: "docs/lattice/compression.md"
+      - statement: "A batch whose tag has no registered receiver compressor surfaces NotSupportedException."
+        source: "docs/lattice/compression.md"
+      - statement: "Shared-dictionary compression is opt-in beyond dictionary-less Zstandard."
+        source: "docs/lattice/compression.md"
+      - statement: "A non-zero dictionary id requires matching dictionary bytes on receivers before senders use it."
+        source: "docs/lattice/compression.md"
+      - statement: "Auto-training is opt-in and disabled by default."
+        source: "docs/lattice/compression.md"
+    unsafe_sequences:
+      - sequence:
+          - "configure ZstdDictionary on a sender"
+          - "ship to receivers without the dictionary bytes"
+        hazard: "Receivers cannot decode that dictionary frame and route through the decoder failure or fallback path."
+        source: "docs/lattice/compression.md"
+      - sequence:
+          - "register two compressors with the same algorithm tag"
+          - "build the encoder"
+        hazard: "Startup fails instead of shadowing one compressor."
+        source: "docs/lattice/compression.md"
+    concurrency_rules:
+      - statement: "ILatticeCompressor implementations must be thread-safe and allocation-free on the steady-state hot path."
+        source: "docs/lattice/compression.md"
+      - statement: "At most one auto-training pass runs at a time."
+        source: "docs/lattice/compression.md"
+      - statement: "Pulled dictionary install is idempotent and rejects the same id with different bytes."
+        source: "docs/lattice/compression.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/compression.md"
+  - id: conflict-free-merges
+    name: "Conflict-free merges"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - conflict-resolution-merge
+    guarantees:
+      - statement: "CRDT merge functions are commutative, associative, and idempotent."
+        source: "docs/crdt/readme.md"
+      - statement: "Replicas that see the same CRDT updates converge regardless of delivery order."
+        source: "docs/crdt/readme.md"
+      - statement: "Typed ILattice accessors carry the selected merge mode and encode deltas."
+        source: "docs/crdt/readme.md"
+      - statement: "A local tree can mix CRDT primitives and plain LWW values."
+        source: "docs/crdt/readme.md"
+      - statement: "LwwValue merge picks the higher HLC timestamp and deterministic tie-breaks."
+        source: "docs/lattice/state-primitives.md"
+    non_guarantees:
+      - statement: "Plain SetAsync is last-writer-wins and can silently discard a concurrent write."
+        source: "docs/crdt/readme.md"
+      - statement: "LatticeMergeMode.LwwRegister is not a CRDT."
+        source: "docs/crdt/readme.md"
+      - statement: "A replicated tree declares one merge mode and rejects inbound writes whose mode differs."
+        source: "docs/crdt/readme.md"
+      - statement: "A declared-CRDT replicated tree rejects plain SetAsync writes."
+        source: "docs/crdt/readme.md"
+      - statement: "The sequence family ships RGA only."
+        source: "docs/crdt/readme.md"
+    unsafe_sequences:
+      - sequence:
+          - "use plain SetAsync on a key with concurrent writers"
+          - "replicate or merge concurrent updates"
+        hazard: "Last-writer-wins keeps one value and silently discards the other."
+        source: "docs/crdt/readme.md"
+      - sequence:
+          - "compact observed-remove dots"
+          - "cancel dots by exact equality"
+        hazard: "A peer holding a superseded dot can diverge because the retraction no longer covers it."
+        source: "docs/lattice/state-primitives.md"
+    concurrency_rules:
+      - statement: "Each independent writer should use a stable distinct replica id."
+        source: "docs/crdt/readme.md"
+      - statement: "Duplicate CRDT deliveries are harmless because merge is idempotent."
+        source: "docs/crdt/readme.md"
+      - statement: "OR-Set removes only tombstone observed dots, so a concurrent add survives."
+        source: "docs/lattice/state-primitives.md"
+      - statement: "RW-Flag disable wins over a concurrent enable that did not observe it."
+        source: "docs/lattice/state-primitives.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/crdt/readme.md"
+      - "docs/lattice/state-primitives.md"
+  - id: cross-cluster-replication
+    name: "Cross-cluster replication"
+    packages:
+      - "Orleans.Lattice.Replication"
+    concepts:
+      - conflict-resolution-merge
+      - replication-peer
+      - shipper
+    guarantees:
+      - statement: "Replication captures mutations at commit time, ships them between clusters, and applies them on receivers."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Replication is per-tree opt-in with a declared merge mode."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Any peer can write to any enrolled tree in active-active topology."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Concurrent writes to the same key converge deterministically."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Receivers do not observe a write before its causal dependencies."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Replicated SetManyAtomicAsync arrives as one visible unit on receivers."
+        source: "docs/lattice.replication/README.md"
+    non_guarantees:
+      - statement: "A host without the replication package runs the core library alone."
+        source: "PACKAGES.md"
+      - statement: "Replication is not enabled for a tree until that tree is enrolled."
+        source: "docs/lattice.replication/README.md"
+      - statement: "The per-key shipper filter is not applied to snapshot exports or opt-in anti-entropy repair."
+        source: "docs/lattice.replication/README.md"
+      - statement: "The in-memory WAL default is not restart-durable storage."
+        source: "docs/lattice.replication/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "enable runtime replication concurrently under divergent merge modes"
+          - "assume one mode wins"
+        hazard: "The mode can become ambiguous and further enable is refused until disable and re-enable."
+        source: "FEATURES.md"
+      - sequence:
+          - "trim WAL before a peer has acknowledged entries"
+          - "expect incremental shipping to cover the gap"
+        hazard: "A fallen-off peer must re-seed from snapshot bootstrap."
+        source: "docs/lattice.replication/README.md"
+    concurrency_rules:
+      - statement: "A per-tree shipper tails the WAL separately for each peer."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Repeated records are suppressed by exact origin, HLC, key, and operation identity."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Entries whose causal dependencies are missing wait in the receiver causal-apply buffer."
+        source: "docs/lattice.replication/README.md"
+      - statement: "Dead-letter quarantine isolates poison entries per tree while replication continues past them."
+        source: "docs/lattice.replication/README.md"
+    sources:
+      - "FEATURES.md"
+      - "PACKAGES.md"
+      - "docs/lattice.replication/README.md"
+  - id: diagnostics
+    name: "Diagnostics"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - dashboards
+      - tree
+    guarantees:
+      - statement: "DiagnoseAsync returns a point-in-time health snapshot of a tree."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "TreeDiagnosticReport aggregates per-shard structural and runtime metrics."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "Deep diagnostics include tombstone counts and tombstone ratios."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "Repeated callers within DiagnosticsCacheTtl share the same snapshot."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "DiagnoseAsync is safe during an ongoing resize or reshard."
+        source: "docs/lattice/diagnostics.md"
+    non_guarantees:
+      - statement: "DiagnoseAsync is an admin-rate API and not for hot-path application logic."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "Both shallow and deep diagnostics walk every shard's whole leaf chain."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "RecentSplits is in-memory, best-effort, and not persisted."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "A shallow report always reports zero tombstones."
+        source: "docs/lattice/troubleshooting.md"
+      - statement: "Reserved system trees cannot be diagnosed through ILattice."
+        source: "docs/lattice/diagnostics.md"
+    unsafe_sequences:
+      - sequence:
+          - "take a shallow diagnostics report"
+          - "conclude zero tombstones means none exist"
+        hazard: "The shallow path never asks leaves for tombstone counts."
+        source: "docs/lattice/troubleshooting.md"
+      - sequence:
+          - "see an all-zero shard entry"
+          - "conclude the shard is empty without checking HotnessWindow or logs"
+        hazard: "A fan-out failure is represented by a placeholder entry with default values."
+        source: "docs/lattice/troubleshooting.md"
+    concurrency_rules:
+      - statement: "Per-shard fan-out failures are isolated to placeholder entries."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "With authorization registered, DiagnoseAsync authorizes as a whole-tree read."
+        source: "docs/lattice/diagnostics.md"
+      - statement: "Cancellation is observed cooperatively between bounded shard batches."
+        source: "docs/lattice/diagnostics.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/diagnostics.md"
+      - "docs/lattice/troubleshooting.md"
+  - id: distributed-lock
+    name: "Distributed lock"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - distributed-lock-lease
+      - fencing-token
+    guarantees:
+      - statement: "ILatticeLockGrain is a single-cluster FIFO-fair distributed lock and lease keyed by name."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "Callers using the same lock name contend for the same activation."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "Every grant carries a strictly increasing fencing token."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "A bounded lease is reclaimed when not renewed or released before expiry."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "ReleaseAsync is idempotent for stale tokens."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "The fencing counter is persisted so it never rewinds across crash or reactivation."
+        source: "docs/lattice/distributed-lock.md"
+    non_guarantees:
+      - statement: "The lock is not a cross-cluster lock."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "The lock does not make key writes atomic and offers no rollback."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "A fencing token protects only resources that validate it."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "GetStatusAsync is diagnostic and not a coordination primitive."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "The waiter queue is transient across process boundaries."
+        source: "docs/lattice/distributed-lock.md"
+    unsafe_sequences:
+      - sequence:
+          - "acquire a lease"
+          - "write the guarded resource without forwarding the fencing token"
+        hazard: "A superseded holder can act on stale belief."
+        source: "docs/lattice/distributed-lock.md"
+      - sequence:
+          - "run two clusters"
+          - "use the same lock name as a geo-distributed lock"
+        hazard: "Each cluster can independently grant the lock with incomparable tokens."
+        source: "docs/lattice/distributed-lock.md"
+    concurrency_rules:
+      - statement: "AcquireAsync enqueues FIFO and either grants later or times out and removes the waiter."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "TryAcquireAsync never queues and returns null when the lock is held."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "A stale RenewAsync throws LatticeLockConflictException."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "A guarded resource must reject lower tokens than the highest token it has accepted."
+        source: "docs/lattice/distributed-lock.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/distributed-lock.md"
+  - id: durable-cursors
+    name: "Durable cursors"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - cursor
+      - scan-range
+    guarantees:
+      - statement: "Durable cursors are server-side checkpointed iterators for scans and resumable range deletes."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "A cursor persists its position after every page."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "A new activation reads the checkpoint and continues where the previous one stopped."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "Effective range computation excludes every previously yielded key."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "Point-in-time key or entry cursors freeze the saga-decision view at open time."
+        source: "docs/lattice/durable-cursors.md"
+    non_guarantees:
+      - statement: "Live-mode durable cursors do not preserve one atomic-visibility view across pages."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "Point-in-time mode is not available for delete-range cursors."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "A point-in-time cursor whose registry pin expires fails on its next page."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "Every cursor step adds checkpoint, reminder, and extra-grain overhead."
+        source: "docs/lattice/durable-cursors.md"
+    unsafe_sequences:
+      - sequence:
+          - "open a point-in-time cursor"
+          - "leave it inactive past its pin TTL"
+        hazard: "The next page fails with LatticeCursorSnapshotExpiredException."
+        source: "docs/lattice/durable-cursors.md"
+      - sequence:
+          - "need one saga-decision view across all pages"
+          - "use live mode"
+        hazard: "Live mode preserves the view only within each step."
+        source: "docs/lattice/durable-cursors.md"
+    concurrency_rules:
+      - statement: "Ordering under concurrent shard splits applies within each cursor step."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "Different cursor grains run in parallel without cross-cursor coordination."
+        source: "docs/lattice/durable-cursors.md"
+      - statement: "Further Next calls after exhaustion are idempotent empty pages."
+        source: "docs/lattice/durable-cursors.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/durable-cursors.md"
+  - id: events
+    name: "Events"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - mutation-observer
+      - tree
+    guarantees:
+      - statement: "When enabled, Orleans.Lattice publishes metadata-only tree events on a per-tree Orleans stream."
+        source: "docs/lattice/events.md"
+      - statement: "Events include operation kind, logical tree id, optional key, optional shard index, optional operation id, and timestamp."
+        source: "docs/lattice/events.md"
+      - statement: "Atomic writes stamp the operation id on per-entry Set events and AtomicWriteCompleted."
+        source: "docs/lattice/events.md"
+      - statement: "The stream namespace is orleans.lattice.events and the stream id is the logical tree id."
+        source: "docs/lattice/events.md"
+      - statement: "Per-tree publish overrides persist in the tree registry."
+        source: "docs/lattice/events.md"
+    non_guarantees:
+      - statement: "Publication is fire-and-forget and never changes the write return value."
+        source: "docs/lattice/events.md"
+      - statement: "Events never carry value bytes."
+        source: "docs/lattice/events.md"
+      - statement: "Lattice does not register a stream provider by default."
+        source: "docs/lattice/events.md"
+      - statement: "LatticeTreeEvent is not persisted and is not a durable change log."
+        source: "docs/lattice/events.md"
+      - statement: "Events are not transactional and not totally ordered, even per key."
+        source: "docs/lattice/events.md"
+    unsafe_sequences:
+      - sequence:
+          - "act on prepared Set events from an atomic write"
+          - "ignore absence of AtomicWriteCompleted"
+        hazard: "The saga may abort and publish no completion event."
+        source: "docs/lattice/events.md"
+      - sequence:
+          - "use LatticeTreeEvent as the only audit trail"
+          - "lose stream delivery or restart a silo"
+        hazard: "The durable write can survive while its event is lost."
+        source: "docs/lattice/events.md"
+    concurrency_rules:
+      - statement: "The configured Orleans stream provider determines redelivery and ordering guarantees."
+        source: "docs/lattice/events.md"
+      - statement: "Concurrent writes to the same key can publish events in a different order than the shard applied them."
+        source: "docs/lattice/events.md"
+      - statement: "Other activations can observe a publish override change up to about five seconds later."
+        source: "docs/lattice/events.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/events.md"
+  - id: explorer-console
+    name: "Explorer console"
+    packages:
+      - "Orleans.Lattice.Explorer.Web"
+    concepts:
+      - explorer
+    guarantees:
+      - statement: "The Explorer is an opt-in, auth-aware web console that observes and administers a cluster only through gRPC APIs."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "The Explorer can run standalone or embedded through the same AddLatticeExplorerWeb and MapLatticeExplorer calls."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "MapLatticeExplorer maps Razor components, static assets, and sign-in and sign-out endpoints under the configured base path."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "The Access area drives the authorization admin surface over the auth gRPC binding and does not re-implement policy verdicts."
+        source: "docs/lattice.explorer/managing-access.md"
+      - statement: "The Schema area drives the schema control API and delegates enforcement, versioning, and dead-letter semantics to Orleans.Lattice.Schema."
+        source: "docs/lattice.explorer/managing-schema.md"
+      - statement: "Per-operator auth sessions and cluster connections are scoped per Blazor Server circuit."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "MapLatticeExplorer emits baseline security response headers on every Explorer response."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+    non_guarantees:
+      - statement: "The Explorer surface is documented as in progress and its surface area and navigation are still moving."
+        source: "FEATURES.md"
+      - statement: "The Schema area is withheld by default because its versioning UI cannot yet express what differs between schema versions."
+        source: "docs/lattice.explorer/managing-schema.md"
+      - statement: "The Explorer is a Blazor Server application and therefore requires session affinity in a multi-instance deployment."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "Interactive endpoint configuration is disabled by default because the connection configuration is shared by every circuit."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "Environment credential seeding is disabled by default because the web head credential store is per browser."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+    unsafe_sequences:
+      - sequence:
+          - "restore a containerized isolated Explorer host from the csproj alone"
+          - "publish with --no-restore"
+        hazard: "The Blazor web asset contribution can be missed, dropping blazor.web.js so the interactive circuit never starts."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - sequence:
+          - "configure BasePath on the Explorer head"
+          - "forward through a front end that strips the path prefix"
+        hazard: "The head serves at the root instead of the configured subpath."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - sequence:
+          - "enable AllowEnvironmentCredentialSeed"
+          - "serve the web head to more than one trusted operator"
+        hazard: "A seeded credential would sign every anonymous visitor in as the operator."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+    concurrency_rules:
+      - statement: "Run the Explorer as an isolated head to scope Blazor Server session affinity to the admin deployment rather than the cluster endpoint."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "Credential-bearing gRPC control-plane clients are scoped per circuit and act under the calling circuit's own authentication."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+      - statement: "If the Explorer is co-hosted in a cluster, session affinity should be scoped to the Explorer BasePath alone."
+        source: "docs/lattice.explorer/running-the-explorer.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.explorer/running-the-explorer.md"
+      - "docs/lattice.explorer/managing-access.md"
+      - "docs/lattice.explorer/managing-schema.md"
+  - id: explorer-navigation-and-accessibility
+    name: "Explorer navigation and accessibility"
+    packages:
+      - "Orleans.Lattice.Explorer.Web"
+    concepts:
+      - explorer
+    guarantees:
+      - statement: "Primary Explorer navigation is a stable vertical rail of top-level areas."
+        source: "docs/lattice.explorer/navigation-model.md"
+      - statement: "Every navigable view has a URL so back, forward, reload, bookmark, and sharing work."
+        source: "docs/lattice.explorer/navigation-model.md"
+      - statement: "Every route and query key declared by the console is lower case."
+        source: "docs/lattice.explorer/navigation-model.md"
+      - statement: "Denied navigation entries stay visible but demoted and state a remedy."
+        source: "docs/lattice.explorer/navigation-visibility-policy.md"
+      - statement: "An anonymous caller is classified as AuthenticationRequired rather than Denied."
+        source: "docs/lattice.explorer/navigation-visibility-policy.md"
+      - statement: "The tenant picker adapts to the caller's reachability and offers a switch only to a validated platform operator."
+        source: "docs/lattice.explorer/tenant-scope.md"
+      - statement: "The console targets WCAG 2.1 Level AA and WCAG 2.2 Level AA."
+        source: "docs/lattice.explorer/accessibility-conformance.md"
+      - statement: "Theme, contrast, and density are independent user choices."
+        source: "docs/lattice.explorer/theming-and-density.md"
+    non_guarantees:
+      - statement: "Navigation access gates are advisory and are not a security boundary."
+        source: "docs/lattice.explorer/navigation-visibility-policy.md"
+      - statement: "Navigation visibility applies only to capability names and never to data-derived instance names such as tenant ids or tree names."
+        source: "docs/lattice.explorer/navigation-visibility-policy.md"
+      - statement: "Unavailable capabilities render no entry and are explained separately in the capabilities affordance."
+        source: "docs/lattice.explorer/navigation-visibility-policy.md"
+      - statement: "The accessibility statement is self-assessment and no formal third-party audit or assistive-technology user testing has been carried out."
+        source: "docs/lattice.explorer/accessibility-conformance.md"
+      - statement: "The browser accessibility lane is advisory rather than a required check."
+        source: "docs/lattice.explorer/accessibility-conformance.md"
+      - statement: "The axe sweep does not drive the data-lx-density compact spacing scale."
+        source: "docs/lattice.explorer/accessibility-conformance.md"
+    unsafe_sequences:
+      - sequence:
+          - "add a catch-all route at the application root"
+          - "serve Explorer static assets"
+        hazard: "Asset requests can be routed into the renderer and return the admin console instead of the asset."
+        source: "docs/lattice.explorer/navigation-model.md"
+      - sequence:
+          - "move the first-paint appearance script out of head or mark it defer or async"
+          - "load the Explorer for a user with a stored non-default appearance"
+        hazard: "The chosen appearance is applied after paint, reintroducing a visible theme flash."
+        source: "docs/lattice.explorer/theming-and-density.md"
+      - sequence:
+          - "replace the shell layout"
+          - "omit ShellRouteBinding or place it where area changes unmount it"
+        hazard: "The address bar stops following the view and deep links, sharing, and browser history stop working."
+        source: "docs/lattice.explorer/navigation-model.md"
+    concurrency_rules:
+      - statement: "An explicit URL wins over remembered view state and is then remembered for later bare visits."
+        source: "docs/lattice.explorer/navigation-model.md"
+      - statement: "Remembered tenant scope is revalidated against the caller's current accessible list on every restore."
+        source: "docs/lattice.explorer/tenant-scope.md"
+      - statement: "Tenant switching is enforced on the server and a non-operator cannot switch or elevate into the all-tenant view."
+        source: "docs/lattice.explorer/tenant-scope.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.explorer/navigation-model.md"
+      - "docs/lattice.explorer/navigation-visibility-policy.md"
+      - "docs/lattice.explorer/tenant-scope.md"
+      - "docs/lattice.explorer/theming-and-density.md"
+      - "docs/lattice.explorer/accessibility-conformance.md"
+  - id: explorer-plugins
+    name: "Explorer plugins"
+    packages:
+      - "Orleans.Lattice.Explorer.Web"
+    concepts:
+      - explorer
+    guarantees:
+      - statement: "The Explorer shell enumerates IExplorerPlugin registrations and renders each plugin's declared ViewType without per-plugin shell knowledge."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "An area plugin renders in the rail and a selection plugin renders in the detail panel filtered by SelectionKinds."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "Implementing IExplorerPlugin<TDomain> declares the plugin's domain contract in the type system."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "AddExplorerPlugin registration also registers the host machinery and is idempotent."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "Every plugin declares an access gate and uses the shared four-state access model."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "Sub-surfaces render as a subordinate segmented control."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "Plugin-specific styling is expected to use design-system primitives and lx-prefixed classes."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+    non_guarantees:
+      - statement: "Denied plugin entries are presentation-only and the server remains the sole enforcement point for calls the plugin issues."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "Explorer plugins are added by package and registration, not by extending a shell enum or switch."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "The Access, Backup, and Schema package ids omit the Plugins segment only because they are frozen shipped ids."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "A missing stylesheet link is not caught by the static-asset reference guard."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+    unsafe_sequences:
+      - sequence:
+          - "declare two area plugins with the same Order"
+          - "register them in one head"
+        hazard: "Their relative position is handed to the catalog tie-break instead of declared intent."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - sequence:
+          - "hand-roll a sub-surface role=tablist"
+          - "skip the shared tab primitive"
+        hazard: "The control will not carry the roving tabindex, arrow-key handling, or aria-controls binding the shell guarantees."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - sequence:
+          - "explain plugin UI with a title attribute"
+          - "serve touch or keyboard users"
+        hazard: "The explanation is invisible on touch and unreachable by keyboard."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - sequence:
+          - "ship a plugin stylesheet"
+          - "omit its link from either Explorer head"
+        hazard: "The panel can ship unstyled without a build error or obvious console error."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+    concurrency_rules:
+      - statement: "Two selection plugins may share an Order only when their SelectionKinds are disjoint."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "A plugin gate admits only when it positively demonstrates the grant; the mere absence of a probe failure is not admission."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+      - statement: "Adaptive plugin tables must be tested at named breakpoints for the rendered markup rather than only the state that feeds it."
+        source: "docs/lattice.explorer/writing-a-plugin.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.explorer/writing-a-plugin.md"
+  - id: external-state-and-data-apis
+    name: "External state and data APIs"
+    packages:
+      - "Orleans.Lattice.Api.Data"
+      - "Orleans.Lattice.Api.Data.Grpc"
+      - "Orleans.Lattice.Api.State"
+      - "Orleans.Lattice.Api.State.Grpc"
+    concepts:
+      - api-data-facade
+      - api-state-facade
+      - grpc-binding
+    guarantees:
+      - statement: "The State API is the outward-facing read-only surface for discovery, structure, entries, change history, observation, metrics, dead letters, and cluster identity."
+        source: "docs/lattice.api.state/README.md"
+      - statement: "The Data API is the outward-facing read-write surface for point writes, deletes, reads, range reads, atomic batches, and typed CRDT verbs."
+        source: "docs/lattice.api.data/README.md"
+      - statement: "Both APIs expose transport-agnostic facades and code-first gRPC bindings over Orleans-serialized C# records."
+        source: "docs/lattice.api.state/README.md"
+      - statement: "State API protected gRPC calls are fail-closed by default while GetAuthScheme remains unauthenticated for scheme discovery."
+        source: "docs/lattice.api.state/README.md"
+      - statement: "Data API calls pass through both the transport-level authorizer and the core per-tree or per-key authorization gate."
+        source: "docs/lattice.api.data/README.md"
+      - statement: "Every Data API tree id is resolved to a tenant-scoped effective id before authorization and operation."
+        source: "docs/lattice.api.data/README.md"
+      - statement: "Every State API tree id is resolved to the same effective tenant-scoped id for authorization and read."
+        source: "docs/lattice.api.state/README.md"
+    non_guarantees:
+      - statement: "The State API exposes observation verbs only and has no mutation path."
+        source: "docs/lattice.api.state/README.md"
+      - statement: "State API structure and metric counts report the latest published aggregate rather than a cursor-pinned snapshot."
+        source: "docs/lattice.api.state/README.md"
+      - statement: "Data API v1 deliberately omits a live streaming scan or mutation feed."
+        source: "docs/lattice.api.data/README.md"
+      - statement: "The Data API registers nothing unless the host opts in with AddLatticeDataApi and the gRPC binding."
+        source: "docs/lattice.api.data/README.md"
+      - statement: "A denied Data API response never includes the entry value."
+        source: "docs/lattice.api.data/README.md"
+    unsafe_sequences: []
+    concurrency_rules:
+      - statement: "State API entry scans use snapshot isolation by default, while Live and LivePointInTime modes can reflect writes committed after the scan opened."
+        source: "docs/lattice.api.state/README.md"
+      - statement: "Data API atomic and cross-tree batches authorize every leg before any apply."
+        source: "docs/lattice.api.data/README.md"
+      - statement: "Concurrent State API metric subscribers to the same request share one sampling loop, and a cluster with no metric subscribers does no sampling."
+        source: "docs/lattice.api.state/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.state/README.md"
+      - "docs/lattice.api.data/README.md"
+  - id: fast-reads
+    name: "Fast reads"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - caching
+    guarantees:
+      - statement: "GetAsync, ExistsAsync, and GetManyAsync use a read-through leaf cache."
+        source: "docs/lattice/caching.md"
+      - statement: "Each leaf-cache activation keeps a local mirror of the primary leaf entries."
+        source: "docs/lattice/caching.md"
+      - statement: "Every read refreshes from the primary unless a documented revision or CacheTtl gate skips it."
+        source: "docs/lattice/caching.md"
+      - statement: "Leaf epoch changes force a full snapshot and mirror replacement."
+        source: "docs/lattice/caching.md"
+      - statement: "Cached reads are bounded by CacheTtl plus one delta round-trip."
+        source: "docs/lattice/caching.md"
+      - statement: "Split and moved-away deltas prune entries the primary leaf no longer owns."
+        source: "docs/lattice/caching.md"
+    non_guarantees:
+      - statement: "GetWithVersionAsync bypasses the cache."
+        source: "docs/lattice/caching.md"
+      - statement: "The cache mirror is unbounded by default."
+        source: "docs/lattice/caching.md"
+      - statement: "Remote-cache reads can skip refresh inside non-zero CacheTtl."
+        source: "docs/lattice/caching.md"
+      - statement: "The cache cursor is non-persistent and adds no per-write durable I/O."
+        source: "docs/lattice/caching.md"
+      - statement: "Value-payload eviction causes evicted value reads to delegate to the primary leaf."
+        source: "docs/lattice/caching.md"
+    unsafe_sequences:
+      - sequence:
+          - "evict an entire cache row"
+          - "advance the delivery cursor past that key"
+        hazard: "The cache can answer a silent false miss because the leaf will not re-ship the key until it changes."
+        source: "docs/lattice/caching.md"
+      - sequence:
+          - "reuse a stale LatticeGrain alias after resize"
+          - "route to the old physical tree"
+        hazard: "The old tree rejects and the activation must refresh alias and retry."
+        source: "docs/lattice/caching.md"
+    concurrency_rules:
+      - statement: "The cache uses an activation-scoped epoch and sequence cursor rather than filtering by HLC."
+        source: "docs/lattice/caching.md"
+      - statement: "Applying the same delta twice is a no-op under LWW and version-vector merge."
+        source: "docs/lattice/state-primitives.md"
+      - statement: "Same-silo caches skip refresh only while the primary leaf revision counter is unchanged."
+        source: "docs/lattice/caching.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/caching.md"
+      - "docs/lattice/state-primitives.md"
+  - id: fault-tolerant
+    name: "Fault-tolerant"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "The chaos suite asserts public ILattice consistency guarantees under concurrent reads, writes, scans, atomic sagas, topology mutations, and network partitions."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "The single-cluster suite exercises recovery protocols under random storage-write faults."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Chaos plus online reshard validates that the tree recovers to the pinned universe and the reshard coordinator becomes idle."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Atomic-visibility chaos requires every reader poll to observe a full pre-saga state, a full post-saga state, or all keys hidden."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Cross-cluster atomic-visibility chaos requires each authored saga to land all-or-nothing on every receiver after drain."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Per-merge-mode replication chaos asserts convergence across sites after partitions are healed and drained."
+        source: "docs/lattice/chaos-tests.md"
+    non_guarantees:
+      - statement: "Every chaos fixture is tagged Category Chaos and is skipped by filters that exclude Chaos."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "During the injected storage-fault window, per-operation invariants are weakened and arbitrary exceptions are tolerated."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Most chaos fixtures are NonParallelizable so each fixture has its cluster to itself."
+        source: "docs/lattice/chaos-tests.md"
+    unsafe_sequences:
+      - sequence:
+          - "inject storage-write faults"
+          - "assert strong per-operation invariants during the fault window"
+        hazard: "A failed WriteStateAsync can legitimately cascade into split aborts, stale routing, count drift, and arbitrary tolerated exceptions."
+        source: "docs/lattice/chaos-tests.md"
+    concurrency_rules:
+      - statement: "Count and scan chaos asserts exact live-key sets while concurrent topology mutation and workload traffic run."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Cross-tree atomic chaos checks only settled generations during the concurrent read loop because independent point reads are not a simultaneous cross-tree snapshot."
+        source: "docs/lattice/chaos-tests.md"
+      - statement: "Replication convergence chaos heals all edges and drains every per-edge cursor to the sender WAL tail before asserting final state."
+        source: "docs/lattice/chaos-tests.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/chaos-tests.md"
+  - id: grain-indexes
+    name: "Grain indexes"
+    packages:
+      - "Orleans.Lattice.GrainIndex"
+    concepts:
+      - secondary-grain-index
+    guarantees:
+      - statement: "Grain indexes are declared explicitly with AddGrainIndex and Include selectors."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "A grain is indexed only when the silo declares an index and the persistent state is annotated with Indexed."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "Typed predicate queries run over indexed grain state and can stream grain references, keys, or projections."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "Activation and mutation enrolment and reminder-driven backfill converge through the same duplicate-free projection path."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "A failed index write leaves a durable pending-projection marker that is retried across silo restarts."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "Startup drift detection rejects a declaration change that would silently invalidate stored entries."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "A grain's entry set is reconciled with SetManyAtomicAsync so readers never see a half-updated grain."
+        source: "docs/lattice.grainindex/README.md"
+    non_guarantees:
+      - statement: "Grain indexes are eventually consistent with grain state and can reflect the last projected state rather than a more recent mutation."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "There is no index-everything mode."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "Index trees are cluster-local by default and are not replicated unless AllowReplication is enabled."
+        source: "docs/lattice.grainindex/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "change an index definition in a way that invalidates stored entries"
+          - "start the silo without rebuilding or handling drift"
+        hazard: "Startup drift detection rejects the changed definition instead of returning wrong answers."
+        source: "docs/lattice.grainindex/README.md"
+      - sequence:
+          - "configure an index tree to replicate"
+          - "leave AllowReplication false"
+        hazard: "Startup is rejected by the replication guard."
+        source: "docs/lattice.grainindex/README.md"
+    concurrency_rules:
+      - statement: "Under the default synchronous projection mode, a failed index write is surfaced to the caller of the state write and retried from durable state."
+        source: "docs/lattice.grainindex/README.md"
+      - statement: "All indexed properties for one index share one tree, with each property occupying its own contiguous key range."
+        source: "docs/lattice.grainindex/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.grainindex/README.md"
+  - id: history-views
+    name: "History views"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - history-retention
+      - materialised-view
+    guarantees:
+      - statement: "A history view is an append-only materialised view that records every source mutation as a durable revision row."
+        source: "docs/lattice/history-views.md"
+      - statement: "History rows are keyed by source key plus a fixed-width encoded hybrid logical clock, so distinct mutations map to distinct revision keys."
+        source: "docs/lattice/history-views.md"
+      - statement: "A history view created before WAL garbage collection has trimmed the start replays the log from the beginning with original clocks."
+        source: "docs/lattice/history-views.md"
+      - statement: "Retention mode is live-tunable per tree and defaults to MetadataOnly with no age bound."
+        source: "docs/lattice/history-views.md"
+      - statement: "ScanEntryHistoryAsync reads a key timeline from the durable history view when one is enabled."
+        source: "docs/lattice/history-views.md"
+      - statement: "On the view path, EntryHistoryPage.Truncated is always false."
+        source: "docs/lattice/history-views.md"
+      - statement: "The accumulative flag keeps existing rows on projection-version change and records unconstrained range deletes as range-tombstone marker revisions."
+        source: "docs/lattice/history-views.md"
+    non_guarantees:
+      - statement: "Revisions trimmed from the source WAL before the history view existed are never reconstructed."
+        source: "docs/lattice/history-views.md"
+      - statement: "Count-based retention by last N revisions per key is out of scope."
+        source: "docs/lattice/history-views.md"
+      - statement: "Without a history view, ScanEntryHistoryAsync falls back only to the retained WAL window and reports truncation when older entries were trimmed."
+        source: "docs/lattice/history-views.md"
+      - statement: "Lag-budget eviction on a history view rebuilds from current source state and collapses the timeline."
+        source: "docs/lattice/history-views.md"
+    unsafe_sequences:
+      - sequence:
+          - "enable MaxLagBudget on a history view"
+          - "let the view exceed that lag budget"
+        hazard: "Lag-budget eviction rebuilds from current source state and collapses the historical timeline."
+        source: "docs/lattice/history-views.md"
+      - sequence:
+          - "operator-trigger RebuildAsync on a history view"
+          - "expect earlier revisions to remain"
+        hazard: "The rebuild intentionally re-derives from current source state and collapses prior revisions."
+        source: "docs/lattice/history-views.md"
+      - sequence:
+          - "enable history with the synchronous Create overload"
+          - "assume durable registration failure was reported to the caller"
+        hazard: "The synchronous overload persists in the background and cannot report a failure to the caller."
+        source: "docs/lattice/history-views.md"
+    concurrency_rules:
+      - statement: "CreateAsync returns only after the view runtime registration is durable."
+        source: "docs/lattice/history-views.md"
+      - statement: "Retention policy changes apply to revisions the maintainer applies after the change and never rewrite existing rows."
+        source: "docs/lattice/history-views.md"
+      - statement: "ScanEntryHistoryAsync is side-effect-free and never perturbs the maintainer or its source WAL pin."
+        source: "docs/lattice/history-views.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/history-views.md"
+  - id: identity-directory
+    name: "Identity directory"
+    packages:
+      - "Orleans.Lattice.Explorer.Web"
+      - "Orleans.Lattice.Membership"
+      - "Orleans.Lattice.Membership.Entra.Graph"
+    concepts:
+      - auth-group
+      - membership-provider
+    guarantees:
+      - statement: "ILatticeIdentityDirectory is a read-only provider seam for searching and validating principals from an external identity source."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "SearchAsync returns paged DirectoryPrincipal results filtered by term and optional principal kind."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "ResolveAsync returns a DirectoryPrincipal for a vouched-for id or null for an unknown principal."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "When validation is required and a real provider is active, group and member creates validate ids before writing any membership edge."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "The Explorer Access picker searches the configured identity-directory provider and pages further matches with Load more."
+        source: "docs/lattice.explorer/managing-access.md"
+      - statement: "Explorer group creation is blocked when a directory resolves the id as the wrong kind or does not resolve it."
+        source: "docs/lattice.explorer/managing-access.md"
+      - statement: "The Entra Graph provider searches and resolves users and groups with app-only Microsoft Graph permissions."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+    non_guarantees:
+      - statement: "A principal returned by the identity-directory provider is a searchable identity and never grants access on its own."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "ValidationRequired defaults to false, so principal ids are accepted without lookup unless validation is opted in."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "The default NullIdentityDirectory searches nothing and resolves every id to null."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "With the null provider active, validation is skipped regardless of ValidationRequired."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "Graph OData denials degrade to empty search pages or null resolves, but token-acquisition and non-OData transport failures currently propagate."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+    unsafe_sequences:
+      - sequence:
+          - "register the Entra Graph resolver"
+          - "omit prior Entra credential authenticator registration"
+        hazard: "The resolver registration check throws because the required authenticator marker is absent."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+    concurrency_rules:
+      - statement: "Provider registrations are last-wins singletons, so a custom or static provider overrides the default NullIdentityDirectory when registered after membership."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "Identity-directory page sizes are bounded by LatticeIdentityDirectoryOptions across providers."
+        source: "docs/lattice.membership/identity-directory-providers.md"
+      - statement: "Explorer subject-picker keystrokes are coalesced so a burst of typing issues a single search."
+        source: "docs/lattice.explorer/managing-access.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.membership/identity-directory-providers.md"
+      - "docs/lattice.explorer/managing-access.md"
+  - id: materialised-views
+    name: "Materialised views"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - materialised-view
+      - wal-cursor
+    guarantees:
+      - statement: "Materialised views are asynchronous, eventually consistent projections maintained by tailing a source tree WAL."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "Filter and re-project views select source keys with a predicate and optional value transform or injective key remap."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "Aggregation views materialise one reduced value per group for count, sum, min, max, set-union, or fold."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "AddLatticeViews registers the view catalog, factory, maintainer, and WAL cursor registry."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "Runtime CreateAsync returns an ILatticeView after the runtime registration is durable."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "ILatticeViewFactory.GetAsync follows the maintainer's active generation on every read."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "ReconcileAsync re-derives expected content from current source state, repairs divergence, and reports whether drift was found."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "A source SetManyAtomicAsync batch appears atomically in the view, with no prepared-but-uncommitted or partial batch observable."
+        source: "docs/lattice/materialised-views.md"
+    non_guarantees:
+      - statement: "A view is read-only and its backing view tree rejects direct writes and direct content reads through ILattice."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "A view's source must be a directly writable tree and cannot be another view."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "The synchronous Create overload persists and activates in the background and cannot report durable-registration failure to the caller."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "ShipView rebuild and reconcile clear and re-derive the stable view tree in place, so a producer reader can briefly observe a partially rebuilt view."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "A re-keyed view collision resolves last-writer-wins and is counted as a configuration error."
+        source: "docs/lattice/materialised-views.md"
+    unsafe_sequences:
+      - sequence:
+          - "bind ILattice directly to a view-* tree"
+          - "read or mutate the view contents through that raw tree"
+        hazard: "Direct content reads and writes throw InvalidOperationException and can observe stale generations if bypassed."
+        source: "docs/lattice/materialised-views.md"
+      - sequence:
+          - "create a view over a view-* source tree"
+          - "start the maintainer"
+        hazard: "View chaining is unsupported and rejected because it compounds lag and stacks source-WAL cursor pins."
+        source: "docs/lattice/materialised-views.md"
+      - sequence:
+          - "delete a source tree that still has materialised views"
+          - "leave dependent views registered"
+        hazard: "DeleteTreeAsync throws and names the dependent views because the source must outlive its views."
+        source: "docs/lattice/materialised-views.md"
+      - sequence:
+          - "change an existing view between DeriveLocally and ShipView or change its designated producer"
+          - "keep the same view name"
+        hazard: "The existing view-tree WAL may contain writes authored under the old topology."
+        source: "docs/lattice/materialised-views.md"
+    concurrency_rules:
+      - statement: "WaitForSourceHeadAsync blocks until the view has applied the current source head for callers needing read-your-writes."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "Cross-tree source atomic writes flip participating views jointly unless a participant is unavailable past CrossTreeReadinessTimeout."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "If a cross-tree participant view is permanently unavailable, present views degrade to per-tree atomicity after the bounded wait and schedule reconcile."
+        source: "docs/lattice/materialised-views.md"
+      - statement: "While the source WAL saturation signal is Throttled or Saturated, the maintainer reduces batch size and delays background ticks to preserve foreground write throughput."
+        source: "docs/lattice/materialised-views.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/materialised-views.md"
+  - id: mcp-server
+    name: "MCP server"
+    packages:
+      - "Orleans.Lattice.Api.Mcp"
+    concepts:
+      - api-facade
+      - mcp-tool-group
+    guarantees:
+      - statement: "AddLatticeMcp registers the MCP server, streamable HTTP transport, fail-closed authorizer seam, and credential bridge."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "MapLatticeMcp maps the MCP endpoint."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "The server starts with no tools and each built-in tool module is opt-in."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "Permission-scoped discovery computes the session tool list from the authenticated caller's effective permissions."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "Every MCP tool is a thin adapter over the matching Orleans.Lattice.Api facade."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "The credential bridge stamps the authenticated MCP session identity onto the ambient LatticeCredentialContext."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "AddLatticeMcpRemote binds the same built-in tool modules over the Orleans.Lattice.Api gRPC clients for an out-of-silo host."
+        source: "docs/lattice.api.mcp/remote.md"
+      - statement: "Remote multi-region routing builds the region list and routing table once at startup from one configuration."
+        source: "docs/lattice.api.mcp/remote.md"
+    non_guarantees:
+      - statement: "Discovery is coarse at the facade group level, so a listed group can still contain per-call verbs the facade access gate refuses."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "Destructive verbs are hidden until the host enables the corresponding opt-in flag."
+        source: "docs/lattice.api.mcp/README.md"
+      - statement: "Remote hosting omits tools whose backing facade operations have no gRPC method yet."
+        source: "docs/lattice.api.mcp/remote.md"
+      - statement: "Serving remote tools to non-administrator callers requires an Auth endpoint and an administrator credential."
+        source: "docs/lattice.api.mcp/remote.md"
+      - statement: "The remote binding does not reject duplicate RegionId values."
+        source: "docs/lattice.api.mcp/remote.md"
+    unsafe_sequences:
+      - sequence:
+          - "configure a peer region endpoint to a global anycast load balancer"
+          - "route a tool call with a region selector"
+        hazard: "The call can land on whichever region the load balancer chooses instead of the requested region."
+        source: "docs/lattice.api.mcp/remote.md"
+      - sequence:
+          - "use a static Entra administrator credential on a long-lived remote MCP head"
+          - "let the token expire"
+        hazard: "Remote permission introspection stops advertising tools to non-administrator callers until the process restarts or the value is rotated."
+        source: "docs/lattice.api.mcp/remote.md"
+      - sequence:
+          - "serve tenant callers from a remote MCP head"
+          - "omit the TenantAdmin endpoint"
+        hazard: "Tenant-asserted region discovery returns the full configured topology instead of the tenant-scoped actionable set."
+        source: "docs/lattice.api.mcp/remote.md"
+    concurrency_rules:
+      - statement: "A cross-region call forwards the same caller credential to the target region, which authorizes it independently."
+        source: "docs/lattice.api.mcp/remote.md"
+      - statement: "VerifyRegionIdentity probes each peer once and omits or rejects a region fail-closed when the advertised cluster id does not match."
+        source: "docs/lattice.api.mcp/remote.md"
+      - statement: "The managed-identity administrator source caches and refreshes administrator tokens before expiry and takes precedence over a static AdministratorCredential."
+        source: "docs/lattice.api.mcp/remote.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.mcp/README.md"
+      - "docs/lattice.api.mcp/remote.md"
+  - id: mcp-telemetry
+    name: "MCP telemetry"
+    packages:
+      - "Orleans.Lattice.Api.Mcp.Telemetry"
+      - "Orleans.Lattice.Api.Mcp.Telemetry.Azure"
+    concepts:
+      - mcp-tool-group
+    guarantees:
+      - statement: "MCP telemetry adds four read-only tools for instant queries, range queries, metric-name discovery, and metric metadata."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "The telemetry proxy stamps the configured backend credential on backend calls and never forwards the caller's Lattice credential."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "Metric access can be restricted to an explicit allow-list of exact names and wildcard patterns."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "Range queries are bounded by a configured maximum window and step."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "Backend timeouts, HTTP failures, malformed payloads, guardrail rejections, and metric-access denials return structured Success=false results."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "The Telemetry grant is a cluster-wide capability granted over the all-trees sentinel scope."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "The Azure companion supplies DynamicBearer backend tokens for Azure Monitor managed Prometheus."
+        source: "docs/lattice.api.mcp.telemetry.azure/README.md"
+    non_guarantees:
+      - statement: "The telemetry tool group exposes no write, delete, or control verbs."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "The telemetry tools appear only when AddTelemetryTools is called and the caller holds a Telemetry grant."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "Admin does not confer the Telemetry capability."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "A backend metadata 404 is treated as a missing metadata surface and returns Success=true with an empty metric list."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+      - statement: "Azure telemetry token options are validated on first token request rather than at startup."
+        source: "docs/lattice.api.mcp.telemetry.azure/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "configure Azure Monitor managed Prometheus with static Bearer backend auth"
+          - "run beyond the Entra token lifetime"
+        hazard: "A static bearer string cannot rotate for Azure managed Prometheus."
+        source: "docs/lattice.api.mcp.telemetry.azure/README.md"
+    concurrency_rules:
+      - statement: "Concurrent Azure telemetry token queries during rotation share a single in-flight token acquisition."
+        source: "docs/lattice.api.mcp.telemetry.azure/README.md"
+      - statement: "The Azure provider serves a cached token until the cache is empty or within RefreshSkew of expiry."
+        source: "docs/lattice.api.mcp.telemetry.azure/README.md"
+      - statement: "A genuine caller cancellation propagates rather than being returned as a structured telemetry failure."
+        source: "docs/lattice.api.mcp.telemetry/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.mcp.telemetry/README.md"
+      - "docs/lattice.api.mcp.telemetry.azure/README.md"
+  - id: metrics
+    name: "Metrics"
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Dashboards"
+    concepts:
+      - dashboards
+    guarantees:
+      - statement: "Orleans.Lattice publishes runtime telemetry through System.Diagnostics.Metrics for OpenTelemetry-compatible exporters."
+        source: "docs/lattice/metrics.md"
+      - statement: "Core instruments are owned by the orleans.lattice Meter exposed by LatticeMetrics."
+        source: "docs/lattice/metrics.md"
+      - statement: "Every Lattice instrument carries a low-cardinality tenant tag derived from the tree id or platform context."
+        source: "docs/lattice/metrics.md"
+      - statement: "Leaf grain ids are not emitted as metric tags."
+        source: "docs/lattice/metrics.md"
+      - statement: "The build.info observable gauge is emitted unconditionally from process start with version and sha tags."
+        source: "docs/lattice/metrics.md"
+      - statement: "Orleans.Lattice.Dashboards ships embedded Grafana dashboards retrieved by LatticeDashboardKind."
+        source: "docs/lattice.dashboards/README.md"
+      - statement: "Dashboard metric references and discoverable instruments are drift-guarded by CI tests."
+        source: "docs/lattice.dashboards/README.md"
+    non_guarantees:
+      - statement: "AddMeter with an exact name matches that meter only and does not cascade to child lattice meters."
+        source: "docs/lattice/metrics.md"
+      - statement: "Grain-call observation is opt-in because it observes every outgoing grain call the silo makes."
+        source: "docs/lattice/metrics.md"
+      - statement: "The bundled dashboards assume a host exporting through AddPrometheusExporter."
+        source: "docs/lattice.dashboards/README.md"
+      - statement: "The repository-context container's hand-rolled exposition publishes histograms as summaries without bucket boundaries, so Grafana quantile panels over buckets are unavailable there."
+        source: "docs/lattice.dashboards/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "declare a Meter field below an instrument field in a metrics class"
+          - "use reference-based MeterListener subscription"
+        hazard: "Already-published instruments can be missed silently because the callback sees a null Meter field."
+        source: "docs/lattice/metrics.md"
+      - sequence:
+          - "omit exporter unit suffixes in histogram bucket queries"
+          - "use AddPrometheusExporter output"
+        hazard: "The query names a series the exporter does not emit."
+        source: "docs/lattice.dashboards/README.md"
+      - sequence:
+          - "point bundled histogram_quantile panels at the repository-context container exposition"
+          - "read an or vector(0) fallback as data"
+        hazard: "Missing bucket series can render as literal zero rather than as an unavailable quantile."
+        source: "docs/lattice.dashboards/README.md"
+    concurrency_rules:
+      - statement: "LatticeMetrics declares its Meter above every instrument and builds instruments from that field so listener publication observes a fully initialized Meter."
+        source: "docs/lattice/metrics.md"
+      - statement: "The grain-index package publishes its instruments on the same orleans.lattice Meter."
+        source: "docs/lattice/metrics.md"
+      - statement: "A pipeline that subscribes by meter name before silo start picks up instruments whenever subsequently activated grains publish them."
+        source: "docs/lattice/metrics.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/metrics.md"
+      - "docs/lattice.dashboards/README.md"
+  - id: multi-tenancy
+    name: "Multi-tenancy"
+    packages:
+      - "Orleans.Lattice.Tenancy"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "Tenancy is opt-in and adopts pre-tenancy data into the reserved default tenant without renaming or rewriting it."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "When the tenancy package is absent, core tenant seams resolve to null implementations and existing paths remain unchanged."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Tenant isolation is default-deny across data plane, enumeration, control plane, backup, restore, replication apply, observability, and Explorer surfaces."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "AddLatticeTenancy throws during registration unless AddLattice, AddLatticeMembership, and AddLatticeAuth have already run."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Tenant tree ids compose as t/{tenantId}/{name} and are checked by ordinal prefix."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Every external API facade resolves caller-supplied names through ResolveEffectiveTreeIdAsync and uses the effective id for both authorization and operation."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Tenant quotas cover aggregate durable bytes, live keys, resident memory, tree count, request rate, and burst headroom."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "GlobalConverged quota enforcement reads a convergent CRDT sum rather than using locks or consensus."
+        source: "docs/lattice.tenancy/README.md"
+    non_guarantees:
+      - statement: "The active tenant is always caller-supplied and is not inferred from a subject's sole membership."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Tag-index trees are not partitioned today and remain cluster-global."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Quota admission fails open for a tenant with no landed usage sample yet."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Setting MeterInterval to zero disables metering entirely and leaves quota admission permanently open."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "MaxOpsPerSecond is enforced per cluster regardless of quota enforcement scope."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "The default tenant cannot be suspended, deleted, given quotas, have admin subjects changed, or participate in cross-tenant grants."
+        source: "docs/lattice.tenancy/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "call AddLatticeTenancy before AddLatticeMembership or AddLatticeAuth"
+          - "start composing the silo"
+        hazard: "Registration throws rather than silently downgrading to an unenforced state."
+        source: "docs/lattice.tenancy/README.md"
+      - sequence:
+          - "revoke an allowed region while the tenant is still resident there"
+          - "skip draining the region first"
+        hazard: "Region administration refuses the revoke; the region must be drained with SetResidencyAsync first."
+        source: "docs/lattice.tenancy/README.md"
+      - sequence:
+          - "set a tenant residency set to empty"
+          - "remove its last resident region"
+        hazard: "The operation is refused because the last resident region can never be removed."
+        source: "docs/lattice.tenancy/README.md"
+      - sequence:
+          - "address a sys- tree from a non-default tenant outside system-origin scope"
+          - "resolve the tenant-scoped tree name"
+        hazard: "The name is refused because the reserved system namespace is closed to tenants."
+        source: "docs/lattice.tenancy/README.md"
+    concurrency_rules:
+      - statement: "Tenant definitions converge across clusters through existing system-tree replication."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Usage overage uses grow-only GCounters for each metered footprint dimension."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Request-rate limiting uses silo-local token buckets on the per-op hot path and a low-frequency coordinator for apportionment."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "A tenant's first non-empty usage sample always publishes so quota enforcement can arm for small tenants."
+        source: "docs/lattice.tenancy/README.md"
+      - statement: "Residency changes are asynchronous and only Online regions serve the tenant."
+        source: "docs/lattice.tenancy/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.tenancy/README.md"
+  - id: online-reshard
+    name: "Online reshard"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - reshard
+      - shard-map
+    guarantees:
+      - statement: "ReshardAsync grows a tree's physical shard count online while reads and writes continue."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "Resharding changes key-space partitioning and write-path fan-out, not the maximum amount of data a shard can hold."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "On a tree that holds data, resharding is grow-only and the target must exceed the current distinct-shard count."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "An observably empty tree can be re-pinned in place to any in-range shard count without a coordinator."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "Repeated ReshardAsync calls with the same in-progress target are no-ops."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "The reshard coordinator is reminder-anchored and resumes automatically after silo restart."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "The reshard target range is 2 through the fixed virtual shard count of 4096."
+        source: "docs/lattice/online-reshard.md"
+    non_guarantees:
+      - statement: "ReshardAsync cannot shrink a tree that holds data."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "ReshardAsync is shard-count only and does not change MaxLeafKeys or MaxInternalChildren."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "The reshard source-selection policy is heuristic and does not currently read hotness counters."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "A single tree cannot support more than 4096 physical shards."
+        source: "docs/lattice/online-reshard.md"
+    unsafe_sequences:
+      - sequence:
+          - "start ReshardAsync on a tree"
+          - "start ResizeAsync on the same tree before reshard completes"
+        hazard: "The reshard is refused with InvalidOperationException while resize is in flight."
+        source: "docs/lattice/online-reshard.md"
+      - sequence:
+          - "start ReshardAsync with target A"
+          - "start ReshardAsync with different target B before A completes"
+        hazard: "The second request is refused with InvalidOperationException."
+        source: "docs/lattice/online-reshard.md"
+      - sequence:
+          - "raise a tree's pinned shard count with ReshardAsync"
+          - "expect shard healing to reduce it below that new pin"
+        hazard: "Healing never undoes a reshard below the pinned shard count."
+        source: "docs/lattice/online-reshard.md"
+    concurrency_rules:
+      - statement: "The reshard coordinator dispatches up to MaxConcurrentMigrations concurrent online shard splits per tick."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "The autonomic split monitor suppresses its own passes while a reshard is running."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard."
+        source: "docs/lattice/online-reshard.md"
+      - statement: "From a split swap phase onward, the source emits StaleShardRoutingException and the tree router retries against the new owner."
+        source: "docs/lattice/online-reshard.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/online-reshard.md"
+  - id: per-entry-ttl
+    name: "Per-entry TTL"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tombstone
+      - ttl
+    guarantees:
+      - statement: "Per-entry TTL writes store an absolute UTC expiry resolved server-side."
+        source: "docs/lattice/ttl.md"
+      - statement: "SetAsync with a TTL rejects zero, negative, or overflowing TTL values with ArgumentOutOfRangeException."
+        source: "docs/lattice/ttl.md"
+      - statement: "Non-TTL SetAsync and bulk-load entries carry no expiry and never expire on their own."
+        source: "docs/lattice/ttl.md"
+      - statement: "A later last-writer-wins SetAsync clears or introduces expiry according to the winning write."
+        source: "docs/lattice/ttl.md"
+      - statement: "Typed CRDT writes with TTL merge expiry by max absolute ticks so concurrent TTL writes converge."
+        source: "docs/lattice/ttl.md"
+      - statement: "Read paths filter expired entries before returning results."
+        source: "docs/lattice/ttl.md"
+      - statement: "Shard splits, snapshots, resize, and MergeAsync preserve the winning row's absolute expiry metadata."
+        source: "docs/lattice/ttl.md"
+      - statement: "Expired live entries past TombstoneGracePeriod are reaped by reminder-driven tombstone compaction."
+        source: "docs/lattice/ttl.md"
+    non_guarantees:
+      - statement: "A durable CRDT write without TTL does not clear an existing CRDT expiry."
+        source: "docs/lattice/ttl.md"
+      - statement: "Clearing a TTL'd CRDT entry back to durable is out of scope for this version."
+        source: "docs/lattice/ttl.md"
+      - statement: "SetManyAtomicAsync and SetManyAtomicWhereAsync accept no TTL and their committed writes carry none."
+        source: "docs/lattice/ttl.md"
+      - statement: "BulkLoadAsync and streaming bulk-load overloads do not currently accept a TTL."
+        source: "docs/lattice/ttl.md"
+      - statement: "TTL consistency depends on reasonably synchronized silo clocks, not client clocks."
+        source: "docs/lattice/ttl.md"
+      - statement: "CacheTtl is independent of an entry's own expiry."
+        source: "docs/lattice/ttl.md"
+    unsafe_sequences:
+      - sequence:
+          - "set TombstoneGracePeriod below worst-case clock drift plus replication delay"
+          - "compact expired entries"
+        hazard: "A lagging replica can resurrect an expired entry via delayed merge."
+        source: "docs/lattice/ttl.md"
+      - sequence:
+          - "write a TTL'd CRDT entry"
+          - "write the same CRDT key without TTL expecting the expiry to clear"
+        hazard: "The durable write contributes the bottom expiry and leaves the existing expiry unchanged."
+        source: "docs/lattice/ttl.md"
+      - sequence:
+          - "commit a non-TTL atomic batch over a TTL'd key"
+          - "expect the previous expiry to remain when the batch wins"
+        hazard: "The non-TTL committed entry resolves like a non-TTL SetAsync and clears the prior expiry."
+        source: "docs/lattice/ttl.md"
+    concurrency_rules:
+      - statement: "CRDT TTL expiry uses a commutative, associative, and idempotent max-absolute-ticks join."
+        source: "docs/lattice/ttl.md"
+      - statement: "The effective now is captured once per leaf call, so every key evaluated by one leaf request observes the same expiry instant."
+        source: "docs/lattice/ttl.md"
+      - statement: "Expired entries are preserved on replication-layer GetDeltaSinceAsync and MergeManyAsync paths so replicas can still converge on HLC resolution."
+        source: "docs/lattice/ttl.md"
+      - statement: "An aborted atomic batch never rewrites a pre-saga entry or its TTL."
+        source: "docs/lattice/ttl.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/ttl.md"
+  - id: performance
+    name: "Performance"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "The single-silo guide reports Layer 1 in-process ceilings and Layer 2 end-to-end single-silo measurements against real Azure Tables."
+        source: "docs/lattice/performance-single-silo.md"
+      - statement: "Layer 2 write measurements include the durable WAL-before-apply path with real Azure round trips."
+        source: "docs/lattice/performance-single-silo.md"
+      - statement: "The multi-silo guide reports Layer 3 throughput across 1, 2, 4, 6, and 8 silos on Azure Container Apps."
+        source: "docs/lattice/performance-multi-silo.md"
+      - statement: "Layer 3 publishes completed work divided by active elapsed time."
+        source: "docs/lattice/performance-multi-silo.md"
+    non_guarantees:
+      - statement: "The performance guides are approximate guides, not per-deployment service-level objectives."
+        source: "docs/lattice/performance-single-silo.md"
+      - statement: "The single-silo figures describe warm steady-state averages and exclude cold starts, JIT warm-up, activation storms, and bursty offered load."
+        source: "docs/lattice/performance-single-silo.md"
+      - statement: "The multi-silo figures measure one tree on one storage account, so many-tree or multi-account estates can have a different ceiling."
+        source: "docs/lattice/performance-multi-silo.md"
+      - statement: "Different key size, value size, fan-out, skew, read/write mix, durability needs, or storage tier can produce different numbers."
+        source: "docs/lattice/performance-single-silo.md"
+    unsafe_sequences:
+      - sequence:
+          - "quote the published benchmark rows as a production capacity plan"
+          - "deploy a different workload without re-running the harness"
+        hazard: "The guides state that operators should measure their own workload before committing to capacity."
+        source: "docs/lattice/performance-single-silo.md"
+    concurrency_rules:
+      - statement: "Layer 3 offered load scales by silo count so a flat curve means extra hosts absorbed no additional cluster demand."
+        source: "docs/lattice/performance-multi-silo.md"
+      - statement: "For a single tree, fixed resources such as WAL partitions, shards, and the transaction registry do not grow with the silo count."
+        source: "docs/lattice/performance-multi-silo.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/performance-single-silo.md"
+      - "docs/lattice/performance-multi-silo.md"
+  - id: predicate-operations
+    name: "Predicate operations"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - predicate
+    guarantees:
+      - statement: "Predicate operations translate a C# expression to LatticePredicateNode on the client and evaluate it on the owning leaf grain."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "Predicate reads return only live values that match and omit missing, tombstoned, and non-matching keys."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "A predicated SetManyAsync writes each key only when the current stored value matches and returns exactly the keys written."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "A predicated SetManyAtomicAsync commits the whole batch only when every pre-saga target value matches."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "Predicate cursor specifications persist the compiled predicate IR so resume reapplies the same filter."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "Predicated DeleteRangeAsync persists the matched key set to the WAL so peers delete the same keys without re-evaluating the predicate."
+        source: "docs/lattice/predicated-operations.md"
+    non_guarantees:
+      - statement: "A serializer that does not implement ILatticePredicateSerializer is rejected client-side with NotSupportedException before any RPC."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "Expressions outside the documented allowlist are rejected client-side with NotSupportedException at translation time."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "String overloads that take StringComparison, ignoreCase, or culture arguments are rejected because server comparison is ordinal."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "Predicated SetManyAsync is not atomic and can produce a partial result."
+        source: "docs/lattice/predicated-operations.md"
+    unsafe_sequences:
+      - sequence:
+          - "use predicated SetManyAsync for a multi-key conditional update"
+          - "assume the operation committed all keys or none"
+        hazard: "SetManyAsync decides each key independently; use SetManyAtomicAsync for all-or-nothing semantics."
+        source: "docs/lattice/predicated-operations.md"
+    concurrency_rules:
+      - statement: "A retry of predicated SetManyAtomicAsync with the same operation id reattaches to the original saga and returns its memoized outcome."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "The guarded atomic batch evaluates its predicate against the pre-saga snapshot of every target key."
+        source: "docs/lattice/predicated-operations.md"
+      - statement: "Predicated resilient scans recover from EnumerationAbortedException with the predicate intact."
+        source: "docs/lattice/predicated-operations.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/predicated-operations.md"
+  - id: projection-rebuild
+    name: "Projection rebuild"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - materialised-view
+    guarantees:
+      - statement: "GetLeafProjectionDigestAsync returns an O(shard-count) drift-detection fingerprint for each physical shard."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "The projection digest folds key, HLC timestamp, tombstone state, TTL, origin cluster id, version vector, and value bytes."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "RebuildLeafProjectionAsync clears projection-owned state for every leaf in a shard and lets activation replay rebuild from the WAL."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "GetMaterialiserLagAsync returns the maximum estimated materialiser lag across all physical shards of the tree."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "Snapshot-on-fall-off captures active leaf cache state before a WAL trim makes the checkpoint unrecoverable."
+        source: "docs/lattice/projection-rebuild.md"
+    non_guarantees:
+      - statement: "The projection digest is a non-cryptographic drift-detection fingerprint, not an authentication tag."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "Digest equality is meaningful only between quiescent observations after coalesced publishes have landed."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "RebuildLeafProjectionAsync does not take a tree-wide consistency lock."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "During a live RebuildLeafProjectionAsync, reads against the rebuilt shard can see fewer entries until WAL replay catches up."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "Activation-time SnapshotThenWal does not yet recover the case where snapshot rehydrate declined and the WAL is genuinely short."
+        source: "docs/lattice/projection-rebuild.md"
+    unsafe_sequences:
+      - sequence:
+          - "set MaintainProjectionDigest to false for a tree"
+          - "allow a mutation to land while digest maintenance is disabled"
+          - "turn MaintainProjectionDigest back on and rely on digest reads"
+        hazard: "The first mutation accepted while digest maintenance is disabled stamps a permanent registry latch and digest reads keep throwing until rebuild."
+        source: "docs/lattice/projection-rebuild.md"
+      - sequence:
+          - "observe a live leaf latched stale after WAL trim"
+          - "recycle the activation before capturing a backup or export"
+        hazard: "The live activation may hold the only copy of writes in the trimmed range, and RebuildLeafProjectionAsync replays only surviving WAL."
+        source: "docs/lattice/projection-rebuild.md"
+    concurrency_rules:
+      - statement: "Leaf digest publishes are bounded by DigestPublishTimeout and an abandoned publish is retried by a later mutation without partially applying at the parent."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "Internal-node digest folding rejects stale publishes from children the node no longer owns."
+        source: "docs/lattice/projection-rebuild.md"
+      - statement: "Background starvation drives share replay permits with activations but never queue for one."
+        source: "docs/lattice/projection-rebuild.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/projection-rebuild.md"
+  - id: queues
+    name: "Queues"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "Each logical queue is a typed cluster-internal FIFO queue over a reserved system tree."
+        source: "docs/lattice/queues.md"
+      - statement: "EnqueueAsync appends an item at the tail and returns the assigned monotonic long id."
+        source: "docs/lattice/queues.md"
+      - statement: "TryDequeueAsync removes and returns the head entry or null when the queue is empty."
+        source: "docs/lattice/queues.md"
+      - statement: "PeekAsync returns the head entry without removing it."
+        source: "docs/lattice/queues.md"
+      - statement: "When QueueCapacity is set and the bound is reached, enqueue evicts the oldest entry first."
+        source: "docs/lattice/queues.md"
+    non_guarantees:
+      - statement: "The queue is cluster-internal and is not a CRDT-replicated primitive."
+        source: "docs/lattice/queues.md"
+      - statement: "The queue never ships a LatticeMergeMode for cross-cluster FIFO."
+        source: "docs/lattice/queues.md"
+      - statement: "A drained queue can reuse ids after a crash if ids advanced since the last persisted head-cursor write."
+        source: "docs/lattice/queues.md"
+      - statement: "ListAsync materializes every parked entry and is intended for diagnostics or control-plane use rather than the hot path."
+        source: "docs/lattice/queues.md"
+    unsafe_sequences:
+      - sequence:
+          - "use one logical queue as a primary high-throughput data-plane work queue"
+          - "expect sharding to raise FIFO throughput"
+        hazard: "One coordinator activation serializes every operation for a logical queue, and sharding cannot relieve that without breaking FIFO order."
+        source: "docs/lattice/queues.md"
+      - sequence:
+          - "dequeue from a queue in one cluster"
+          - "expect destructive FIFO state to converge across clusters"
+        hazard: "Destructive dequeue is non-monotonic and cross-cluster FIFO is outside the CRDT merge model."
+        source: "docs/lattice/queues.md"
+    concurrency_rules:
+      - statement: "One coordinator grain per logical queue serializes all operations to preserve FIFO order."
+        source: "docs/lattice/queues.md"
+      - statement: "Applications needing higher throughput should fan work across several independently named queues and hash a producer key to a lane."
+        source: "docs/lattice/queues.md"
+      - statement: "Resolving the same queue name returns a facade over the same coordinator grain."
+        source: "docs/lattice/queues.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/queues.md"
+  - id: reference-architecture
+    name: "Reference architecture"
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Api.Mcp"
+      - "Orleans.Lattice.Backup.AzureBlob"
+      - "Orleans.Lattice.Explorer.Web"
+      - "Orleans.Lattice.Membership.Entra"
+      - "Orleans.Lattice.Replication"
+      - "Orleans.Lattice.Scaling"
+      - "Orleans.Lattice.Storage.AzureTable"
+    concepts:
+      - region
+      - storage-provider
+    guarantees:
+      - statement: "The reference architecture is a reusable Azure Container Apps active-active cross-region blueprint with a parameterized deployment kit."
+        source: "reference-architecture.md"
+      - statement: "Every region in the blueprint is a full read-write Lattice cluster with no primary region for serving traffic."
+        source: "reference-architecture.md"
+      - statement: "The baseline uses a durable Azure Table WAL per region and a shared Azure Blob backup sink."
+        source: "reference-architecture.md"
+      - statement: "The silo head has a nonzero minimum replica floor, while MCP, Explorer, and Grafana heads can scale to zero."
+        source: "reference-architecture.md"
+      - statement: "The deployment script is idempotent and re-running it converges the estate rather than duplicating resources."
+        source: "reference-architecture/README.md"
+    non_guarantees:
+      - statement: "Cross-region consistency in the active-active estate is eventual, not strongly consistent across regions."
+        source: "reference-architecture.md"
+      - statement: "The baseline does not deploy Azure Front Door Premium, Private Link private origins, managed WAF, bot protection, or a WAF policy."
+        source: "reference-architecture.md"
+      - statement: "The public-option Front Door origin lock is a header assertion and is not an unspoofable network lock."
+        source: "reference-architecture.md"
+      - statement: "The private option closes ingress and inter-region replication paths but does not make Azure Storage, ACR, or Key Vault fully private."
+        source: "reference-architecture/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "restore a replicated tree as if restore were local to one region"
+          - "assume each peer keeps live writes after the backup point"
+        hazard: "A restore of a replicated tree is promoted to an all-or-nothing coordinated restore across every current replication peer."
+        source: "reference-architecture/README.md"
+      - sequence:
+          - "deploy the public option"
+          - "treat the AFD Standard origin header check as an unspoofable lock"
+        hazard: "A caller that learns the ACA FQDN and non-secret Front Door id can forge the header; the non-spoofable path is Premium plus Private Link."
+        source: "reference-architecture.md"
+    concurrency_rules:
+      - statement: "The backup-primary region alone owns scheduled backups, while other regions are DR standby and do not run the scheduler."
+        source: "reference-architecture.md"
+      - statement: "Every region must reciprocally enroll every other region as a replication peer and enroll every replicated tree."
+        source: "reference-architecture.md"
+      - statement: "Front Door routes MCP requests independently, and callers can pin a tool call to a specific region with the optional region argument."
+        source: "reference-architecture/README.md"
+    sources:
+      - "FEATURES.md"
+      - "reference-architecture.md"
+      - "reference-architecture/README.md"
+  - id: repo-context-mcp
+    name: "Repo-context MCP"
+    packages:
+      - "Orleans.Lattice.Api.Mcp.RepoContext"
+    concepts:
+      - mcp-tool-group
+      - repocontext-store
+    guarantees:
+      - statement: "RepoContext MCP contributes repocontext_* tools for repository onboarding, working memory, retrieval, graph navigation, exclusive claims, token economics, and health."
+        source: "docs/lattice.api.mcp.repocontext/README.md"
+      - statement: "Every record is stored as a CRDT value on a named Lattice tree and inherits Lattice durability, TTL, and tombstone-compaction behavior."
+        source: "docs/lattice.api.mcp.repocontext/README.md"
+      - statement: "Tool advertisement and invocation clear the same fail-closed authorization gate."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - statement: "Onboarding runs asynchronously and is idempotent and resumable, with status reported by repocontext_index_status."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - statement: "Semantic search uses nearest-neighbour vectors when available and deterministic keyword search over records and file content when semantic retrieval cannot serve."
+        source: "docs/lattice.api.mcp.repocontext/semantic-search.md"
+      - statement: "repocontext_context packs ranked source under a hard response-token ceiling and fails closed when even the cheapest entry cannot fit."
+        source: "docs/lattice.api.mcp.repocontext/retrieval-economics.md"
+      - statement: "repocontext_reset_index drops the code index and vector planes while preserving durable agent memory."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+    non_guarantees:
+      - statement: "Semantic nearest-neighbour retrieval is approximate by default unless exact retrieval is configured."
+        source: "docs/lattice.api.mcp.repocontext/semantic-search.md"
+      - statement: "Onboarding tools and repocontext_changed are withheld unless the host supplies a workspace root and the effective path guard is enforcing."
+        source: "docs/lattice.api.mcp.repocontext/README.md"
+      - statement: "The keyword path does not scan the symbol tree, so a symbol fully qualified name is not part of that haystack."
+        source: "docs/lattice.api.mcp.repocontext/semantic-search.md"
+      - statement: "docker compose down -v deletes both the code index and authored agent memory unless a separate memory archive or backup protects it."
+        source: "samples/RepoContextContainer/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "call repocontext_remove_repo to repair a wedged or stale code index"
+          - "expect captured memory for that repository to remain available"
+        hazard: "repocontext_remove_repo deletes structural records, memory, and vector trees; repocontext_reset_index is the repair path that preserves memory."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - sequence:
+          - "renew a long claim without passing leaseSeconds"
+          - "continue work assuming the original long lease is preserved"
+        hazard: "Omitting leaseSeconds requests the short cluster default and can silently shorten the held claim."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+    concurrency_rules:
+      - statement: "Memory entries are written through CRDT read-merge-write so concurrent updates converge instead of clobbering."
+        source: "docs/lattice.api.mcp.repocontext/memory-and-ttl.md"
+      - statement: "Repository-context claims use the distributed lock's mutual exclusion, FIFO fairness, bounded lease, and monotonic fencing token."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - statement: "Memory writes, updates, and forgets are refused when a claimed record's fencing check fails."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - statement: "The self-index grain owns each repository's keep-indexed guarantee until the repository is removed or its index is reset."
+        source: "docs/lattice.api.mcp.repocontext/tools.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.mcp.repocontext/README.md"
+      - "docs/lattice.api.mcp.repocontext/tools.md"
+      - "docs/lattice.api.mcp.repocontext/semantic-search.md"
+      - "docs/lattice.api.mcp.repocontext/retrieval-economics.md"
+      - "docs/lattice.api.mcp.repocontext/memory-and-ttl.md"
+      - "samples/RepoContextContainer/README.md"
+  - id: resize
+    name: "Resize"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - resize
+      - tree-alias
+    guarantees:
+      - statement: "ResizeAsync changes MaxLeafKeys or MaxInternalChildren by draining into a destination tree and atomically swapping the registry alias."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "Reads and writes remain available throughout an online resize."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "The destination tree inherits the source ShardCount and a copy of its ShardMap."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "Live writes during resize are shadow-forwarded to the destination with their original LWW metadata."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "A resize can be undone while it is running and after swap until the old tree leaves the soft-delete window."
+        source: "docs/lattice/tree-sizing.md"
+    non_guarantees:
+      - statement: "ResizeAsync cannot change ShardCount."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "The old and new physical trees coexist until the old tree is purged, requiring about twice the tree storage during that window."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "Every write between shadow-forward start and swap pays an extra grain hop for the parallel forward."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "Undo is unavailable after the old tree's soft-delete window expires and the old tree is purged."
+        source: "docs/lattice/tree-sizing.md"
+    unsafe_sequences:
+      - sequence:
+          - "start a resize"
+          - "start a reshard before the resize completes"
+        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight and ResizeAsync throws while reshard is in flight."
+        source: "docs/lattice/tree-sizing.md"
+      - sequence:
+          - "call ResizeAsync while a resize is in progress"
+          - "pass different target sizing"
+        hazard: "A duplicate resize with different parameters throws InvalidOperationException."
+        source: "docs/lattice/tree-sizing.md"
+    concurrency_rules:
+      - statement: "Calling ResizeAsync again with the same parameters while a resize is in progress is a no-op."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "LWW convergence makes the race between a drain copy and a shadow-forwarded live write safe."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "LatticeOptions.MaxConcurrentDrains bounds concurrent per-shard drains during resize."
+        source: "docs/lattice/tree-sizing.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/tree-sizing.md"
+  - id: retry-policy
+    name: "Retry policy"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "The retry surface is opt-in and is inactive unless the host wires a retry policy and the caller opens an idempotency scope."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "LatticeIdempotencyContext pins one logical mutation identity across attempts."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "A retry under the same LatticeIdempotencyKey stamps the same HLC on the leaf write."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "The shipped BoundedExponentialRetryPolicy defaults to four total attempts, a 50 ms initial delay, and a 2 second maximum delay."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "A mutating call with no ambient idempotency key bypasses the retry policy and keeps the original throw-and-revert semantics."
+        source: "docs/lattice/retry-policy.md"
+    non_guarantees:
+      - statement: "The library does not install a retry policy by default."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "The retry policy does not coordinate across multiple ILattice calls."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "The retry policy does not wrap batch, atomic, or bulk-load entry points."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "The shipped BoundedExponentialRetryPolicy does not implement jitter."
+        source: "docs/lattice/retry-policy.md"
+    unsafe_sequences:
+      - sequence:
+          - "configure a retry policy"
+          - "perform a write outside LatticeIdempotencyContext"
+          - "expect the library to retry it"
+        hazard: "Without an ambient idempotency key the policy is bypassed because storage cannot deduplicate the retry."
+        source: "docs/lattice/retry-policy.md"
+      - sequence:
+          - "wrap several non-atomic ILattice calls in one idempotency scope"
+          - "treat the retry policy as a multi-key transaction coordinator"
+        hazard: "The retry policy only re-invokes the operation delegate and does not coordinate across multiple calls."
+        source: "docs/lattice/retry-policy.md"
+    concurrency_rules:
+      - statement: "A LatticeIdempotencyContext scope flows across await points on the same logical execution context."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "A retried LWW write under the same key stamps the same HLC, so LWW resolution treats it as a tie rather than a new write."
+        source: "docs/lattice/retry-policy.md"
+      - statement: "PnCounter retry dedup uses a delta carrying the resulting per-replica total, so re-applying the same delta is a no-op."
+        source: "docs/lattice/retry-policy.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/retry-policy.md"
+  - id: runtime-replication-config
+    name: "Runtime replication config"
+    packages:
+      - "Orleans.Lattice.Api.Replication"
+      - "Orleans.Lattice.Replication"
+    concepts:
+      - api-replication-facade
+      - replication-peer
+    guarantees:
+      - statement: "Runtime replication configuration enables or disables cross-cluster replication per tree without redeploying."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Replication configuration is stored in the replicated CRDT system tree sys-replication-config."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Enablement uses a disable-wins RwFlag and merge mode uses an MvRegister so concurrent divergent modes remain detectable."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Enable fixes the merge mode at enable time."
+        source: "docs/lattice.api.replication/architecture.md"
+      - statement: "Disable writes a disable-wins dot and never purges peer data."
+        source: "docs/lattice.api.replication/architecture.md"
+      - statement: "GetReplicationConfigAsync returns only trees the caller is authorized to manage."
+        source: "docs/lattice.api.replication/architecture.md"
+    non_guarantees:
+      - statement: "The compiled runtime config snapshot is eventually consistent rather than a grain call on the commit hot path."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Disabling a runtime entry does not turn off a tree that is still declared in the static replicated-tree map."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Disable does not pause an already-active shipper in the current engine; peers can drop entries while the sender advances its cursor."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "The facade holds no replication state of its own."
+        source: "docs/lattice.api.replication/architecture.md"
+    unsafe_sequences:
+      - sequence:
+          - "enable the same tree concurrently under different merge modes"
+          - "continue writing without disabling and re-enabling under one intended mode"
+        hazard: "The MvRegister reports the tree ambiguous, the resolver picks no mode, peers drop shipped entries, and divergence persists until reseed or repair."
+        source: "docs/lattice.replication/runtime-config.md"
+      - sequence:
+          - "disable a tree that is also in the static replicated-tree map"
+          - "expect runtime disable to stop replication"
+        hazard: "The static declaration is a fallback floor, so the tree keeps shipping until deployment configuration removes it."
+        source: "docs/lattice.replication/runtime-config.md"
+      - sequence:
+          - "call AddLatticeReplicationApi before registering AddLatticeReplication with enableRuntimeConfig true"
+          - "start the silo expecting the facade to work"
+        hazard: "The API registration guard fails fast because the dynamic config authority is missing."
+        source: "docs/lattice.api.replication/README.md"
+    concurrency_rules:
+      - statement: "A concurrent enable and disable resolves to disabled because the enablement flag is disable-wins."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Concurrent enable writes under divergent modes both survive in the MvRegister and make the tree ambiguous."
+        source: "docs/lattice.replication/runtime-config.md"
+      - statement: "Enabling an already-enabled tree under the same mode is idempotent."
+        source: "docs/lattice.api.replication/architecture.md"
+      - statement: "Enabling an already-enabled tree under a different mode or while the mode is ambiguous is rejected."
+        source: "docs/lattice.api.replication/architecture.md"
+      - statement: "Disabling an absent or already-disabled runtime entry is idempotent and authors nothing."
+        source: "docs/lattice.api.replication/architecture.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.replication/README.md"
+      - "docs/lattice.api.replication/api.md"
+      - "docs/lattice.api.replication/architecture.md"
+      - "docs/lattice.replication/runtime-config.md"
+  - id: scalable-writes
+    name: "Scalable writes"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "Keys are routed through XxHash32 into a fixed virtual shard space and then through the per-tree ShardMap to a physical shard."
+        source: "docs/lattice/architecture.md"
+      - statement: "Sharding gives each key range an independent B+ subtree and removes the single-root bottleneck."
+        source: "docs/lattice/architecture.md"
+      - statement: "The default shard count is 64 and is configurable at tree creation time."
+        source: "docs/lattice/architecture.md"
+      - statement: "Successful SetAsync and DeleteAsync return only after the leaf appends to the WAL partition."
+        source: "docs/lattice/architecture.md"
+      - statement: "A WAL append failure surfaces to the caller before any in-memory mutation happens."
+        source: "docs/lattice/architecture.md"
+    non_guarantees:
+      - statement: "Keys in different shards have no ordering relationship until a global range scan scatter-gathers and merges them."
+        source: "docs/lattice/architecture.md"
+      - statement: "XxHash32 shard placement and FNV-1a WAL partition placement are stable non-cryptographic hashes and are not adversarial boundaries."
+        source: "docs/lattice/architecture.md"
+      - statement: "A hostile writer that can choose keys can precompute keys that concentrate load on one shard or WAL partition."
+        source: "docs/lattice/architecture.md"
+      - statement: "Changing the virtual shard count would invalidate persisted shard maps, so it is not a LatticeOptions property."
+        source: "docs/lattice/architecture.md"
+    unsafe_sequences:
+      - sequence:
+          - "embed untrusted caller-controlled data directly in keys"
+          - "rely on the placement hash to prevent one tenant from concentrating load"
+        hazard: "The placement hashes are unseeded and non-cryptographic, so an attacker can steer keys onto one shard or WAL partition."
+        source: "docs/lattice/architecture.md"
+      - sequence:
+          - "run a global range scan over many shards"
+          - "assume it is a single ordered shard walk"
+        hazard: "A global range scan scatter-gathers across shards and merges because different shards have no inherent ordering relationship."
+        source: "docs/lattice/architecture.md"
+    concurrency_rules:
+      - statement: "LatticeGrain is a stateless-worker router with many concurrent activations."
+        source: "docs/lattice/architecture.md"
+      - statement: "ShardRootGrain wraps structural dispatch writes in a bounded retry loop for up to three total attempts on transient Orleans, timeout, or I/O faults."
+        source: "docs/lattice/architecture.md"
+      - statement: "Writes refused by an empty-leaf reclaim are retried with jitter until LeafRetirementRetryDeadline expires."
+        source: "docs/lattice/architecture.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/architecture.md"
+  - id: schema-enforcement-and-versioning
+    name: "Schema enforcement & versioning"
+    packages:
+      - "Orleans.Lattice.Schema"
+    concepts:
+      - dead-letter
+      - schema-version-policy
+    guarantees:
+      - statement: "Schema enforcement validates every write to an opted-in tree against its per-tree policy."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "A local write of a non-compliant value throws LatticeSchemaViolationException and is never persisted."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "Strict ingest diverts a non-compliant replicated or restored item to the dead-letter queue instead of applying it."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "Schema versioning prepends a self-describing schema id and version envelope for opted-in trees."
+        source: "docs/lattice.schema/schema-versioning.md"
+      - statement: "Read-time versioning strips the envelope and upcasts stale values to the target version before returning bytes."
+        source: "docs/lattice.schema/schema-versioning.md"
+      - statement: "Dead-letter entries are read-only in the current release."
+        source: "docs/lattice.schema/dead-letter-queue.md"
+    non_guarantees:
+      - statement: "A tree with no schema policy and no version config behaves like a plain lattice."
+        source: "docs/lattice.schema/README.md"
+      - statement: "Installing a stricter policy does not retroactively rewrite existing values."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "ValidateCrdtMergeResults never rejects or rewrites a merge, and its annotation is not currently surfaced."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "A direct local write rejected by schema policy is not mirrored into the dead-letter queue in the current release."
+        source: "docs/lattice.schema/dead-letter-queue.md"
+      - statement: "Replay or requeue of dead-lettered items and retention or cap policies are not part of the current dead-letter surface."
+        source: "docs/lattice.schema/dead-letter-queue.md"
+      - statement: "A version newer than the reader target or one with no upcaster to the target surfaces NotSupportedException on read."
+        source: "docs/lattice.schema/schema-versioning.md"
+    unsafe_sequences:
+      - sequence:
+          - "register schema versioning"
+          - "register schema enforcement second"
+          - "expect new writes to be version-stamped"
+        hazard: "Calling AddLatticeSchemaEnforcement second replaces the composed write interceptor with enforcement alone."
+        source: "docs/lattice.schema/README.md"
+      - sequence:
+          - "run schema remediation or eager version migration while the source tree is accepting writes"
+          - "assume concurrent writes are shadow-forwarded into the destination"
+        hazard: "The shadow build copies at the logical level and does not shadow-forward concurrent writes, so post-scan writes can be superseded at cutover."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - sequence:
+          - "set only a per-tree strict-ingest flag"
+          - "expect system-origin writes to be inspected while the global strict switch is off"
+        hazard: "Strict ingest takes effect only when the global switch and the per-tree flag are both enabled."
+        source: "docs/lattice.schema/schema-enforcement.md"
+    concurrency_rules:
+      - statement: "Remediation persists intent and phase transitions so reissuing the same call after failover resumes from the last persisted phase."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "A remediation call with different parameters while one is in flight throws InvalidOperationException."
+        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "Version migrations reuse the same crash-safe shadow-build-and-cutover mechanism as enforcement remediation."
+        source: "docs/lattice.schema/schema-versioning.md"
+      - statement: "Strict-ingest dead-lettering keeps replication or restore ingest from blocking on a schema violation."
+        source: "docs/lattice.schema/dead-letter-queue.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.schema/README.md"
+      - "docs/lattice.schema/schema-enforcement.md"
+      - "docs/lattice.schema/schema-versioning.md"
+      - "docs/lattice.schema/dead-letter-queue.md"
+  - id: security
+    name: "Security"
+    packages:
+      - "Orleans.Lattice.Auth"
+      - "Orleans.Lattice.Membership"
+      - "Orleans.Lattice.Membership.Entra"
+      - "Orleans.Lattice.Membership.Entra.Graph"
+      - "Orleans.Lattice.Membership.Oidc"
+    concepts:
+      - access-gate
+      - auth-rule
+      - membership-provider
+    guarantees:
+      - statement: "Membership resolves credentials to a stable subject id plus the transitive group closure."
+        source: "docs/lattice.membership/README.md"
+      - statement: "Orleans.Lattice.Auth installs a policy store, decision engine, and enforcing access gate."
+        source: "docs/lattice.auth/README.md"
+      - statement: "The enforcing gate is consulted on every user-originated core operation when authorization is registered."
+        source: "docs/lattice/security.md"
+      - statement: "Denied writes and deletes throw, while denied point reads report absent."
+        source: "docs/lattice/security.md"
+      - statement: "Range scans prune to the authorized subset server-side."
+        source: "docs/lattice/security.md"
+      - statement: "A range delete under partial authorization is hard-denied rather than narrowed."
+        source: "docs/lattice/security.md"
+    non_guarantees:
+      - statement: "Nothing in the security layer is enabled unless the host registers the add-on packages."
+        source: "docs/lattice/security.md"
+      - statement: "Membership alone resolves identity but enforces nothing until authorization is also registered."
+        source: "docs/lattice.membership/README.md"
+      - statement: "Policy propagation is eventually consistent by default."
+        source: "docs/lattice.auth/README.md"
+      - statement: "Strict policy epoch fences are opt-in per tree and reject opted-in user writes rather than waiting."
+        source: "docs/lattice.auth/README.md"
+      - statement: "A rule condition string is reserved for a future predicate language and currently matches as an unconditional rule."
+        source: "docs/lattice.auth/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "register authorization before membership or before core lattice registration"
+          - "start the silo expecting authorization to initialize later"
+        hazard: "AddLatticeAuth must be called after AddLattice and AddLatticeMembership and fails fast when prerequisites are missing."
+        source: "docs/lattice.auth/README.md"
+      - sequence:
+          - "author a rule condition"
+          - "depend on the condition to narrow the grant"
+        hazard: "Conditions are currently opaque and unevaluated, so such a rule matches as unconditional."
+        source: "docs/lattice.auth/README.md"
+      - sequence:
+          - "remove a group record"
+          - "leave membership edges that reference the group"
+        hazard: "Group removal is non-cascading, so orphaned edges can keep contributing the deleted group id to a subject closure."
+        source: "docs/lattice.membership/README.md"
+    concurrency_rules:
+      - statement: "Policy changes take effect once the compiled snapshot rebuilds from the updated policy tree."
+        source: "docs/lattice/security.md"
+      - statement: "Strict epoch fencing rejects opted-in user writes while the local compiled policy epoch is below the required floor."
+        source: "docs/lattice.auth/README.md"
+      - statement: "System-origin writes and replication-applied writes are never fenced by strict policy epochs."
+        source: "docs/lattice.auth/README.md"
+      - statement: "Group membership closure is cached for the configured ResolutionCacheTtl."
+        source: "docs/lattice.membership/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/security.md"
+      - "docs/lattice.auth/README.md"
+      - "docs/lattice.membership/README.md"
+  - id: snapshot-cursors
+    name: "Snapshot cursors"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - cursor
+      - scan-range
+    guarantees:
+      - statement: "Snapshot cursors return pages that reflect the tree state captured at open time."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "Foreground writes, deletes, sagas, range deletes, and replication applies after open are not visible through that cursor."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "The cursor id, pagination contract, and CloseCursorAsync lifecycle match durable live cursors."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "The open captures the routing map from the registry and pins it on the snapshot coordinate."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "A multi-page snapshot persists every shard baseline before returning the first page with HasMore true."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "Snapshot cursor WAL registrations do not hold back WAL trimming."
+        source: "docs/lattice/snapshot-cursors.md"
+    non_guarantees:
+      - statement: "A snapshot cursor is local to the cluster that opened it and does not provide cross-cluster snapshot rendezvous."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "There is no snapshot variant of OpenDeleteRangeCursorAsync."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "Two cursors opened at logically identical coordinates do not share materialized snapshot leaves."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "SnapshotLeafIdleTtl is documented as an eviction window but current runtime code does not read it, so changing it has no effect."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "A baseline seeded in memory but not yet persisted can expire before its first read, causing LatticeSnapshotExpiredException rather than a partial view."
+        source: "docs/lattice/snapshot-cursors.md"
+    unsafe_sequences:
+      - sequence:
+          - "open a snapshot cursor on a saturated tree with ShedSnapshotOpensWhenSaturated enabled"
+          - "auto-retry the open in a tight loop"
+        hazard: "Snapshot opens are shed with a retryable LatticeSaturatedException to prevent scan storms against saturated shard roots."
+        source: "docs/lattice/snapshot-cursors.md"
+    concurrency_rules:
+      - statement: "Snapshot open fan-out is bounded by MaxConcurrentSnapshotCaptures and the captured baseline is identical under any cap."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "Within one shard, MaxConcurrentSnapshotBaselineFolds bounds concurrent baseline folds and fold results are consumed in strict leaf-chain order."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "Snapshot open capture is covered by MaxScanPageStallDuration so an unresponsive leaf cannot hold a shard root indefinitely."
+        source: "docs/lattice/snapshot-cursors.md"
+      - statement: "When ShedSnapshotOpensWhenSaturated is enabled, only the Saturated WAL state sheds snapshot opens; Throttled trees stay browsable."
+        source: "docs/lattice/snapshot-cursors.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/snapshot-cursors.md"
+  - id: snapshots
+    name: "Snapshots"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - snapshot
+    guarantees:
+      - statement: "SnapshotAsync creates a point-in-time copy of a source tree into a new destination tree."
+        source: "docs/lattice/snapshots.md"
+      - statement: "Offline snapshots lock the source tree at the start and unlock each shard after its entries have been copied."
+        source: "docs/lattice/snapshots.md"
+      - statement: "Online snapshots keep the source tree available for reads and writes while mutations are shadow-forwarded to the destination."
+        source: "docs/lattice/snapshots.md"
+      - statement: "Snapshot progress is persisted after each phase completion and resumes via keepalive reminder after silo restart."
+        source: "docs/lattice/snapshots.md"
+      - statement: "The destination tree is automatically registered with the source tree's shard count."
+        source: "docs/lattice/snapshots.md"
+      - statement: "Copied live entries preserve source HLC and remaining absolute TTL."
+        source: "docs/lattice/snapshots.md"
+    non_guarantees:
+      - statement: "Snapshots copy only live entries and exclude tombstoned keys."
+        source: "docs/lattice/snapshots.md"
+      - statement: "The destination tree's leaf and internal sizing are not inherited unless maxLeafKeys and maxInternalChildren are supplied."
+        source: "docs/lattice/snapshots.md"
+      - statement: "The destination tree id must not already exist."
+        source: "docs/lattice/snapshots.md"
+      - statement: "The destination tree id must differ from the source tree id."
+        source: "docs/lattice/snapshots.md"
+    unsafe_sequences:
+      - sequence:
+          - "start a snapshot"
+          - "start another snapshot of the same source with different parameters before the first completes"
+        hazard: "Only one snapshot per source can run at a time and a request with different parameters throws InvalidOperationException."
+        source: "docs/lattice/snapshots.md"
+      - sequence:
+          - "choose a destination under the reserved _lattice_, sys-, or another tenant namespace"
+          - "call SnapshotAsync"
+        hazard: "Reserved or foreign tenant namespaces are rejected."
+        source: "docs/lattice/snapshots.md"
+    concurrency_rules:
+      - statement: "Repeating the same snapshot request while a snapshot of the source is in flight is a no-op."
+        source: "docs/lattice/snapshots.md"
+      - statement: "Online snapshot shadow forwarding uses LWW commutativity so a drain copy and a live mutation converge to the entry with the higher HLC."
+        source: "docs/lattice/snapshots.md"
+      - statement: "Bulk-load operations into destination shards use deterministic operation ids derived from the snapshot operation id, making retries idempotent."
+        source: "docs/lattice/snapshots.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/snapshots.md"
+  - id: soft-delete-and-recovery
+    name: "Soft delete & recovery"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "DeleteTreeAsync soft-deletes a tree by making it inaccessible while retaining its data for the configured grace period."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "After deletion, reads and writes throw InvalidOperationException that the tree has been deleted and is no longer accessible."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "RecoverTreeAsync can restore full access during the soft-delete window before purge begins."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "Reminder-driven purge processes shards one per timer tick and resumes from persisted progress after a crash."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "PurgeTreeAsync permanently destroys a soft-deleted tree's data immediately."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "DeleteTreeAsync, RecoverTreeAsync, and PurgeTreeAsync authorize TreeLifecycle over the whole tree."
+        source: "docs/lattice/tree-deletion.md"
+    non_guarantees:
+      - statement: "RecoverTreeAsync throws when the tree is not deleted, purge is in progress, or purge is complete."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "PurgeTreeAsync throws when the tree is not deleted or already purged."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "A provider may keep freed storage space until its own compaction runs even after grain records are deleted."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "Failed shards during purge are retried once before being skipped, and a skipped shard is not revisited in that purge pass."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "LeafCacheGrain activations are not notified when a tree is deleted."
+        source: "docs/lattice/tree-deletion.md"
+    unsafe_sequences:
+      - sequence:
+          - "delete a source tree while one or more materialised views derive from it"
+          - "expect delete to cascade or leave views valid"
+        hazard: "DeleteTreeAsync refuses a tree that materialised views derive from; delete dependent views first."
+        source: "docs/lattice/tree-deletion.md"
+      - sequence:
+          - "delete a tree"
+          - "wait until purge begins or completes"
+          - "attempt recovery"
+        hazard: "Recovery is only safe during the soft-delete window before purge begins."
+        source: "docs/lattice/tree-deletion.md"
+      - sequence:
+          - "use PurgeTreeAsync on a very large tree"
+          - "expect reminder-style shard-by-shard timeout resilience inside one call"
+        hazard: "Manual purge processes all shards in a single grain call and can hit Orleans grain-call timeouts on very large trees."
+        source: "docs/lattice/tree-deletion.md"
+    concurrency_rules:
+      - statement: "DeleteTreeAsync is idempotent and calling it on an already-deleted tree is a no-op."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "MarkDeletedAsync is idempotent per shard."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "PurgeAsync is safe to call multiple times because clearing already-cleared grain state is harmless and retries reach leaves past a chain break through the routed-leaf sweep."
+        source: "docs/lattice/tree-deletion.md"
+      - statement: "A shard-root deleted-tree check runs before traversal, so stale leaf-cache activations cannot be reached through the public read path."
+        source: "docs/lattice/tree-deletion.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/tree-deletion.md"
+  - id: state-model
+    name: "State model"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - bplus-leaf-node
+      - value-codec-envelope
+      - wal
+    guarantees:
+      - statement: "The WAL is canonical for committed tree entries; leaf state and snapshots are derived projection anchors."
+        source: "docs/lattice/state-model.md"
+      - statement: "The leaf state row carries topology, checkpoints, digest state, clocks, and unresolved replay work, not per-key entries."
+        source: "docs/lattice/state-model.md"
+      - statement: "Activation rehydrates from a usable snapshot, then replays each WAL partition tail."
+        source: "docs/lattice/state-model.md"
+      - statement: "CRDT writes carry typed delta bytes in WalRecord.Delta and omit the full-state Value slot."
+        source: "docs/lattice/state-model.md"
+      - statement: "LWW register writes remain full-state writes whose WAL record carries the post-merge byte payload."
+        source: "docs/lattice/state-model.md"
+    non_guarantees:
+      - statement: "A WAL trimmed past a checkpoint without a covering snapshot is not recovered automatically; activation fails with LeafProjectionStaleException."
+        source: "docs/lattice/state-model.md"
+      - statement: "The projection checkpoint is a replay-cost optimization, not an additional durability boundary."
+        source: "docs/lattice/wal.md"
+      - statement: "The persisted leaf row is not a fallback copy of committed entry values."
+        source: "docs/lattice/wal.md"
+    unsafe_sequences:
+      - sequence:
+          - "trim the WAL past a leaf checkpoint without a covering snapshot"
+          - "reactivate the leaf"
+        hazard: "The leaf cannot rebuild the lost prefix and fails activation."
+        source: "docs/lattice/state-model.md"
+      - sequence:
+          - "use OrMap on a tree without AddOrMapShape registration"
+          - "emit or apply an OR-Map delta"
+        hazard: "The open-shape CRDT shape cannot be resolved."
+        source: "docs/lattice/state-model.md"
+    concurrency_rules:
+      - statement: "Replay and projection-checkpoint advance are partition-scoped when WalPartitions is greater than one."
+        source: "docs/lattice/wal.md"
+      - statement: "CRDT deltas are folded by the registered shape's merge rule during apply."
+        source: "docs/lattice/state-model.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/state-model.md"
+      - "docs/lattice/wal.md"
+  - id: strongly-consistent-scans
+    name: "Strongly-consistent scans"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - page
+      - scan-range
+    guarantees:
+      - statement: "CountAsync returns the exact live key count under the observed topology snapshot."
+        source: "docs/lattice/consistency.md"
+      - statement: "CountPerShardAsync returns per-shard counts consistent with the observed shard layout."
+        source: "docs/lattice/consistency.md"
+      - statement: "ScanKeysAsync yields live keys in lexicographic order with no duplicates or gaps during concurrent splits or rebalances."
+        source: "docs/lattice/consistency.md"
+      - statement: "ScanEntriesAsync has the same key ordering and atomic-visibility guarantees as ScanKeysAsync."
+        source: "docs/lattice/consistency.md"
+      - statement: "Count and scan operations observe a concurrent SetManyAtomicAsync either entirely or not at all within their stated scope."
+        source: "docs/lattice/consistency.md"
+    non_guarantees:
+      - statement: "Retry exhaustion throws InvalidOperationException rather than returning a partial or approximate result."
+        source: "docs/lattice/consistency.md"
+      - statement: "A streaming scan that reconnects after an abort reopens under a fresh saga-decision view."
+        source: "docs/lattice/consistency.md"
+      - statement: "Live durable cursor steps are strongly consistent per step, not one atomic view across all steps."
+        source: "docs/lattice/consistency.md"
+    unsafe_sequences:
+      - sequence:
+          - "run a resilient streaming scan"
+          - "let it reconnect after an abort"
+          - "treat the entire stream as one snapshot"
+        hazard: "The suffix can observe a saga-decision view captured after the reconnect."
+        source: "docs/lattice/consistency.md"
+    concurrency_rules:
+      - statement: "Scan operations record ShardMap.Version and retry when it moves before return."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Point operations transparently retry topology changes, while scans use bounded reconciliation."
+        source: "docs/lattice/consistency.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/consistency.md"
+      - "docs/lattice/tree-registry.md"
+  - id: tag-indexes
+    name: "Tag indexes"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tag-index
+    guarantees:
+      - statement: "A tag index stores membership rows in a sibling ordinary Lattice tree named tag-{indexName}."
+        source: "docs/lattice/api.md"
+      - statement: "The single-tree surface exposes per-key tag CRUD, all-tags queries, any-tags queries, tag enumeration, reconcile, and value-with-tags writes."
+        source: "docs/lattice/api.md"
+      - statement: "Atomic value-with-tags writes use the cross-tree atomic-write saga so value and membership rows become visible together."
+        source: "docs/lattice/api.md"
+      - statement: "ReconcileAsync removes orphan membership rows whose subject key no longer exists and is idempotent."
+        source: "docs/lattice/api.md"
+      - statement: "Background reconciliation uses covered-tree projection digests to skip deep scans when the fingerprint is unchanged."
+        source: "docs/lattice/api.md"
+    non_guarantees:
+      - statement: "Default LWW membership can drop a concurrent add or remove across clusters by clock resolution."
+        source: "docs/lattice/api.md"
+      - statement: "SetValueWithTags is additive and does not remove previously associated tags."
+        source: "docs/lattice/api.md"
+      - statement: "TagsAsync and ReconcileAsync are whole-index scans."
+        source: "docs/lattice/api.md"
+      - statement: "Producer-side covered-tree acceptance is validated on the write path only, never as an apply-time gate."
+        source: "docs/lattice/api.md"
+    unsafe_sequences:
+      - sequence:
+          - "use default LWW membership in active-active replication"
+          - "concurrently add and remove the same tag row"
+        hazard: "Clock resolution can drop the add."
+        source: "docs/lattice/api.md"
+      - sequence:
+          - "call SetValueWithTags on an already tagged key"
+          - "assume omitted tags are removed"
+        hazard: "Omitted tags remain until Key(key).SetAsync replaces the tag set."
+        source: "docs/lattice/api.md"
+    concurrency_rules:
+      - statement: "In flag mode, atomic value-with-tags stages each membership row with a freshly minted flag-enable delta."
+        source: "docs/lattice/api.md"
+      - statement: "Background reconciliation processes covered trees in chunks bounded by LatticeTagIndexReconciliationOptions.ChunkSize."
+        source: "docs/lattice/api.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/api.md"
+  - id: tenant-administration
+    name: "Tenant administration"
+    packages:
+      - "Orleans.Lattice.Api.TenantAdmin"
+    concepts:
+      - api-tenantadmin-facade
+      - tenant
+    guarantees:
+      - statement: "Tenant administration exposes lifecycle, region-residency, self-service, tenant-scoped tree, access, grant, and quota-usage facades."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Lifecycle, region-residency, access, grant, and quota-usage operations authorize before changing state."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Platform operators own lifecycle and allowed-region authorization, while tenant administrators own residency, access, grants, and quota-usage reads."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "The reserved default tenant cannot be suspended, deleted, quota-limited, admin-subject changed, or used in a grant offer."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Deleting a tenant first suspends it, then soft-deletes each tenant-owned tree before removing the tenant record."
+        source: "docs/lattice.api.tenantadmin/README.md"
+    non_guarantees:
+      - statement: "CreateTenantAsync is not an idempotent upsert; a duplicate tenant id fails closed."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "A tenant created with no admin subjects is mutable but invisible through self-service visibility."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "ILatticeTenantSelfService has no lifecycle authority."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Tenant-scoped schema-policy verbs delegate to ILatticeSchemaAdmin, which performs no authorization of its own."
+        source: "docs/lattice.api.tenantadmin/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "call AddLatticeTenantAdminApi before AddLatticeTenancy"
+          - "start the silo"
+        hazard: "Registration fails fast because the tenancy registry is absent."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - sequence:
+          - "call AddLatticeTenantScopedTreeAdminApi before AddLatticeTreeAdminApi or AddLatticeSchemaEnforcement"
+          - "start the silo"
+        hazard: "Registration fails fast because delegated tree or schema dependencies are absent."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - sequence:
+          - "concurrently remove different resident regions"
+          - "assume each pre-write check is enough"
+        hazard: "The merged record could become resident nowhere; the call repairs its own removal and refuses."
+        source: "docs/lattice.api.tenantadmin/README.md"
+    concurrency_rules:
+      - statement: "SetResidencyAsync checks the last-resident-region invariant before writing and again after CRDT merge."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Admin-subject add and remove operations are idempotent and report whether the set moved."
+        source: "docs/lattice.api.tenantadmin/README.md"
+      - statement: "Concurrent removal of the last admin subjects is detected on the merged record and repaired before refusal."
+        source: "docs/lattice.api.tenantadmin/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.tenantadmin/README.md"
+  - id: tenant-metrics
+    name: "Tenant metrics"
+    packages:
+      - "Orleans.Lattice.Api.Telemetry"
+    concepts:
+      - region
+      - tenant
+      - tenant-admission
+    guarantees:
+      - statement: "Telemetry clients name a curated query id and never supply PromQL."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "Telemetry answers derive tenant scope on the server from caller identity."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "The response scope reports requested visibility, effective visibility, tenant id, downgrade status, and cross-tenant status."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "A non-operator asking for another tenant is pinned to its own tenant and marked downgraded."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "GetCatalogAsync returns an empty catalog for an unconfigured backend or a caller entitled to no query."
+        source: "docs/lattice.api.telemetry/README.md"
+    non_guarantees:
+      - statement: "The facade is not a query proxy."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "Tenant query entries return no series on a cluster without the tenancy add-on."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "TelemetryQueryNotFoundException does not distinguish unknown from not-offered query ids."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "AddLatticeTelemetryApi registers no options validation unless the host registers LatticeTelemetryOptionsValidator."
+        source: "docs/lattice.api.telemetry/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "catch TelemetryBackendException in a remote binding"
+          - "forward its Message to the caller"
+        hazard: "The message can include backend host and port details."
+        source: "docs/lattice.api.telemetry/README.md"
+    concurrency_rules:
+      - statement: "AddLatticeTelemetryApi is idempotent and wires the backend client once for transport bindings."
+        source: "docs/lattice.api.telemetry/README.md"
+      - statement: "Caller-supplied tenant scope is a preference that the server may narrow on every query."
+        source: "docs/lattice.api.telemetry/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.telemetry/README.md"
+  - id: tombstone-cleanup
+    name: "Tombstone cleanup"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - compaction
+      - tombstone
+    guarantees:
+      - statement: "Deleted keys are represented as tombstone LWW entries until compaction reaps them."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "A single TombstoneCompactionGrain per tree owns the reminder and timer that drive passes."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "Each reaped tombstone or expired live entry is written to the WAL as a maintenance Tombstone mutation before in-memory removal."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "Compaction progress is persisted through NextShardIndex, the in-shard cursor, and InProgress."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "A keepalive reminder resumes an in-progress pass after silo restart."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "CompactShardAsync schedules an out-of-cycle pass for one physical shard and bypasses cooldown."
+        source: "docs/lattice/tombstone-compaction.md"
+    non_guarantees:
+      - statement: "Normal operations never remove tombstones without compaction."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "A tree with TombstoneGracePeriod set to Timeout.InfiniteTimeSpan never registers a compaction reminder."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "Reap envelopes carry Maintenance category and are not shipped by replication."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "A replicated point delete does not mark the receiver cluster's dirty-leaf set."
+        source: "docs/lattice/tombstone-compaction.md"
+    unsafe_sequences:
+      - sequence:
+          - "shorten CompactionShardTickInterval or raise CompactionLeafBatchSize"
+          - "ignore peak leaf activation headroom"
+        hazard: "A chain-walked pass can activate the whole tree inside one collection window."
+        source: "docs/lattice/tombstone-compaction.md"
+      - sequence:
+          - "read an empty dirty-leaf snapshot"
+          - "assume the shard is clean"
+        hazard: "The coordinator falls back to a full chain walk."
+        source: "docs/lattice/tombstone-compaction.md"
+    concurrency_rules:
+      - statement: "Per-leaf compaction is safe to repeat because replay re-runs the dominance check for each reap envelope."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "Dirty-leaf snapshots are drained only up to their captured HLC watermark."
+        source: "docs/lattice/tombstone-compaction.md"
+      - statement: "A dirty leaf that throws is re-marked dirty and does not stop the rest of that dirty-leaf walk."
+        source: "docs/lattice/tombstone-compaction.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/tombstone-compaction.md"
+  - id: tree-administration
+    name: "Tree administration"
+    packages:
+      - "Orleans.Lattice.Api.TreeAdmin"
+    concepts:
+      - api-treeadmin-facade
+      - tree
+    guarantees:
+      - statement: "Tree administration is a transport-agnostic facade published as ILatticeTreeAdmin."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "The facade delegates to existing tree, registry, backup, view, tag-index, compaction, WAL-placement, retention, and schema machinery."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "Every operation authorizes through the shared core access gate or the wrapped facade's own gate before doing work."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "ProbeCapabilitiesAsync is read-only, side-effect-free, and advisory."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "CreateTreeAsync is idempotent for an already-registered tree and preserves existing configuration."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "Destructive or structural lifecycle operations require the distinct TreeLifecycle authority."
+        source: "docs/lattice.api.treeadmin/README.md"
+    non_guarantees:
+      - statement: "The facade is absent by default until AddLatticeTreeAdminApi is called."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "The capability probe does not replace per-operation authorization."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "View verbs are rejected when the view subsystem is not registered, and the probe carries no view flag."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "ReclaimMovedWalSourceAsync is irreversible after the former source tail is trimmed."
+        source: "docs/lattice/wal-storage-providers.md"
+    unsafe_sequences:
+      - sequence:
+          - "call AddLatticeTreeAdminApi before AddLatticeSchemaApi"
+          - "start the silo"
+        hazard: "Registration fails fast because the schema control facade is absent."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - sequence:
+          - "repair orphaned leaves without auditing and reading gaps"
+          - "ignore refusal findings"
+        hazard: "Repair is irreversible and only safe for leaves proven readable by descent."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - sequence:
+          - "reclaim a moved WAL source"
+          - "try to revert the move to that provider"
+        hazard: "The provider may no longer hold retained offsets needed for reversal."
+        source: "docs/lattice/wal-storage-providers.md"
+    concurrency_rules:
+      - statement: "Bulk-load chunk re-sends with the same operation id and chunk index are idempotent."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "Matching in-flight reshard, resize, or snapshot targets are idempotent, while different in-flight targets are rejected."
+        source: "docs/lattice.api.treeadmin/README.md"
+      - statement: "Batch WAL moves flip the placement pin once under a single compare-and-swap."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "Orphaned-leaf audit, survey, and repair are bounded batches resumed with resumeFrom."
+        source: "docs/lattice.api.treeadmin/README.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.api.treeadmin/README.md"
+      - "docs/lattice/wal-storage-providers.md"
+  - id: tree-registry
+    name: "Tree registry"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree
+    guarantees:
+      - statement: "The tree registry is stored in the reserved _lattice_trees Lattice tree."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Registry entries track structural sizing pins, alias, shard map, runtime overrides, WAL partition count, WAL placement, and bookkeeping."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "A tree is automatically registered on first options resolution or first shard-root operation, including reads."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Registration must succeed before the root leaf pointer is persisted."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Structural sizing pins are seeded from hardcoded defaults when missing and later change only through resize and reshard."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Every persisted shard-map write increments ShardMap.Version monotonically."
+        source: "docs/lattice/tree-registry.md"
+    non_guarantees:
+      - statement: "System trees whose ids start with _lattice_ are excluded from self-registration."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Only one level of tree alias indirection is allowed."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Physical trees created by resize or snapshot appear in GetAllTreeIdsAsync until purged."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "ConfigureLattice cannot seed structural sizing because LatticeOptions carries no sizing properties."
+        source: "docs/lattice/api.md"
+    unsafe_sequences:
+      - sequence:
+          - "configure structural sizing through named LatticeOptions after a tree exists"
+          - "expect the existing tree to resize"
+        hazard: "Structural sizing is pinned in the registry and ignores IOptionsMonitor after seeding."
+        source: "docs/lattice/tree-registry.md"
+      - sequence:
+          - "write as user code to _lattice_, sys-, t/, or literal * tree ids"
+          - "expect a normal user tree"
+        hazard: "Reserved namespace guards refuse or route the mutation through tenancy rules."
+        source: "docs/lattice/tree-registry.md"
+    concurrency_rules:
+      - statement: "Concurrent resolves of the same tree on one silo share one in-flight registry read."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Across the cluster at most sixteen registry option reads are in flight, with each silo getting at least one share."
+        source: "docs/lattice/tree-registry.md"
+      - statement: "Shard-map version increments are atomic with writes because the registry grain is non-reentrant."
+        source: "docs/lattice/tree-registry.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/api.md"
+      - "docs/lattice/tree-registry.md"
+  - id: vector-search
+    name: "Vector search"
+    packages:
+      - "Orleans.Lattice.Vector"
+    concepts:
+      - vector-index
+    guarantees:
+      - statement: "VectorIndex uses an inverted-file index that ranks centroids and scores only probed cells."
+        source: "docs/lattice.vector/architecture.md"
+      - statement: "Search reports whether the answer came from the exhaustive or approximate path."
+        source: "docs/lattice.vector/api.md"
+      - statement: "The package publishes and tests recall floors for clustered and unclustered corpora."
+        source: "docs/lattice.vector/recall.md"
+      - statement: "Results are ordered by descending score and then ascending key."
+        source: "docs/lattice.vector/architecture.md"
+      - statement: "DurableVectorIndex persists the index under a caller-chosen key prefix."
+        source: "docs/lattice.vector/api.md"
+      - statement: "Lazy load fetches only query-probed vector partitions after opening metadata."
+        source: "docs/lattice.vector/architecture.md"
+    non_guarantees:
+      - statement: "Approximate search does not guarantee exact nearest-neighbour recall."
+        source: "docs/lattice.vector/recall.md"
+      - statement: "A corpus below MinimumTrainingCount answers by exhaustive scan rather than an approximate partitioned path."
+        source: "docs/lattice.vector/configuration.md"
+      - statement: "Training is synchronous and expensive and should be kept off the request path."
+        source: "docs/lattice.vector/README.md"
+      - statement: "A lazily loaded index is read-only."
+        source: "docs/lattice.vector/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "set Probes as a fraction of PartitionCount"
+          - "grow the corpus"
+        hazard: "Query cost becomes linear while still reporting approximate search."
+        source: "docs/lattice.vector/configuration.md"
+      - sequence:
+          - "hash string ids into long vector keys"
+          - "resolve search hits"
+        hazard: "A collision silently returns the wrong record."
+        source: "docs/lattice.vector/README.md"
+      - sequence:
+          - "share KeyPrefix with unrelated data"
+          - "trigger recovery or rebuild"
+        hazard: "The recovery path deletes whole key ranges under KeyPrefix."
+        source: "docs/lattice.vector/configuration.md"
+    concurrency_rules:
+      - statement: "VectorIndex is safe for concurrent readers or a single writer, not both."
+        source: "docs/lattice.vector/README.md"
+      - statement: "The durable build is caller-driven through BuildStepAsync or RunBuildAsync rather than a background thread."
+        source: "docs/lattice.vector/api.md"
+      - statement: "FlushAsync persists only partitions whose version stamp moved."
+        source: "docs/lattice.vector/architecture.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice.vector/README.md"
+      - "docs/lattice.vector/api.md"
+      - "docs/lattice.vector/architecture.md"
+      - "docs/lattice.vector/configuration.md"
+      - "docs/lattice.vector/recall.md"
+  - id: verified-atomic-action
+    name: "Verified atomic action"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - atomic-action-saga
+    guarantees:
+      - statement: "Atomic-action sequencing and crash-resume decisions are driven by the pure deterministic AtomicActionPlanCore."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "NextForwardIndex chooses the lowest-indexed pending step."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "NextCompensationIndex chooses the highest-indexed completed forward step."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "The Coyote model injects crashes before status persistence at every forward and compensating effect."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "A guard test must find a violation when compensation is deliberately run in forward order."
+        source: "docs/lattice/verified-atomic-action.md"
+    non_guarantees:
+      - statement: "The model does not prove that a caller's custom compensation actually undoes its forward effect."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "The model does not re-prove tree-write atomicity."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "The Coyote model explores crash-or-persist choices, not real thread schedules."
+        source: "docs/lattice/verified-atomic-action.md"
+    unsafe_sequences: []
+    concurrency_rules:
+      - statement: "Production and model both call the same pure core after each persisted step transition."
+        source: "docs/lattice/verified-atomic-action.md"
+      - statement: "Terminal phases make Decide return None, so no further effect runs."
+        source: "docs/lattice/verified-atomic-action.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/verified-atomic-action.md"
+  - id: verified-atomic-commit-protocol
+    name: "Verified atomic-commit protocol"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - atomic-batch
+      - cross-tree-atomic
+    guarantees:
+      - statement: "Atomic-commit decision points are extracted into pure deterministic cores used by production grains and verification models."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "AtomicVisibilityGate.ResolveKey owns how a pending mutation is answered against the recorded decision."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "SagaCoordinatorCore.Decide commits only when every participant acknowledged and aborts on the first nack or unreachable leaf."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "The Coyote tier model-checks cores under cooperative orderings of protocol steps."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "Each Coyote model includes a guard test that removes the fix and must find a violation."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "The TLA+ specification checks the protocol design over a bounded instance and maps it back to code cores."
+        source: "docs/lattice/verified-atomic-commit.md"
+    non_guarantees:
+      - statement: "The Coyote tier does not control real Task or thread schedules."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "Liveness is checked as bounded progress under a finite fault budget."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "Verification is bounded by the property catalogue and proves only asserted properties."
+        source: "docs/lattice/verified-atomic-commit.md"
+    unsafe_sequences: []
+    concurrency_rules:
+      - statement: "ReaderStabilityGate decides whether a snapshot read is stable against the registry revision."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "TerminalArrivalTally flips a receiver decision only when distinct terminal arrivals reach the expected count."
+        source: "docs/lattice/verified-atomic-commit.md"
+      - statement: "Checked safety properties include AllOrNothing, VisibilityMatchesDecision, StrictIsolation, CommitIntegrity, LinearizedTerminals, and NoMixedTerminals."
+        source: "docs/lattice/verified-atomic-commit.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/verified-atomic-commit.md"
+  - id: verified-distributed-lock
+    name: "Verified distributed lock"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - distributed-lock-lease
+      - fencing-token
+    guarantees:
+      - statement: "Distributed-lock admission and fencing decisions are driven by the pure deterministic LockAdmissionCore."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "NextFencingToken returns the strict successor of the last issued token and throws on overflow."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "Grant is the only core operation that mints and installs a fencing token."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "Renew and Release honour only the current holder's token."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "ReclaimIfExpired frees an expired lease while preserving the fencing counter."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "The guard test must catch a release implementation that ignores the fencing token."
+        source: "docs/lattice/verified-lock.md"
+    non_guarantees:
+      - statement: "FIFO fairness and no-starvation are checked by grain-level tests rather than the pure model."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "The Coyote model explores an explicit choice space, not real thread schedules."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "A protected resource must validate fencing tokens; the lock does not protect resources that ignore them."
+        source: "docs/lattice/distributed-lock.md"
+    unsafe_sequences:
+      - sequence:
+          - "guard a resource with ILatticeLockGrain"
+          - "let the resource ignore fencing tokens"
+        hazard: "A superseded holder can still mutate the resource."
+        source: "docs/lattice/distributed-lock.md"
+    concurrency_rules:
+      - statement: "Decide grants only when the lock is free or the lease has expired."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "Stale operations from a superseded holder cannot dislodge the newer holder."
+        source: "docs/lattice/verified-lock.md"
+      - statement: "Checked safety properties are FencingMonotonic, MutualExclusion, StaleTokenRejection, and LeaseReclamationSafety."
+        source: "docs/lattice/verified-lock.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/distributed-lock.md"
+      - "docs/lattice/verified-lock.md"
+  - id: verified-wal-concurrency
+    name: "Verified WAL concurrency"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - wal
+      - wal-cursor
+      - wal-move-placement
+    guarantees:
+      - statement: "WAL concurrency decisions are extracted into pure deterministic cores used by production grains and Coyote models."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "WalShippingWatermark prevents cursor readers from observing offsets above an unfilled prefix hole."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "WalGcTrimCore decides trim eligibility from cursor, retention, materialiser floor, causal-stable, and blocked-floor inputs."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "WalMoveFenceCore owns append admission while a shard move has fenced the log."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "WalOffsetAllocationCore owns atomic per-shard offset assignment and counter advance."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "Every WAL model includes a guard test that removes the fix and must find a violation."
+        source: "docs/lattice/verified-wal.md"
+    non_guarantees:
+      - statement: "The WAL Coyote models use cooperative step ordering rather than real Task or thread schedules."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "Verification is limited to the extracted decision points and represented properties."
+        source: "docs/lattice/verified-wal.md"
+    unsafe_sequences: []
+    concurrency_rules:
+      - statement: "Out-of-order flush completions never let a reader advance past a lower unpersisted offset."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "A consumer cursor never regresses below its highest report."
+        source: "docs/lattice/verified-wal.md"
+      - statement: "A placement move redrive resumes just past what the target already holds."
+        source: "docs/lattice/verified-wal.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/verified-wal.md"
+  - id: wal-saturation-signal
+    name: "WAL saturation signal"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - wal-saturation-signal
+    guarantees:
+      - statement: "The signal exposes Healthy, Throttled, and Saturated per-tree WAL back-pressure states."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "Healthy means admission depth is under cap and no recent acute WAL pressure is observed."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "Throttled means advisory pressure is sustained and callers should slow offered load."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "Saturated means an acute input is firing or, when configured, an at-cap partition has parked callers."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "GetCurrentState returns the cached state with one concurrent-dictionary lookup."
+        source: "docs/lattice/api.md"
+      - statement: "WaitForHealthyAsync completes synchronously when the tree is already Healthy."
+        source: "docs/lattice/api.md"
+    non_guarantees:
+      - statement: "The signal is per-silo and does not compute cluster-wide aggregate health."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "The signal carries no producer strategy."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "Disabling the sampler pins cached states to Healthy and publishes no gauge series."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "Cause attribution is single-valued when several inputs cross in one window."
+        source: "docs/lattice/wal-saturation-signal.md"
+    unsafe_sequences:
+      - sequence:
+          - "observe Saturated"
+          - "continue dispatching at full rate"
+        hazard: "Parked callers will fault after the admission or dispatch budget instead of increasing throughput."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - sequence:
+          - "release every parked waiter at once on recovery"
+          - "resume a partition with a backlog above admission capacity"
+        hazard: "The released herd can refill the pipeline and re-saturate it without progress."
+        source: "docs/lattice/wal-saturation-signal.md"
+    concurrency_rules:
+      - statement: "WalSaturationRecoveryReleaseBatch releases parked waiters oldest-first and at most one batch per partition per sampler tick."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "The writer admission gate reads the verdict for the append's WAL partition."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "On Saturated, the writer waits up to the admission or per-call budget before throwing LatticeSaturatedException."
+        source: "docs/lattice/wal-saturation-signal.md"
+      - statement: "On Throttled, the writer applies WalThrottledAdmissionPace and proceeds without throwing."
+        source: "docs/lattice/wal-saturation-signal.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/api.md"
+      - "docs/lattice/wal-saturation-signal.md"
+      - "docs/lattice/wal-tuning.md"
+  - id: write-ahead-log-storage
+    name: "Write-ahead log storage"
+    packages:
+      - "Orleans.Lattice"
+      - "Orleans.Lattice.Storage.AzureTable"
+      - "Orleans.Lattice.Storage.File"
+    concepts:
+      - azure-table-storage-provider
+      - file-storage-provider
+      - in-memory-storage-provider
+      - wal
+      - wal-storage-provider
+    guarantees:
+      - statement: "IWalStorageProvider is the pluggable storage seam behind the per-shard WAL durability boundary."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "AppendBatchAsync and AppendEncodedBatchAsync are all-or-nothing per call."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "Providers preserve caller-assigned offsets verbatim and read entries in ascending offset order."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "AddLattice registers the in-memory WAL provider by default."
+        source: "docs/lattice/api.md"
+      - statement: "AddAzureTableWalStorage replaces the baseline and wires WAL cursor registry and garbage collection."
+        source: "docs/lattice.storage.azuretable/api.md"
+      - statement: "AzureTableWalStorageProvider stores durable per-tree and per-shard WAL batches in Azure Table Storage."
+        source: "docs/lattice.storage.azuretable/README.md"
+      - statement: "FileWalStorageProvider stores one wal.log per tree and shard and recovers by discarding torn or uncommitted tails."
+        source: "docs/lattice.storage.file/architecture.md"
+    non_guarantees:
+      - statement: "The in-memory WAL provider is process-local and lost on silo restart."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "Azure Table WAL entries are stored in one binary property and are not split."
+        source: "docs/lattice.storage.azuretable/architecture.md"
+      - statement: "Under Azure Table phase-two pipelining, a trailing batch can be durable before readable."
+        source: "docs/lattice.storage.azuretable/architecture.md"
+      - statement: "The file WAL provider applies no payload compression."
+        source: "docs/lattice.storage.file/architecture.md"
+      - statement: "WalMaxRetainedBytes is advisory and never trims past the safe consumer frontier."
+        source: "docs/lattice/wal.md"
+    unsafe_sequences:
+      - sequence:
+          - "register a durable custom WAL provider"
+          - "omit AddWalCursorRegistry or AddLatticeWalGc"
+        hazard: "The durable log can be untrimmed or trimmed from only process-local cursor state after restart."
+        source: "docs/lattice/wal-storage-providers.md"
+      - sequence:
+          - "pin a WAL partition to a named provider key"
+          - "run a silo that did not register that key"
+        hazard: "The partition fails closed with LatticeWalProviderMissingException."
+        source: "docs/lattice/wal-storage-providers.md"
+      - sequence:
+          - "reclaim a moved WAL source"
+          - "move the partition back after the source tail was trimmed"
+        hazard: "The move is no longer revertible when retained offsets are missing."
+        source: "docs/lattice/wal-storage-providers.md"
+      - sequence:
+          - "configure more than one Azure Table WAL authentication mode"
+          - "start the provider"
+        hazard: "Provider validation fails because exactly one mode is required."
+        source: "docs/lattice.storage.azuretable/configuration.md"
+    concurrency_rules:
+      - statement: "With WalMaxPendingBatches above one, providers must accept out-of-order concurrent batches and reject offset overlap."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "ExecuteWalMoveAsync fences the WAL grain, copies the retained range, flips the pin under compare-and-swap, and deactivates the WAL grain."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "Batch WAL moves run copy phases under MaxConcurrentPartitionMoves and flip placement once."
+        source: "docs/lattice/wal-storage-providers.md"
+      - statement: "Azure Table commit metadata is written in ascending offset order and the stored tail never moves backward."
+        source: "docs/lattice.storage.azuretable/architecture.md"
+      - statement: "File WAL recovery preserves honest offset gaps rather than renumbering the tail."
+        source: "docs/lattice.storage.file/architecture.md"
+    sources:
+      - "FEATURES.md"
+      - "docs/lattice/api.md"
+      - "docs/lattice/wal.md"
+      - "docs/lattice/wal-storage-providers.md"
+      - "docs/lattice.storage.azuretable/README.md"
+      - "docs/lattice.storage.azuretable/api.md"
+      - "docs/lattice.storage.azuretable/architecture.md"
+      - "docs/lattice.storage.azuretable/chaos-tests.md"
+      - "docs/lattice.storage.azuretable/configuration.md"
+      - "docs/lattice.storage.file/README.md"
+      - "docs/lattice.storage.file/architecture.md"
+      - "docs/lattice.storage.file/configuration.md"

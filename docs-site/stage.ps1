@@ -28,7 +28,8 @@
 #   9. writes the site's machine-readable surface for agents and LLM tooling: a
 #      markdown alternate of every page (lib/agent.ps1), llms.txt generated from
 #      the same catalogue as the documentation map, llms-full.txt, and each
-#      package's pages in one file of their own.
+#      package's pages in one file of their own; and lists docs/agents, the
+#      agent-only specifications published as raw YAML and JSON, in llms.txt.
 #
 # Runs on Windows and Linux; keep it free of platform-specific path literals.
 
@@ -1081,7 +1082,9 @@ function Get-PackageCatalogue([string]$Path) {
 $catalogue = Get-PackageCatalogue (Join-Path $RepoRoot 'PACKAGES.md')
 $docsRoot = Join-Path $Staging 'docs'
 # docs/videos is the video series' own section (see Videos below), not a package.
-$packageDirs = Get-ChildItem $docsRoot -Directory | Where-Object { $_.Name -ne 'videos' } | Sort-Object Name
+# docs/agents is the machine-readable specification set for agents (see
+# "Agent specifications" below): published as raw resources, never as pages.
+$packageDirs = Get-ChildItem $docsRoot -Directory | Where-Object { $_.Name -notin @('videos', 'agents') } | Sort-Object Name
 
 # docs/crdt is a docs-only conceptual topic with no src/ counterpart, so it is
 # absent from PACKAGES.md and lands in this catch-all.
@@ -2091,6 +2094,42 @@ if ($episodes.Count -gt 0) {
     $llms.Add('')
 }
 
+# --- Agent specifications: docs/agents ---
+# Machine-readable specifications (concept graph, invariants, API schemas,
+# capability envelopes, procedures, governance rules, deployment) for agents
+# operating Lattice. They are YAML and JSON, which docfx.json publishes as
+# resources, so they are never rendered: no page, no navigation entry, no search
+# result, no sitemap entry. llms.txt and each page's head (build.ps1) are the
+# only ways to them. The manifest, docs/agents/index.json, must list every file
+# in the set and nothing else, so neither can drift from the other.
+$agentSpecSource = Join-Path $Staging 'docs/agents'
+$agentSpecNote = ''
+if (Test-Path $agentSpecSource) {
+    $manifestPath = Join-Path $agentSpecSource 'index.json'
+    if (-not (Test-Path $manifestPath)) { throw 'docs/agents has no index.json; the manifest is how agents find the specifications.' }
+    $manifest = [System.IO.File]::ReadAllText($manifestPath) | ConvertFrom-Json
+    $declared = @($manifest.artifacts | ForEach-Object { [string]$_.path })
+    $onDisk = @(Get-ChildItem $agentSpecSource -Recurse -File | ForEach-Object { ConvertTo-SiteRelative $_.FullName $agentSpecSource } | Where-Object { $_ -ne 'index.json' })
+    $undeclared = @($onDisk | Where-Object { $declared -notcontains $_ })
+    $absent = @($declared | Where-Object { $onDisk -notcontains $_ })
+    if ($undeclared.Count -gt 0 -or $absent.Count -gt 0) {
+        throw "docs/agents/index.json disagrees with the files beside it. Not in the manifest: $($undeclared -join ', '). Listed but missing: $($absent -join ', ')."
+    }
+    $unpublishable = @($onDisk | Where-Object { $_ -notmatch '\.(json|yaml)$' })
+    if ($unpublishable.Count -gt 0) { throw "docs/agents holds only .json and .yaml, which docfx.json publishes as resources; a markdown file would render as a page humans can see: $($unpublishable -join ', ')" }
+
+    $llms.Add('## Agent specifications')
+    $llms.Add('')
+    $llms.Add("- [Manifest]($($site.Url)docs/agents/index.json): Every machine-readable specification for agents operating Orleans.Lattice, with its kind, format and schema. JSON.")
+    foreach ($artifact in @($manifest.artifacts | Sort-Object { [string]$_.path })) {
+        if (-not $artifact.summary) { throw "docs/agents/index.json gives $($artifact.path) no summary, which is its line in llms.txt." }
+        $llms.Add("- [$($artifact.path)]($($site.Url)docs/agents/$($artifact.path)): $($artifact.summary)")
+    }
+    $llms.Add('')
+    $agentSpecNote = " Machine-readable specifications for agents operating Orleans.Lattice are listed under Agent specifications; they are YAML and JSON files, not pages."
+}
+
+
 $llms.Add('## Optional')
 $llms.Add('')
 Add-LlmsLink 'CHANGELOG.md' 'Changelog' 'Release history for the package family, newest first, with one page per release.'
@@ -2140,7 +2179,7 @@ foreach ($line in $llms) {
 $fullIntro = "Every documentation page of the site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``, in the order $($site.Url)llms.txt lists them, each preceded by its address. The release history and the samples' source are left out; llms.txt lists each of their pages. Each package's documentation is also in one file of its own, docs/<package>/llms-full.txt, which llms.txt lists with the package."
 $fullBytes = Write-LlmsBundle 'llms-full.txt' 'Orleans.Lattice documentation, in full' $fullIntro $fullPages
 
-$llms[$llmsIntro] = "This index lists every page of the documentation site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``$commitNote. It is generated from the same catalogue as the site's [documentation map]($($site.Url)docs/index.md), so it lists every package and every page. The release history, the samples' source and the pages beyond the documentation are listed page by page under Optional, apart from a sample whose source is its only page, which is listed under Samples. Each page's link is to its markdown; the rendered page is at the same address ending in ``.html``. Each package's documentation is also in one file, ``docs/<package>/llms-full.txt``, listed with the package below, and [llms-full.txt]($($site.Url)llms-full.txt) holds every documentation page in one file of $(Format-FileSize $fullBytes). [sitemap.xml]($($site.Url)sitemap.xml) lists every rendered page."
+$llms[$llmsIntro] = "This index lists every page of the documentation site for $($site.Label), built $($site.BuiltDate) from ``$($site.Ref)``$commitNote. It is generated from the same catalogue as the site's [documentation map]($($site.Url)docs/index.md), so it lists every package and every page. The release history, the samples' source and the pages beyond the documentation are listed page by page under Optional, apart from a sample whose source is its only page, which is listed under Samples. Each page's link is to its markdown; the rendered page is at the same address ending in ``.html``. Each package's documentation is also in one file, ``docs/<package>/llms-full.txt``, listed with the package below, and [llms-full.txt]($($site.Url)llms-full.txt) holds every documentation page in one file of $(Format-FileSize $fullBytes). [sitemap.xml]($($site.Url)sitemap.xml) lists every rendered page.$agentSpecNote"
 [System.IO.File]::WriteAllText((Join-Path $Staging 'llms.txt'), ($llms -join "`n") + "`n", $utf8)
 $largest = $bundleSizes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
 Write-Host ("Wrote llms.txt ({0} pages, {1}), llms-full.txt ({2} pages, {3}), and {4} package file(s), the largest {5} ({6})" -f $listed.Count, (Format-FileSize (Get-Item (Join-Path $Staging 'llms.txt')).Length), $fullPages.Count, (Format-FileSize $fullBytes), $bundleSizes.Count, $largest.Key, (Format-FileSize $largest.Value))

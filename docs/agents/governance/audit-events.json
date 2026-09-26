@@ -1,0 +1,308 @@
+{
+  "schema": "lattice.agents/governance-audit-events/v1",
+  "audit_records": [
+    {
+      "id": "auth-allowed-log",
+      "type": "ILogger event 2",
+      "fields": [
+        "subject_id",
+        "operation",
+        "tree_id",
+        "key",
+        "matched_rule_id",
+        "policy_epoch"
+      ],
+      "emitting_component": "LoggerLatticeAuthAuditSink",
+      "source": "src/lattice.auth/LoggerLatticeAuthAuditSink.cs"
+    },
+    {
+      "id": "auth-audit-sink-failure-log",
+      "type": "ILogger event 3",
+      "fields": [
+        "sink_type"
+      ],
+      "emitting_component": "LatticeAuthDecisionObserver",
+      "source": "src/lattice.auth/LatticeAuthDecisionObserver.cs"
+    },
+    {
+      "id": "auth-decision-event",
+      "type": "LatticeAuthDecisionEvent",
+      "fields": [
+        "subject_id",
+        "operation",
+        "tree_id",
+        "effect",
+        "policy_epoch",
+        "timestamp_utc",
+        "key",
+        "range_start",
+        "range_end",
+        "matched_rule_id",
+        "matched_scope_kind",
+        "matched_scope_value",
+        "reason"
+      ],
+      "emitting_component": "PolicyAccessGate through LatticeAuthDecisionObserver",
+      "sinks": [
+        "DurableAuthAuditTrailSink",
+        "LoggerLatticeAuthAuditSink"
+      ],
+      "source": "src/lattice.auth/LatticeAuthDecisionEvent.cs"
+    },
+    {
+      "id": "auth-denied-log",
+      "type": "ILogger event 1",
+      "fields": [
+        "subject_id",
+        "operation",
+        "tree_id",
+        "key",
+        "matched_rule_id",
+        "policy_epoch",
+        "reason"
+      ],
+      "emitting_component": "LoggerLatticeAuthAuditSink",
+      "source": "src/lattice.auth/LoggerLatticeAuthAuditSink.cs"
+    },
+    {
+      "id": "auth-posture-log",
+      "type": "ILogger information",
+      "fields": [
+        "default_effect",
+        "all_trees_grants_enabled",
+        "access_administration_delegation_enabled"
+      ],
+      "emitting_component": "AuthPostureLogger",
+      "source": "src/lattice.auth/AuthPostureLogger.cs"
+    },
+    {
+      "id": "compiled-auth-snapshot-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "CompiledPolicySnapshotMaintainer",
+      "source": "src/lattice.auth/CompiledPolicySnapshotMaintainer.cs"
+    },
+    {
+      "id": "grpc-auth-interceptor-rejection-log",
+      "type": "ILogger warning",
+      "fields": [
+        "method"
+      ],
+      "emitting_component": "LatticeAuthApiGrpcAuthInterceptor",
+      "source": "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
+    },
+    {
+      "id": "grpc-tenantadmin-interceptor-rejection-log",
+      "type": "ILogger warning",
+      "fields": [
+        "method"
+      ],
+      "emitting_component": "LatticeTenantAdminApiGrpcAuthInterceptor",
+      "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+    },
+    {
+      "id": "tenant-placement-snapshot-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "TenantPlacementSnapshotMaintainer",
+      "source": "src/lattice.tenancy/TenantPlacementSnapshotMaintainer.cs"
+    },
+    {
+      "id": "tenant-policy-snapshot-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "CompiledTenantPolicySnapshotMaintainer",
+      "source": "src/lattice.tenancy/CompiledTenantPolicySnapshotMaintainer.cs"
+    },
+    {
+      "id": "tenant-residency-snapshot-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "TenantResidencySnapshotMaintainer",
+      "source": "src/lattice.tenancy/TenantResidencySnapshotMaintainer.cs"
+    },
+    {
+      "id": "tenant-usage-index-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "TenantUsageIndexMaintainer",
+      "source": "src/lattice.tenancy/TenantUsageIndexMaintainer.cs"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "auth-decision-duration",
+      "name": "orleans.lattice.auth.decision.duration",
+      "instrument": "Histogram<double>",
+      "tags": [
+        "operation",
+        "tree",
+        "tenant",
+        "effect"
+      ],
+      "source": "src/lattice.auth/LatticeAuthMetrics.cs"
+    },
+    {
+      "id": "auth-decisions",
+      "name": "orleans.lattice.auth.decisions",
+      "instrument": "Counter<long>",
+      "tags": [
+        "operation",
+        "tree",
+        "tenant",
+        "effect"
+      ],
+      "source": "src/lattice.auth/LatticeAuthMetrics.cs"
+    },
+    {
+      "id": "auth-snapshot-age",
+      "name": "orleans.lattice.auth.snapshot.age",
+      "instrument": "ObservableGauge",
+      "tags": [],
+      "source": "src/lattice.auth/AuthSnapshotGaugeRegistry.cs"
+    },
+    {
+      "id": "auth-snapshot-epoch",
+      "name": "orleans.lattice.auth.snapshot.epoch",
+      "instrument": "ObservableGauge",
+      "tags": [],
+      "source": "src/lattice.auth/AuthSnapshotGaugeRegistry.cs"
+    },
+    {
+      "id": "auth-snapshot-rebuilds",
+      "name": "orleans.lattice.auth.snapshot.rebuilds",
+      "instrument": "Counter<long>",
+      "tags": [],
+      "source": "src/lattice.auth/LatticeAuthMetrics.cs"
+    },
+    {
+      "id": "auth-snapshot-subjects",
+      "name": "orleans.lattice.auth.snapshot.subjects",
+      "instrument": "ObservableGauge",
+      "tags": [],
+      "source": "src/lattice.auth/AuthSnapshotGaugeRegistry.cs"
+    },
+    {
+      "id": "membership-directory-search-duration",
+      "name": "orleans.lattice.membership.directory.search.duration",
+      "instrument": "Histogram<double>",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.membership/LatticeMembershipMetrics.cs"
+    },
+    {
+      "id": "membership-directory-search-hits",
+      "name": "orleans.lattice.membership.directory.search.hits",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.membership/LatticeMembershipMetrics.cs"
+    },
+    {
+      "id": "membership-directory-search-misses",
+      "name": "orleans.lattice.membership.directory.search.misses",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.membership/LatticeMembershipMetrics.cs"
+    },
+    {
+      "id": "membership-resolution-cache-hits",
+      "name": "orleans.lattice.membership.resolution_cache.hits",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.membership/LatticeMembershipMetrics.cs"
+    },
+    {
+      "id": "membership-resolution-cache-misses",
+      "name": "orleans.lattice.membership.resolution_cache.misses",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.membership/LatticeMembershipMetrics.cs"
+    },
+    {
+      "id": "tenancy-overage-bytes",
+      "name": "orleans.lattice.tenancy.overage.bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-quota-bytes",
+      "name": "orleans.lattice.tenancy.quota.bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-usage-bytes",
+      "name": "orleans.lattice.tenancy.usage.bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    }
+  ],
+  "audit_controls": [
+    {
+      "id": "auth-audit-sampling",
+      "field": "LatticeAuthOptions.AuditSamplingRatio",
+      "default": 1.0,
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-audit-switch",
+      "field": "LatticeAuthOptions.EnableAuditSink",
+      "default": false,
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-audit-verbosity",
+      "field": "LatticeAuthOptions.AuditVerbosity",
+      "default": "DenyOnly",
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-durable-trail",
+      "field": "LatticeAuthOptions.EnableDurableAuditTrail",
+      "default": false,
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    }
+  ],
+  "uncertainties": [
+    {
+      "status": "uncertain",
+      "reason": "Search found no dedicated tenancy audit record type beyond warning logs and metrics.",
+      "required_source": "src/lattice.tenancy",
+      "issue": 3638
+    },
+    {
+      "status": "uncertain",
+      "reason": "Search found no dedicated api.auth or api.tenantadmin audit record type beyond interceptor rejection logs and gRPC error logs.",
+      "required_source": "src/lattice.api.auth.grpc",
+      "issue": 3638
+    }
+  ]
+}

@@ -1,0 +1,277 @@
+{
+  "schema": "lattice.agents/index/v1",
+  "audience": "agents",
+  "subject": "Orleans.Lattice",
+  "conventions": {
+    "encoding": "ascii, lf line endings, 2-space indent, trailing newline",
+    "determinism": "no timestamps, commit hashes or release numbers; entity lists sorted by id (ordinal) except semantically ordered lists",
+    "ids": "kebab-case; cross-file references use ids",
+    "source_reference": {
+      "format": "repo/relative/path#Symbol",
+      "symbol": "optional; every dot-separated segment occurs in the file",
+      "resolves_against": "https://github.com/NSTA1/Orleans.Lattice at the ref the site was built from"
+    },
+    "uncertainty_marker": {
+      "status_value": "uncertain",
+      "keys": [
+        "status",
+        "reason",
+        "required_source",
+        "issue"
+      ],
+      "required_keys": [
+        "status",
+        "reason",
+        "required_source"
+      ],
+      "issue": "GitHub issue number tracking the gap, when filed"
+    },
+    "package_ids": "NuGet package ids in published casing",
+    "transport_scope": [
+      "both",
+      "grpc_only",
+      "in_process_only",
+      "mcp_tool"
+    ],
+    "grpc_method": "/<service>/<Method>",
+    "validation": "test/lattice/Docs/AgentDocsConsistencyTests.cs",
+    "empty_list": "the entity sources, read in full, state none"
+  },
+  "coverage": {
+    "api_surfaces_covered": [
+      "auth",
+      "backup",
+      "data",
+      "lattice",
+      "mcp",
+      "replication",
+      "schema",
+      "state",
+      "telemetry",
+      "tenantadmin",
+      "treeadmin"
+    ],
+    "api_surfaces_not_covered": [
+      {
+        "package": "Orleans.Lattice.GrainIndex",
+        "reason": "in-process extension api; described in concepts.yaml and capabilities.yaml only"
+      },
+      {
+        "package": "Orleans.Lattice.Vector",
+        "reason": "in-process extension api; described in concepts.yaml and capabilities.yaml only"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "api/auth.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Auth facade (Orleans.Lattice.Api.Auth, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/backup.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Backup facade (Orleans.Lattice.Api.Backup, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/data.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Data facade (Orleans.Lattice.Api.Data, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/lattice.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Core in-process API (ILattice, ILatticeAdmin in Orleans.Lattice): operations, types, exceptions, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/mcp.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext): registration, authorization gate, every tool with parameters, results, errors and annotations."
+    },
+    {
+      "path": "api/replication.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Replication facade (Orleans.Lattice.Api.Replication, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/schema.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Schema facade (Orleans.Lattice.Api.Schema, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/state.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "State facade (Orleans.Lattice.Api.State, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/telemetry.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Telemetry facade (Orleans.Lattice.Api.Telemetry, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/tenantadmin.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Tenant administration facade (Orleans.Lattice.Api.TenantAdmin, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "api/treeadmin.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Tree administration facade (Orleans.Lattice.Api.TreeAdmin, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
+    {
+      "path": "capabilities.yaml",
+      "kind": "capabilities",
+      "format": "yaml",
+      "schema": "lattice.agents/capabilities/v1",
+      "summary": "Capability envelopes: guarantees, non-guarantees, unsafe sequences and concurrency rules per capability."
+    },
+    {
+      "path": "concepts.yaml",
+      "kind": "concepts",
+      "format": "yaml",
+      "schema": "lattice.agents/concepts/v1",
+      "summary": "Concept graph: concepts, typed relationships, capability boundaries and operational envelopes."
+    },
+    {
+      "path": "deployment.yaml",
+      "kind": "deployment",
+      "format": "yaml",
+      "schema": "lattice.agents/deployment/v1",
+      "summary": "Deployment specification: reference topologies (silos, regions, packages, trees, replication mode, storage) and the options configuration schema."
+    },
+    {
+      "path": "governance/audit-events.json",
+      "kind": "governance-audit-events",
+      "format": "json",
+      "schema": "lattice.agents/governance-audit-events/v1",
+      "summary": "Audit event schemas: audit records, security metrics and audit controls with emitting components."
+    },
+    {
+      "path": "governance/authorization.json",
+      "kind": "governance-authorization",
+      "format": "json",
+      "schema": "lattice.agents/governance-authorization/v1",
+      "summary": "Authorization decision trees for facades, access gate, auth rules, tenancy admission and membership, with fail-closed outcomes."
+    },
+    {
+      "path": "governance/identity-propagation.json",
+      "kind": "governance-identity-propagation",
+      "format": "json",
+      "schema": "lattice.agents/governance-identity-propagation/v1",
+      "summary": "Identity propagation: credential and tenant headers, RequestContext keys and flows from transport to grain call context."
+    },
+    {
+      "path": "governance/policies.json",
+      "kind": "governance-policies",
+      "format": "json",
+      "schema": "lattice.agents/governance-policies/v1",
+      "summary": "Policy definitions: role and permission catalogue, tenant policies, security options with defaults, allow-lists."
+    },
+    {
+      "path": "invariants.yaml",
+      "kind": "invariants",
+      "format": "yaml",
+      "schema": "lattice.agents/invariants/v1",
+      "summary": "Operational invariants: scope, violation modes, detection signals and remediation."
+    },
+    {
+      "path": "procedures/backup.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (backup): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/compaction.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (compaction): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/reshard.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (reshard): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/resize.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (resize): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/restore.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (restore): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/retention.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (retention): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/tag-index-reconcile.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (tag-index-reconcile): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/tree-delete-recover.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (tree-delete-recover): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/view-rebuild.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (view-rebuild): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/wal-move.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (wal-move): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/wal-tuning.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (wal-tuning): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    }
+  ]
+}
