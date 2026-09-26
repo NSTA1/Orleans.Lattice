@@ -16,7 +16,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// erroring, an out-of-range result degenerates quietly - and when
 /// <see cref="RepoContextIndexingOptions.PassesPerFullWalk"/> floors to one,
 /// <see cref="RepoContextIndexingOptions.PruningCanEngage"/> goes false and
-/// directory-modification-time pruning stops happening at all. See issue #2075.
+/// directory-modification-time pruning stops happening at all. See issue #2075. Likewise,
+/// when <see cref="RepoContextIndexingOptions.PassesPerEmbeddingGapScan"/> floors to one,
+/// the embedding gap scan runs on every pass and its cadence has no effect; both
+/// degenerate cases are logged as warnings. See issue #3350.
 /// </para>
 /// <para>
 /// The approximate-index build sweep cadence is reported beside them precisely because it
@@ -42,7 +45,8 @@ internal sealed class RepoContextIndexingCadenceReporter(
 {
     /// <summary>
     /// Logs the configured wall-clock intervals alongside the pass counts they derive,
-    /// and warns when the arithmetic has disabled pruning.
+    /// and warns when the arithmetic has disabled pruning or collapsed the embedding gap
+    /// scan cadence to every pass.
     /// </summary>
     /// <param name="cancellationToken">Unused; the report is synchronous.</param>
     /// <returns>A completed task.</returns>
@@ -88,6 +92,31 @@ internal sealed class RepoContextIndexingCadenceReporter(
                 + "reconcile spacing (for example {SuggestedFullWalkSeconds:0.###} s) to "
                 + "re-enable pruning, or lower the reconcile interval.",
                 options.FullWalkInterval.TotalSeconds,
+                options.MaximumReconcileSpacing.TotalSeconds,
+                options.MaximumReconcileSpacing.TotalSeconds * 2);
+        }
+
+        if (options.PassesPerEmbeddingGapScan <= 1)
+        {
+            // Issue #3350. The same degeneracy as the pruning warning above, on the
+            // other pass-counted knob: an interval at or below the reconcile spacing
+            // rounds up to one pass, so the periodic term of the gap-scan gate is true
+            // on every pass and the convergence back-off behind it can never change
+            // whether the scan runs. The shipped 20-minute default sits exactly on that
+            // boundary at the default 15 + 5 minute spacing, so this fires at defaults
+            // by design - it is the only place the collapse is otherwise visible, as a
+            // bare "1 pass(es)" on the line above.
+            logger.LogWarning(
+                "The embedding gap scan cadence has NO EFFECT: an interval of "
+                + "{GapScanSeconds:0.###} s is at or below the reconcile spacing of "
+                + "{SpacingSeconds:0.###} s, so it resolves to one pass and the whole-repository "
+                + "gap scan runs on every reconcile pass whatever the coverage verdict says. The "
+                + "wall-clock interval knobs are a matched set - they are converted to pass "
+                + "counts against the reconcile spacing, which is the reconcile interval plus "
+                + "its jitter. Set the embedding gap scan interval above the reconcile spacing "
+                + "(for example {SuggestedGapScanSeconds:0.###} s) for the cadence to engage, or "
+                + "lower the reconcile interval.",
+                options.EmbeddingGapScanInterval.TotalSeconds,
                 options.MaximumReconcileSpacing.TotalSeconds,
                 options.MaximumReconcileSpacing.TotalSeconds * 2);
         }
