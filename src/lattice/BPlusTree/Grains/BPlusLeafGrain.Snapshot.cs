@@ -1834,10 +1834,11 @@ internal sealed partial class BPlusLeafGrain
             // is recoverable independently of the WAL. Advance the coverage
             // view; the NEXT durable-pin flush will then authorise trimming
             // up to min(checkpoint, coveredOffset) per partition. Advancing
-            // coverage only AFTER the store confirms it KEPT the blob (and the
-            // pin lagging by design - the cursor report precedes this capture
-            // in FlushPendingCheckpointAsync) keeps the pin conservative: it
-            // can never license a trim ahead of durable coverage.
+            // coverage only AFTER the store confirms it KEPT the blob keeps the
+            // pin conservative: it can never license a trim ahead of durable
+            // coverage. The revision bump below is what the checkpoint-persist
+            // tail reads to republish the pin after a capture landed, since its
+            // cursor report ran before this capture (issue #3599).
             RecordDurableSnapshotCoverage(blob);
             _snapshotKeptRevision++;
             captureSucceeded = true;
@@ -2708,6 +2709,14 @@ internal sealed partial class BPlusLeafGrain
     /// path to stamping coverage; it only makes paths that already exist
     /// reachable on a leaf that is never collected.
     /// </para>
+    /// <para>
+    /// Since issue #3599 the recheck runs inside <see cref="BankDurablePinCoreAsync"/>,
+    /// which publishes the durable pin after it when <c>min(persisted, coverage)</c>
+    /// is above what an awaited flush has published. The tick does not commit a
+    /// pending checkpoint advance (that would defeat checkpoint coalescing); it
+    /// banks only what is already persisted. That step acquires no replay
+    /// permit; only the two starvation branches above reach one.
+    /// </para>
     /// </summary>
     internal async Task OnCoverageLagTimerTickAsync(CancellationToken cancellationToken)
     {
@@ -2805,8 +2814,21 @@ internal sealed partial class BPlusLeafGrain
         // The capture this reaches is therefore strictly better contained than
         // the one the existing driver reaches, not an additional uncancellable
         // capture.
-        await MaybeRunPeriodicSnapshotRecheckAsync(
-            fromCheckpointPersist: false,
+        //
+        // Issue #3599. The recheck runs inside the permit-free bank step, which
+        // afterwards publishes the pin the recheck made bankable - and the one a
+        // write-idle leaf was already owed. The tick does not commit a pending
+        // checkpoint advance (that would defeat checkpoint coalescing); it banks
+        // what is already persisted. The pin is clamped per partition by min(persisted
+        // checkpoint, durable coverage); on a leaf with no write traffic nothing
+        // else republished it after a capture restamped coverage, or after a
+        // debounced mirror that never landed, so the WAL floor froze below the
+        // checkpoint indefinitely. The step acquires no replay permit and
+        // replays nothing, and never loosens the clamp: a capture that declined,
+        // threw or never ran leaves coverage, and so the pin, where it was.
+        await BankDurablePinCoreAsync(
+            starvationPartitionCount,
+            flushPendingCheckpoint: false,
             cancellationToken);
     }
 

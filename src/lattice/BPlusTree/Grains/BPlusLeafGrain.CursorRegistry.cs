@@ -80,6 +80,20 @@ internal sealed partial class BPlusLeafGrain
     private bool _durableFrontierBarriered;
 
     /// <summary>
+    /// Per partition, the highest offset this activation has published through
+    /// the awaited batched flush (<see cref="FlushDurableMaterialiserFrontierAsync"/>)
+    /// and seen acknowledged, or <see langword="null"/> before the first such
+    /// flush (issue #3599). The debounced mirror on
+    /// <see cref="ReportCursorIfActiveAsync"/> never updates it: that mirror is
+    /// fire-and-forget, so an offset it carried is not known to have landed.
+    /// <see cref="IsDurablePinBehindBankableOffset"/> reads it so the
+    /// coverage-lag tick republishes only when a partition's bankable pin,
+    /// <c>min(persisted, coverage)</c>, is above what an awaited flush is known
+    /// to have written.
+    /// </summary>
+    private long[]? _lastBankedDurablePinOffsets;
+
+    /// <summary>
     /// Reports the leaf's current projection HLC to the registered
     /// <see cref="ILeafCursorReporter"/>, lazy-gated on
     /// <c>state.State.Clock &gt; HybridLogicalClock.Zero</c>. Called from
@@ -101,9 +115,9 @@ internal sealed partial class BPlusLeafGrain
     /// Whether to follow the cursor report with the durable pin publish (the
     /// batched flush on the first real frontier, the debounced mirror
     /// thereafter). <see langword="false"/> only on the teardown persist's tail,
-    /// which has already published the pin through the awaited batched flush as
-    /// its first step (issue #3393), so a fire-and-forget mirror queued behind
-    /// it would be redundant work on a path with a deadline.
+    /// which publishes the pin itself through the awaited batched flush once
+    /// its snapshot recheck has run (issues #3393, #3599), so a fire-and-forget
+    /// mirror queued behind it would be redundant work on a path with a deadline.
     /// </param>
     private async Task ReportCursorIfActiveAsync(bool publishDurablePin = true)
     {
@@ -277,9 +291,11 @@ internal sealed partial class BPlusLeafGrain
     /// a later re-report: a leaf that deactivates is typically not reactivated
     /// for a long time, and its last published pin holds the shared WAL's trim
     /// floor until it is. It is safe because the teardown persist publishes its
-    /// own pin first, before this barrier runs (issue #3393), so an abandoned
-    /// flush here leaves the pin at the final persisted checkpoint rather than
-    /// at an older one; and a pin that lags only retains more WAL.
+    /// own pin before this barrier runs (issue #3393), after its own snapshot
+    /// recheck so that pin carries any coverage that recheck restamped (issue
+    /// #3599), so an abandoned flush here leaves the pin at
+    /// <c>min(final persisted checkpoint, coverage)</c> rather than at an older
+    /// value; and a pin that lags only retains more WAL.
     /// </param>
     /// <remarks>
     /// <see langword="internal"/> rather than private so the #3476 clamp and
@@ -370,7 +386,78 @@ internal sealed partial class BPlusLeafGrain
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
             treeId, reports, cancellationToken);
+        RecordBankedDurablePinOffsets(reports);
         return releases;
+    }
+
+    /// <summary>
+    /// Records the offsets an acknowledged batched flush published, merged by
+    /// per-partition maximum exactly as the pin store merges them (issue #3599).
+    /// </summary>
+    private void RecordBankedDurablePinOffsets(MaterialiserPinReport[] reports)
+    {
+        var banked = _lastBankedDurablePinOffsets;
+        if (banked is null || banked.Length < reports.Length)
+        {
+            var grown = new long[reports.Length];
+            for (var i = 0; i < grown.Length; i++)
+            {
+                grown[i] = banked is not null && i < banked.Length ? banked[i] : -1L;
+            }
+
+            banked = grown;
+            _lastBankedDurablePinOffsets = grown;
+        }
+
+        for (var i = 0; i < reports.Length; i++)
+        {
+            banked[i] = Math.Max(banked[i], reports[i].CheckpointOffset);
+        }
+    }
+
+    /// <summary>
+    /// Whether any partition's bankable durable pin,
+    /// <c>min(persisted checkpoint, durable snapshot coverage)</c>, is a real
+    /// offset above the highest offset this activation's awaited batched flush
+    /// is known to have published for it (issue #3599).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the coverage-lag tick's trigger for the permit-free republish.
+    /// The bankable value is the same clamp <see cref="ResolveDurablePinForPartition"/>
+    /// applies to a data-bearing partition, so a <see langword="true"/> answer
+    /// means a flush now would publish something higher than any acknowledged
+    /// flush has, and a <see langword="false"/> answer means it could not.
+    /// </para>
+    /// <para>
+    /// It deliberately does not trust the debounced mirror: an offset carried
+    /// only by that fire-and-forget write may never have landed, which is how a
+    /// write-idle leaf's pin froze below its persisted checkpoint. It allocates
+    /// nothing and makes no call, so it is cheap enough to evaluate on every tick.
+    /// </para>
+    /// </remarks>
+    /// <param name="partitionCount">The configured WAL partition count.</param>
+    private bool IsDurablePinBehindBankableOffset(int partitionCount)
+    {
+        var banked = _lastBankedDurablePinOffsets;
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var bankable = Math.Min(
+                GetPersistedCheckpointForPartition(partition),
+                DurableSnapshotCoverageForPartition(partition));
+            if (bankable < 0)
+            {
+                continue;
+            }
+
+            var published = banked is not null && partition < banked.Length ? banked[partition] : -1L;
+            if (bankable > published)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

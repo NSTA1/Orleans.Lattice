@@ -128,8 +128,15 @@ public partial class BPlusLeafGrainTests
         // here - the PRE-FIX behaviour - authorises the GC to trim [0, 1],
         // after which a cold rebuild (empty per-activation cache -> replay from
         // 0) silently loses the prefix. This is the residual ~580-node loss.
-        var (grain, _, lastFlush, _) = CreateResidualLeaf(walPartitions: 1);
+        var (grain, _, lastFlush, snapshotStub) = CreateResidualLeaf(walPartitions: 1);
         var projection = AsProjection(grain);
+
+        // Keep the partition snapshot-UNCOVERED: the persist tail's cadence
+        // recheck would otherwise land a capture and (#3599) republish the
+        // covered pin right after the persist. A declined save leaves coverage
+        // where it was, which is the state this test is about.
+        snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(LeafSnapshotSaveOutcome.Declined));
 
         // Apply a foreground write (advances the leaf clock past Zero, stores a
         // row in partition 0's cache) and DURABLY checkpoint partition 0 at
@@ -164,12 +171,21 @@ public partial class BPlusLeafGrainTests
         // prevents the fix from reintroducing the #1489/#1490 unbounded-growth
         // class. Here we capture a snapshot explicitly and prove the very next
         // durable-frontier flush lifts the block.
-        var (grain, _, lastFlush, _) = CreateResidualLeaf(walPartitions: 1);
+        var (grain, _, lastFlush, snapshotStub) = CreateResidualLeaf(walPartitions: 1);
         var projection = AsProjection(grain);
+
+        // Decline the persist tail's cadence capture so the partition is still
+        // uncovered when the precondition is read; the explicit capture below
+        // is then allowed to land.
+        snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(LeafSnapshotSaveOutcome.Declined));
 
         projection.Apply(BuildSet("k0", Encoding.UTF8.GetBytes("v"), hlcPhysical: 500, treeId: ResidualTreeId));
         await projection.SetCheckpointOffsetAsync(1, default);
         await projection.FlushCheckpointAsync(default);
+
+        snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(LeafSnapshotSaveOutcome.Kept));
 
         // Before coverage: the pin is a Zero block (invariant (a)).
         var blocked = lastFlush();

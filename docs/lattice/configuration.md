@@ -667,7 +667,7 @@ The legacy shape persists each row as an object, which under the default JSON gr
 
 ### `LeafSnapshotMaxCoverageLagSeconds`
 
-Upper bound, in seconds, on how long an active leaf may leave its durable snapshot coverage lagging behind its projection checkpoint (default: 300; `0` disables). A leaf that has been active this long with any partition's checkpoint ahead of the coverage its durable snapshot records drives a capture, closing the gap. It exists for the leaf that serves only reads: every other capture driver is activation-scoped or write-driven, and reads keep the grain from deactivating, so without this bound its coverage - and with it the WAL GC offset floor for the whole tree - could lag without limit. The validator accepts `0` to `86400`.
+Upper bound, in seconds, on how long an active leaf may leave its durable snapshot coverage lagging behind its projection checkpoint (default: 300; `0` disables). A leaf that has been active this long with any partition's checkpoint ahead of the coverage its durable snapshot records drives a capture, closing the gap. The same check also publishes the leaf's durable pin when it has fallen below `min(persisted checkpoint, coverage)`, without taking a replay permit, so a write-idle leaf does not hold the WAL GC offset floor at a stale pin (issue #3599). It exists for the leaf that serves only reads: every other capture driver is activation-scoped or write-driven, and reads keep the grain from deactivating, so without this bound its coverage - and with it the WAL GC offset floor for the whole tree - could lag without limit. The validator accepts `0` to `86400`.
 
 ### `LeafSnapshotSegmentBytes`
 

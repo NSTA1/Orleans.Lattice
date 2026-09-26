@@ -196,6 +196,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - A graceful deactivation lost its final pin.** The slow digest publish ran first and used up the deadline, so the capture and pin barriers faulted on a torn-down activation. The final pin now publishes first, torn-down barriers skip, and the digest publishes last. ([#3393](https://github.com/NSTA1/Orleans.Lattice/issues/3393)) (`Orleans.Lattice`)
 
+- **WAL - A write-idle leaf froze the GC floor at a stale pin.** A checkpoint persist published its pin before its own snapshot capture, and only a replay-permit drive republished it. The pin now publishes after the capture, and the coverage-lag check and GC sweep bank it without a permit. ([#3599](https://github.com/NSTA1/Orleans.Lattice/issues/3599)) (`Orleans.Lattice`)
+
 - **Leaf - A latched stale leaf was not terminal.** A split stamped a checkpoint hint over a stale-latched partition, so it later replayed past the gap it had declared unrecoverable, and WAL GC re-drove every latched leaf each cooldown. The hint is refused and a latched verdict is terminal. ([#3477](https://github.com/NSTA1/Orleans.Lattice/issues/3477), [#3478](https://github.com/NSTA1/Orleans.Lattice/issues/3478)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Shard - Empty-leaf reclaim under-counted and overran.** Reclaim counted one of its four probe sites, so a reported `probed 0` could hide a spent budget, and never checked its deadline before entry. Every probe now counts and entry stands down at the deadline. ([#2682](https://github.com/NSTA1/Orleans.Lattice/issues/2682)) (`Orleans.Lattice`)

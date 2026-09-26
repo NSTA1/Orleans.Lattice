@@ -161,9 +161,12 @@ internal sealed partial class BPlusLeafGrain(
             // publish the digest, which is staleness-tolerant by design.
             //
             // The final persist's own pin is published from INSIDE this barrier,
-            // as the first step of the teardown persist's tail (see
+            // by the teardown persist's tail (see
             // FlushPendingCheckpointOnDeactivateAsync), so it no longer depends
-            // on the trailing frontier-pin barrier surviving to run.
+            // on the trailing frontier-pin barrier surviving to run. The tail
+            // publishes AFTER its snapshot recheck (issue #3599), so a capture
+            // the recheck lands is reflected in that pin rather than in the
+            // pre-capture coverage.
             await RunBarrierAsync(
                 LatticeMetrics.DeactivationBarrierCheckpointFlush,
                 async ct => await FlushPendingCheckpointOnDeactivateAsync(ct));

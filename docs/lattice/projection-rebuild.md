@@ -780,6 +780,16 @@ The capture path is **leaf-driven**, not maintenance-driven:
   partition that no snapshot covers yet, before it publishes its final
   durable pin, so a short-lived activation that never reached the
   periodic cadence still leaves coverage behind.
+- A checkpoint persist, including the final one of a graceful
+  deactivation, publishes the durable pin only after its own snapshot
+  recheck, so a capture it made reaches the pin at once instead of being
+  left to the later `frontier_pin` barrier, which a deactivation deadline
+  can skip. The coverage-lag check also republishes a pin that has fallen
+  below `min(persisted checkpoint, coverage)`, and the WAL GC's
+  blocked-leaf sweep asks a floor-holding leaf for the same step before it
+  spends a replay permit on a drive. That step takes no replay permit and
+  replays nothing, and a capture that fails or is declined leaves coverage,
+  and so the pin, where they were (issue #3599).
 - A single-flight guard suppresses overlapping captures: a slow
   `SaveAsync` does not pin a follow-on capture behind it; the
   follow-on is dropped and the next cadence tick re-evaluates.
