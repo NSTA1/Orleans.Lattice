@@ -18,8 +18,8 @@ harness that produces the Layer 1 and Layer 2 tables.
 **Read the curve, not the absolute numbers.** The point of this tier is the
 *shape* - where throughput stops rewarding extra hosts - and the shape is
 robust in a way the absolute figures are not. Several deliberate choices
-below (a single shared storage account, a fixed shard count, ACA's memory
-ceiling, a harness with bounded concurrency) hold the topology constant so
+below (one shared storage account per rig, a fixed shard count, ACA's memory
+ceiling, a client with bounded concurrency) hold the topology constant so
 the silo count is the only variable; each of them also caps the absolute
 ceiling. A production deployment tuned for throughput rather than for
 comparability will beat these figures.
@@ -28,14 +28,16 @@ comparability will beat these figures.
 
 | Workload | Shape from 1 to 8 silos | What the evidence says bounds it |
 |----------|-------------------------|----------------------------------|
-| `GetManyAsync` (batched read) | Linear: 7.96x at 8 silos, 99% per-silo efficiency | Nothing this sweep reached |
-| `SetManyAsync` (batched write) | Linear to 4 silos (95%), then a plateau at ~24-26 k keys/s | Consistent with the one shared storage account; not isolated |
-| `GetAsync` (point read) | Flat at ~16-20 k keys/s | Consistent with the fixed pool of 64 non-interleaved shard roots |
-| `SetAsync`, with or without a view | Flat at ~1.1-1.3 k keys/s | As for `GetAsync`; the view costs nothing measurable at this ceiling |
-| Atomic and cross-tree sagas (all four) | Plateau at a roughly fixed **~15-25 sagas/s**, whatever the saga size | Not identified; the shape is that of a serialisation point |
+| `GetAsync` (point read) | ~54 k keys/s at one silo, ~58 k at two, then rising to ~131 k at eight (2.43x) | From two silos on, time spent outside the grain call: the silo-side call time holds at ~4 ms while the client's calls take longer |
+| `GetManyAsync` (batched read) | ~312 k keys/s at one silo, ~235 k at two, then rising to ~384 k at six and ~382 k at eight (1.22x) | The client's bounded concurrency against a per-call time that grows with the silo count; not isolated further |
+| `SetAsync`, with or without a view | ~4 k keys/s at one silo, ~11-12 k at six, ~10-11 k at eight | Not isolated; the silo-side median write holds at 35-50 ms up to six silos, then rises at eight as Azure Tables timeouts appear |
+| `SetManyAsync` (batched write) | ~17.6 k keys/s at one silo, 14-26 k from two to eight, no sustained gain | The one shared storage account: server-side timeouts, and at eight silos a cohort that lost whole batches to them |
+| 64-key atomic sagas (single-tree and cross-tree) | ~45-53 sagas/s at one silo, ~120-140 at eight (2.6-2.7x) | Per-saga latency under the client's bounded concurrency; the saga registry's admission budget was never reached |
+| 2-key atomic sagas (single-tree and cross-tree) | ~250 and ~150 sagas/s at one silo, ~640 and ~330 at eight (2.2-2.6x) | Per-saga durable-write latency on the one grain-state storage account ([#3591](https://github.com/NSTA1/Orleans.Lattice/issues/3591)) |
 
-The rest of this document gives the grid, how it was measured, and the
-evidence behind each row of that table.
+No workload is flat any more, and none scales linearly. The rest of this
+document gives the grid, how it was measured, and the evidence behind each
+row of that table.
 
 ## The scaling curve
 
@@ -50,15 +52,15 @@ xychart-beta
     x-axis "Silos" ["1", "2", "4", "6", "8"]
     y-axis "Speedup (x)" 0 --> 9
     line [1, 2, 4, 6, 8]
-    line [1, 0.82, 0.87, 1, 0.97]
-    line [1, 1.99, 3.97, 5.97, 7.96]
-    line [1, 1.25, 1.26, 1.34, 1.25]
-    line [1, 1.62, 1.67, 1.51, 1.48]
-    line [1, 1.98, 3.82, 4, 4.31]
-    line [1, 1.99, 3.18, 3.37, 3.14]
-    line [1, 0.68, 0.49, 0.54, 0.68]
-    line [1, 1.08, 0.9, 0.7, 0.65]
-    line [1, 1.71, 1.74, 1.78, 1.75]
+    line [1, 1.07, 1.7, 2.18, 2.43]
+    line [1, 0.75, 0.99, 1.23, 1.22]
+    line [1, 1.23, 2.15, 2.64, 2.23]
+    line [1, 1.41, 2.48, 2.86, 2.94]
+    line [1, 0.79, 1.21, 1.47, 1.11]
+    line [1, 1.09, 1.7, 2.27, 2.62]
+    line [1, 1.14, 1.71, 2.1, 2.55]
+    line [1, 1.07, 1.45, 1.84, 2.15]
+    line [1, 1.27, 1.84, 2.65, 2.66]
 ```
 
 Series order (xychart-beta renders no legend): ideal linear scaling (y = silos), then `GetAsync` (point read), then `GetManyAsync` (4,096 keys/call), then `SetAsync` (point write), then `SetAsync` (point write + async materialised view), then `SetManyAsync` (4,096 keys/call), then `SetManyAtomicAsync` (64 keys/saga), then `SetManyAtomicAsync` (2 keys/saga, single-tree), then `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees), then `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees).
@@ -67,9 +69,9 @@ Series order (xychart-beta renders no legend): ideal linear scaling (y = silos),
 xychart-beta
     title "Reads: sustained throughput vs silo count"
     x-axis "Silos" ["1", "2", "4", "6", "8"]
-    y-axis "Thousand keys/s" 0 --> 175
-    line [19.67, 16.09, 17.14, 19.7, 19.08]
-    line [19.93, 39.64, 79.2, 118.93, 158.58]
+    y-axis "Thousand keys/s" 0 --> 423
+    line [53.96, 57.77, 91.67, 117.55, 131.18]
+    line [311.88, 234.84, 308.17, 384.01, 381.53]
 ```
 
 Series order (xychart-beta renders no legend): `GetAsync` (point read), then `GetManyAsync` (4,096 keys/call).
@@ -79,9 +81,9 @@ xychart-beta
     title "Point and batched writes: sustained throughput vs silo count"
     x-axis "Silos" ["1", "2", "4", "6", "8"]
     y-axis "Thousand keys/s" 0 --> 29
-    line [0.98, 1.22, 1.23, 1.31, 1.22]
-    line [0.76, 1.24, 1.27, 1.15, 1.13]
-    line [5.93, 11.74, 22.63, 23.7, 25.55]
+    line [4.37, 5.37, 9.38, 11.55, 9.75]
+    line [3.87, 5.44, 9.6, 11.09, 11.37]
+    line [17.59, 13.91, 21.22, 25.94, 19.5]
 ```
 
 Series order (xychart-beta renders no legend): `SetAsync` (point write), then `SetAsync` (point write + async materialised view), then `SetManyAsync` (4,096 keys/call).
@@ -90,11 +92,11 @@ Series order (xychart-beta renders no legend): `SetAsync` (point write), then `S
 xychart-beta
     title "Atomic and cross-tree sagas: sustained throughput vs silo count"
     x-axis "Silos" ["1", "2", "4", "6", "8"]
-    y-axis "keys/s" 0 --> 1827
-    line [492, 977, 1566, 1660, 1546]
-    line [57, 39, 28, 31, 39]
-    line [40, 43, 36, 28, 26]
-    line [734, 1252, 1276, 1310, 1286]
+    y-axis "keys/s" 0 --> 9818
+    line [3410, 3701, 5790, 7726, 8925]
+    line [502, 573, 860, 1052, 1282]
+    line [304, 326, 440, 559, 655]
+    line [2902, 3692, 5340, 7690, 7712]
 ```
 
 Series order (xychart-beta renders no legend): `SetManyAtomicAsync` (64 keys/saga), then `SetManyAtomicAsync` (2 keys/saga, single-tree), then `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees), then `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees).
@@ -103,16 +105,17 @@ Series order (xychart-beta renders no legend): `SetManyAtomicAsync` (64 keys/sag
 
 ## The grid
 
-**How it was run.** Each cell is one cohort: the harness scales the silo
+**How it was run.** For each cohort the harness scales the silo
 Container App to N replicas, waits for every replica to report running,
 retires the superseded revision, settles for cluster membership, then runs
 the producer as a Container Apps **job** that joins the cluster as an
 Orleans *client* over the same Azure Table clustering store. The client
-opens several connections per silo so grain calls spread across every
-gateway rather than funnelling through one, warms the tree, and then drives
-the measurement window. Offered load is **per-silo rung x N**, so the demand
-presented to the cluster grows with the cluster: a flat line on the chart
-means extra hosts absorbed nothing, not that the load ran out.
+opens several connections per silo (four by default) so grain calls spread
+across every gateway rather than funnelling through one, seeds the keyspace
+for the read workloads, warms the tree, and then drives the measurement
+window. Offered load is **per-silo rung x N**, so the demand presented to
+the cluster grows with the cluster: a flat line on the chart means extra
+hosts absorbed nothing, not that the load ran out.
 
 **Every cohort starts on empty storage.** Before each cohort, with the silos
 parked at zero replicas, the harness deletes every table in the storage
@@ -126,97 +129,122 @@ cluster's limit, so the harness discards that cohort as a probe, doubles
 the per-silo rung and runs it again, up to three times. The rung a workload
 settles on carries forward to the larger silo counts, so demand never falls
 as the cluster grows. A cell still keeping up with its offered load after
-the last escalation is published as a lower bound, marked `>=`. Each cell
-is the median of two cohorts at the settled rung; `GetAsync` takes three,
-because its cohorts do not always land at the same level. Between cells the
-silo app is parked at zero replicas.
+the last escalation is published as a lower bound, marked `>=`, and so is a
+cell whose producer could not generate the load it was asked for: that
+measures the client, not the cluster. Each cell is the median of two
+cohorts at the settled rung; `GetAsync` takes three, because its cohorts do
+not always land at the same level. Between cells the silo app is parked at
+zero replicas.
 
 **The client's concurrency is sized per workload.** The client runs a fixed
-number of flush slots per silo. Batched workloads need few: one call carries
-4,096 keys. Point and saga workloads carry one key or one saga per call, so
-at the batched default the client, not the cluster, would be the limit;
-those rows run with more slots per silo (16 for `GetAsync`, 64 for
-`SetAsync` and the atomic workloads), recorded as `flushConcurrency` in the
-table's metadata.
+number of flush slots per silo, recorded as `flushConcurrency` in the
+table's metadata. Batched workloads need few, because one call carries 4,096
+keys, and run 8 per silo. Point and saga workloads carry one key or one saga
+per call, so at that default the client, not the cluster, would be the
+limit; `GetAsync` runs 16 slots per silo and the point-write and atomic
+workloads 64, and each atomic saga is its own flush unit. The point
+workloads fan each slot out into that many individual calls, so their
+in-flight call count is the slot count squared times N: it grows linearly
+with the cluster, keeping per-silo demand constant.
 
-**Two identical rigs, one per workload family.** To halve the wall-clock,
+**Two identical rigs, split by workload family.** To halve the wall-clock,
 the sweep ran on two identically deployed rigs in the same region, each with
-its own storage account: one ran the reads, the point writes and
-`SetManyAsync`, the other ran the four atomic workloads. Every curve comes
-from a single rig, so no line mixes the two.
+its own storage account. One ran the two reads and `SetManyAsync`; the other
+ran the four atomic workloads and the two point-write workloads. Every curve
+comes from a single rig, so no line mixes the two. As a cross-check the
+second rig also ran `SetManyAsync` at every silo count: it reproduced the
+same shape, a dip at two silos and no sustained gain after four, at 4-24%
+below the first rig cell by cell, which is the spread to allow when
+comparing absolute figures across rigs.
+
+**The code measured.** Every cell ran the tip of the epic that removed the
+multi-silo ceilings ([#3496](https://github.com/NSTA1/Orleans.Lattice/issues/3496)),
+recorded as `gitSha` below. The point-write rows and one-silo re-runs of
+`GetManyAsync` and the 64-key `SetManyAtomicAsync` saga ran on the same
+library code with later fixes to the benchmark client's accounting and
+grading applied, because those fixes changed what those cells measured;
+those fixes grade a cohort producer-bound only when the producer really
+fell behind ([#3589](https://github.com/NSTA1/Orleans.Lattice/issues/3589)),
+book point-mode failures per key rather than per 4,096-key flush unit
+([#3590](https://github.com/NSTA1/Orleans.Lattice/issues/3590)), and re-run
+a read cohort whose keyspace was never seeded instead of letting it cap the
+cell. The six-silo `GetManyAsync` cell was re-run for that last reason: one
+of its two original cohorts was unseeded and had been excluded.
 
 <!-- perf-table:layer3:start
   schema=v1
   batchSize=4096
   cohortN=2/3
   dotnet=10.0.x
-  gitSha=8438e1660
+  gitSha=0981d6d27
   host=Azure Container Apps (Consumption)
+  maxRungEscalations=3
   region=westus3
   responseTimeoutSec=420
-  rowsMeasured=2026-09-24
-  rungPerSilo=get-point=4000 veh/silo @ 5 Hz / 45s; get-many=4000 veh/silo @ 5 Hz / 45s; set-point=200 veh/silo @ 5 Hz / 45s; set-point-mv=200 veh/silo @ 5 Hz / 45s; set-many=1200 veh/silo @ 5 Hz / 45s; set-many-atomic=100 veh/silo @ 5 Hz / 45s; set-many-atomic-2=20 veh/silo @ 5 Hz / 45s; cross-tree-atomic-2=8 veh/silo @ 5 Hz / 45s; cross-tree-atomic-64=150 veh/silo @ 5 Hz / 45s
+  rowsMeasured=2026-09-26
+  rungPerSilo=get-point=8000 veh/silo @ 5 Hz / 45s, flushConcurrency 16/silo; get-many=16000 veh/silo @ 5 Hz / 45s, flushConcurrency 8/silo; set-point=1200 veh/silo @ 5 Hz / 45s, flushConcurrency 64/silo; set-point-mv=1200 veh/silo @ 5 Hz / 45s, flushConcurrency 64/silo; set-many=2400 veh/silo @ 5 Hz / 45s, flushConcurrency 8/silo; set-many-atomic=800 veh/silo @ 5 Hz / 45s, flushConcurrency 64/silo; set-many-atomic-2=200 veh/silo @ 5 Hz / 45s, flushConcurrency 64/silo; cross-tree-atomic-2=100 veh/silo @ 5 Hz / 45s, flushConcurrency 64/silo; cross-tree-atomic-64=800 veh/silo @ 5 Hz / 45s, flushConcurrency 64/silo
+  saturationRatio=0.9
   shardCount=64
   siloCounts=1,2,4,6,8
   siloSize=4 vCPU / 8 GiB
   walAccounts=1
   walMaxPendingBatches=16
   walPartitions=16
-  methodology=Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine's active elapsed time. Layer 3 deliberately does NOT reuse Layer 2's rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Offered load is scaled with the silo count (each workload carries a per-silo rung, driven at rung x silo count) so per-silo demand is held constant as the cluster grows and the curve measures capacity rather than a fixed load spread thinner. Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.
+  methodology=Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine's active elapsed time. Layer 3 deliberately does NOT reuse Layer 2's rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99 |
 |-----------|------:|--------:|---------------------:|------------------:|--------------------:|-------------:|-------------:|
-| `GetAsync` (point read) | 1 | ~20 k keys/s | **~19.7 k keys/s** | 1x | 100% | ~30 us | ~240 us |
-| `GetAsync` (point read) | 2 | ~40 k keys/s | **~16.1 k keys/s** | 0.82x | 41% | ~2 ms | ~18.16 ms |
-| `GetAsync` (point read) | 4 | ~80 k keys/s | **~17.1 k keys/s** | 0.87x | 22% | ~2.52 ms | ~36.75 ms |
-| `GetAsync` (point read) | 6 | ~120 k keys/s | **~19.7 k keys/s** | 1x | 17% | ~1.68 ms | ~77.31 ms |
-| `GetAsync` (point read) | 8 | ~160 k keys/s | **~19.1 k keys/s** | 0.97x | 12% | ~3.68 ms | ~74.83 ms |
-| `GetManyAsync` (4,096 keys/call) | 1 | ~20 k keys/s | **~19.9 k keys/s** | 1x | 100% | ~1.29 ms | ~4.16 ms |
-| `GetManyAsync` (4,096 keys/call) | 2 | ~40 k keys/s | **~39.6 k keys/s** | 1.99x | 99% | ~7.72 ms | ~19.98 ms |
-| `GetManyAsync` (4,096 keys/call) | 4 | ~80 k keys/s | **~79.2 k keys/s** | 3.97x | 99% | ~10.74 ms | ~22.24 ms |
-| `GetManyAsync` (4,096 keys/call) | 6 | ~120 k keys/s | **~118.9 k keys/s** | 5.97x | 99% | ~9.48 ms | ~21.48 ms |
-| `GetManyAsync` (4,096 keys/call) | 8 | ~160 k keys/s | **~158.6 k keys/s** | 7.96x | 99% | ~13.51 ms | ~26.88 ms |
-| `SetAsync` (point write) | 1 | ~1 k keys/s | **979 keys/s** | 1x | 100% | ~17.03 ms | ~71.69 ms |
-| `SetAsync` (point write) | 2 | ~2 k keys/s | **~1.2 k keys/s** | 1.25x | 62% | ~22.3 ms | ~87.89 ms |
-| `SetAsync` (point write) | 4 | ~4 k keys/s | **~1.2 k keys/s** | 1.26x | 32% | ~22.3 ms | ~89.6 ms |
-| `SetAsync` (point write) | 6 | ~6 k keys/s | **~1.3 k keys/s** | 1.34x | 22% | ~30.2 ms | ~176.42 ms |
-| `SetAsync` (point write) | 8 | ~8 k keys/s | **~1.2 k keys/s** | 1.25x | 16% | ~27.29 ms | ~132.66 ms |
-| `SetAsync` (point write + async materialised view) | 1 | ~1 k keys/s | **764 keys/s** | 1x | 100% | ~34.7 ms | ~84.64 ms |
-| `SetAsync` (point write + async materialised view) | 2 | ~2 k keys/s | **~1.2 k keys/s** | 1.62x | 81% | ~20.5 ms | ~77.37 ms |
-| `SetAsync` (point write + async materialised view) | 4 | ~4 k keys/s | **~1.3 k keys/s** | 1.67x | 42% | ~30.68 ms | ~189.73 ms |
-| `SetAsync` (point write + async materialised view) | 6 | ~6 k keys/s | **~1.2 k keys/s** | 1.51x | 25% | ~28.24 ms | ~287.2 ms |
-| `SetAsync` (point write + async materialised view) | 8 | ~8 k keys/s | **~1.1 k keys/s** | 1.48x | 18% | ~25.97 ms | ~185.08 ms |
-| `SetManyAsync` (4,096 keys/call) | 1 | ~6 k keys/s | **~5.9 k keys/s** | 1x | 100% | ~206 ms | ~268.85 ms |
-| `SetManyAsync` (4,096 keys/call) | 2 | ~12 k keys/s | **~11.7 k keys/s** | 1.98x | 99% | ~783.2 ms | ~943.71 ms |
-| `SetManyAsync` (4,096 keys/call) | 4 | ~24 k keys/s | **~22.6 k keys/s** | 3.82x | 95% | ~2552.1 ms | ~2779.74 ms |
-| `SetManyAsync` (4,096 keys/call) | 6 | ~36 k keys/s | **~23.7 k keys/s** | 4x | 67% | ~12365.23 ms | ~17152.1 ms |
-| `SetManyAsync` (4,096 keys/call) | 8 | ~48 k keys/s | **~25.6 k keys/s** | 4.31x | 54% | ~7000.57 ms | ~8181.75 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | 1 | 500 keys/s | **492 keys/s** | 1x | 100% | ~56.32 ms | ~99.68 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | 2 | ~1 k keys/s | **977 keys/s** | 1.99x | 99% | ~49.4 ms | ~93.37 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | 4 | ~2 k keys/s | **~1.6 k keys/s** | 3.18x | 80% | ~94.22 ms | ~166.34 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | 6 | ~3 k keys/s | **~1.7 k keys/s** | 3.37x | 56% | ~57.7 ms | ~118.85 ms |
-| `SetManyAtomicAsync` (64 keys/saga) | 8 | ~4 k keys/s | **~1.5 k keys/s** | 3.14x | 39% | ~84.42 ms | ~378.22 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 1 | 100 keys/s | **57 keys/s** | 1x | 100% | ~15.36 ms | ~30.4 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 2 | 200 keys/s | **39 keys/s** | 0.68x | 34% | ~18.27 ms | ~27.78 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 4 | 400 keys/s | **28 keys/s** | 0.49x | 12% | ~99.01 ms | ~160.24 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 6 | 600 keys/s | **31 keys/s** | 0.54x | 9% | ~47.66 ms | ~130.01 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 8 | 800 keys/s | **39 keys/s** | 0.68x | 9% | ~49.6 ms | ~74.98 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 1 | 40 keys/s | **40 keys/s** | 1x | 100% | ~7.42 ms | ~26.54 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 2 | 80 keys/s | **43 keys/s** | 1.08x | 54% | ~12.84 ms | ~98.6 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 4 | 160 keys/s | **36 keys/s** | 0.9x | 22% | ~9.54 ms | ~15.8 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 6 | 240 keys/s | **28 keys/s** | 0.7x | 12% | ~50.89 ms | ~99.32 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 8 | 320 keys/s | **26 keys/s** | 0.65x | 8% | ~31.8 ms | ~50.22 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 1 | 750 keys/s | **734 keys/s** | 1x | 100% | ~68.43 ms | ~121.24 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 2 | ~1.5 k keys/s | **~1.3 k keys/s** | 1.71x | 85% | ~67.31 ms | ~122.12 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 4 | ~3 k keys/s | **~1.3 k keys/s** | 1.74x | 43% | ~84.86 ms | ~99.58 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 6 | ~4.5 k keys/s | **~1.3 k keys/s** | 1.78x | 30% | ~140.06 ms | ~165.02 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 8 | ~6 k keys/s | **~1.3 k keys/s** | 1.75x | 22% | ~443.48 ms | ~635.23 ms |
+| `GetAsync` (point read) | 1 | ~80 k keys/s | **~54 k keys/s** | 1x | 100% | ~30 us | ~290 us |
+| `GetAsync` (point read) | 2 | ~160 k keys/s | **~57.8 k keys/s** | 1.07x | 54% | ~3.79 ms | ~14.46 ms |
+| `GetAsync` (point read) | 4 | ~320 k keys/s | **~91.7 k keys/s** | 1.7x | 42% | ~4.07 ms | ~15.92 ms |
+| `GetAsync` (point read) | 6 | ~480 k keys/s | **~117.6 k keys/s** | 2.18x | 36% | ~3.62 ms | ~17.59 ms |
+| `GetAsync` (point read) | 8 | ~640 k keys/s | **~131.2 k keys/s** | 2.43x | 30% | ~3.94 ms | ~20.93 ms |
+| `GetManyAsync` (4,096 keys/call) | 1 | ~640 k keys/s | **~311.9 k keys/s** | 1x | 100% | ~51.05 ms | ~168.93 ms |
+| `GetManyAsync` (4,096 keys/call) | 2 | ~640 k keys/s | **~234.8 k keys/s** | 0.75x | 38% | ~237.9 ms | ~285.38 ms |
+| `GetManyAsync` (4,096 keys/call) | 4 | ~1.28 M keys/s | **~308.2 k keys/s** | 0.99x | 25% | ~349 ms | ~451.36 ms |
+| `GetManyAsync` (4,096 keys/call) | 6 | ~1.92 M keys/s | **~384 k keys/s** | 1.23x | 21% | ~446.96 ms | ~539.3 ms |
+| `GetManyAsync` (4,096 keys/call) | 8 | ~2.56 M keys/s | **~381.5 k keys/s** | 1.22x | 15% | ~621.26 ms | ~713.69 ms |
+| `SetAsync` (point write) | 1 | ~6 k keys/s | **~4.4 k keys/s** | 1x | 100% | ~46.04 ms | ~152.52 ms |
+| `SetAsync` (point write) | 2 | ~12 k keys/s | **~5.4 k keys/s** | 1.23x | 61% | ~34.51 ms | ~89.21 ms |
+| `SetAsync` (point write) | 4 | ~24 k keys/s | **~9.4 k keys/s** | 2.15x | 54% | ~43 ms | ~148.88 ms |
+| `SetAsync` (point write) | 6 | ~36 k keys/s | **~11.6 k keys/s** | 2.64x | 44% | ~48.7 ms | ~144.36 ms |
+| `SetAsync` (point write) | 8 | ~48 k keys/s | **~9.7 k keys/s** | 2.23x | 28% | ~67.86 ms | ~152.17 ms |
+| `SetAsync` (point write + async materialised view) | 1 | ~6 k keys/s | **~3.9 k keys/s** | 1x | 100% | ~50.2 ms | ~141.06 ms |
+| `SetAsync` (point write + async materialised view) | 2 | ~12 k keys/s | **~5.4 k keys/s** | 1.41x | 70% | ~41.31 ms | ~137.78 ms |
+| `SetAsync` (point write + async materialised view) | 4 | ~24 k keys/s | **~9.6 k keys/s** | 2.48x | 62% | ~53.32 ms | ~170.14 ms |
+| `SetAsync` (point write + async materialised view) | 6 | ~36 k keys/s | **~11.1 k keys/s** | 2.86x | 48% | ~47.1 ms | ~607.48 ms |
+| `SetAsync` (point write + async materialised view) | 8 | ~48 k keys/s | **~11.4 k keys/s** | 2.94x | 37% | ~51.9 ms | ~168.48 ms |
+| `SetManyAsync` (4,096 keys/call) | 1 | ~24 k keys/s | **~17.6 k keys/s** | 1x | 100% | ~1622.34 ms | ~1888.69 ms |
+| `SetManyAsync` (4,096 keys/call) | 2 | ~48 k keys/s | **~13.9 k keys/s** | 0.79x | 40% | ~3717.43 ms | ~4142.52 ms |
+| `SetManyAsync` (4,096 keys/call) | 4 | ~96 k keys/s | **~21.2 k keys/s** | 1.21x | 30% | ~5853.15 ms | ~6372.12 ms |
+| `SetManyAsync` (4,096 keys/call) | 6 | ~144 k keys/s | **~25.9 k keys/s** | 1.47x | 25% | ~6895.64 ms | ~7388.44 ms |
+| `SetManyAsync` (4,096 keys/call) | 8 | ~192 k keys/s | **~19.5 k keys/s** | 1.11x | 14% | ~16466.48 ms | ~20061.78 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | 1 | ~8 k keys/s | **~3.4 k keys/s** | 1x | 100% | ~476.5 ms | ~761.59 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | 2 | ~8 k keys/s | **~3.7 k keys/s** | 1.09x | 54% | ~1015.98 ms | ~1395.41 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | 4 | ~16 k keys/s | **~5.8 k keys/s** | 1.7x | 42% | ~1446.25 ms | ~1665.31 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | 6 | ~24 k keys/s | **~7.7 k keys/s** | 2.27x | 38% | ~1684.66 ms | ~2559.9 ms |
+| `SetManyAtomicAsync` (64 keys/saga) | 8 | ~32 k keys/s | **~8.9 k keys/s** | 2.62x | 33% | ~2160.95 ms | ~2870.2 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 1 | ~1 k keys/s | **502 keys/s** | 1x | 100% | ~20.66 ms | ~73.04 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 2 | ~2 k keys/s | **573 keys/s** | 1.14x | 57% | ~38.56 ms | ~112.05 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 4 | ~4 k keys/s | **860 keys/s** | 1.71x | 43% | ~58.86 ms | ~142.6 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 6 | ~6 k keys/s | **~1.1 k keys/s** | 2.1x | 35% | ~80.03 ms | ~273.61 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | 8 | ~8 k keys/s | **~1.3 k keys/s** | 2.55x | 32% | ~72.96 ms | ~152.04 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 1 | 500 keys/s | **304 keys/s** | 1x | 100% | ~9.97 ms | ~68.4 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 2 | ~1 k keys/s | **326 keys/s** | 1.07x | 54% | ~14.07 ms | ~83.96 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 4 | ~2 k keys/s | **440 keys/s** | 1.45x | 36% | ~19.88 ms | ~96.76 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 6 | ~3 k keys/s | **559 keys/s** | 1.84x | 31% | ~22.36 ms | ~100.46 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | 8 | ~4 k keys/s | **655 keys/s** | 2.15x | 27% | ~25.52 ms | ~102.4 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 1 | ~4 k keys/s | **~2.9 k keys/s** | 1x | 100% | ~301.34 ms | ~481.09 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 2 | ~8 k keys/s | **~3.7 k keys/s** | 1.27x | 64% | ~171.47 ms | ~316.63 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 4 | ~16 k keys/s | **~5.3 k keys/s** | 1.84x | 46% | ~3677.4 ms | ~4006.31 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 6 | ~24 k keys/s | **~7.7 k keys/s** | 2.65x | 44% | ~166.9 ms | ~499.32 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | 8 | ~32 k keys/s | **~7.7 k keys/s** | 2.66x | 33% | ~145.33 ms | ~305.57 ms |
 
 <!-- perf-table:layer3:end -->
 
-> Measured 2026-09-24 on Azure Container Apps (Consumption) in westus3 (.NET 10.0.x) at git sha 8438e1660, n=2/3 cohorts per cell, silo counts 1,2,4,6,8. Offered load scales with the silo count (constant per-silo demand), and every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed.
+> Measured 2026-09-26 on Azure Container Apps (Consumption) in westus3 (.NET 10.0.x) at git sha 0981d6d27, n=2/3 cohorts per cell, silo counts 1,2,4,6,8. Offered load scales with the silo count and is raised until each cell plateaus below it, so every figure is true throughput rather than offered load; every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed.
 
 ## How to read this
 
@@ -227,14 +255,25 @@ speedup = N and efficiency = 100%. The **knee** is the silo count after
 which efficiency falls away sharply - past it you are paying for hosts that
 contend rather than contribute.
 
+**The one-silo cell is a different machine from the rest.** At one silo
+every grain is local, so a call from the router to a shard root and from the
+shard root to a leaf never leaves the process. From two silos on, most of
+those hops cross the network. The step from one to two silos therefore
+carries a one-off latency cost that no later step repeats, and for the
+workloads dominated by per-call latency it shows as a speedup well below 2x
+at two silos (or, for the two batched workloads, below 1x). Reading speedup
+from two silos onwards, as well as from one, separates that one-off cost
+from how the cluster scales.
+
 **`Offered` is the load the cell was driven at, and it is above the
 result by design.** The harness raises the offered load until the cluster
 stops keeping up, so a cell well below its `Offered` figure is the
 cluster's limit, not load that was lost: the client is closed-loop and
 bounds how much work it has in flight, so when the cluster cannot keep up
 the producer is held back rather than queueing without limit. A `>=` cell
-is the exception - the cluster was still keeping up at the highest load
-the harness offered, so the true ceiling is higher.
+is the exception - either the cluster was still keeping up at the highest
+load the harness offered, or the producer could not generate that load - so
+the true ceiling is higher.
 
 **Throughput is cluster-wide; the latency quantiles are not.** The
 throughput column counts every key the whole cluster retired. The p50/p99
@@ -243,168 +282,175 @@ reporter window, because the histogram is per-process and this tier does not
 aggregate quantiles across hosts (merging quantiles is not sound, and
 summing them is meaningless). Treat the latency columns as *representative
 of one host under the cluster's share of the load*, not as a cluster-wide
-distribution. For the atomic rows the instrument is the saga's terminal
-broadcast phase (`saga.broadcast.duration`), not its end-to-end commit time,
-which is much longer; see the atomic section.
+distribution, and as the time spent inside the silo, not the round trip the
+client sees. For the atomic rows the instrument is the saga's terminal
+broadcast phase (`saga.broadcast.duration`), not its end-to-end commit time.
 
-**Failures are data here, and most are storage transaction failures.** The
-engine retries a WAL saturation refusal on its own back-off ladder (#3339),
-so back-pressure is absorbed rather than counted, and the FINAL line carries
-`satRetries` / `satRecovered` / `satExhausted` to make it readable. What
-`failed` counts in this sweep is almost entirely Azure Tables batch
-transactions that did not report success: either
-`TableTransactionFailedException: The specified entity already exists` - the
-signature of a transaction being retried after it had in fact landed, so the
-keys are durable - or a server-side timeout ("Operation could not be
-completed within the specified time"), where the outcome was simply not
-reported. Either way the harness books the whole batch as failed. Most cells
-report zero; the non-zero ones are called out below. The harness grades a
-cohort only on whether it produced a productive measurement window, and
-carries the failure count through rather than discarding the cell.
+**Failures are data here, and they are storage timeouts.** The engine
+retries a WAL saturation refusal on its own back-off ladder, so
+back-pressure is absorbed rather than counted, and the FINAL line carries
+`satRetries` / `satRecovered` / `satExhausted` to make it readable. Across
+the whole sweep `satExhausted` is zero in every cohort. What `failed` counts
+is Azure Tables operations that did not report success. In every cohort
+checked they are almost all server-side timeouts ("Operation could not be
+completed within the specified time"), with a handful of
+`The specified entity already exists` conflicts - a transaction retried
+after it had in fact landed, so those keys are durable. A point workload books a failure per key; a batched
+workload books the whole 4,096-key batch the timeout hit, which is why the
+batched failure counts are much larger. Most cells report zero; the non-zero
+ones are called out below. The harness grades a cohort only on whether it
+produced a productive measurement window, and carries the failure count
+through rather than discarding the cell.
 
 ## Workload by workload
 
-### `GetManyAsync`: linear to 8 silos
+### `GetAsync`: scales from two silos, on client round-trip time
 
-Every cell retired essentially all of its offered load: 19.9 k keys/s at one
-silo and 158.6 k at eight, 7.96x, with per-silo efficiency at 99% in every
-cell. Both cohorts of every cell agree to within 1%. The median per-call
-time rises from ~1.3 ms at one silo to ~8-14 ms from two silos on, which is
-the cost of a batch fanning out to shard roots that now live on other hosts,
-and grows only modestly beyond that. This is the compute-tier result: grain
-placement, the gateway fan-out and the leaf cache spread across hosts, and
-this sweep did not find the ceiling. The N=1 cell also matches Layer 2's
-single-VM read figure (see the caveats).
+Point reads deliver ~54 k keys/s at one silo, ~58 k at two, and then
+~92 k, ~118 k and ~131 k at four, six and eight: 2.43x at eight silos, or
+2.27x for the fourfold step from two to eight. All three cohorts of every
+cell are within about 20% of each other, with zero failures.
 
-### `GetAsync`: flat, and the reason is not the silos
+The client is closed-loop at 256 calls in flight per silo, and its producer
+is blocked on the cluster 88-98% of the time in every cohort, so the cluster
+is setting the pace. Dividing the calls in flight by the throughput gives
+the mean time a read takes as the client sees it: about 4.7 ms at one silo,
+9 ms at two and 16 ms at eight. The silo-side time is far smaller: a p50 of
+~30 us at one silo, where the whole read is in-process, and a flat ~3.6-4 ms
+at two to eight, where the shard root usually lives on another host. So
+from two silos on, the growth is not inside the grain call; it is in the
+client-to-gateway hop, the messaging layer and the queueing in front of
+them. Shard-root point reads are interleavable
+([#3474](https://github.com/NSTA1/Orleans.Lattice/issues/3474)), so the
+fixed pool of 64 shard roots is not a serialisation point for them.
 
-Point reads deliver ~16-20 k keys/s at every silo count. At one silo that is
-the offered load (the client used 2 of its 8 flush slots). From two silos on
-the client is pinned at its in-flight cap and the cluster still retires the
-same ~17-20 k keys/s, so the extra hosts add nothing.
+### `GetManyAsync`: rises from two silos, on per-call time
 
-The silo-side histograms say where the time goes. Busy concurrency inside
-`LatticeGrain` (the sum of `get.duration` over a 10-second window divided by
-the window) is **0.8** calls per silo at one silo and **25-28** at two to
-eight silos, against a stateless-worker pool of 32 per silo; the mean time a
-get spends inside the grain rises from **0.05 ms** at one silo to **4-10
-ms** at two to eight. So each silo's workers are almost all busy waiting.
-The worker pool grows with the silo count while the cluster's throughput
-does not, which means the binding resource is fixed-size rather than
-per-host.
+Batched reads deliver ~312 k keys/s at one silo, drop to ~235 k at two,
+and rise to ~308 k at four and ~384 k and ~382 k at six and eight: 1.22x at
+eight silos, or 1.62x for the fourfold step from two to eight. Every cohort
+reports zero failures, and in every one the producer is blocked on the
+cluster 99% of the time, so the cluster sets the pace.
 
-The fixed-size resource that fits is the tree's **64 shard roots**. A shard
-root's `GetAsync` and `SetAsync` are deliberately *not* interleaved (the
-invariant that keeps a point operation atomic with respect to an online
-reshard), so each shard root serves one point operation at a time and holds
-its turn across the call to the leaf. At one silo that hop is in-process; at
-N silos it crosses the network for (N-1)/N of calls. More silos therefore
-add hops without adding shard roots, and cluster-wide point throughput stays
-roughly 64 divided by the per-operation hold time. This is **consistent
-with** the evidence, not proven by it: a shard-count A/B would settle it.
-Either way, the levers for point-read throughput are batching
-(`GetManyAsync` amortises one shard-root turn over many keys, which is why
-it scales) and shard count, not silo count.
+Each call reads a 4,096-key batch whose keys land on shards on every host,
+and the client holds eight calls in flight per silo. The silo-side median
+call time grows with the silo count: ~50 ms at one silo, ~240 ms at two,
+~350 ms at four, ~450 ms at six and ~620 ms at eight. From two silos to
+eight the calls in flight grow fourfold while the call time grows about
+2.6-fold, which is the ~1.6x gain measured. Why the call time grows is not
+isolated further; a batch completes only when its slowest shard answers,
+and each added host puts more of its shards across the network. The
+one-silo cell ran 16 producer clients per silo rather than 4, so that the
+producer could offer the load a single silo needed.
 
-### `SetAsync` and `SetAsync` with a materialised view: flat at ~1.2 k
+**The read keyspace grows with the cell.** The harness seeds as many keys as
+the producer has vehicles, and the vehicle count also sets the offered load,
+so a larger cell reads a larger keyspace: 128 k keys at one and two silos,
+256 k at four, 384 k at six and 512 k at eight. Keyspace size affects the
+result. At six silos a 96 k-key keyspace delivered ~452 k keys/s in a single
+cohort, while 192 k and 384 k keys both delivered ~385 k; an earlier
+six-silo sweep at 384 k keys delivered ~342 k from a single cohort, which
+puts the run-to-run spread at about 12%. The one-silo cell read twice as
+many keys per silo as the others, so if anything its figure is understated.
 
-Point writes deliver 979 keys/s at one silo (the offered 1 k) and ~1.2-1.3 k
-keys/s at every silo count from two to eight. The shape is the same as
-`GetAsync`: at one silo the grain's busy concurrency is ~13 per silo; from
-two silos on it is **30-32**, its cap, and the mean time a set spends inside
-the grain triples from ~14 ms to ~44 ms. The same fixed-pool reading
-applies, with a WAL commit inside each shard-root turn making the hold time
-longer, and so the ceiling much lower, than for reads. Some cohorts at four
-or more silos report failed keys (up to ~12 k); in every one checked they
-are Azure Tables server timeouts, not WAL back-pressure.
+### `SetAsync` and `SetAsync` with a materialised view
 
-The materialised-view variant tracks plain `SetAsync` within cohort noise
-from two silos on (~1.1-1.3 k keys/s). At one silo it is lower (764 against
-979 keys/s, with its two cohorts at 669 and 859), where the view maintainer
-shares the only host with the write path. At the ceiling the view costs
-nothing measurable.
+Point writes deliver ~4.4 k keys/s at one silo, ~5.4 k at two, ~9.4 k at
+four and ~11.6 k at six, then fall back to ~9.7 k at eight: 2.64x at six
+silos. The median time a write spends inside the silo is 35-50 ms from
+one silo to six, so the gain comes from more writes in flight across more
+hosts rather than from faster writes. At eight the median rises to ~68 ms
+and failures appear: the two eight-silo cohorts lost 827 and 1,405 keys, Azure Tables server timeouts with a few `already exists` conflicts,
+against zero at every other silo count. The pace-setter is not isolated
+further.
 
-### `SetManyAsync`: linear to 4 silos, then a plateau
+The materialised-view variant tracks plain `SetAsync` within about 12% from
+one silo to six (~3.9 k, ~5.4 k, ~9.6 k and ~11.1 k keys/s) and reaches
+~11.4 k at eight, where one cohort lost 148 keys to timeouts; the plain
+writes' larger losses at eight account for most of that gap. It is lowest
+relative to plain writes at one silo, where the view maintainer shares the
+only host with the write path. Maintaining the view does not measurably
+lower the write ceiling at two or more silos.
 
-Batched writes scale linearly to four silos - 5.9 k, 11.7 k and 22.6 k
-keys/s, 95% efficiency at four - and at those silo counts the cluster keeps
-up with the offered load: the client uses a handful of its flush slots (3-5
-of 32 at four silos) and failures are zero. From six silos on the curve
-flattens at **~24-26 k keys/s**: the client is pinned at its cap (64 of 64
-at eight silos) and the median call time rises from ~2.6 s at four silos to
-~7-12 s.
+### `SetManyAsync`: bound by the storage account from one silo
 
-The plateau is **consistent with the single shared storage account**, but
-not proven to be it. The account's own metrics show **zero** throttling
-responses across the whole sweep, so it was not refusing work. Its
-server-side latency did rise in the final hour of the sweep, which carried
-the eight-silo `SetManyAsync` cell and the six-silo tie-break (hourly
-averages of 6-9 ms earlier, 18.4 ms in that hour), and the tree's 16 WAL
-partitions against Azure Tables' documented per-partition target of about
-2,000 entities/s give a ceiling in the low 30 k entities/s - close to where
-the curve flattens. The experiment that would settle it is the harness's
-multi-account WAL fan-out, held out of this sweep so the silo count stays
-the only variable.
+Batched writes deliver ~17.6 k keys/s at one silo and do not sustain a gain
+beyond it: ~13.9 k at two, ~21.2 k at four, ~25.9 k at six and ~19.5 k at
+eight. The median call already takes ~1.6 s at one silo, and ~7 s at six,
+so each call is waiting on the WAL rather than on compute, and extra silos
+add calls in flight without adding commit capacity.
 
-The six-silo cell needed a tie-break, and it is the one place the residual
-multi-silo stall shows up in the grid. Its first cohort **wedged**: 18
-productive seconds, then 287 seconds retiring nothing with the client pinned
-at its cap, and no recovery even after the producer stopped. It finished at
-1,780 keys/s with 352,803 keys failed and 182,117 back-offs exhausted, and
-the storage account went on serving WAL batch transactions throughout, so
-commits were landing while calls did not return. The other two cohorts ran
-normally at 27.4 k and 23.7 k keys/s, and the cell reports the median of all
-three, 23.7 k. Neither eight-silo cohort wedged (28.4 k and 22.7 k keys/s,
-zero failures). This stall class is tracked as #3458; the cohort is kept in
-the data rather than discarded.
+The pace-setter is the one storage account the whole rig writes its WAL
+through. It is the only resource in the path that every silo shares, the
+second rig reproduced the same shape through its own account, and the
+failures it produces grow with the load: zero in most cohorts, one
+two-silo cohort with 53,248 keys failed, and one eight-silo cohort with
+538,624 keys failed, which retired 13.4 k keys/s beside its sibling's
+25.6 k. Those failures are storage timeouts, not WAL back-pressure
+refusals. The lever is the harness's
+multi-account WAL fan-out (`BENCH_WAL_ACCOUNTS`), which spreads a tree's
+WAL partitions across several accounts; it is held out of this sweep so the
+silo count stays the only variable.
 
-### Atomic and cross-tree sagas: a fixed number of sagas per second
+### Atomic and cross-tree sagas: per-saga latency
 
-The four atomic workloads look different in keys/s and alike in sagas/s,
-which is the more telling unit:
+The four atomic workloads read most clearly in sagas per second:
 
 | Workload | Keys per saga | Sagas/s at 1 / 2 / 4 / 6 / 8 silos |
 |----------|--------------:|:-----------------------------------|
-| `SetManyAtomicAsync` | 64 | 7.7 / 15 / 24 / 26 / 24 |
-| `SetManyAtomicAsync` | 2 | 28 / 20 / 14 / 15 / 20 |
-| `BeginAtomicWrite` cross-tree | 64 | 11.5 / 20 / 20 / 20 / 20 |
-| `BeginAtomicWrite` cross-tree | 2 | 20 / 21 / 18 / 14 / 13 |
+| `SetManyAtomicAsync` | 64 | 53 / 58 / 90 / 121 / 139 |
+| `SetManyAtomicAsync` | 2 | 251 / 287 / 430 / 526 / 641 |
+| `BeginAtomicWrite` cross-tree | 64 | 45 / 58 / 83 / 120 / 120 |
+| `BeginAtomicWrite` cross-tree | 2 | 152 / 163 / 220 / 280 / 328 |
 
-Where a cell is below its plateau (the single-tree 64-key saga at one and
-two silos, both cross-tree sagas at one) it is simply retiring the offered
-load. Everywhere else the four workloads converge on roughly **15-25
-sagas/s**, whether a saga carries 2 keys or 64 and whether it spans one tree
-or two. The cost is per saga, not per key, and adding silos does not raise
-the rate.
+All four rise with the silo count, by 2.2-2.7x at eight silos. The cost is
+mostly per saga rather than per key: a 2-key saga runs three to five times
+as many sagas per second as a 64-key one, not thirty-two times. Spanning two
+trees costs a 2-key saga about half its rate; a 64-key saga loses at
+most 15%.
 
-That is not the harness running out of concurrency. Every atomic mode
-commits one flush batch's sagas one after another, and runs up to eight
-batches per silo at once, so the harness presents 8N concurrent saga chains;
-at the plateau it is pinned at that cap (for example 32 of 32 for the
-cross-tree 64-key saga at four silos, and 64 of 64 for both single-tree
-sagas at eight). A fixed sagas/s rate under concurrency that grows with N
-means each saga's end-to-end time grows roughly in proportion to N: for the
-2-key single-tree saga, about 0.3 s at one silo and about 3.3 s at eight.
-That shape - throughput set by a count of operations and independent of both
-their size and the concurrency offered - is what a serialisation point looks
-like, but this sweep does not identify one, and it is not the saga's
-terminal broadcast, whose p50 in the table stays far below the end-to-end
-times above. The failed keys in some 64-key cohorts at four or more silos
-are, in every cohort checked, Azure Tables server timeouts.
+No cohort was refused. `satRetries` is zero in every atomic cohort, so
+neither WAL back-pressure nor the saga decision registry turned a saga away.
+The registry does have a real ceiling: it persists a tombstone per completed
+saga for `TxDecisionRetention`, and `LatticeOptions.TxRegistryAdmissionBudgetBytes`
+refuses new sagas with `LatticeSaturatedException` (source
+`TxRegistryCapacity`) once a registry shard's row approaches the storage
+provider's entity limit. The sweep runs the registry with eight shards
+(`LatticeOptions.TxRegistryShardCount`, default 1), and at these rates it
+never got there. A tree that needs more sagas per second than its registry
+admits can raise the shard count; a refusal shows up as non-zero
+`satRetries` on the FINAL line.
+
+What sets the rate is how long each saga takes. The client keeps 64 sagas in
+flight per silo, and its producer is blocked on the cluster for a growing
+share of the time as silos are added (a third of the time or less at one
+silo, 78-93% at eight), so the cluster is the limit and each saga's
+end-to-end time grows with the silo count. For the 2-key saga the growth is
+in its chain of serial durable writes - the leaf prepare and decision
+commits and three saga checkpoints - whose p50s rise three- to fourfold
+from one silo to eight (a checkpoint from 12 ms to 53 ms, a prepare from
+43 ms to 135 ms), while each per-shard broadcast call
+(`saga.broadcast.shard.duration`) stays at about 3 ms. Every one of those
+writes lands in the rig's single grain-state storage account. That is the
+saga analogue of the `SetManyAsync` storage bound, and it is tracked as
+[#3591](https://github.com/NSTA1/Orleans.Lattice/issues/3591). The 64-key
+sagas carry a 64-key WAL write on top of the same chain; their few failed
+keys (up to ~32 k in one cross-tree cohort at eight silos) are Azure Tables
+server timeouts.
 
 ## Caveats that bound these numbers
 
-**The N=1 cell is the control, and it reproduces Layer 2.** A scaling curve
-measured on different hardware to the single-host tier would be
-uncomparable, so the first thing to check is that one ACA silo performs like
-one Layer 2 VM. It does: the N=1 `get-many` cell lands on Layer 2's
-published single-VM read figure. That is what licenses reading the rest of
-this document alongside the single-silo guide rather than as an unrelated
-experiment, and it is the reason `get-many` is in the sweep at all even
-though it exercises no WAL. If a future re-run shows the N=1 cell drifting
-away from Layer 2's, treat the whole curve as suspect before believing
+**The N=1 cell is not a like-for-like control for Layer 2.** Layer 2
+publishes most of its rows at a fixed offered load (for example `GetAsync`
+at ~19.9 k keys/s against 20 k offered), because its question is what one
+host costs per call, not where it stops keeping up. Every Layer 3 cell is
+driven until the cluster stops keeping up, so most N=1 cells here sit well
+above the Layer 2 figure for the same workload, and the two are not
+directly comparable. The check that stands in for a control is the one
+described under the grid: the second rig ran `SetManyAsync` independently
+and reproduced its shape. If a re-run shows one rig's N=1 cells moving far
+from the other's, treat the whole curve as suspect before believing
 anything it says about scaling.
-
 **The throughput basis differs from Layer 2's, deliberately.** Layer 2
 publishes the mean of the silo's per-second rate samples. That works when
 the producer is co-located and work retires smoothly. It does **not** work
@@ -421,29 +467,43 @@ cell are consequently *not* computed the same way; the Layer 3 figure is the
 conservative one.
 
 **One storage account per rig backs the whole cluster.** Every silo's WAL
-writes land in the same Azure Tables account, so a flattening write curve
-could be measuring that account rather than the cluster. Its metrics were
-read for the whole sweep: across roughly 13.5 M transactions on the two
-rigs' accounts there were **zero** throttling (`ServerBusy`) responses and
-about 120 server timeouts in total. The account was never refusing work, but
-that does not rule out it being the pace-setter for `SetManyAsync`'s
-plateau, as discussed above. Multi-account WAL fan-out exists in the harness
-and is held out of this sweep so that silo count stays the only variable.
+writes and grain state land in the same Azure Tables account, so a
+flattening write curve can be measuring that account rather than the
+cluster. For `SetManyAsync` and the 2-key sagas the evidence above says it
+is. Multi-account WAL fan-out exists in the harness and is held out of this
+sweep so that silo count stays the only variable; there is no equivalent
+fan-out for grain state yet.
 
 **The shard count is fixed across every cell.** All cells use the same
 64-shard tree topology, so a change in the curve is a change in host count
-and not in shard granularity. That choice matters most for the point
-operations, whose flat curves are consistent with the shard roots being the
-limit; if your deployment runs a different shard count, scale your
-expectations for `GetAsync` and `SetAsync` with it.
+and not in shard granularity. At eight silos that leaves eight shard roots
+per silo.
 
-**The harness's concurrency is bounded and scales with the silo count.** The
-client runs a fixed number of flush slots per silo, sized per workload, and
-the atomic modes commit each slot's sagas serially. The rung escalation
-raises the offered rate, not the slot count, so a cell where the client was
-pinned at its slot cap measures the cluster's response time under that
-concurrency, not an open-loop ceiling. Each section above says where that
-applies.
+**The client's concurrency is bounded and scales with the silo count.** The
+client runs a fixed number of flush slots per silo, sized per workload. The
+rung escalation raises the offered rate, not the slot count, so a cell
+where the client was pinned at its slot cap measures the cluster's response
+time under that concurrency, not an open-loop ceiling. Each section above
+says where that applies.
+
+**Harness fixes after this sweep started are listed in the changelog.**
+Three harness bugs were found and fixed while the sweep ran, and the cells
+they affected were re-run: point-write fan-out booked a whole flush unit as
+failed on one faulted call
+([#3590](https://github.com/NSTA1/Orleans.Lattice/issues/3590)), the report
+graded some cluster-bound or on-schedule cohorts as producer-bound
+([#3589](https://github.com/NSTA1/Orleans.Lattice/issues/3589)), and an
+unseeded read cohort was accepted in place of a measurement, capping its
+cell at the starting load. A read preseed that failed part-way also
+restarted from the first key, and at six silos the 384 k-key seed needed
+three whole cohort attempts before one seeded
+([#3588](https://github.com/NSTA1/Orleans.Lattice/issues/3588)); the seed
+now resumes from the last slice that landed, a fix made after these cells
+were measured. One harness defect remains open under the same issue: a new
+cohort's silo revision can overlap the previous cohort's for up to a
+minute. The retiring silos run under the previous cohort's cluster id, so
+they cannot join the new cluster, but they share its storage account until
+they stop.
 
 **Silo sizing matches Layer 2 on CPU, not on memory.** The Layer 2 host is a
 `Standard_D4as_v5` (4 vCPU / 16 GiB). ACA Consumption caps a replica at 4
@@ -496,6 +556,10 @@ The switches that matter for a partial or resumed run:
   above which a cell counts as still keeping up and is re-run at double the
   load; `-MaxRungEscalations` (default 3) bounds how many times that
   happens before the cell is published as a `>=` lower bound.
+- `-Layer3ClientsPerSilo` (default 4) sets how many Orleans client
+  connections the producer opens per silo, capped at 64 in total. Raise it
+  when a cell is graded producer-bound, which means the producer could not
+  generate the load it was asked for.
 - `-DryRun` re-renders this document from the newest run state without
   touching Azure.
 
