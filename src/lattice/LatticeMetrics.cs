@@ -2533,6 +2533,40 @@ public static class LatticeMetrics
             description: "WAL garbage-collection passes that found the configured WalMaxRetainedBytes unreachable against the tree's measured logical working set, tagged by tree.");
 
     /// <summary>
+    /// Counter of WAL garbage-collection passes taken while a tree is in a
+    /// <b>terminal breach</b>, tagged with <see cref="TagTree"/> (issue #3149).
+    /// <para>
+    /// A pass is breaching when it classifies <see cref="OutcomeOverCeiling"/>
+    /// with an <see cref="WalGcCursorFloorState.Available"/> cursor floor and
+    /// reclaims no entry at all. One such pass is unremarkable - a consumer
+    /// lagging for a pass or two produces it - so the scheduler counts the run
+    /// of them per tree and advances this counter by one on every pass once the
+    /// run has reached <c>LatticeWalGcScheduler.TerminalBreachPasses</c>
+    /// consecutive breaching passes. Any pass that reclaims, falls under the
+    /// ceiling or reports a non-available floor ends the run.
+    /// </para>
+    /// <para>
+    /// <b>Why it exists.</b> Before it, a tree could classify hundreds of
+    /// consecutive passes as <c>over_ceiling</c> while reclaiming zero bytes
+    /// and nothing anywhere said that this was no longer a transient: the
+    /// outcome arm advances identically for the first breaching pass and the
+    /// six-hundredth. This counter is flat zero on every tree whose breaches
+    /// resolve, so a non-zero rate is directly alertable. Read it beside
+    /// <see cref="WalGcFloorHeadDistance"/> for the reason: a large distance
+    /// means a floor far behind the head is holding the retained range, while a
+    /// distance near zero means the floor covers nothing and the bytes are
+    /// retained somewhere the trim scan does not reach.
+    /// </para>
+    /// <para>
+    /// Zero-primed per tree beside the pass-outcome arms, with the same tag set
+    /// as the emission, so a flat zero is a measured "not in terminal breach".
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcTerminalBreach =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.terminal_breach", unit: "{pass}",
+            description: "WAL garbage-collection passes taken after a tree has spent the terminal-breach threshold of consecutive passes over its byte ceiling with an available floor while reclaiming nothing, tagged by tree.");
+
+    /// <summary>
     /// Counter of WAL garbage-collection passes for which the durable
     /// leaf-materialiser <em>offset</em> floor could not be computed because the
     /// pin store was unreachable, tagged with <see cref="TagTree"/>. Emitted from
@@ -2671,6 +2705,41 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalGcTrimStops =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
             description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, durability_unverified, durability_hold, durable_offset_refusal, exhausted or empty.");
+
+    /// <summary>
+    /// Histogram of the floor-to-head distance of each WAL GC per-shard trim
+    /// scan, in WAL offsets, tagged with <see cref="TagTree"/> and with
+    /// <see cref="TagShard"/> carrying the partition (issue #3149).
+    /// <para>
+    /// The value is the span of offsets the scan had to retain: from the first
+    /// entry it met and could not release - the effective trim floor, whichever
+    /// clause set it - through the shard's head offset inclusive. On a dense log
+    /// that is exactly the number of retained entries above the floor. A scan
+    /// that released everything it was offered, or found the shard empty,
+    /// records <c>0</c>, because nothing stands between its floor and the head.
+    /// </para>
+    /// <para>
+    /// <b>Recorded on every scanned shard on every pass, including when it is
+    /// zero.</b> That zero is the reading this instrument was added for. Before
+    /// it, a tree over its byte ceiling with an available floor that reclaimed
+    /// nothing looked identical whether the floor was far behind the head
+    /// holding the whole retained range, or already at the head with nothing
+    /// left to release - the two call for opposite repairs, and only the
+    /// distance separates them. The reclaimable side of the same scan - the
+    /// entries below the floor it released - is
+    /// <see cref="WalEntriesTrimmed"/>, equally shard-attributed.
+    /// </para>
+    /// <para>
+    /// Measured in offsets rather than bytes because byte accounting is per
+    /// tree, not per offset range, so no byte figure for the span exists to
+    /// publish. A shard this silo does not resolve a provider for is not
+    /// scanned and records nothing, exactly as it records no
+    /// <see cref="WalEntriesTrimmed"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalGcFloorHeadDistance =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.gc.floor_head_distance", unit: "{offset}",
+            description: "WAL offsets retained between the trim floor a GC shard scan stopped at and the shard head, per scan, tagged by tree and by shard; zero when the scan released everything it was offered.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed

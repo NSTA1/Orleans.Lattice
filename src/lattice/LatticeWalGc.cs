@@ -688,6 +688,7 @@ public sealed class LatticeWalGc(
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, partition, shardScan.StopReason);
             RecordEntriesTrimmed(treeTag, tenantTag, partition, shardScan.EligibleCount);
+            RecordFloorHeadDistance(treeTag, tenantTag, partition, shardScan.FloorHeadDistance);
         }
 
         var (_, retainedAfter, logicalAfter) = await SampleRetainedBytesAsync(
@@ -2588,7 +2589,7 @@ public sealed class LatticeWalGc(
         => _durableFloorProgress.TryGetValue(treeName, out var progress)
             && progress.HighWaterFloor is not null;
 
-    private static async Task<(long EligibleCount, WalGcTrimStopReason StopReason)> TrimShardAsync(
+    private static async Task<(long EligibleCount, WalGcTrimStopReason StopReason, long FloorHeadDistance)> TrimShardAsync(
         IWalStorageProvider provider,
         string treeId,
         int shardIndex,
@@ -2605,6 +2606,7 @@ public sealed class LatticeWalGc(
         long fromOffsetExclusive = -1;
         long eligibleCount = 0;
         long entriesSeen = 0;
+        long retainedFromOffset = -1;
         var stopReason = WalGcTrimStopReason.Exhausted;
         var stop = false;
 
@@ -2693,6 +2695,16 @@ public sealed class LatticeWalGc(
                 }
             }
 
+            if (stop)
+            {
+                // Every stop above breaks on the entry it had to retain, and
+                // lastSeenOffset was set from that entry before the checks ran,
+                // so this is the effective trim floor's first retained offset
+                // whichever clause set it (issue #3149).
+                retainedFromOffset = lastSeenOffset;
+                break;
+            }
+
             if (pageEntries == 0)
             {
                 // Provider exhausted; nothing more to scan.
@@ -2749,6 +2761,21 @@ public sealed class LatticeWalGc(
             stopReason = WalGcTrimStopReason.DurabilityUnverified;
         }
 
+        // The floor-to-head distance (issue #3149): how much of the shard the
+        // floor this scan stopped at is holding. Zero when the scan did not
+        // stop on a retained entry - it released everything it was offered, or
+        // the shard was empty - because nothing then lies between its floor and
+        // the head. Read only on a stopped scan, so an exhausted or empty shard
+        // costs no extra provider call. The head is a monotonic high-water mark
+        // and so is never below an entry the scan has just read; the clamp only
+        // defends against a provider that breaks that contract.
+        long floorHeadDistance = 0;
+        if (retainedFromOffset >= 0)
+        {
+            var head = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+            floorHeadDistance = Math.Max(head, retainedFromOffset) - retainedFromOffset + 1;
+        }
+
         if (lastEligibleOffset < 0)
         {
             // Nothing was released, so the TrimAsync below - and with it the
@@ -2791,11 +2818,11 @@ public sealed class LatticeWalGc(
             // here, because every dead-byte arm reads a quantity this stop
             // prevents from ever being written.
             await provider.EvaluateCompactionAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
-            return (0, stopReason);
+            return (0, stopReason, floorHeadDistance);
         }
 
         await provider.TrimAsync(treeId, shardIndex, lastEligibleOffset, cancellationToken).ConfigureAwait(false);
-        return (eligibleCount, stopReason);
+        return (eligibleCount, stopReason, floorHeadDistance);
     }
 
     /// <summary>
@@ -2848,6 +2875,29 @@ public sealed class LatticeWalGc(
         long count)
         => LatticeMetrics.WalEntriesTrimmed.Add(
             count,
+            treeTag,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex),
+            tenantTag);
+
+    /// <summary>
+    /// Records the floor-to-head distance one shard scan measured, tagged with
+    /// that shard's index and the same (tree, shard, tenant) set as
+    /// <see cref="RecordEntriesTrimmed"/>, so the retained side of a scan joins
+    /// its reclaimed side shard for shard (issue #3149).
+    /// <para>
+    /// <paramref name="distance"/> is recorded even when it is zero: a zero is
+    /// the measured statement that the floor holds nothing above it, which is
+    /// the reading that separates "the floor covers nothing" from "the floor is
+    /// far behind the head" on a tree over its ceiling that reclaims nothing.
+    /// </para>
+    /// </summary>
+    private static void RecordFloorHeadDistance(
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        int shardIndex,
+        long distance)
+        => LatticeMetrics.WalGcFloorHeadDistance.Record(
+            distance,
             treeTag,
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex),
             tenantTag);
