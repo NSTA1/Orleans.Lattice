@@ -524,8 +524,10 @@ internal sealed class LatticeWalGcScheduler(
     /// <para>
     /// <b>It cannot outlive the condition that justified it.</b> The entry is
     /// replaced by every classifying sweep, dropped when the tree is neither
-    /// breaching its byte ceiling nor holding a retained backlog (issue #3229),
-    /// and dropped when the tree becomes genuinely floor-blocked - at which
+    /// breaching its byte ceiling nor holding a retained backlog (issue #3229) -
+    /// whether or not the pass reclaimed anything, since a pass that trims a
+    /// little behind a still-pinned floor is not healthy (issue #3609) - and
+    /// dropped when the tree becomes genuinely floor-blocked - at which
     /// point the blocked arm's own report is a better answer to the same
     /// question than a sample of it.
     /// </para>
@@ -2711,10 +2713,10 @@ internal sealed class LatticeWalGcScheduler(
                         }
                     }
                 }
-                else
+                else if (!report.RetainedBacklog)
                 {
-                    // Neither breaching nor stranded, which after issue #3229 is
-                    // the genuinely healthy case and nothing else: the trim scan
+                    // Neither breaching nor holding a backlog, which is the
+                    // genuinely healthy case and nothing else: the trim scan
                     // ran, reclaimed what it was entitled to, and met no WAL it
                     // had to retain. The condition that licensed the sample is
                     // gone and will not be refreshed, so drop it rather than
@@ -2725,6 +2727,23 @@ internal sealed class LatticeWalGcScheduler(
                     // backlog must still retire its sample, or the drive would
                     // spend touches on a healthy tree forever off a classification
                     // no sweep will ever replace.
+                    //
+                    // Keyed on RetainedBacklog rather than on `stranded`
+                    // (issue #3609). `stranded` folds in `!reclaimed`, which is
+                    // right for what it admits to the sweep above and wrong as a
+                    // retirement predicate: trimming something does not imply
+                    // retaining nothing behind a pinned floor. On a partitioned
+                    // WAL one partition trims a little while another stays pinned
+                    // by the very holders this sample names, so the pass reclaims
+                    // AND retains. Retiring there also retired the blocked
+                    // observation below, and with it every consumer's
+                    // FirstObserved, so each re-sample restarted the
+                    // ReactivationMinBlockAge clock. Progress caused the wipe:
+                    // every lift let some partition trim, the episode ended, and
+                    // the holders never aged into eligibility. A pass that
+                    // reclaims while still retaining falls through this chain
+                    // and keeps both the sample and the budgets; it does not
+                    // refresh the sample, which remains the sweep's job.
                     _repairableFloorHolders.Remove(treeId);
                 }
 
