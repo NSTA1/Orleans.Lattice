@@ -597,6 +597,16 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Sets the withheld-permit count directly. Test-only: the GC share of
+    /// issue #3610 is sized from the ceiling less this count, and reaching a
+    /// withheld state for real needs a simulated heap cycle that says nothing
+    /// about the share arithmetic under test.
+    /// </summary>
+    /// <param name="withheld">The withheld-permit count to simulate.</param>
+    internal static void SeedWithheldReplayPermitsForTest(int withheld)
+        => Volatile.Write(ref _withheldReplayPermits, withheld);
+
+    /// <summary>
     /// Decides whether the caller's replay permit should be <b>withheld</b> rather
     /// than returned, because the heap cannot currently afford the concurrency the
     /// gate is configured for (issues #2781 and #2862).
@@ -1469,12 +1479,12 @@ internal sealed partial class BPlusLeafGrain
                 throw new LatticeSaturatedException(
                     origin == StarvationDriveOrigin.CoverageLagTimer
                         ? "The per-silo WAL replay gate has no immediate capacity for a coverage-lag timer "
-                            + "starvation drive. GC drives never queue and share at most half the configured "
-                            + "replay permits (at least one), and a timer drive never takes the last free one, "
+                            + "starvation drive. GC drives never queue and share at most half the replay permits "
+                            + "still in circulation (at least one), and a timer drive never takes the last free one, "
                             + "which is kept for WAL GC sweep drives; retry after a backoff."
                         : "The per-silo WAL replay gate has no immediate capacity for a WAL GC sweep "
-                            + "starvation drive. GC drives never queue and share at most half the configured "
-                            + "replay permits (at least one); retry after a backoff.",
+                            + "starvation drive. GC drives never queue and share at most half the replay permits "
+                            + "still in circulation (at least one); retry after a backoff.",
                     state.State.TreeId,
                     LatticeSaturationSource.ReplayPermitAdmission);
             }
@@ -1641,12 +1651,13 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// How many process-wide GC slots may already be held for a starvation
-    /// drive of <paramref name="origin"/> to be admitted, for a replay gate sized
-    /// to <paramref name="ceiling"/> permits (issues #3480, #3575).
+    /// drive of <paramref name="origin"/> to be admitted, for a replay gate with
+    /// <paramref name="ceiling"/> permits in circulation (issues #3480, #3575,
+    /// #3610).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The whole share is half the ceiling, rounded down, with a floor of one,
+    /// The whole share is half the circulating permits, rounded down, with a floor of one,
     /// so interactive activations keep the other half. A WAL GC sweep drive may
     /// fill it. A coverage-lag timer drive is admitted only while the held count
     /// is below one less than that, so the last free slot of the share is always
@@ -1667,7 +1678,10 @@ internal sealed partial class BPlusLeafGrain
     /// it while a refused sweep drive is outstanding.
     /// </para>
     /// </remarks>
-    /// <param name="ceiling">The resolved replay permit ceiling.</param>
+    /// <param name="ceiling">
+    /// The replay permits in circulation: the resolved ceiling less any the
+    /// heap backpressure is withholding (<see cref="CirculatingReplayPermits"/>).
+    /// </param>
     /// <param name="origin">Who requested the drive.</param>
     internal static int StarvationReplayLimit(int ceiling, StarvationDriveOrigin origin)
     {
@@ -1676,25 +1690,47 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// The replay permits still in circulation: <paramref name="ceiling"/> less
+    /// the <paramref name="withheld"/> ones, never below one (issue #3610).
+    /// </summary>
+    /// <remarks>
+    /// The GC share is sized from this rather than from the configured ceiling.
+    /// Withholding follows the heap cycle, so at the withholding floor a ceiling
+    /// of six circulates one permit, and a share sized from six (three slots, two
+    /// for the timer) lets coverage-lag timer drives hold every permit left while
+    /// the sweep - the only drive that lifts a floor-holding pin - is refused at
+    /// the gate. Sized from what circulates, that phase is a single-slot share,
+    /// which the timer yields to a refused sweep drive. The floor of one matches
+    /// the withholding floor, which always leaves one permit in circulation.
+    /// </remarks>
+    /// <param name="ceiling">The resolved replay permit ceiling.</param>
+    /// <param name="withheld">The permits currently withheld from the gate.</param>
+    internal static int CirculatingReplayPermits(int ceiling, int withheld)
+        => Math.Max(1, ceiling - withheld);
+
+    /// <summary>
     /// Reserves a process-wide GC slot and an immediately available shared
-    /// replay permit for a drive of <paramref name="origin"/>. A failed attempt
+    /// replay permit for a drive of <paramref name="origin"/>, sizing the GC
+    /// share from the permits in circulation (issue #3610). A failed attempt
     /// retains neither and never joins a queue.
     /// </summary>
     /// <param name="gate">The per-silo replay concurrency gate.</param>
     /// <param name="origin">Who requested the drive.</param>
     internal static bool TryAcquireStarvationReplayPermit(SemaphoreSlim gate, StarvationDriveOrigin origin)
     {
-        var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
+        var circulating = CirculatingReplayPermits(
+            Volatile.Read(ref _replayConcurrencyCeiling),
+            Volatile.Read(ref _withheldReplayPermits));
         var timer = origin == StarvationDriveOrigin.CoverageLagTimer;
 
         if (timer
-            && StarvationReplayLimit(ceiling, StarvationDriveOrigin.WalGcSweep) == 1
+            && StarvationReplayLimit(circulating, StarvationDriveOrigin.WalGcSweep) == 1
             && IsSweepDriveRefusalOutstanding())
         {
             return false;
         }
 
-        var limit = StarvationReplayLimit(ceiling, origin);
+        var limit = StarvationReplayLimit(circulating, origin);
         var reserved = false;
         while (true)
         {
