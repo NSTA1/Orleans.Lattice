@@ -3635,7 +3635,11 @@ internal sealed class LatticeWalGcScheduler(
     /// one such leaf would consume the whole pass and starve the other blockers
     /// of the tree - the failing leaf would deny the sweep to the leaves that
     /// might still heal. Issued concurrently, a pass costs the same wall-clock
-    /// as it did when it made a single touch.
+    /// as it did when it made a single touch. The one exception is arm 2's
+    /// head (issue #3610): a pre-classified pass touches the holder nearest the
+    /// floor first and alone, so the free replay permit goes to the floor rather
+    /// than to whichever touch reaches the gate first, and only then launches the
+    /// rest concurrently - at most one touch's worth of extra wall-clock.
     /// </para>
     /// <para>
     /// <b>It is not assumed to work.</b> See <see cref="MaxReactivationAttempts"/>:
@@ -3998,7 +4002,29 @@ internal sealed class LatticeWalGcScheduler(
         _blockedConsumers[treeId] = observation;
 
         var touches = new Task<ReactivationTouchResult>[touching.Count];
-        for (var i = 0; i < touching.Count; i++)
+        var concurrentFrom = 0;
+
+        // Issue #3610: the floor holder is touched first and alone. The
+        // classifier hands arm 2 its holders nearest the floor first, but a
+        // concurrent launch let whichever touch reached the replay gate first
+        // take the free permit, which on the live estate was always a leaf
+        // above the floor. The rest still run concurrently, so a stuck floor
+        // holder costs this pass one extra touch, and MaxReactivationAttempts
+        // bounds how many passes it can do that on.
+        if (preClassified && touching.Count > 1)
+        {
+            touches[0] = TryReactivateBlockedLeafAsync(
+                treeId,
+                touching[0],
+                treeTag,
+                tenantTag,
+                requireOffsetAdvance?.Contains(touching[0]) == true,
+                stoppingToken);
+            await ((Task)touches[0]).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            concurrentFrom = 1;
+        }
+
+        for (var i = concurrentFrom; i < touching.Count; i++)
         {
             touches[i] = TryReactivateBlockedLeafAsync(
                 treeId,
