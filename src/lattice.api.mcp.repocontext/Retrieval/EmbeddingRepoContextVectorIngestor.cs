@@ -2074,7 +2074,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // that did land suppress the arm's "no embedding batch succeeded" line
                 // and leave a healthy-looking outcome behind (issue #2272).
                 var failedSources = NameBatchSources(start, count);
-                _pacer?.RecordBatch(batchStartedAt, succeeded: false);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: false, units: count);
                 failedBatches++;
                 embedFailedBatches++;
                 strandedSources += failedSources.Count;
@@ -2166,7 +2166,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
                 embedded += batchEmbedded;
                 consecutiveBatchFailures = 0;
-                _pacer?.RecordBatch(batchStartedAt, succeeded: true);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: true, units: count);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2176,7 +2176,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // repair, which is what makes continuing safe rather than merely
                 // convenient.
                 firstBatchFailure ??= ex;
-                _pacer?.RecordBatch(batchStartedAt, succeeded: false);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: false, units: count);
                 failedBatches++;
                 if (stage == "record")
                 {

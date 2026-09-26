@@ -87,6 +87,8 @@ public sealed class EmbeddingRepoContextVectorIngestorPacingTests
             Assert.That(snapshot.State, Is.Not.EqualTo(RepoIndexPaceState.Idle),
                 "Every batch went through the pacer, so it has left Idle.");
             Assert.That(snapshot.ForegroundRequests, Is.Zero);
+            Assert.That(pacer.LargestBatchUnits, Is.EqualTo(EmbeddingRepoContextVectorIngestor.EmbedBatchSize),
+                "Each batch reports its passage count, so latency is judged per passage (issue #3456).");
         });
     }
 
