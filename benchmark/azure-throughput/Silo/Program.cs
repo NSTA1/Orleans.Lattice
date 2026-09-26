@@ -77,6 +77,14 @@
 //                           which also makes the coalescing threshold above
 //                           unreachable. Set to 0 for the control arm of the
 //                           #3408 A/B; leave unset for the fix arm.
+//   BENCH_WAL_MATERIALISER_PIN_BUCKETS
+//                           Floor on the durable WAL materialiser pin buckets
+//                           per pin shard (defaults to
+//                           LatticeOptions.DefaultWalMaterialiserPinBuckets, i.e.
+//                           1). The store splits itself above the floor once a
+//                           slot outgrows its byte budget (#3576), so the default
+//                           is safe for a large preseed; raise it only to start
+//                           from a wider layout for an A/B.
 //   BENCH_WAL_MAX_PENDING_BATCHES
 //                           Per-WalShardGrain pipeline depth (defaults to
 //                           LatticeOptions.DefaultWalMaxPendingBatches so the bench
@@ -274,10 +282,14 @@ var tcpPort     = ReadInt("BENCH_TCP_PORT", 7000);
 var batchSize   = ReadInt("BENCH_BATCH_SIZE", 4096);
 var flushMs     = ReadInt("BENCH_FLUSH_MS", 50);
 var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
+// BENCH_POINT_FANOUT: per-slot fan-out for the point modes; unset falls back to
+// BENCH_FLUSH_CONCURRENCY (in-flight = that bound squared). See IngestSettings.
+var pointFanOut = ReadIntAllowZero("BENCH_POINT_FANOUT", 0);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
 var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
 var walBatchedSingleEntryAppends = ReadBool("BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS", LatticeOptions.DefaultWalBatchedSingleEntryAppends);
+var walMaterialiserPinBuckets = ReadInt("BENCH_WAL_MATERIALISER_PIN_BUCKETS", LatticeOptions.DefaultWalMaterialiserPinBuckets);
 // BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly
 // the shape the replay admission gate is sized to refuse, and refusing it here
 // is a measurement artefact rather than a finding.
@@ -335,6 +347,15 @@ var walAdmissionCallBudgetSec = ReadIntAllowZero("BENCH_WAL_ADMISSION_CALL_BUDGE
 var walAdmissionCallBudget = walAdmissionCallBudgetSec <= 0
     ? Timeout.InfiniteTimeSpan
     : TimeSpan.FromSeconds(walAdmissionCallBudgetSec);
+// BENCH_TX_REGISTRY_SHARDS (#3501): saga decision registry shards per tree.
+// The library default of 1 keeps the unsharded, rolling-upgrade-safe layout;
+// the rig sets it from run-cohort-aca.ps1 -TxRegistryShards (default 8) so the
+// sharded ceiling is what an atomic cohort measures. Read from the global
+// options, so it is applied in the unnamed ConfigureLattice block below.
+var txRegistryShards = Math.Clamp(
+    ReadInt("BENCH_TX_REGISTRY_SHARDS", LatticeOptions.DefaultTxRegistryShardCount),
+    1,
+    LatticeOptions.MaxTxRegistryShardCount);
 // Multi-account WAL fan-out (experiment knobs). BENCH_WAL_EXTRA_ACCOUNT_URIS is
 // a ';'-delimited list of additional storage-account table endpoints wired in
 // by update.ps1 (accounts 1..N-1; account 0 is BENCH_STORAGE_URI). Each becomes
@@ -377,7 +398,7 @@ var walNetworkTimeoutSec = ReadIntAllowZero("BENCH_WAL_NETWORK_TIMEOUT_SEC", 0);
 // Finite per-commit deadline (seconds) for the per-shard PhaseTwoWorker's
 // manifest commit, mapped to AzureTableWalStorageOptions.PhaseTwoCommitTimeout.
 // When the env var is ABSENT the option is left at the library default
-// (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 3 s) - the deploy
+// (AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout, 12 s) - the deploy
 // script only emits this var when the operator overrides it. When SUPPLIED the
 // value is honoured verbatim: 0 explicitly disables the deadline (null - the
 // historical unbounded behaviour), > 0 sets that finite deadline. A finite
@@ -525,9 +546,10 @@ if (clusteringMode == "azuretable"
 // both the configured value and the effective fire-or-not state so a
 // glance at the silo log line answers "did the seed actually run?"
 // unambiguously.
-var preseedWillFire = preseedKeyCount > 0
-    && (workloadMode == BenchWorkloadMode.GetPoint
-        || workloadMode == BenchWorkloadMode.GetMany);
+// In cluster ingest mode the silo never seeds: the Layer 3 producer does
+// (see Producer/Program.cs), so the silo banner reports false there.
+var preseedWillFire = BenchPreseed.IsRequired(workloadMode, preseedKeyCount)
+    && ingestMode != "cluster";
 // Banner descriptor for the phase-2 commit deadline: "default(3s)" when the
 // operator left it unset (library DefaultPhaseTwoCommitTimeout applies),
 // "off" when explicitly disabled (supplied 0), or the supplied second-count.
@@ -554,7 +576,7 @@ Console.WriteLine($"[silo] auth={(string.IsNullOrEmpty(storageConn) ? $"managed-
 // values the TCP-read gating + the silo's sampler use. A "default"
 // suffix on the sample interval is implicit when the env-var was not
 // supplied; the actual value the silo will use is shown for clarity.
-Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends}");
+Console.WriteLine($"[silo] saturationSampleMs={saturationSampleMs} saturationThrottledRatio={saturationThrottledRatio:0.###} saturationDispatchTimeoutThreshold={saturationDispatchTimeoutThreshold} saturationReleaseBatch={(saturationReleaseBatch == 0 ? "all" : $"{saturationReleaseBatch}")} setManyFanOutBudget={(setManyFanOutBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{setManyFanOutBudget.TotalSeconds:0.##}s")} walAdmissionCallBudget={(walAdmissionCallBudget == Timeout.InfiniteTimeSpan ? "infinite" : $"{walAdmissionCallBudget.TotalSeconds:0.##}s")} walBatchedSingleEntryAppends={walBatchedSingleEntryAppends} txRegistryShards={txRegistryShards} walMaterialiserPinBuckets={walMaterialiserPinBuckets}");
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -605,7 +627,7 @@ builder.Services.AddHostedService<VehicleFleetSimulator.AzureThroughput.Silo.Pha
 builder.Services.AddSingleton<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>();
 builder.Services.AddSingleton<Orleans.Lattice.IWalSaturationObserver>(sp =>
     sp.GetRequiredService<VehicleFleetSimulator.AzureThroughput.Silo.BenchSaturationLogger>());
-builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode));
+builder.Services.AddSingleton(new IngestSettings(treeId, tcpPort, batchSize, TimeSpan.FromMilliseconds(flushMs), TimeSpan.FromSeconds(reportSec), flushConcurrency, shardCountOverride, workloadMode, atomicBatchSize, preseedKeyCount, walMaxPending, responseTimeoutSec, walPartitions, walAccounts, ingestMode) { PointFanOut = pointFanOut });
 // (#3348) Hold warm-up until this silo's cluster manifest lists the cohort's
 // full silo count, so the hot grains it activates are placed across the whole
 // cluster rather than the first silos to join. 0 (the default) disables it.
@@ -743,6 +765,7 @@ builder.UseOrleans(silo =>
         o.WalSaturationDispatchTimeoutThreshold = saturationDispatchTimeoutThreshold;
         o.WalSaturationRecoveryReleaseBatch = saturationReleaseBatch;
         o.WalSaturationAcuteOnly = saturationAcuteOnly;
+        o.TxRegistryShardCount = txRegistryShards;
     });
 
     silo.ConfigureLattice(treeId, o =>
@@ -760,6 +783,10 @@ builder.UseOrleans(silo =>
         // a wide fan-out of single-entry leaf slices stops serialising
         // the partition behind one provider round trip (#3408).
         o.WalBatchedSingleEntryAppends = walBatchedSingleEntryAppends;
+        // A floor, not the layout: the pin store widens itself past it once a
+        // slot outgrows its byte budget (#3576). Assigned unconditionally
+        // because the default IS the library default.
+        o.WalMaterialiserPinBuckets = walMaterialiserPinBuckets;
         // c2-xxviii: opt the bench into the leaf-side digest coalescing
         // window so the bulk-write hot path collapses N per-call
         // OnChildDigestPublishedAsync hops into one per window. Library
@@ -1034,7 +1061,7 @@ internal sealed class TcpIngestService(
         var asm = typeof(TcpIngestService).Assembly;
         var asmLoc = asm.Location;
         var builtAtUtc = string.IsNullOrEmpty(asmLoc) ? "unknown" : File.GetLastWriteTimeUtc(asmLoc).ToString("yyyy-MM-ddTHH:mm:ssZ");
-        Console.WriteLine($"[silo:ingest] settings.BatchSize={settings.BatchSize} settings.FlushConcurrency={settings.FlushConcurrency} settings.FlushInterval={settings.FlushInterval.TotalMilliseconds:F0}ms settings.ShardCountOverride={settings.ShardCountOverride} treeId={settings.TreeId} asm={Path.GetFileName(asmLoc)} builtAtUtc={builtAtUtc}");
+        Console.WriteLine($"[silo:ingest] settings.BatchSize={settings.BatchSize} settings.FlushConcurrency={settings.FlushConcurrency} settings.EffectivePointFanOut={settings.EffectivePointFanOut} settings.FlushInterval={settings.FlushInterval.TotalMilliseconds:F0}ms settings.ShardCountOverride={settings.ShardCountOverride} treeId={settings.TreeId} asm={Path.GetFileName(asmLoc)} builtAtUtc={builtAtUtc}");
 
         var lattice = grainFactory.GetGrain<ILattice>(settings.TreeId);
 
@@ -1393,32 +1420,15 @@ internal sealed class TcpIngestService(
         // cache population) happens for every mode via the
         // `lattice.WarmUpAsync` call earlier in startup; only the
         // tree-content pre-seed is gated on the read modes.
-        var preseedEnabled = settings.PreseedKeyCount > 0
-            && (settings.WorkloadMode == BenchWorkloadMode.GetPoint
-                || settings.WorkloadMode == BenchWorkloadMode.GetMany);
+        var preseedEnabled = BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount);
         if (preseedEnabled)
         {
             var preseedSw = System.Diagnostics.Stopwatch.StartNew();
-            const int PreseedPayloadBytes = 245;
-            var seedEntries = new List<KeyValuePair<string, byte[]>>(settings.PreseedKeyCount);
-            Span<byte> idBytes = stackalloc byte[16];
-            for (var i = 0; i < settings.PreseedKeyCount; i++)
-            {
-                // Mirror Producer/Program.cs vehicle-id construction.
-                BitConverter.TryWriteBytes(idBytes[..4], i);
-                BitConverter.TryWriteBytes(idBytes.Slice(4, 4), 0xC0FFEE);
-                BitConverter.TryWriteBytes(idBytes.Slice(8, 4), unchecked((int)0xDEADBEEF));
-                BitConverter.TryWriteBytes(idBytes.Slice(12, 4), unchecked((int)0xCAFEBABE));
-                var vehicleId = new Guid(idBytes).ToString("N");
-                // Deterministic 245-byte payload so two re-runs over the
-                // same keyspace produce bit-identical rows in the WAL
-                // (cleanest cross-run diff). i mod 256 fill is enough to
-                // tell the rows apart on a hex-dump if anything is ever
-                // off.
-                var payload = new byte[PreseedPayloadBytes];
-                for (var b = 0; b < PreseedPayloadBytes; b++) payload[b] = (byte)((i + b) & 0xFF);
-                seedEntries.Add(new KeyValuePair<string, byte[]>(vehicleId, payload));
-            }
+            const int PreseedPayloadBytes = BenchPreseed.PayloadBytes;
+            // Keys mirror the producer's vehicle-id construction; the payload
+            // is deterministic so re-runs write bit-identical rows. Shared
+            // with the Layer 3 producer's cluster-mode pre-seed.
+            var seedEntries = BenchPreseed.BuildEntries(settings.PreseedKeyCount);
             try
             {
                 // Use SetManyAsync (not BulkLoadAsync) for the pre-seed:

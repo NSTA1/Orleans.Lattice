@@ -96,6 +96,8 @@ param(
 	# round-robin per client, so 4x N makes full coverage overwhelmingly
 	# likely rather than merely possible.
 	[int] $ClientsPerSilo = 4,
+	# 0 lets the producer use its own Environment.ProcessorCount.
+	[ValidateRange(0, 1024)][int] $GeneratorParallelism = 0,
 	# The silo default of 30s turns a transient queue depth into a flood of
 	# grain-rpc-deadline failures and reports collapse where Layer 2 would
 	# have reported latency, so this tier raises it as Layer 2 does.
@@ -240,6 +242,10 @@ param(
 	# 0 means infinite (inherit the library default).
 	[int] $SetManyFanOutBudgetSec = 30,
 	[int] $WalAdmissionCallBudgetSec = 15,
+	# (#3501) Saga decision registry shards per tree (1..256). The library
+	# default is 1 (unsharded, rolling-upgrade safe); the rig opts in to 8 so
+	# atomic cohorts measure the sharded ceiling. Pass 1 for the legacy layout.
+	[ValidateRange(1, 256)] [int] $TxRegistryShards = 8,
 	# (#3396) WAL append coalescing threshold. Unlike the two budgets above,
 	# 0 here is a MEANINGFUL value (coalescing disabled, the historical
 	# unconditional final-entry flush kick) rather than "infinite", so it
@@ -255,6 +261,11 @@ param(
 	# the silo on its shipping default (off); 0 and 1 pin the control and fix
 	# arms explicitly so a cohort's arm is never implicit.
 	[int] $WalBatchedSingleEntryAppends = -1,
+	# Floor on the durable WAL materialiser pin buckets per pin shard (#3576).
+	# -1 leaves the silo on the library default, which is what published
+	# numbers must reflect; the store splits itself above that floor anyway, so
+	# this only pins a wider layout from the first write for an A/B.
+	[int] $WalMaterialiserPinBuckets = -1,
 	# (#3402) Paced release of parked WAL-admission waiters on partition
 	# recovery. 0 is MEANINGFUL here too - it is the pre-#3402 "release the
 	# whole parked herd in one pass" behaviour, which is the control arm -
@@ -266,7 +277,11 @@ param(
 	# Extra silo env vars as "NAME=value" strings, appended last so they win.
 	# For one-off diagnostic arms that do not warrant a dedicated parameter.
 	[string[]] $ExtraSiloEnv = @(),
-	[int] $SettleSec = 30
+	[int] $SettleSec = 30,
+	# Longest tolerated mid-run freeze (cumulative ops not advancing while
+	# inFlight > 0) before the cell is graded WEDGE rather than HEALTHY. A
+	# saturated cell keeps advancing; a frozen one does not. 0 disables.
+	[int] $FreezeWedgeSec = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -298,10 +313,15 @@ $logPath = Join-Path $runRoot "$logStem.log"
 # Derive the per-cohort values from the per-silo rung.
 $VehicleCount = $VehiclesPerSilo * $SiloCount
 $FlushConcurrency = $FlushConcurrencyPerSilo * $SiloCount
+# The point modes fan each flush slot out into this many concurrent calls. It
+# is deliberately the PER-SILO bound, not the cohort bound: slots already
+# scale with N, so a cohort-sized fan-out would make the in-flight call count
+# (FlushConcurrencyPerSilo x N)^2 and per-silo demand would grow with N.
+$PointFanOut = $FlushConcurrencyPerSilo
 $ClientCount = [Math]::Min(64, $ClientsPerSilo * $SiloCount)
 
 Write-Host "[cohort] n=$SiloCount workload=$WorkloadMode duration=${DurationSec}s tree=$TreeId" -ForegroundColor Cyan
-Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleCount * $TickHz) keys/s) shards=$ShardCount flushConcurrency=$FlushConcurrency clients=$ClientCount" -ForegroundColor DarkGray
+Write-Host "[cohort] offered vehicles=$VehicleCount tickHz=$TickHz (=$($VehicleCount * $TickHz) keys/s) shards=$ShardCount flushConcurrency=$FlushConcurrency pointFanOut=$PointFanOut clients=$ClientCount" -ForegroundColor DarkGray
 
 if ($ResetStorage) {
 	# Parking first is what makes the delete safe: no live silo may hold a
@@ -328,6 +348,7 @@ $siloEnv = @(
 	"BENCH_BATCH_SIZE=$BatchSize",
 	"BENCH_FLUSH_MS=$FlushMs",
 	"BENCH_FLUSH_CONCURRENCY=$FlushConcurrency",
+	"BENCH_POINT_FANOUT=$PointFanOut",
 	"BENCH_WAL_PARTITIONS=$WalPartitions",
 	"BENCH_VEHICLE_COUNT=$VehicleCount",
 	# Silo-side too: the inner hops (LatticeGrain -> shard -> leaf -> WAL)
@@ -348,6 +369,7 @@ $siloEnv = @(
 	# env rather than implicit in the silo binary's defaults. 0 = infinite.
 	"BENCH_SET_MANY_FANOUT_BUDGET_SEC=$SetManyFanOutBudgetSec",
 	"BENCH_WAL_ADMISSION_CALL_BUDGET_SEC=$WalAdmissionCallBudgetSec",
+	"BENCH_TX_REGISTRY_SHARDS=$TxRegistryShards",
 	"BENCH_CLUSTER_ID=$ClusterId",
 	# (#3348) Every silo holds its warm-up until its cluster manifest lists
 	# all $SiloCount silos. Ungated, the first silo to warm up did so while
@@ -369,6 +391,12 @@ if ($WalAppendCoalescingInFlightThreshold -ge 0) {
 
 if ($WalBatchedSingleEntryAppends -ge 0) {
 	$siloEnv += "BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS=$WalBatchedSingleEntryAppends"
+}
+
+# (#3576) Only pinned when explicitly requested, so the pin store runs its
+# shipping layout on an ordinary sweep.
+if ($WalMaterialiserPinBuckets -ge 1) {
+	$siloEnv += "BENCH_WAL_MATERIALISER_PIN_BUCKETS=$WalMaterialiserPinBuckets"
 }
 
 # (#3402) Same treatment: only pinned when explicitly requested. 0 selects the
@@ -421,9 +449,11 @@ try {
 		"BENCH_BATCH_SIZE=$BatchSize",
 		"BENCH_FLUSH_MS=$FlushMs",
 		"BENCH_FLUSH_CONCURRENCY=$FlushConcurrency",
+		"BENCH_POINT_FANOUT=$PointFanOut",
 		"BENCH_WAL_PARTITIONS=$WalPartitions",
 		"BENCH_SHARD_COUNT=$ShardCount",
 		"BENCH_CLIENT_COUNT=$ClientCount",
+		"BENCH_GENERATOR_PARALLELISM=$GeneratorParallelism",
 		"BENCH_INFLIGHT_TAIL_BUDGET_SEC=$InFlightTailBudgetSec",
 		"BENCH_RESPONSE_TIMEOUT_SEC=$ResponseTimeoutSec",
 		# Wall-clock ceiling on the producer's warm-up retry loop. The attempt
@@ -527,10 +557,19 @@ try {
 	# delivered real throughput is HEALTHY and its failure count is carried
 	# as data (Read-SiloLogStats already extracts it), not as grounds for
 	# exclusion.
+	#
+	# The one saturated-looking shape that is NOT kept HEALTHY is a mid-run
+	# freeze: the cell delivers throughput, then the cumulative ops counter
+	# stops advancing while in-flight stays pinned, because every call is
+	# parked and none completes. That is a wedge that happened to start after
+	# some work had landed, and grading it HEALTHY lets its failure count read
+	# as saturation (#3475: 128 in-flight sagas frozen for ~400 s, 70% failed,
+	# graded HEALTHY).
 	$producerDone = @($lines | Where-Object { $_.Contains('[producer] DONE') }).Count -gt 0
 	$productive = @($lines | Where-Object {
 		$_.Contains('[silo] t=') -and ($_ -match 'ops/sec=\s*([\d,]+)') -and ([long]($Matches[1] -replace ',','') -gt 0)
 	}).Count
+	$longestFreeze = Get-SiloProgressLongestStall -Lines @($lines)
 
 	$verdictState = 'HEALTHY'
 	$verdictDetail = ''
@@ -540,12 +579,15 @@ try {
 	} elseif ($productive -eq 0) {
 		$verdictState = 'WEDGE'
 		$verdictDetail = ' (no productive window: every call outlived the measurement window)'
+	} elseif ($FreezeWedgeSec -gt 0 -and $longestFreeze -ge $FreezeWedgeSec) {
+		$verdictState = 'WEDGE'
+		$verdictDetail = (' (mid-run freeze: no completion for {0:N0}s with work in flight)' -f $longestFreeze)
 	}
 
 	Add-Content -Path $logPath -Encoding utf8 -Value (Format-CohortVerdictLogBlock `
 		-VerdictState $verdictState -VerdictDetail $verdictDetail -DrainTailSamples 0)
 	$verdictColour = if ($verdictState -eq 'HEALTHY') { 'Green' } else { 'Red' }
-	Write-Host "[cohort] verdict=$verdictState productiveWindows=$productive" -ForegroundColor $verdictColour
+	Write-Host "[cohort] verdict=$verdictState productiveWindows=$productive longestFreezeSec=$([Math]::Round($longestFreeze,1))" -ForegroundColor $verdictColour
 
 	[pscustomobject]@{
 		NamePrefix    = $NamePrefix

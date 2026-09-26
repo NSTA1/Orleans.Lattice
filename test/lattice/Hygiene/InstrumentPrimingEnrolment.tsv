@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 186 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 189 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -334,6 +334,7 @@ src/lattice/LatticeMetrics.cs#ShardHealingDecisions	unresolved	reason=dimension 
 src/lattice/LatticeMetrics.cs#ShardReads	unresolved	reason=dimension (unread-tag-argument:GetMetricTags()): tag argument(s) GetMetricTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ShardRecordsWritten	unresolved	reason=dimension (unread-tag-argument:tags): tag argument(s) tags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ShardRootFlushRetriesSuspended	unresolved	reason=dimension kind: no declaration found for kind
+src/lattice/LatticeMetrics.cs#ShardRootOptimisticReadOutcomes	unresolved	reason=dimension (unread-tag-argument:outcome): tag argument(s) outcome are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ShardRootReshardCompleted	open	open=tenant, tree; open dimension: tree carries a runtime identifier (TreeId)
 src/lattice/LatticeMetrics.cs#ShardRootReshardInFlight	open	open=tenant, tree; open dimension: tree carries a runtime identifier (TreeId)
 src/lattice/LatticeMetrics.cs#ShardRootReshardInitiated	open	open=tenant, tree; open dimension: tree carries a runtime identifier (TreeId)
@@ -356,6 +357,9 @@ src/lattice/LatticeMetrics.cs#StorageWalCompressionSkipped	unresolved	reason=bou
 src/lattice/LatticeMetrics.cs#StorageWalStoredBytes	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#StorageWalUncompressedBytes	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#TreeLifecycle	unresolved	reason=dimension kind: no declaration found for kindTag
+src/lattice/LatticeMetrics.cs#TxRegistryWriteDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
+src/lattice/LatticeMetrics.cs#TxRegistryWriteMutations	unresolved	reason=bounded domain found, enrolment not yet chosen
+src/lattice/LatticeMetrics.cs#TxRegistryWrites	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#ViewAggregationApplied	none	
 src/lattice/LatticeMetrics.cs#ViewAggregationRejected	none	
 src/lattice/LatticeMetrics.cs#ViewApplied	none	

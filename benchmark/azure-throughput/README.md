@@ -171,8 +171,76 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `cross-tree-atomic-64` | The same cross-tree saga with 64 keys (32 per tree). |
 | `set-point` | One `SetAsync` per key. |
 | `set-point-mv` | `set-point` with an asynchronous materialised view attached to the tree - the A/B partner that shows whether maintaining a view perturbs the source write path. |
-| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. A Layer 3 (cluster ingest) silo never pre-seeds, and neither does the Orleans-client producer, so unless `-TreeId` names a tree written earlier, a Layer 3 read cohort reads keys nothing has written. |
+| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
+
+In the four atomic modes each saga is its own flush unit: it takes its own
+`BENCH_FLUSH_CONCURRENCY` slot, is retried on its own, and is counted in `ops` or
+`failed` on its own, so up to `BENCH_FLUSH_CONCURRENCY` sagas are in flight and
+`inFlight` on the progress line counts sagas. A producer batch used to be one unit
+whose sagas ran in sequence, which reported `ops=0` for minutes at N=4 (#3581).
+
+## Parallel Layer 3 producer
+
+The Orleans-client producer uses `BENCH_GENERATOR_PARALLELISM` workers (default
+`Environment.ProcessorCount`; `0` also means automatic), capped at the vehicle
+count. `run-cohort-aca.ps1 -GeneratorParallelism K` pins it for a cohort; omission
+resets any previous pin to automatic. Workers own disjoint vehicle slices and
+retain the per-vehicle tick pacing: total offered load is still vehicles x Hz,
+not K times that rate. An in-progress tick finishes at the duration boundary.
+
+Keys are formatted once before measurement. `get-point` and `get-many` pass
+empty values directly to the ingest engine, which reads only their keys; write
+modes still serialize the same telemetry JSON with a fresh tick timestamp.
+The TCP producer and its JSON wire protocol are unchanged. The client generator
+transfers up to 1,024 entries per channel item (64 bounded items), avoiding a
+shared channel lock per key. The engine still receives individual entries and
+retains its own batching, flush concurrency, and single pre-seed pass. In
+addition to the channel, each worker and the reader can hold one chunk.
+
+Periodic and `DONE` lines carry `genBlockedFrac` and `slipMaxMs`:
+
+- `genBlockedFrac` is generator-seconds spent waiting for channel capacity,
+  divided by elapsed seconds x worker count. It excludes CPU/scheduling lateness:
+  a high value is consumer/cluster back-pressure, not a slow generator. Periodic
+  values cover the reporting interval; `DONE` covers the full run. Live blocked
+  writes remain observable.
+- `slipMaxMs` is the run-wide maximum schedule slip across workers, including
+  overrun of an unfinished tick, not just the last completed tick.
+
+`performance-report.ps1` warns and renders `>= X` only when the same `DONE` line
+reports slip above 1,000 ms AND `genBlockedFrac` below 0.2. High slip with high
+channel-wait time is consistent with a saturated cluster and is NOT marked
+producer-bound, even when achieved throughput is below offered load. Slip still
+includes lateness accumulated during channel waits; the wait fraction is what
+distinguishes that case from generation falling behind without back-pressure.
+The rule uses paired full-run totals, never maxima from different windows.
+Legacy logs without both fields, and logs without `DONE`, cannot establish a
+producer bottleneck and are not flagged. Re-run known producer-limited legacy
+cells with the new producer before making a cluster-ceiling claim.
+
+Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
+and charts omit affected workload curves rather than plot a misleading plateau.
+An omission note appears only when a curve was actually excluded. Resume and
+dry-run aggregation re-read retained logs; paired evidence is retained in cohort
+state as `producerSlipMaxMs` and `producerGenBlockedFrac`.
+
+For a local generator-only measurement, build the Producer project in Release,
+then run its DLL with `--dry-run`. This bypasses TCP, Orleans, Azure credentials,
+and pre-seeding, but drains the same channel adapter into a no-op sink:
+
+```powershell
+$env:BENCH_WORKLOAD_MODE = 'get-many'
+$env:BENCH_VEHICLE_COUNT = '1000000'
+$env:BENCH_TICK_HZ = '10'
+$env:BENCH_DURATION_SEC = '10'
+$env:BENCH_GENERATOR_PARALLELISM = '4' # Repeat with 1, keeping load unchanged.
+dotnet benchmark\azure-throughput\Producer\bin\Release\net10.0\VehicleFleetSimulator.AzureThroughput.Producer.dll --dry-run
+```
+
+Compare `DONE avg` and verify `dry-run drained` equals `DONE total`. This measures
+local generation/queue capacity, not cluster throughput or a guaranteed parallel
+speedup. No producer replicas or sliced pre-seeding are required by this path.
 
 ## Auto-shutdown safety net
 
@@ -236,10 +304,12 @@ current short version, in the order an investigator reaches for them:
 | `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Silo grain-RPC deadline. **Raise to 180 when saturating** or you'll see `[silo] grain-rpc-deadline` failures that look like wedges but aren't. The `ladder.ps1` script pins this to 180 by default for exactly this reason. |
 | `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
 | `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flushes from `TcpIngestService`. |
+| `BENCH_POINT_FANOUT` | `BENCH_FLUSH_CONCURRENCY` | Concurrent calls per flush slot in the point modes (`set-point`, `set-point-mv`, `get-point`). The ACA cohort script sets it to the per-silo flush bound so point-mode in-flight scales linearly with silo count. |
 | `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (currently 8) | WAL grain count per tree. Pairs with `BENCH_FLUSH_CONCURRENCY`. Inherited from the shipping default so the bench tracks the library; override explicitly to A/B against a non-default fan-out. |
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (currently 16) | Per-WalShardGrain pipeline depth. Inherited from the shipping default so the bench tracks the library; see [WAL Tuning](../../docs/lattice/wal-tuning.md) for the storage-account-throughput envelope above which raising this further stops helping. |
 | `BENCH_SET_MANY_FANOUT_BUDGET_SEC` | `30` | Seconds `LatticeGrain.SetManyAsync` may spend awaiting its per-shard fan-out before refusing the call with `LatticeSaturatedException` (`SetManyFanOut`). **One of two knobs here that deliberately do not inherit the library default**, which is `Timeout.InfiniteTimeSpan` so that the bound is opt-in on the released line ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). An unbounded fan-out is the [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) collapse itself, so the rig opts in to the recommended finite budget and measures the corrected configuration. Set `0` for infinite to reproduce the pre-fix shape. |
 | `BENCH_WAL_ADMISSION_CALL_BUDGET_SEC` | `15` | Seconds **one top-level call** may spend waiting at the WAL admission saturation gate, summed across every append and every retry layer (`LatticeOptions.WalAdmissionSaturationCallBudget`). The second knob that deliberately does not inherit the library default, which is `Timeout.InfiniteTimeSpan` ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)). Left infinite, only the per-append `WalAdmissionSaturationWaitBudget` applies and the three nested retry layers each open a fresh one - the multiplication [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) names as remedy 3, recorded in its cohort logs as `10488ms of that was saturation back-off` against a 5 s per-append budget. Set `0` for infinite. |
+| `BENCH_TX_REGISTRY_SHARDS` | `1` (silo), `8` (via `-TxRegistryShards`) | Saga decision registry shards per tree (`LatticeOptions.TxRegistryShardCount`, [#3501](https://github.com/NSTA1/Orleans.Lattice/issues/3501)). The library default of `1` is the unsharded layout; `run-cohort-aca.ps1` opts in to `8` so atomic cohorts measure the sharded ceiling of about 100 sagas/s per shard. Clamped to `1..256`. |
 | `BENCH_TREE_ID` | rotates per cohort | Pin to re-use an existing WAL partition; otherwise every cohort starts on an empty manifest. |
 
 All of these can be passed via `-ExtraSiloEnv @{ BENCH_FOO = 'bar' }` to `run-cohort.ps1`,
@@ -356,20 +426,21 @@ marker or no window was productive.
 | `-ResponseTimeoutSec`, `-WarmUpBudgetSec`, `-InFlightTailBudgetSec` | `420`, `400`, `120` | Grain-call deadline, wall-clock ceiling on the producer's warm-up retries, and the drain allowed before `FINAL`. |
 | `-WalReplayQueueDepth` | `64` | `BENCH_WAL_REPLAY_QUEUE_DEPTH` for the silos. |
 | `-SetManyFanOutBudgetSec`, `-WalAdmissionCallBudgetSec` | `30`, `15` | The two saturation budgets from [Saturation knobs](#saturation-knobs); `0` means infinite, the library default. |
-| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps the value the app already carries - its own default, unless an earlier cohort on the rig pinned the variable (see below); any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. The silo honours only a positive coalescing threshold, so `0` for that arm falls back to the default. |
+| `-TxRegistryShards` | `8` | Saga decision registry shards per tree, passed as `BENCH_TX_REGISTRY_SHARDS`. Pass `1` for the unsharded library default. |
+| `-WalAppendCoalescingInFlightThreshold`, `-WalBatchedSingleEntryAppends`, `-WalSaturationRecoveryReleaseBatch`, `-WalSaturationAcuteOnly` | `-1` | A/B arms for WAL behaviours. `-1` sets nothing, so the silo keeps its own default (see below); any value from `0` up is passed to the silo as the matching `BENCH_WAL_*` variable. The silo honours only a positive coalescing threshold, so `0` for that arm falls back to the default. |
+| `-WalMaterialiserPinBuckets` | `-1` | Floor on the durable pin buckets per pin shard (#3576). `-1` sets nothing, so the silo keeps the library default; any value from `1` up is passed as `BENCH_WAL_MATERIALISER_PIN_BUCKETS`. |
 | `-ResetStorage` | `$true` | Empty the rig's storage before the cohort (above). |
 | `-WalTable`, `-GrainStateTable` | `OrleansLatticeWal`, `OrleansLatticeGrainState` | Table names. Under `-ResetStorage` they are replaced by fresh `Wal<stamp>` / `Gs<stamp>` names unless passed explicitly. |
 | `-TreeId`, `-CohortTag` | generated, none | Tree name (default `l3-<workload>-n<N>-<stamp>`), and a tag that keeps repeated cohorts' logs apart. |
-| `-ExtraSiloEnv` | none | Extra `NAME=value` silo environment variables, applied last; they persist into later cohorts (see below). |
+| `-ExtraSiloEnv` | none | Extra `NAME=value` silo environment variables, applied last; a later cohort that does not name them removes them (see below). |
 | `-SettleSec` | `30` | Wait for cluster membership before starting the producer. |
 
-Silo environment variables persist across cohorts on one rig: each cohort applies its
-variables with `az containerapp update --set-env-vars`, which adds or overwrites
-variables but never removes one. A variable an earlier cohort pinned - an A/B arm above
-or an `-ExtraSiloEnv` entry - therefore stays set for every later cohort that does not
-restate it. Before comparing against a default, restate the value the arm needs (for
-example `-WalSaturationAcuteOnly 1`) or provision a fresh rig: a `deploy-aca.ps1 -ReuseRg`
-redeploy keeps the existing silo app and its variables.
+Silo environment variables do not persist across cohorts on one rig. Each cohort applies
+its variables with one `az containerapp update --set-env-vars`, which merges into the app's
+environment, so the same update also passes `--remove-env-vars` for every variable an
+earlier cohort set that this cohort does not name (#3514). Secret-backed variables and the
+`deploy-aca.ps1` baseline are kept. A `-1` arm therefore runs the silo's own default, and
+the removal rides the same update, so each cohort still mints exactly one revision.
 
 Neither script deletes the rig. `performance-report.ps1` tears down the rigs it
 provisions; for a rig deployed by hand, delete `rg-<prefix>` yourself, or dot-source

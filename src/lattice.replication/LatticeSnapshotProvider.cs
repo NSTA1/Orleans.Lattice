@@ -33,8 +33,9 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// <b>Atomic visibility across the bootstrap boundary.</b> The export
 /// freezes a tree-wide view of <see cref="ITxRegistryGrain"/> saga
-/// decisions via <see cref="ITxRegistryGrain.SnapshotAsync"/> at the
-/// start of the export and stamps it on every leaf the export visits
+/// decisions via <see cref="ITxRegistryGrain.SnapshotAsync"/>, unioned
+/// across every registry shard of the tree up to its durable shard
+/// high-water, at the start of the export and stamps it on every leaf the export visits
 /// via <see cref="LatticeRegistrySnapshotContext"/>. Sagas the
 /// snapshot recorded as <see cref="TxStatus.Committed"/> or
 /// <see cref="TxStatus.Aborted"/> are folded into the committed
@@ -127,8 +128,9 @@ internal sealed class LatticeSnapshotProvider(
         // on every per-shard / per-leaf call via
         // <see cref="LatticeRegistrySnapshotContext"/> means every
         // export sees a single decision view.
-        var registry = _grainFactory.GetGrain<ITxRegistryGrain>(treeName);
-        var snap0 = await registry.SnapshotAsync().ConfigureAwait(false);
+        var snap0 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
+            .StableSnapshotAsync(_grainFactory, treeName)
+            .ConfigureAwait(false);
 
         // The prepared-row pass runs BEFORE the committed-projection
         // pass. Order matters because a source-side terminal that

@@ -29,6 +29,70 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<byte[]?> GetAsync(string key);
 
     /// <summary>
+    /// Interleavable, optimistic counterpart of <see cref="GetAsync"/> (issue #3474).
+    /// Returns the value for <paramref name="key"/> when the read can be validated,
+    /// or a result whose <see cref="OptimisticReadResult.IsValidated"/> is <c>false</c>, in
+    /// which case the caller MUST repeat the read through the serial
+    /// <see cref="GetAsync"/>. The routing gates the serial read enforces (a
+    /// rejecting or deleted tree, a retained redirect, a moved-away slot) never
+    /// raise here: they surface as a serial retry, so the serial read raises or
+    /// settles them against prepared state and the caller's stale-routing retry
+    /// loop cannot re-enter this method indefinitely. A leaf fault while routing
+    /// was stable propagates unchanged.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> so concurrent point reads on
+    /// one shard root overlap their leaf round trips instead of queueing one per
+    /// round trip. This does not reintroduce the U9h-C "key missing mid-chaos"
+    /// violation documented on <see cref="GetAsync"/>, because the value is only
+    /// returned after validating root routing and, where required, leaf ownership:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>The shard root brackets incoming calls conservatively in a grain-level
+    /// filter, except allowlisted reads, diagnostics and point Sets. Point Sets
+    /// self-bracket prepare, split-link/promotion and retired-leaf retry work.
+    /// Brackets bump a routing epoch at entry and exit. Writers of
+    /// <c>RootNodeId</c>, <c>RootIsLeaf</c>, <c>MovedAwaySlots</c>,
+    /// <c>SplitInProgress</c>, pending promotion / bulk graft state and the leaf
+    /// moved-away seal run inside those brackets. Leaf-level changes that bypass
+    /// the shard root are additionally covered by leaf ownership stamps.</item>
+    /// <item>The read captures the epoch and checks, in one synchronous block with
+    /// no await, that no such call is in flight, that the routing state needs no
+    /// prepare work, that no split is in progress and that the key's slot has not
+    /// moved away.</item>
+    /// <item>The leaf is resolved only from routing tables the serial path already
+    /// cached; a cache miss is a serial retry. The read never fetches or publishes a
+    /// routing table, so it cannot cache a table a concurrent split has superseded
+    /// and misroute later writes.</item>
+    /// <item>The read goes to the primary leaf grain, not the stateless-worker leaf
+    /// cache the serial path uses. A cache replica activated or refreshed from an
+    /// interleaved read during a fold or split can diverge from the shard root's
+    /// routing; the primary leaf is the authority for its own moved-away seal and
+    /// pending-transaction state.</item>
+    /// <item>After the leaf returns, the epoch is compared again. Any change means a
+    /// routing mutation overlapped the read, so the value is discarded and a serial
+    /// retry is requested.</item>
+    /// <item>A present raw reply validates without leaf metadata when no point
+    /// write overlapped it. An admission epoch and in-flight count detect even a
+    /// write that starts and finishes during the leaf await. Otherwise, or for a
+    /// raw miss, a versioned reply must carry the same non-default leaf activation identity
+    /// and positive routing generation cached by a serial read. The leaf returns
+    /// that proof only with a synchronous observation in its owned key range,
+    /// outside topology transitions and awaited transaction visibility checks.
+    /// A matching proof validates both values and genuine absences; a null
+    /// without it always retries serially. Old-wire replies omit the proof and
+    /// cannot validate on this proof-required path.</item>
+    /// </list>
+    /// <para>
+    /// A validated read can linearize at the leaf's synchronous observation.
+    /// Concurrent value-only point writes do not invalidate routing, while a
+    /// topology change observed before the leaf samples its value prevents
+    /// validation against the old ownership stamp.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<OptimisticReadResult> TryGetOptimisticAsync(string key);
+
+    /// <summary>
     /// Returns <c>true</c> if <paramref name="key"/> exists and is live.
     /// <para>
     /// NOT marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason
@@ -57,7 +121,64 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
 
-    /// <summary>Inserts or updates the value for <paramref name="key"/>.</summary>
+    /// <summary>
+    /// Inserts or updates the value for <paramref name="key"/>.
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so point writes aimed
+    /// at one shard pipeline instead of queueing behind the write in flight
+    /// (issue #812). Without it the call held the activation's non-reentrant
+    /// turn across the whole leaf and write-ahead-log round trip, so per-shard
+    /// point-write concurrency was one. On the set-point rig (two silos, 4,000
+    /// keys/s offered) the shard stage accounted for 257 ms of a 258 ms mean
+    /// set, against a 20 ms leaf commit, and quadrupling the shard count raised
+    /// throughput by 59%.
+    /// </para>
+    /// <para>
+    /// The write runs the same guards as <see cref="SetManyAsync"/>, which has
+    /// interleaved since U9g, and relies on the same invariants listed there:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>The reject check runs before the traversal, and the post-apply
+    ///   split shadow-forward re-reads the split state after the leaf write
+    ///   lands. A split phase that advances mid-write is therefore forwarded,
+    ///   not lost.</item>
+    ///   <item>A leaf split is linked through the per-shard split-link gate with
+    ///   a fresh descent (#3523), never against the path captured before the
+    ///   leaf call, so concurrent splits cannot orphan a sibling.</item>
+    ///   <item>A routing table fetched on a cache miss is published only when
+    ///   the routing generation is unchanged since the fetch began.</item>
+    ///   <item>Every shard-root state write goes through the per-activation
+    ///   write semaphore.</item>
+    ///   <item>The optimistic-read call filter still counts this method as a
+    ///   routing mutation, so an interleaved read that overlaps it falls back to
+    ///   the serial path.</item>
+    ///   <item>Point writes do not straddle serial turns. The shard root's call filter
+    ///   holds a point write back while a non-interleaved turn is active, and makes
+    ///   that turn wait for point writes already in flight, so split and fold phase
+    ///   transitions and their authoritative drains still see no write mid-flight.
+    ///   Point writes do not wait on each other.</item>
+    ///   <item>A point write that reaches an activation which has requested its own
+    ///   deactivation is refused with a retriable fault before it touches a leaf.
+    ///   Dispatched, it would stall on the leaf's footprint callback into the
+    ///   deactivating activation and lose any split carried back on the timed-out
+    ///   reply.</item>
+    /// </list>
+    /// <para>
+    /// The U9h-C lesson recorded on <see cref="GetAsync"/> does not carry over.
+    /// That defect was a read acting on routing fields it had read at different
+    /// times. A write does not act on its routing snapshot beyond delivering the
+    /// value to a leaf: the leaf decides the split, the fresh descent decides the
+    /// link, and the post-apply forward re-reads the split state.
+    /// </para>
+    /// <para>
+    /// Two concurrent writes to one key, or a point write racing a
+    /// non-interleaved single-key call such as <see cref="GetOrSetAsync"/> on the
+    /// same key, apply in either order. The owning leaf stamps each write with
+    /// its own HLC, so last-writer-wins resolves the race exactly as it does for
+    /// two callers racing on different activations.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
@@ -65,7 +186,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// expiry. The entry is treated as tombstoned on reads once the
     /// current UTC wall clock passes <paramref name="expiresAtTicks"/>.
     /// Pass <c>0</c> for no expiry (equivalent to <see cref="SetAsync(string, byte[])"/>).
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the reasons, and
+    /// under the invariants, documented on <see cref="SetAsync(string, byte[])"/>.
+    /// The expiry travels with the value to the leaf and through the post-apply
+    /// split shadow-forward, so interleaving does not change how it is applied.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task SetAsync(string key, byte[] value, long expiresAtTicks);
 
     /// <summary>
@@ -191,6 +319,13 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// split ordering is still serialised at the parent grain even under
     /// interleaved shard-root turns.
     /// </para>
+    /// <para>
+    /// This method and <see cref="SetManyWherePredicateAsync"/> count admitted
+    /// batches until completion so grain-requested deactivation waits for them
+    /// to drain. New batches are refused with a retriable fault before leaf
+    /// dispatch once deactivation is requested. Ordinary serial turns do not
+    /// wait for these batches.
+    /// </para>
     /// </summary>
     [AlwaysInterleave]
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries);
@@ -205,7 +340,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// writes that replicate without re-evaluating the predicate.
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason as
-    /// <see cref="SetManyAsync"/>.
+    /// <see cref="SetManyAsync"/> and uses the same deactivation admission fence
+    /// and batch-drain accounting, without blocking ordinary serial turns.
     /// </para>
     /// </summary>
     [AlwaysInterleave]

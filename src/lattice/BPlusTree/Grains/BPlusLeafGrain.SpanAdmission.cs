@@ -132,6 +132,15 @@ internal sealed partial class BPlusLeafGrain
     /// which a split has recorded the sibling identity but the successor pointer
     /// has not yet been persisted.
     /// </para>
+    /// <para>
+    /// While a division of this leaf is in flight the successor pointer is not
+    /// used: it already names the new sibling, which may not be initialised
+    /// yet, while the high bound is still the pre-split one. A key at or above
+    /// that bound goes to <c>OldNextSibling</c>, the real successor, instead
+    /// (issue #3583). Termination is unaffected, because that successor's low
+    /// bound is the pre-split high bound, so the forward still moves strictly
+    /// rightwards.
+    /// </para>
     /// </summary>
     private bool TryResolveSpanForwardTarget(string key, out GrainId target, out SpanFailOpenReason failOpen)
     {
@@ -145,8 +154,19 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // While a division is in flight - from the persist of its intent until
+        // CompleteSplitAsync narrows this leaf - NextSibling already names the
+        // new sibling, but HighKeyExclusive is still the pre-split bound and the
+        // new sibling may not be initialised yet. A key at or above that bound
+        // belongs to the real successor, which OldNextSibling holds until the
+        // narrow. Forwarding it to the new sibling instead lands it on a leaf
+        // with no declared span, which accepts and acknowledges it, and the
+        // sibling's initialisation then declares [splitKey, preSplitHigh)
+        // around it: an acknowledged write no read is routed to (issue #3583).
         var candidate = high is not null && string.CompareOrdinal(key, high) >= 0
-            ? state.State.NextSibling ?? state.State.SplitSiblingId
+            ? HasInterruptedSplit
+                ? state.State.OldNextSibling
+                : state.State.NextSibling ?? state.State.SplitSiblingId
             : state.State.PrevSibling;
 
         // A self-reference would spin the forward on this same grain, and a
@@ -463,17 +483,39 @@ internal sealed partial class BPlusLeafGrain
     /// resolvable forward target are stored here, which is the documented
     /// fail-open rule. Returns every split the receiving leaves report, for the
     /// shard root to link.
+    /// <para>
+    /// An interrupted split is completed first, for the reason the write
+    /// entry points give: forwarding while it is interrupted sends a key at or
+    /// above the pre-split bound to <c>OldNextSibling</c>, and once the new
+    /// sibling is initialised a reclaim can fold that successor into it and
+    /// retire it (issue #3583). When another turn is still running the split,
+    /// this waits for it on <c>_splitGate</c> and then routes by the narrowed
+    /// span. No caller holds <c>_splitGate</c> here: relocation runs in the
+    /// commit path, which takes no gate, and a split never waits on a commit.
+    /// </para>
+    /// <para>
+    /// <paramref name="completeInterruptedSplit"/> is false only for a caller
+    /// that cannot report the returned split (the untracked delete). A split
+    /// completed there and dropped would leave the new sibling unreachable by
+    /// descent, so such a caller leaves the split for a tracked write.
+    /// </para>
     /// </summary>
     private async Task<SplitResult?> RelocateStrandedAsync(
-        Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration)
+        Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration, bool completeInterruptedSplit = true)
     {
+        SplitResult? recovered = null;
+        if (completeInterruptedSplit && HasInterruptedSplit)
+        {
+            recovered = await CompleteRecoverySplitUnderGateAsync();
+        }
+
         var (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration);
         foreach (var (key, lww) in local)
         {
             StoreEntry(key, lww);
         }
 
-        return forwardedSplit;
+        return SplitResult.Combine(recovered, forwardedSplit);
     }
 
     /// <summary>

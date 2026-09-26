@@ -439,11 +439,12 @@ internal sealed partial class BPlusLeafGrain
     /// and runs <see cref="CompleteSplitAsync"/> + <see cref="PersistAsync"/>
     /// only if the in-progress state is still observed. Returns
     /// <see langword="null"/> when a concurrent turn already finished
-    /// the recovery; the caller still has stable
+    /// the recovery; the caller then routes its own write by the declared
+    /// span, which is correct either way. It must not route by
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitKey"/> /
-    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitSiblingId"/> fields to
-    /// route its own write across the donor / sibling boundary, so
-    /// the post-gate routing in the caller is correct either way.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitSiblingId"/>:
+    /// a new division can start before the caller resumes, and those fields
+    /// would then name its not-yet-initialised sibling (issue #3583).
     /// <para>
     /// This recovery acquire stays <em>blocking</em> (unlike the
     /// non-blocking acquire in <see cref="SplitIfNeededUnderGateAsync"/>)
@@ -740,6 +741,7 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task<SplitResult?> SplitAsync()
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // Issue #3265. A split whose intent is already durable must be RESUMED,
         // never re-minted.
@@ -952,6 +954,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
+        using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // Register this completion as in flight for as long as this call is
         // suspended inside the method body (issue #2967). The scope disposes on

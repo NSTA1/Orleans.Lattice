@@ -312,6 +312,9 @@ public class ShardActivationRetryTests
             Assert.That(ShardActivationRetry.IsTransientSiloChurn(
                 new ShardActivationTimeoutException("seed")), Is.False,
                 "Seed-timeout is handled by its own catch arm, not the churn predicate.");
+            Assert.That(ShardActivationRetry.IsTransientSiloChurn(
+                new ShardRootDeactivatingException("tree/0")), Is.True,
+                "A shard root refusing a point write while deactivating is the same condition, one hop earlier.");
         });
     }
 

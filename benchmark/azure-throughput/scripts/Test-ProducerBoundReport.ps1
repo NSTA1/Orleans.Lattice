@@ -1,0 +1,150 @@
+#!/usr/bin/env pwsh
+#requires -Version 7.0
+<#
+.SYNOPSIS
+    Local regression tests for producer-bound Layer 3 parsing and rendering.
+    Loads only function definitions, never the report's Azure-running Main.
+#>
+[CmdletBinding()] param()
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$path = Join-Path $PSScriptRoot '..\..\performance-report.ps1'
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $path), [ref]$tokens, [ref]$errors)
+if ($errors.Count -gt 0) { throw ($errors -join "`n") }
+foreach ($function in $ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+}, $false)) {
+    . ([scriptblock]::Create($function.Extent.Text))
+}
+
+$Layer3Rows = @(@{ Label = 'GetManyAsync'; WorkloadMode = 'get-many'; ChartGroup = 'reads' })
+$Layer3ChartGroups = @(@{ Id = 'reads'; Title = 'Read throughput' })
+$passed = 0
+function Assert-Case([string] $Name, [bool] $Condition) {
+    if (-not $Condition) { throw "FAIL: $Name" }
+    $script:passed++
+    Write-Host "PASS: $Name"
+}
+function New-Cohort([double] $Rate = 400000) {
+    return @{
+        verdict = 'HEALTHY'; finalThroughput = $Rate; steadyMean = $Rate
+        perCallP50Ms = 1; perCallP99Ms = 2; rungVehicles = 200000; rungTickHz = 5
+        offerBound = $false
+    }
+}
+
+$log = [IO.Path]::GetTempFileName()
+try {
+    $cases = @(
+        @{ Name = 'legacy slip is ambiguous'; Line = '[producer] t= 30.0s sent=1 rate=4,700 msg/s slipMaxMs= 6797.0'; Bound = $false },
+        @{ Name = 'legacy DONE without blocked is ambiguous'; Line = '[producer] DONE total=1 elapsed=1s avg=4,700 msg/s slipMaxMs=6797.0'; Bound = $false },
+        @{ Name = 'CPU-bound generator'; Line = '[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=1001.0'; Bound = $true },
+        @{ Name = 'saturated cluster below offered'; Line = '[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.800 slipMaxMs=6797.0'; Bound = $false },
+        @{ Name = 'blocked threshold is not producer-bound'; Line = '[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.200 slipMaxMs=6797.0'; Bound = $false },
+        @{ Name = 'slip threshold is not producer-bound'; Line = '[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=1000.0'; Bound = $false },
+        @{ Name = 'healthy'; Line = '[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=10.0'; Bound = $false },
+        @{ Name = 'ignore non-producer'; Line = '[silo] t=1s genBlockedFrac=1.0 slipMaxMs=99999.0'; Bound = $false }
+    )
+    foreach ($case in $cases) {
+        [IO.File]::WriteAllText($log, $case.Line)
+        $cohort = New-Cohort
+        $warnings = @()
+        Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningVariable warnings -WarningAction SilentlyContinue
+        Assert-Case $case.Name ($cohort.producerBound -eq $case.Bound)
+        Assert-Case "$($case.Name) warning" (($warnings.Count -gt 0) -eq $case.Bound)
+    }
+
+    # Measured pl3c set-point N=2: the generator slipped without blocking,
+    # but the cluster retired 4,738 of the 10,673 keys/s it generated.
+    [IO.File]::WriteAllText($log, '[producer] DONE total=486,000 elapsed=45.537s avg=10,673 msg/s genBlockedFrac=0.167 slipMaxMs=4968.5')
+    $cohort = New-Cohort 4738
+    $warnings = @()
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningVariable warnings -WarningAction SilentlyContinue
+    Assert-Case 'cluster below generated rate is a cluster ceiling' (-not $cohort.producerBound -and $warnings.Count -eq 0)
+    Assert-Case 'generated rate is recorded' ($cohort.producerGeneratedPerSec -eq 10673)
+
+    # Measured pl3c get-many N=1: the cluster retired everything generated.
+    [IO.File]::WriteAllText($log, '[producer] DONE total=14,112,000 elapsed=45.162s avg=312,476 msg/s genBlockedFrac=0.074 slipMaxMs=1164.3')
+    $cohort = New-Cohort 312451
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'cluster keeping pace with a slow generator is producer-bound' $cohort.producerBound
+
+    # The same cohort at its real rung (64,000 vehicles x 5 Hz = 320,000 keys/s):
+    # the generator reached 97.6% of the offered rate, so the start-up slip
+    # did not bound the cell and it must escalate instead.
+    $cohort = New-Cohort 312451
+    $cohort.rungVehicles = 64000
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'generator on schedule is not producer-bound' (-not $cohort.producerBound)
+
+    # Measured pl3d set-many-atomic N=1 c2: a 1.4 s start-up slip, then 4,000 msg/s
+    # on schedule against 4,000 offered.
+    [IO.File]::WriteAllText($log, '[producer] DONE total=175,000 elapsed=45.166s avg=3,875 msg/s genBlockedFrac=0.065 slipMaxMs=1485.6')
+    $cohort = New-Cohort 3653
+    $cohort.rungVehicles = 800
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'start-up slip on an on-schedule generator is not producer-bound' (-not $cohort.producerBound)
+    $cohort = New-Cohort 3600
+    $cohort.rungVehicles = 900
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'generator below 90 percent of offered is producer-bound' $cohort.producerBound
+
+    [IO.File]::WriteAllText($log, '[producer] DONE total=1 elapsed=1s avg=1,000 msg/s genBlockedFrac=0.010 slipMaxMs=5000.0')
+    $cohort = New-Cohort 900
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'pace threshold at 90 percent of generated is producer-bound' $cohort.producerBound
+    $cohort = New-Cohort 899
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'below 90 percent of generated is not producer-bound' (-not $cohort.producerBound)
+
+    [IO.File]::WriteAllText($log, '[producer] DONE total=1 elapsed=1s avg=900,000 msg/s genBlockedFrac=0.5 slipMaxMs=20.0')
+    $cohort = New-Cohort 900000
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log
+    Assert-Case 'at 90 percent offered is not backpressure-bound' (-not $cohort.producerBound)
+
+    [IO.File]::WriteAllText($log, "[producer] t=1s genBlockedFrac=0.8 slipMaxMs=12000.0`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.1 slipMaxMs=0.0")
+    $cohort = New-Cohort
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'DONE totals win over unrelated periodic maxima' (-not $cohort.producerBound -and $cohort.producerSlipMaxMs -eq 0 -and $cohort.producerGenBlockedFrac -eq 0.1)
+
+    [IO.File]::WriteAllText($log, "[producer] t=1s genBlockedFrac=0.8 slipMaxMs=12000.0`n[producer] t=2s genBlockedFrac=0.0 slipMaxMs=0.0")
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log
+    Assert-Case 'windows cannot be combined without paired DONE totals' (-not $cohort.producerBound)
+
+    [IO.File]::WriteAllText($log, "[producer] preseed treeId=t entries=1200 payloadBytes=245 attempts=1 elapsedMs=10`n[producer] t=1s genBlockedFrac=0.8 slipMaxMs=0.0`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.1 slipMaxMs=12000.0")
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'CPU-bound DONE is not masked by earlier blocked window' $cohort.producerBound
+
+    $cohort.siloLog = $log
+    $healthy = New-Cohort
+    $cells = @{ 'get-many' = @{ '1' = @($healthy, $cohort); '2' = @((New-Cohort 800000)) } }
+    $rows = Aggregate-Layer3Cells -Cells $cells -WarningAction SilentlyContinue
+    Assert-Case 'any producer-bound contributor taints median' $rows.GetManyAsync['1'].producerBound
+    Assert-Case 'producer-bound anchor disables scaling claims' ($null -eq $rows.GetManyAsync['2'].speedup -and $null -eq $rows.GetManyAsync['2'].efficiency)
+    $table = Render-Layer3Table -RowsAgg $rows
+    Assert-Case 'table marks lower bound' ($table.Contains('>= ') -and $table.Contains('not cluster ceilings'))
+    $chart = Render-Layer3Chart -RowsAgg $rows
+    Assert-Case 'chart cannot publish producer ceiling' (-not $chart.Contains('```mermaid'))
+    Assert-Case 'omitted curves are explained' ($chart -match 'producer-bound')
+
+    [IO.File]::WriteAllText($log, "[producer] preseed treeId=t entries=1200 payloadBytes=245 attempts=1 elapsedMs=10`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=10.0")
+    $rows = Aggregate-Layer3Cells -Cells $cells
+    Assert-Case 'resume reparses retained logs instead of stale grading' (-not $rows.GetManyAsync['1'].producerBound)
+    Assert-Case 'healthy speedup unchanged' ($rows.GetManyAsync['2'].speedup -eq 2)
+    Assert-Case 'healthy table is not a lower bound' (-not (Render-Layer3Table -RowsAgg $rows).Contains('>= '))
+    Assert-Case 'healthy chart still renders' ((Render-Layer3Chart -RowsAgg $rows).Contains('```mermaid'))
+    Assert-Case 'healthy chart has no omission note' (-not (Render-Layer3Chart -RowsAgg $rows).Contains('Producer-bound workload curves are omitted'))
+    Assert-Case 'empty chart has no omission claim' (-not (Render-Layer3Chart -RowsAgg @{}).Contains('producer-bound'))
+    $healthy.offerBound = $true
+    $cells['get-many']['1'] = @($healthy)
+    $rows = Aggregate-Layer3Cells -Cells $cells
+    Assert-Case 'existing offer-bound marker retained' ((Render-Layer3Table -RowsAgg $rows).Contains('>= '))
+    Write-Host "$passed assertions passed."
+} finally {
+    Remove-Item -LiteralPath $log
+}

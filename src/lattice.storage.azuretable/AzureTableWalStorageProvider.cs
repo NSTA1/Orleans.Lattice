@@ -1876,6 +1876,17 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// <see cref="FlushPhaseTwoAsync"/> when a caller needs
     /// read-your-writes from those.
     /// </para>
+    /// <para>
+    /// Before reading <c>TAIL</c>, the call waits for every phase-2
+    /// transaction this provider instance abandoned on its
+    /// <see cref="AzureTableWalStorageOptions.PhaseTwoCommitTimeout"/>
+    /// against the shard to reach a real outcome (#3458). Such a
+    /// transaction can still land its manifest rows and <c>TAIL</c>
+    /// after its callers were faulted; reading beneath it would hand the
+    /// producer's post-failure resync an offset the transaction then
+    /// writes. The wait is free when nothing was abandoned, and is
+    /// bounded by the transport and by <paramref name="cancellationToken"/>.
+    /// </para>
     /// </remarks>
     public async Task<long> GetHighestOffsetAsync(
         string treeId,
@@ -1887,6 +1898,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+
+        if (_phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var fencedWorker))
+        {
+            await fencedWorker.AbandonedSubmits.WhenIdleAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         long persistedTail;
         try

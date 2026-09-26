@@ -488,7 +488,7 @@ public sealed class AzureTableWalStorageOptions
     /// manifest commit (the Azure Tables
     /// <c>SubmitTransactionAsync</c> round-trip) before abandoning it
     /// and faulting that commit's batch. Defaults to
-    /// <see cref="DefaultPhaseTwoCommitTimeout"/> (3 s). Set to
+    /// <see cref="DefaultPhaseTwoCommitTimeout"/> (12 s). Set to
     /// <c>null</c> to disable the deadline and restore the historical
     /// behaviour, in which the commit is bounded only by the worker's
     /// lifetime token and the SDK's own
@@ -525,21 +525,43 @@ public sealed class AzureTableWalStorageOptions
     /// so operators can prove whether the deadline ever fired.
     /// </para>
     /// <para>
-    /// <b>Sizing.</b> Set comfortably above the observed phase-2
-    /// commit p99 so healthy commits never trip it, but below the
-    /// silo-level activation / request timeout so a wedged shard is
-    /// broken before it cascades. The 3 s default
-    /// (<see cref="DefaultPhaseTwoCommitTimeout"/>) sits well above the
-    /// observed real-Azure phase-2 commit p99 (sub-second) while still
-    /// breaking a wedged shard before the silo-level request timeout.
-    /// <c>null</c> leaves the seam unbounded (the pre-default
+    /// <b>The deadline bounds the wait, not the transaction.</b> An
+    /// abandoned transaction is not cancelled: the service may already
+    /// hold it, so it can still land after its callers were faulted.
+    /// The worker keeps it running to a real outcome and fences it, and
+    /// the shard's post-failure resync
+    /// (<see cref="IWalStorageProvider.ReconcileAsync"/> and
+    /// <see cref="IWalStorageProvider.GetHighestOffsetAsync"/>) waits
+    /// for it before reading the shard, so the producer never resumes
+    /// beneath rows the transaction then writes (#3458). A transaction
+    /// that has not completed 60 s after it was abandoned is cancelled
+    /// so the fence cannot be held forever.
+    /// </para>
+    /// <para>
+    /// <b>Sizing.</b> Set above the worst phase-2 commit latency a
+    /// healthy but browned-out account produces, so a transient
+    /// slowdown costs latency rather than a failure storm, but below
+    /// the silo-level request timeout (30 s by default) so a genuinely
+    /// wedged shard is still broken before it cascades. The 12 s
+    /// default (<see cref="DefaultPhaseTwoCommitTimeout"/>) is derived
+    /// from multi-silo real-Azure evidence (#3458): a single storage
+    /// account under about 36k keys/s went through a 6-9 s latency
+    /// brown-out in which phase-2 commits took up to 6 s. The former
+    /// 3 s default tripped on every shard at once during that window
+    /// and turned 6 s of latency into roughly 250k failed keys;
+    /// disabling the deadline in the same run failed none. 12 s gives
+    /// 2x headroom over the observed worst commit, sits above the 10 s
+    /// <see cref="DefaultRetryNetworkTimeout"/> so one slow attempt
+    /// alone does not trip it, and stays below the 15 s
+    /// <c>LatticeOptions.WalFlushTimeout</c> and the silo request
+    /// timeout. <c>null</c> leaves the seam unbounded (the pre-default
     /// behaviour).
     /// </para>
     /// </summary>
     public TimeSpan? PhaseTwoCommitTimeout { get; set; } = DefaultPhaseTwoCommitTimeout;
 
-    /// <summary>Default value for <see cref="PhaseTwoCommitTimeout"/> (3 s; comfortably above the observed real-Azure phase-2 commit p99 yet below the silo-level request timeout, so a wedged shard is broken before it cascades).</summary>
-    public static readonly TimeSpan DefaultPhaseTwoCommitTimeout = TimeSpan.FromSeconds(3);
+    /// <summary>Default value for <see cref="PhaseTwoCommitTimeout"/> (12 s; 2x above the 6 s worst phase-2 commit observed in a real-Azure single-account brown-out (#3458), yet below the 15 s WAL flush timeout and the silo-level request timeout, so a wedged shard is still broken before it cascades).</summary>
+    public static readonly TimeSpan DefaultPhaseTwoCommitTimeout = TimeSpan.FromSeconds(12);
 
     /// <summary>
     /// When <see langword="true"/> (the default), the provider attaches

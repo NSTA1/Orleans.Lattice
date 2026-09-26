@@ -18,9 +18,10 @@ public partial class TxRegistryGrainTests
         TimeSpan? retention = null,
         TimeProvider? timeProvider = null,
         LatticeOptions? options = null,
-        IGrainFactory? grainFactory = null)
+        IGrainFactory? grainFactory = null,
+        IGrainContext? context = null)
     {
-        var context = Substitute.For<IGrainContext>();
+        context ??= Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("tx-registry", treeId));
         state ??= new FakePersistentState<TxRegistryState>();
         var effectiveOptions = options ?? new LatticeOptions

@@ -583,9 +583,10 @@ internal sealed partial class ViewMaintainerGrain
     /// Maximum number of grain calls the rebuild paths keep in flight at once.
     /// </summary>
     /// <remarks>
-    /// Adopted unchanged from <see cref="BoundedFanOut.DefaultWidth"/>, which is
-    /// sized to the <see cref="ILattice"/> router grain's <c>maxLocalWorkers</c>;
-    /// see that type for why the window is bounded at all.
+    /// Adopted unchanged from <see cref="BoundedFanOut.DefaultWidth"/>, a
+    /// per-caller burst bound kept below the <see cref="ILattice"/> router
+    /// grain's local worker pool; see that type for why the window is bounded
+    /// at all.
     /// </remarks>
     internal const int RebuildFanOutWidth = BoundedFanOut.DefaultWidth;
 

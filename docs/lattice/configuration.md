@@ -172,6 +172,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
 | [`MaxValueSizeBytes`](#maxvaluesizebytes) | `int?` | `null` (unbounded) | Yes |
 | [`MinTombstoneRatioForCompaction`](tombstone-compaction.md) | `double` | 0.0 (disabled) | Yes |
+| [`OptimisticShardRootPointReads`](#optimisticshardrootpointreads) | `bool` | `true` | Yes (on next activation) |
 | [`PrefetchEntriesScan`](#prefetchentriesscan) | `bool` | `false` | Yes |
 | [`PrefetchKeysScan`](#prefetchkeysscan) | `bool` | `false` | Yes |
 | [`ProjectionRebuildPolicy`](#projectionrebuildpolicy) | enum | `SnapshotThenWal` | Yes |
@@ -196,6 +197,8 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`StorageUsageRollupBudget`](#storageusagerollupbudget) | `TimeSpan` | 20 seconds | No (cluster-wide; read from the default options) |
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
+| [`TxRegistryAdmissionBudgetBytes`](#txregistryadmissionbudgetbytes) | `long?` | 768 KiB | Yes |
+| [`TxRegistryShardCount`](#txregistryshardcount) | `int` | 1 | No (global; read from the default options) |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
 | [`WalAppendDispatchTimeout`](#walappenddispatchtimeout) | `TimeSpan` | 30 seconds | Yes |
 | [`WalBytePressureReclaimTarget`](#walbytepressurereclaimtarget) | `double` | 0.8 | Yes |
@@ -209,7 +212,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalGcStartupDelay`](#walgcstartupdelay) | `TimeSpan` | 30 seconds | No (global; read at silo start) |
 | [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = the lesser of `Environment.ProcessorCount` and the container CPU grant) | Yes |
 | [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes (global; read from the default options) |
-| [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
+| [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (floor; the store splits itself above it) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShedCeiling`](#walmaterialiserpinshedceiling) | `TimeSpan?` | `null` (disarmed) | Yes (global; read from the default options) |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
@@ -1053,6 +1056,22 @@ siloBuilder.ConfigureLattice(o => o.MaxValueSizeBytes = 1024 * 1024);
 
 This option can be changed freely at any time. It is enforced per write, so a new value takes effect on the next write.
 
+### `OptimisticShardRootPointReads`
+
+When enabled (the default), a point read (`GetAsync`) first tries an optimistic read that is allowed to interleave with other reads on the same shard root, rather than queueing behind them. Without it, each shard root serves one point read per full leaf round trip, which caps point-read throughput at roughly the shard count divided by the leaf round-trip time.
+
+The optimistic read always validates the shard root's routing epoch. Routing-changing calls bump the root epoch at entry and exit; point Sets bracket only prepare, split-link/promotion and retired-leaf retry work. An uncontended present read uses the primary leaf's raw byte reply without computing, transporting or comparing an ownership stamp. A point-write admission epoch plus the in-flight count detect writes that start and finish during the await. Reads overlapping point Sets, and raw misses, instead require a versioned reply with a leaf ownership stamp. The stamp combines a fresh activation identity with a generation bumped around splits, seals, move-away, consolidation and retirement. The leaf returns it only when it owns the key's half-open range and can observe ownership and value together without awaiting. A read overlapping root routing changes or returning a missing/different required stamp retries serially, including splits below an internal node that leave the root epoch unchanged.
+
+The optimistic read resolves its leaf only from routing tables the serial path has already cached, and reads the primary leaf grain directly rather than through the leaf cache, because a cache replica refreshed mid-split can briefly disagree with the shard root's routing. Serial reads also warm leaf ownership stamps. A matching stamp proves genuine absence as well as a present value; a null without that proof is always re-read serially. Old-wire leaves omit the additive ownership fields and therefore cannot validate when proof is required. Pending-transaction and shadowed-migration replies cannot supply ownership proof because their visibility may require an awaited registry check.
+
+Non-splitting point Sets do not suppress optimistic reads, so present and absent reads can validate during continuous point writes. Other mutations remain conservatively bracketed for their full duration. Disable the option to restore the fully serial read path:
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.OptimisticShardRootPointReads = false);
+```
+
+This option can be changed freely at any time. It is resolved when a grain activation first reads the tree's options, so a new value takes effect as activations are recycled.
+
 ### `PrefetchEntriesScan`
 
 When enabled, `ScanEntriesAsync` pre-fetches the next page from each shard in the background while the current page is being consumed by the k-way merge. This hides per-shard grain-call latency and can significantly reduce wall-clock time for large scans across many shards.
@@ -1363,6 +1382,46 @@ Expired tombstones are physically purged by the next forget call against the reg
 
 This option can be changed freely at any time.
 
+### `TxRegistryAdmissionBudgetBytes`
+
+Fail-safe admission bound on each saga decision registry shard's row (default: 768 KiB, `null` disables it). A tree's registry is split into [`TxRegistryShardCount`](#txregistryshardcount) shards, and each shard persists its whole state as one grain-state row, and every `ForgetAsync` leaves a tombstone in that row for [`TxDecisionRetention`](#txdecisionretention). Group commit (issue #3475) lets one tree run far more sagas per second than before. So the tombstone count, which is roughly throughput multiplied by retention, can now grow the row past what a storage provider accepts in a single row: about 1 MB for Azure Table grain state. Once the row is that large, every registry write fails, and with it every saga on the tree.
+
+The bound refuses **new** sagas before they do any work, and never refuses work already under way. Before each new saga registers, the registry computes an O(1) estimate of its row size from dictionary counts. The estimate is deliberately weighted to over-count against the real JSON row. If the estimate exceeds the budget, the registry first purges any tombstones that have aged out of the retention window. If the estimate is still over budget, the saga fails with a `LatticeSaturatedException` whose `SaturationSource` is `LatticeSaturationSource.TxRegistryCapacity`.
+
+The refusal is retryable, but only after a back-off: capacity returns as tombstones age out, which takes seconds. The library never retries this refusal itself. `MarkCommittedAsync`, `MarkAbortedAsync`, `ForgetAsync`, recovery, and every status read are never refused, so in-flight sagas always complete, and completing them is what frees room.
+
+Ceiling maths. One tombstone costs about 116 bytes of JSON, so a 1 MB row holds about 8,600 tombstones. At the default 60 s retention, that is about 143 sagas/s sustained per tree. The estimate weights a tombstone at 128 bytes, so the 768 KiB default admits about 6,100 tombstones, or about 100 sagas/s per tree at 60 s retention, and leaves headroom for concurrent admissions to overshoot, since each check is a probe and not a reservation. These figures are **per registry shard**: each shard admits against its own row and its own budget, so a tree with eight shards sustains about 800 sagas/s at 60 s retention. To raise the ceiling further, raise [`TxRegistryShardCount`](#txregistryshardcount), which is the preferred lever because it changes no correctness window. Shortening `TxDecisionRetention` also raises it, subject to that option's own safety guidance.
+
+```csharp verify
+siloBuilder.ConfigureLattice("orders", o =>
+{
+    o.TxRegistryAdmissionBudgetBytes = 512 * 1024;
+});
+```
+
+Set `null` only on a storage provider with no practical per-row limit. The value must be at least 1 when set. This option can be changed freely at any time.
+
+### `TxRegistryShardCount`
+
+Number of saga decision registry shards that new sagas are minted across, per tree (default: 1, range 1 to 256). Each shard is a separate `ITxRegistryGrain` activation keyed `_lattice_txshard_{n}_{treeId}`, with its own persisted row, its own [`TxRegistryAdmissionBudgetBytes`](#txregistryadmissionbudgetbytes) budget, and its own decisions revision. The sustained atomic-saga rate a tree can retain within [`TxDecisionRetention`](#txdecisionretention) therefore scales linearly with the shard count: about 100 sagas/s per shard at the default budget and retention.
+
+A saga's shard is chosen when its transaction id is minted, and the shard index is stamped into the id itself (a version-8 UUID). Every later registry call for that saga - from the saga coordinator, a leaf resolving a pending intent, a shard root, a split, a backup, or a replication receiver - routes to the owning shard from the stamped index alone, never from this setting. Tree-wide reads (multi-key reads, scans, cursors, backups, and replication snapshots) fan out over every shard up to the tree's durable shard high-water mark, which a shard raises before its first write, plus the legacy registry, and sum the per-shard revisions; a per-silo coalescer shares one fan-out across the concurrent reads of the same tree.
+
+**Opt-in.** The default of `1` keeps the pre-sharding layout: one registry per tree, keyed by the bare tree id, and ordinary version-4 transaction ids that route to it. A silo running an older version resolves every txid against that legacy registry, so raise the value only once every silo, and every replication peer that applies this cluster's sagas, runs a version that understands sharded ids. Transaction ids minted before the change keep routing to the legacy registry, which tree-wide reads always include, so enabling sharding needs no migration and the legacy row drains within one retention window.
+
+**Changing the value.** Because routing never reads the setting and tree-wide reads cover the durable high-water mark, silos configured with different values still agree on every read, and changing the value on a live cluster is safe in either direction. Raising it spreads new sagas across more shards; lowering it, to `1` included, reroutes nothing and still reads every shard already written to.
+
+Eight shards lift the per-tree ceiling from about 100 to about 800 sagas/s while keeping a tree-wide read at nine registry calls (eight shards plus the legacy registry) and one high-water read.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o =>
+{
+    o.TxRegistryShardCount = 16;
+});
+```
+
+This option is read from the global (unnamed) options, so a per-tree override has no effect.
+
 ### `VersionVectorRetention`
 
 Declared retention window for `VersionVector` replica entries (default: `InfiniteTimeSpan`, no pruning). **No Lattice component currently reads this option, so setting it has no effect**: nothing in the library prunes a version vector with a cutoff derived from it, and no cache expunges vectors on its schedule. The pruning primitive it describes is the public `VersionVector.PruneOlderThan(long minRetainedUtcTicks)`, which removes every replica entry whose wall-clock tick is older than the cutoff. A host that prunes vectors itself must apply the same cutoff on every replica that merges against them, because a pruned entry is reinstated by the next merge with a replica that still holds it.
@@ -1643,7 +1702,7 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `WalBatchedSingleEntryAppends`
 
-When `true` (the default), a bulk WAL append carrying exactly one entry is dispatched through the interleaving batched grain method instead of the exclusive-turn per-entry overload. Under a wide fan-out whose per-leaf slices are one entry each - the dominant shape for uniformly distributed keys - the exclusive turn serialised every append on a partition for its whole provider round trip, collapsing concurrency to one and keeping [`WalAppendCoalescingInFlightThreshold`](#walappendcoalescinginflightthreshold) from ever being reached. Ordering, durability, and offset density are unchanged, because the shard's internal state gate, not turn exclusivity, serialises offset assignment and the pending list. Set to `false` to restore the per-entry overload.
+When `true` (the default), every single-entry WAL append - a point append (leaf `SetAsync` / `DeleteAsync` and their conditional forms, CRDT merge apply, pending-transaction staging, inline saga terminals) as well as a bulk append carrying exactly one entry - is dispatched through the interleaving batched grain method instead of the exclusive-turn per-entry overload. Point appends were routed in issue #812: before that they always took the exclusive turn, so each WAL partition admitted one point write per provider round trip and a set-point workload was capped at roughly `WalPartitions` divided by that round trip regardless of shard count. Under a wide fan-out whose per-leaf slices are one entry each - the dominant shape for uniformly distributed keys - the exclusive turn serialised every append on a partition for its whole provider round trip, collapsing concurrency to one and keeping [`WalAppendCoalescingInFlightThreshold`](#walappendcoalescinginflightthreshold) from ever being reached. Ordering, durability, and offset density are unchanged, because the shard's internal state gate, not turn exclusivity, serialises offset assignment and the pending list. The `orleans.lattice.wal.append.turn_wait` and `orleans.lattice.wal.append.queue_depth` histograms are recorded only by the per-entry overload, so with this option on they no longer observe single-entry appends. Set to `false` to restore the per-entry overload.
 
 ### `WalMaxRetainedBytes`
 
@@ -1681,11 +1740,15 @@ Set to `1` to restore the historical single-activation shape. Changing this valu
 
 ### `WalMaterialiserPinBuckets`
 
-Number of durable state slots a single pin shard's blob is split across (default: `1`, which is the historical single-slot layout and is byte-for-byte what every pre-bucketing build wrote). Orleans persists grain state as one whole blob, so a shard holding `N` consumer pins rewrites all `N` of them to record one leaf's advance. On a large tree that is a multi-megabyte write per flush, which is what made the pin store the bottleneck in issue #2012. Bucketing splits the persistence of one shard across several slots and rewrites only the slots whose contents changed, turning an `O(consumers on the shard)` write into an `O(consumers in the bucket)` one.
+The **minimum** number of durable state slots a single pin shard's blob is split across (default: `1`, which is the historical single-slot layout and is byte-for-byte what every pre-bucketing build wrote while the shard is small). Orleans persists grain state as one whole blob, so a shard holding `N` consumer pins rewrites all `N` of them to record one leaf's advance. On a large tree that is a multi-megabyte write per flush, which is what made the pin store the bottleneck in issue #2012. Bucketing splits the persistence of one shard across several slots and rewrites only the slots whose contents changed, turning an `O(consumers on the shard)` write into an `O(consumers in the bucket)` one.
 
 Buckets are the **write** dimension; [`WalMaterialiserPinShards`](#walmaterialiserpinshards) is the **read** dimension. They are orthogonal, and that is the point of having both. Raising the shard count also shrinks each blob, but it widens the WAL garbage collector's per-pass grain fan-in by the same factor, because the collector must read every shard to compute the trim floor. Raising the bucket count shrinks the blob without touching that fan-in at all: one activation still answers for the whole shard and unions its buckets in memory, so `GetPinsAsync` still costs one grain call per shard. Reach for buckets when pin writes are slow, and for shards when pin calls are queueing.
 
-Changing this value is a **durable-store migration**, and both directions are safe. Raising it: existing pins stay in the legacy slot, which every activation keeps reading, and each consumer's pin moves to its bucket the next time that consumer reports. Lowering it: an activation reads the wider layout it finds recorded in bucket zero, merges it, and immediately consolidates into the narrower one, so no pin is stranded. The legacy slot is never cleared except on tree deletion, so a rollback to a pre-bucketing build still finds the pins it wrote before the upgrade; those pins are stale, which retains more WAL, which is safe. As with the shard count, a deliberate rollout (drain, change, redeploy) is still preferable to flipping it on a hot cluster. It is read from the default (unnamed) options, so per-tree overrides do not apply. Must be `>= 1`; the validator rejects values below 1.
+The configured value is a floor, not the layout. The shard estimates its serialised size as pins change, and when a slot would exceed a 64 KiB byte budget it widens its layout by powers of two (up to 1,024 slots) until each slot is at most half that budget; the width it settled on is recorded in bucket zero. This is what keeps the default safe on a large tree: Orleans' Azure Table grain storage rejects any blob over 983,040 bytes, and before issue #3576 a shard at the default of `1` grew linearly with its consumer count (about 1 MB per 128k preseeded keys) until every flush and birth seed was rejected with `Data too large`. A provider rejection that reports an oversize payload also doubles the size estimate, so an estimate that under-counts drives a split rather than an identical retry. A failing write is retried after a backoff that doubles from 1 s to 60 s rather than on every flush tick; after three consecutive failures a birth seed or removal fails fast without touching the store (the pin is already merged in memory, which is what the WAL garbage collector reads, and it is made durable by the first successful flush). One coalesced flush writes at most eight slots, so a wide shard drains across several ticks instead of monopolising the non-reentrant pin grain.
+
+Changing this value is a **durable-store migration**, and both directions are safe. Raising it: existing pins stay in the legacy slot, which every activation keeps reading, and each consumer's pin moves to its bucket the next time that consumer reports. Lowering it: an activation reads the wider layout it finds recorded in bucket zero, merges it, and consolidates into the narrower one only when the smaller layout still leaves each slot within half the byte budget; otherwise it stays at the recorded width, so no pin is stranded and no slot is pushed over the provider limit. An automatic widening follows the same crash-safe order as a configured one: the new slots are written before bucket zero records the new width, and the old slots are rewritten last, so an activation that dies part way through reads either the old layout or the new one in full. The direct-store write a leaf falls back to during silo teardown also routes by the width recorded in bucket zero. After a move out of the legacy slot, every activation keeps reading the legacy slot until every bucket that receives its pins has been written; the legacy slot is then emptied, so a consumer removed after the split is not resurrected from it at its pre-split frontier by the next activation. An activation that finds a non-empty legacy slot under a bucketed layout, including one a pre-#3576 build left behind at a bucket count of `2` or more, treats it as an unfinished move: it keeps every one of those pins, rewrites the buckets they route to, and then empties the legacy slot. Every read at activation is fail-closed: if bucket zero or any slot of the recorded layout cannot be read, activation fails and the WAL garbage collector reports the pin census as unavailable and retries, instead of computing a floor from a partial map, which could only raise it. A pass that cannot read the pin or offset census of any shard fails closed: it trims nothing, TTL included, and retries on the next pass.
+
+**Rolling upgrades and rollbacks.** A build that predates #3576 does not read the width recorded in bucket zero, and once the legacy slot has been retired it holds no pins. If a pin shard reactivates on such a silo at a bucket count of `1` while a rollout is in progress, that silo sees none of the split shard's pins. During the rollout window, either drain the older silos before the new build starts serving, or run the whole cluster (old and new silos) at a bucket count of at least `2`, ideally at or above the widest recorded width, so an older silo reads the buckets. The same applies to a rollback to an older build after a shard has split itself. As with the shard count, a deliberate rollout (drain, change, redeploy) is still preferable to flipping it on a hot cluster. It is read from the default (unnamed) options, so per-tree overrides do not apply. Must be `>= 1`; the validator rejects values below 1.
 
 Pair with `orleans.lattice.materialiser.pin.durable_write_latency` and `orleans.lattice.materialiser.pin.reports_shed` when sizing: a sustained non-zero shed rate means the pin store is the bottleneck and the bucket count is the knob for it.
 

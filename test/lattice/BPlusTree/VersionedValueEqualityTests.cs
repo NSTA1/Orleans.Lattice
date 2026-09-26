@@ -102,4 +102,50 @@ public sealed class VersionedValueEqualityTests
             Assert.That(decoded.GetHashCode(), Is.EqualTo(value.GetHashCode()));
         });
     }
+
+    [Test]
+    public void Ownership_metadata_is_not_part_of_public_value_equality()
+    {
+        var value = Sample();
+        var stamped = value with { LeafRoutingEpoch = Guid.NewGuid(), LeafRoutingGeneration = 42 };
+        Assert.That(stamped, Is.EqualTo(value));
+        Assert.That(stamped.GetHashCode(), Is.EqualTo(value.GetHashCode()));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Serialization_and_same_silo_copy_preserve_ownership_metadata(bool absent)
+    {
+        var value = Sample() with
+        {
+            Value = absent ? null : [1, 2, 3],
+            LeafRoutingEpoch = Guid.NewGuid(),
+            LeafRoutingGeneration = 42,
+        };
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<VersionedValue>>();
+        var decoded = serializer.Deserialize(serializer.SerializeToArray(value));
+        var copied = services.GetRequiredService<DeepCopier<VersionedValue>>().Copy(value);
+        foreach (var result in new[] { decoded, copied })
+        {
+            Assert.That(result.LeafRoutingEpoch, Is.EqualTo(value.LeafRoutingEpoch));
+            Assert.That(result.LeafRoutingGeneration, Is.EqualTo(42));
+            Assert.That(result.Value, Is.EqualTo(value.Value));
+        }
+    }
+
+    [Test]
+    public void Missing_wire_fields_have_no_ownership_proof()
+    {
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<VersionedValue>>();
+        // Empty object with no fields: tag-delimited header then end-object.
+        // Unlike serializing default properties, this exercises absent field IDs.
+        var decoded = serializer.Deserialize(new byte[]
+        {
+            (byte)Orleans.Serialization.WireProtocol.WireType.TagDelimited, 0xe0,
+        });
+        Assert.That(decoded.LeafRoutingEpoch, Is.EqualTo(Guid.Empty));
+        Assert.That(decoded.LeafRoutingGeneration, Is.Zero);
+    }
 }

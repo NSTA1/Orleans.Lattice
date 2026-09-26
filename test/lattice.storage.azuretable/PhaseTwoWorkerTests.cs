@@ -769,8 +769,9 @@ public partial class PhaseTwoWorkerTests
         // With a finite PhaseTwoCommitTimeout, a submit that never
         // returns on its own must be abandoned with a TimeoutException
         // rather than wedging the drain loop forever. The submit
-        // delegate parks on the cancellation token the worker passes,
-        // which the per-commit deadline cancels.
+        // delegate parks on the cancellation token the worker passes;
+        // the deadline abandons only the wait (#3458), and the token is
+        // cancelled later by the settle cap or the worker's disposal.
         var submitter = new RecordingSubmitter((_, ct) =>
         {
             var tcs = new TaskCompletionSource();
@@ -841,8 +842,9 @@ public partial class PhaseTwoWorkerTests
     public async Task CommitTimeout_positive_continues_to_drain_new_arrivals_after_a_timeout()
     {
         // After a deadline-tripped round the worker must keep draining:
-        // the first submit parks until cancelled (tripping the
-        // deadline), subsequent submits complete immediately.
+        // the first submit parks past the deadline (tripping it, and
+        // staying fenced until the worker is disposed), subsequent
+        // submits complete immediately.
         var primed = 0;
         var submitter = new RecordingSubmitter((_, ct) =>
         {

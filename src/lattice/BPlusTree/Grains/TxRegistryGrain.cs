@@ -20,8 +20,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// dial back to <c>GetStatusAsync</c> and use the registry's
 /// already-persisted decision to resolve the read.</description></item>
 /// <item><description>The grain is single-threaded by Orleans turn semantics
-/// and persisted via <see cref="LatticeOptions.StorageProviderName"/>,
-/// so decision recording is a single atomic state-write per call.</description></item>
+/// and persisted via <see cref="LatticeOptions.StorageProviderName"/>. Each
+/// mutating call validates and mutates in one synchronous block and then
+/// joins a group commit (see <c>TxRegistryGrain.GroupCommit.cs</c>): at most
+/// one whole-state write is in flight, mutations arriving meanwhile ride the
+/// next write, and every caller returns only once a write carrying its
+/// mutation is durable. Readers are read-committed: they never return an
+/// answer derived from a mutation that is not yet durable.</description></item>
 /// <item><description>Idempotency: repeated calls with the same outcome are
 /// no-ops. Conflicting calls (commit-then-abort or abort-then-commit)
 /// throw <see cref="InvalidOperationException"/> - they indicate a saga
@@ -38,7 +43,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// run online resharding.</description></item>
 /// </list>
 /// </summary>
-internal sealed class TxRegistryGrain(
+internal sealed partial class TxRegistryGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
@@ -57,11 +62,20 @@ internal sealed class TxRegistryGrain(
     internal TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     /// <summary>
-    /// Tree id derived from the grain key. Used to resolve the
+    /// Tree id derived from the grain key (the shard framing, if any, stripped
+    /// by <see cref="TxRegistryRouting.TreeIdFromKey"/>). Used to resolve the
     /// per-tree <see cref="LatticeOptions"/> snapshot for
-    /// tombstone-retention configuration.
+    /// tombstone-retention and admission configuration.
     /// </summary>
-    private string TreeId => context.GrainId.Key.ToString()!;
+    private string TreeId => _treeId ??= TxRegistryRouting.TreeIdFromKey(GrainKey);
+
+    private string? _treeId;
+
+    /// <summary>
+    /// The full grain key: the bare tree id for the legacy (unsharded)
+    /// registry, or <c>_lattice_txshard_{n}_{treeId}</c> for a shard.
+    /// </summary>
+    private string GrainKey => context.GrainId.Key.ToString()!;
 
     /// <summary>
     /// Current per-tree tombstone retention. Re-read on every call so
@@ -103,8 +117,22 @@ internal sealed class TxRegistryGrain(
         switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: true))
         {
             case TerminalRecordAction.Idempotent:
+                // The existing row may still be riding an un-durable group
+                // commit. Acknowledge only once it is durable; if that write
+                // failed the row was rolled back, so re-run against disk state.
+                if (!await WhenDurableAsync(txid))
+                {
+                    await MarkCommittedAsync(txid);
+                }
                 return;
             case TerminalRecordAction.Conflict when !tombstoned:
+                // A conflict against an un-durable verdict is only real if that
+                // verdict persists; if its write failed, re-classify.
+                if (!await WhenDurableAsync(txid))
+                {
+                    await MarkCommittedAsync(txid);
+                    return;
+                }
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
         }
@@ -138,11 +166,7 @@ internal sealed class TxRegistryGrain(
         var core = DecisionCore();
         var mutation = core.Apply(txid, TxStatus.Committed);
         state.State.DecisionsRevision = core.Revision;
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        await CommitAsync(PendingGroup(txid), () =>
         {
             core.Rollback(mutation);
             state.State.DecisionsRevision = core.Revision;
@@ -154,8 +178,7 @@ internal sealed class TxRegistryGrain(
             // coordinator pointer GetStatusAsync has to resolve it with.
             RestoreDelegations(txid, delegations);
             RestoreTombstone(txid, tombstoneClear);
-            throw;
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -169,8 +192,18 @@ internal sealed class TxRegistryGrain(
         switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: false))
         {
             case TerminalRecordAction.Idempotent:
+                // Durability barrier: see MarkCommittedAsync.
+                if (!await WhenDurableAsync(txid))
+                {
+                    await MarkAbortedAsync(txid);
+                }
                 return;
             case TerminalRecordAction.Conflict when !tombstoned:
+                if (!await WhenDurableAsync(txid))
+                {
+                    await MarkAbortedAsync(txid);
+                    return;
+                }
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
         }
@@ -188,18 +221,13 @@ internal sealed class TxRegistryGrain(
         var core = DecisionCore();
         var mutation = core.Apply(txid, TxStatus.Aborted);
         state.State.DecisionsRevision = core.Revision;
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        await CommitAsync(PendingGroup(txid), () =>
         {
             core.Rollback(mutation);
             state.State.DecisionsRevision = core.Revision;
             RestoreDelegations(txid, delegations);
             RestoreTombstone(txid, tombstoneClear);
-            throw;
-        }
+        });
     }
 
     /// <summary>
@@ -381,6 +409,13 @@ internal sealed class TxRegistryGrain(
         // this registration. Leave the local decision authoritative.
         if (state.State.Decisions.ContainsKey(txid))
         {
+            // The local decision may still be riding an un-durable group
+            // commit; if that write fails the decision is rolled back and this
+            // registration must be applied after all.
+            if (!await WhenDurableAsync(txid))
+            {
+                await RegisterExternalDecisionAuthorityAsync(txid, coordinatorKey);
+            }
             return;
         }
 
@@ -388,6 +423,10 @@ internal sealed class TxRegistryGrain(
         if (state.State.ExternalAuthorities.TryGetValue(txid, out var existing)
             && string.Equals(existing, coordinatorKey, StringComparison.Ordinal))
         {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RegisterExternalDecisionAuthorityAsync(txid, coordinatorKey);
+            }
             return;
         }
 
@@ -407,17 +446,12 @@ internal sealed class TxRegistryGrain(
         {
             state.State.CrossTreeRegistrationEpoch = prevEpoch + 1;
         }
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        await CommitAsync(PendingGroup(txid), () =>
         {
             if (existing is not null) state.State.ExternalAuthorities[txid] = existing;
             else state.State.ExternalAuthorities.Remove(txid);
             state.State.CrossTreeRegistrationEpoch = prevEpoch;
-            throw;
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -430,6 +464,11 @@ internal sealed class TxRegistryGrain(
         // finalized before (or concurrently with) this registration.
         if (state.State.Decisions.ContainsKey(txid))
         {
+            // Durability barrier: see RegisterExternalDecisionAuthorityAsync.
+            if (!await WhenDurableAsync(txid))
+            {
+                await RegisterReceiverDecisionAuthorityAsync(txid, receiverCoordinatorKey);
+            }
             return;
         }
 
@@ -437,6 +476,10 @@ internal sealed class TxRegistryGrain(
         if (state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var existing)
             && string.Equals(existing, receiverCoordinatorKey, StringComparison.Ordinal))
         {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RegisterReceiverDecisionAuthorityAsync(txid, receiverCoordinatorKey);
+            }
             return;
         }
 
@@ -455,17 +498,12 @@ internal sealed class TxRegistryGrain(
         {
             state.State.CrossTreeRegistrationEpoch = prevEpoch + 1;
         }
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        await CommitAsync(PendingGroup(txid), () =>
         {
             if (existing is not null) state.State.ReceiverDecisionAuthorities[txid] = existing;
             else state.State.ReceiverDecisionAuthorities.Remove(txid);
             state.State.CrossTreeRegistrationEpoch = prevEpoch;
-            throw;
-        }
+        });
     }
 
     /// <summary>
@@ -521,17 +559,21 @@ internal sealed class TxRegistryGrain(
         {
             var core = DecisionCore();
             var mutation = core.Apply(txid, verdict);
-            state.State.ReceiverDecisionAuthorities.Remove(txid);
+            var removed = state.State.ReceiverDecisionAuthorities.Remove(txid);
             state.State.DecisionsRevision = core.Revision;
             try
             {
-                await state.WriteStateAsync();
+                await CommitAsync(PendingGroup(txid), () =>
+                {
+                    core.Rollback(mutation);
+                    if (removed) state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
+                    state.State.DecisionsRevision = core.Revision;
+                });
             }
             catch
             {
-                core.Rollback(mutation);
-                state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
-                state.State.DecisionsRevision = core.Revision;
+                // The group commit already rolled the cache back; the verdict
+                // itself is durable at the coordinator, so it is still served.
             }
         }
         return verdict;
@@ -613,19 +655,22 @@ internal sealed class TxRegistryGrain(
         {
             var core = DecisionCore();
             var mutation = core.Apply(txid, verdict);
-            state.State.ExternalAuthorities.Remove(txid);
+            var removed = state.State.ExternalAuthorities.Remove(txid);
             state.State.DecisionsRevision = core.Revision;
             try
             {
-                await state.WriteStateAsync();
+                await CommitAsync(PendingGroup(txid), () =>
+                {
+                    core.Rollback(mutation);
+                    if (removed) state.State.ExternalAuthorities[txid] = coordinatorKey;
+                    state.State.DecisionsRevision = core.Revision;
+                });
             }
             catch
             {
-                core.Rollback(mutation);
-                state.State.ExternalAuthorities[txid] = coordinatorKey;
-                state.State.DecisionsRevision = core.Revision;
                 // Surface the resolved verdict for this read even though the
-                // cache write failed; the next read re-dials and re-attempts.
+                // cache write failed (the group commit already rolled the cache
+                // back); the next read re-dials and re-attempts.
             }
         }
         return verdict;
@@ -684,6 +729,20 @@ internal sealed class TxRegistryGrain(
     /// <inheritdoc />
     public async Task<CrossTreeInFlightObservation> ObserveCrossTreeInFlightAsync()
     {
+        while (true)
+        {
+            var observation = await ObserveCrossTreeInFlightCoreAsync();
+            // Read-committed: the counts are tree-wide, so they may only be
+            // reported once every mutation they could reflect is durable.
+            if (await WhenAllDurableAsync())
+            {
+                return observation;
+            }
+        }
+    }
+
+    private async Task<CrossTreeInFlightObservation> ObserveCrossTreeInFlightCoreAsync()
+    {
         // Resolve every active delegation against its coordinator first, so a
         // saga whose coordinator has already decided is caches-and-dropped and
         // no longer counts as in-flight.
@@ -710,6 +769,25 @@ internal sealed class TxRegistryGrain(
 
     /// <inheritdoc />
     public async Task<TxStatus> GetStatusAsync(Guid txid)
+    {
+        while (true)
+        {
+            var status = await ReadStatusAsync(txid);
+            // Read-committed: never report a verdict (or an absence) that a
+            // not-yet-durable mutation produced. Completes synchronously when
+            // nothing un-durable touches this txid.
+            if (await WhenDurableAsync(txid))
+            {
+                return status;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The unguarded body of <see cref="GetStatusAsync(Guid)"/>: the answer the
+    /// in-memory state gives, before the read-committed barrier.
+    /// </summary>
+    private async ValueTask<TxStatus> ReadStatusAsync(Guid txid)
     {
         if (IsTombstoneExpired(txid))
         {
@@ -742,15 +820,39 @@ internal sealed class TxRegistryGrain(
     }
 
     /// <inheritdoc />
-    public Task<TxStatus> GetRecordedStatusAsync(Guid txid) =>
-        Task.FromResult(state.State.Decisions.TryGetValue(txid, out var status)
-            ? status
-            : TxStatus.InFlight);
+    public async Task<TxStatus> GetRecordedStatusAsync(Guid txid)
+    {
+        while (true)
+        {
+            var status = state.State.Decisions.TryGetValue(txid, out var recorded)
+                ? recorded
+                : TxStatus.InFlight;
+            if (await WhenDurableAsync(txid))
+            {
+                return status;
+            }
+        }
+    }
 
     /// <inheritdoc />
     public async Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids)
     {
         ArgumentNullException.ThrowIfNull(txids);
+        while (true)
+        {
+            var result = await ReadStatusManyAsync(txids);
+            if (await WhenDurableAsync(txids))
+            {
+                return result;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The unguarded body of <see cref="GetStatusManyAsync(IReadOnlyList{Guid})"/>.
+    /// </summary>
+    private async Task<Dictionary<Guid, TxStatus>> ReadStatusManyAsync(IReadOnlyList<Guid> txids)
+    {
         var result = new Dictionary<Guid, TxStatus>(txids.Count);
         // Hoist UtcNow + retention out of the per-txid loop: every
         // expiry check uses the same instant and the same window, so
@@ -785,6 +887,20 @@ internal sealed class TxRegistryGrain(
 
     /// <inheritdoc />
     public async Task<Dictionary<Guid, TxStatus>> SnapshotAsync()
+    {
+        while (true)
+        {
+            var snapshot = await ReadSnapshotAsync();
+            // Read-committed: a tree-wide snapshot is only handed out once every
+            // mutation it could reflect is durable.
+            if (await WhenAllDurableAsync())
+            {
+                return snapshot;
+            }
+        }
+    }
+
+    private async Task<Dictionary<Guid, TxStatus>> ReadSnapshotAsync()
     {
         // Resolve any active cross-tree delegations against their coordinator
         // BEFORE the synchronous dict-build below. A coordinator-decided but
@@ -827,6 +943,23 @@ internal sealed class TxRegistryGrain(
 
     /// <inheritdoc />
     public async Task<TxRegistrySnapshot> SnapshotWithRevisionAsync()
+    {
+        while (true)
+        {
+            var snapshot = await ReadSnapshotWithRevisionAsync();
+            // Read-committed: the (dict, revision) pair must name a durable
+            // state. Were an un-durable pair handed out and its write then
+            // failed, the rollback could later reuse the same revision for a
+            // different decision map, and a reader's revision probe would take
+            // its stale snapshot as current.
+            if (await WhenAllDurableAsync())
+            {
+                return snapshot;
+            }
+        }
+    }
+
+    private async Task<TxRegistrySnapshot> ReadSnapshotWithRevisionAsync()
     {
         // Resolve cross-tree delegations first (see SnapshotAsync). The
         // dict + revision are then captured in one synchronous block with no
@@ -892,6 +1025,23 @@ internal sealed class TxRegistryGrain(
         // synchronously inside this turn, and the expiry term is a pure
         // function of ForgottenAt and the clock, which the writers mutate in
         // the same pre-await block as the decision map.
+        //
+        // Group commit (#3475) and durability. Unlike every other reader, this
+        // probe deliberately does NOT wait for the pending group commit, and
+        // may return a token that includes mutations not yet durable. That is
+        // safe, and group commit does not make it less so, because of how the
+        // one consumer uses it: LatticeGrain.IsSnap2StableAsync compares the
+        // probe for EQUALITY with the token of a snapshot it already holds, and
+        // snapshots are now read-committed, so that token always names a
+        // durable state. Every un-durable decision-view mutation advances the
+        // token past the durable value, so an un-durable probe either equals
+        // the durable token (nothing pending changes the view: the snapshot is
+        // current) or exceeds it (the reader falls back to a fresh, barriered
+        // snapshot - a conservative extra fetch, never a stale accept). A
+        // failed write rolls the token back to the durable value, which again
+        // names the snapshot's state. Waiting here would put the probe back
+        // behind the registry's writes, which is the queueing this change
+        // exists to remove.
         return Task.FromResult(EffectiveDecisionsRevision(TimeProvider.GetUtcNow(), Retention));
     }
 
@@ -1020,11 +1170,25 @@ internal sealed class TxRegistryGrain(
                 core.AdvanceRevision();
                 state.State.DecisionsRevision = core.Revision;
             }
-            try
+
+            // The prune retires OTHER txids' expired rows (their reads flip
+            // from Indeterminate to InFlight) and may evict pins (which change
+            // every txid's read mask), so the group is marked as touching them
+            // too: a reader of any of those must wait for this write.
+            var group = PendingGroup(txid);
+            if (pruned.Tombstones is { } prunedTombstones)
             {
-                await state.WriteStateAsync();
+                foreach (var entry in prunedTombstones)
+                {
+                    group.AddTxid(entry.Txid);
+                }
             }
-            catch
+            if (pruned.ExpiredPins is not null)
+            {
+                group.TouchesAllTxids = true;
+            }
+
+            await CommitAsync(group, () =>
             {
                 if (droppedDecision) state.State.Decisions[txid] = prevStatus;
                 if (addedForgottenAt)
@@ -1086,8 +1250,15 @@ internal sealed class TxRegistryGrain(
                     core.RollbackRevision(prevRevision);
                     state.State.DecisionsRevision = core.Revision;
                 }
-                throw;
-            }
+            });
+        }
+        else if (!await WhenDurableAsync(txid))
+        {
+            // Nothing to do against the in-memory state, but that state may
+            // itself be un-durable (a Forget of this txid riding a pending
+            // write). Acknowledge only once it is durable; if that write failed
+            // it was rolled back, so this call must do the work itself.
+            await ForgetAsync(txid);
         }
     }
 
@@ -1109,22 +1280,27 @@ internal sealed class TxRegistryGrain(
             // stable activation; this branch only fires when the
             // shard-root deactivated and reactivated between two
             // prepare-phase writes for the same saga.
+            //
+            // The existing slot is normally long durable (the saga's bulk
+            // RegisterParticipantsAsync landed before its first prepare), in
+            // which case this completes synchronously and never waits behind
+            // another saga's write. Only if the slot is still riding an
+            // un-durable group does it wait, and re-register if that failed.
+            if (!await WhenDurableAsync(txid))
+            {
+                await RegisterParticipantAsync(txid, shardIndex);
+            }
             return;
         }
 
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        await CommitAsync(PendingGroup(txid), () =>
         {
             // Unwind the in-memory mutation so a retry from the same
             // activation does not hit the `!set.Add(shardIndex)`
             // short-circuit and silently no-op with disk still stale.
             set.Remove(shardIndex);
             if (createdSet) state.State.Participants.Remove(txid);
-            throw;
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -1165,14 +1341,14 @@ internal sealed class TxRegistryGrain(
             // is currently empty; leave the empty entry rather than
             // remove it, matching the RegisterParticipantAsync
             // contract that a created-but-empty set is allowed.
+            if (!await WhenDurableAsync(txid))
+            {
+                await RegisterParticipantsAsync(txid, shardIndices);
+            }
             return;
         }
 
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        await CommitAsync(PendingGroup(txid), () =>
         {
             // Unwind only the indices this call inserted so a retry
             // from the same activation re-issues the bulk insert
@@ -1185,22 +1361,32 @@ internal sealed class TxRegistryGrain(
             {
                 state.State.Participants.Remove(txid);
             }
-            throw;
-        }
+        });
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid)
+    public async Task<IReadOnlyList<int>> GetParticipantsAsync(Guid txid)
     {
-        if (!state.State.Participants.TryGetValue(txid, out var set) || set.Count == 0)
+        while (true)
         {
-            return Task.FromResult<IReadOnlyList<int>>(Array.Empty<int>());
-        }
+            IReadOnlyList<int> participants;
+            if (!state.State.Participants.TryGetValue(txid, out var set) || set.Count == 0)
+            {
+                participants = Array.Empty<int>();
+            }
+            else
+            {
+                var sorted = new int[set.Count];
+                set.CopyTo(sorted);
+                Array.Sort(sorted);
+                participants = sorted;
+            }
 
-        var sorted = new int[set.Count];
-        set.CopyTo(sorted);
-        Array.Sort(sorted);
-        return Task.FromResult<IReadOnlyList<int>>(sorted);
+            if (await WhenDurableAsync(txid))
+            {
+                return participants;
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -1248,6 +1434,12 @@ internal sealed class TxRegistryGrain(
         var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
         if (TerminalDecisionGuard.Classify(hasExisting, existing, committed) == TerminalRecordAction.Conflict)
         {
+            // A conflict against an un-durable verdict is only real if that
+            // verdict persists; if its write failed, re-evaluate.
+            if (!await WhenDurableAsync(txid))
+            {
+                return await RecordTerminalArrivalAsync(txid, sourceShardIndex, committed, expectedShardCount);
+            }
             throw new InvalidOperationException(committed
                 ? $"Saga {txid:N} received a commit terminal after an abort was already recorded."
                 : $"Saga {txid:N} received an abort terminal after a commit was already recorded.");
@@ -1279,28 +1471,12 @@ internal sealed class TxRegistryGrain(
             state.State.ExpectedTerminals[txid] = newExpected;
         }
 
-        if (arrivalAdded || expectedChanged)
-        {
-            try
-            {
-                await state.WriteStateAsync();
-            }
-            catch
-            {
-                if (arrivalAdded) arrivals.Remove(sourceShardIndex);
-                if (arrivalsCreated || (!arrivalsHadEntry && arrivals.Count == 0))
-                {
-                    state.State.TerminalArrivals.Remove(txid);
-                }
-                if (expectedChanged)
-                {
-                    if (expectedHadEntry) state.State.ExpectedTerminals[txid] = prevExpected;
-                    else state.State.ExpectedTerminals.Remove(txid);
-                }
-                throw;
-            }
-        }
-
+        // The tally verdict is taken NOW, in the same synchronous block as this
+        // arrival's own mutation, and not after the write below. The write is a
+        // group commit and this method interleaves, so other arrivals for the
+        // same saga can land in the same group while it is outstanding; reading
+        // the count after the await would let every one of them see the full
+        // tally and each report itself as the final arrival.
         var isFinal = TerminalArrivalTally.IsFinalArrival(arrivals.Count, newExpected);
         // Materialise the observed source-shard set only on the final
         // arrival - in-progress arrivals do not need to know the
@@ -1320,6 +1496,31 @@ internal sealed class TxRegistryGrain(
         {
             observed = Array.Empty<int>();
         }
+
+        if (arrivalAdded || expectedChanged)
+        {
+            await CommitAsync(PendingGroup(txid), () =>
+            {
+                if (arrivalAdded) arrivals.Remove(sourceShardIndex);
+                if (arrivalsCreated || (!arrivalsHadEntry && arrivals.Count == 0))
+                {
+                    state.State.TerminalArrivals.Remove(txid);
+                }
+                if (expectedChanged)
+                {
+                    if (expectedHadEntry) state.State.ExpectedTerminals[txid] = prevExpected;
+                    else state.State.ExpectedTerminals.Remove(txid);
+                }
+            });
+        }
+        else if (!await WhenDurableAsync(txid))
+        {
+            // A duplicate delivery re-evaluated against a tally that was still
+            // riding an un-durable write, and that write failed: the tally was
+            // rolled back, so record this arrival afresh.
+            return await RecordTerminalArrivalAsync(txid, sourceShardIndex, committed, expectedShardCount);
+        }
+
         return new TerminalTallyResult
         {
             IsFinal = isFinal,
@@ -1395,18 +1596,18 @@ internal sealed class TxRegistryGrain(
             ExpiresAt = now + effectiveTtl,
         };
         InvalidatePinMemo();
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        // A pin changes the read mask of every txid it covers, and the
+        // expired-tombstone mask is what every per-txid reader consults, so the
+        // group is marked as touching them all.
+        var group = PendingGroup();
+        group.TouchesAllTxids = true;
+        await CommitAsync(group, () =>
         {
             if (hadPrior && prior is not null) state.State.SnapshotPins[pinId] = prior;
             else state.State.SnapshotPins.Remove(pinId);
             state.State.TombstonePinUnmaskEpoch = priorUnmaskEpoch;
             InvalidatePinMemo();
-            throw;
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -1416,7 +1617,8 @@ internal sealed class TxRegistryGrain(
 
         if (!state.State.SnapshotPins.TryGetValue(pinId, out var pin))
         {
-            return false;
+            // Read-committed: the absence may be an un-durable unpin or prune.
+            return await WhenAllDurableAsync() ? false : await RefreshPinAsync(pinId, ttl);
         }
         // A pin that has already expired (between the prior step's
         // refresh and this one) is treated as missing - the caller
@@ -1428,7 +1630,7 @@ internal sealed class TxRegistryGrain(
             // The prune pass in ForgetAsync drops expired pins on its
             // own cadence; we don't bother dropping it here because
             // returning false is enough to fail the cursor cleanly.
-            return false;
+            return await WhenAllDurableAsync() ? false : await RefreshPinAsync(pinId, ttl);
         }
 
         var options = optionsMonitor.Get(TreeId);
@@ -1438,7 +1640,7 @@ internal sealed class TxRegistryGrain(
         {
             // No-op: identical ttl was already recorded (e.g. two
             // refreshes within the same TimeProvider tick).
-            return true;
+            return await WhenAllDurableAsync() || await RefreshPinAsync(pinId, ttl);
         }
 
         var prior = pin.ExpiresAt;
@@ -1446,16 +1648,13 @@ internal sealed class TxRegistryGrain(
         // The txid membership is unchanged but the union's validity horizon is
         // derived from pin expiries, so extending one moves the horizon.
         InvalidatePinMemo();
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        var group = PendingGroup();
+        group.TouchesAllTxids = true;
+        await CommitAsync(group, () =>
         {
             pin.ExpiresAt = prior;
             InvalidatePinMemo();
-            throw;
-        }
+        });
         return true;
     }
 
@@ -1464,28 +1663,43 @@ internal sealed class TxRegistryGrain(
     {
         if (!state.State.SnapshotPins.TryGetValue(pinId, out var prior))
         {
+            // The pin may be missing because an un-durable unpin or prune
+            // removed it; if that write fails the pin is restored, so retry.
+            if (!await WhenAllDurableAsync())
+            {
+                await UnpinSnapshotAsync(pinId);
+            }
             return;
         }
         state.State.SnapshotPins.Remove(pinId);
         InvalidatePinMemo();
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
+        var group = PendingGroup();
+        group.TouchesAllTxids = true;
+        await CommitAsync(group, () =>
         {
             state.State.SnapshotPins[pinId] = prior;
             InvalidatePinMemo();
-            throw;
-        }
+        });
     }
 
     /// <inheritdoc />
-    public Task<int> GetPinnedDecisionCountAsync()
+    public async Task<int> GetPinnedDecisionCountAsync()
+    {
+        while (true)
+        {
+            var count = CountPinnedDecisions();
+            if (await WhenAllDurableAsync())
+            {
+                return count;
+            }
+        }
+    }
+
+    private int CountPinnedDecisions()
     {
         if (state.State.SnapshotPins.Count == 0)
         {
-            return Task.FromResult(0);
+            return 0;
         }
         // Honour the expiry semantic of the prune pass: an expired
         // pin contributes nothing to the diagnostics count even
@@ -1497,7 +1711,7 @@ internal sealed class TxRegistryGrain(
             if (pin.ExpiresAt <= now) continue;
             foreach (var txid in pin.Txids) union.Add(txid);
         }
-        return Task.FromResult(union.Count);
+        return union.Count;
     }
 
     /// <summary>

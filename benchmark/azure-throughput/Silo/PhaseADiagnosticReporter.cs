@@ -208,6 +208,11 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         "orleans.lattice.shard_root.reshard.rejected",
         "orleans.lattice.shard_root.reshard.completed",
         "orleans.lattice.shard_root.reshard.in_flight",
+        // Optimistic point-read outcome counter (issue #3474). The outcome
+        // tag folds into the status column, so a get-point cohort shows how
+        // many reads were validated versus handed back to the serial,
+        // non-interleaved shard-root read (and why).
+        "orleans.lattice.shard_root.optimistic_read.outcomes",
         // Mode-B wedge diagnostic pack: writer-layer
         // (WalCommitLogWriter) append-dispatch counter + per-partition
         // pending-append-dispatch depth histogram. The dispatch counter
@@ -362,6 +367,7 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
         string tree = "-", shard = "-", phase = "-", status = "-";
         string? step = null;
         string? stage = null;
+        string? outcome = null;
         for (var i = 0; i < tags.Length; i++)
         {
             var tagKey = tags[i].Key;
@@ -390,6 +396,17 @@ internal sealed class PhaseADiagnosticReporter : BackgroundService
             {
                 status = value;
             }
+            else if (string.Equals(tagKey, LatticeMetrics.TagOutcome, StringComparison.Ordinal))
+            {
+                outcome = value;
+            }
+        }
+        // Only the optimistic-read counter renders its outcome: folding it for
+        // every instrument would re-key rows existing report parsers aggregate.
+        if (status == "-" && outcome is not null
+            && ReferenceEquals(instrument, LatticeMetrics.ShardRootOptimisticReadOutcomes))
+        {
+            status = outcome;
         }
         if (phase == "-" && step is not null)
         {

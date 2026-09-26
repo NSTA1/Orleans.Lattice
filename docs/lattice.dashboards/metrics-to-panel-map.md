@@ -305,6 +305,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.view.source_backpressure` | counter (`{pass}`) | `view`, `state`, `tenant` | MaterialisedViews | Source back-pressure self-throttle (rate). Counts throttled drain passes of every trigger, read-your-writes barrier drains included; only background timer ticks are also deferred |
 | `orleans.lattice.get.duration` | histogram (ms) | `tree`, `tenant` | Overview | GetAsync / GetManyAsync envelope p50 (ms); GetAsync / GetManyAsync envelope p95 / p99 (ms) |
 | `orleans.lattice.get.stage.duration` | histogram (ms) | `tree`, `stage`, `tenant` | Overview | GetAsync stage breakdown p95 (ms) |
+| `orleans.lattice.shard_root.optimistic_read.outcomes` | counter | `tree`, `outcome`, `tenant` | Overview | Shard-root optimistic point reads by outcome (reads/s); includes leaf-generation retries and validated absences |
 | `orleans.lattice.get_many.duration` | histogram (ms) | `tree`, `tenant` | Overview | GetAsync / GetManyAsync envelope p50 (ms); GetAsync / GetManyAsync envelope p95 / p99 (ms) |
 | `orleans.lattice.get_many.stage.duration` | histogram (ms) | `tree`, `stage`, `tenant` | Overview | GetManyAsync stage breakdown p95 (ms) |
 | `orleans.lattice.exists.duration` | histogram (ms) | `tree`, `tenant` | Overview | ExistsAsync / GetWithVersionAsync envelope p95 (ms) |
@@ -361,6 +362,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_write.cross_tree.completed` | counter (`{saga}`) | `outcome`, `tree_count`, `tenant` | AtomicWrites | Cross-tree atomic write outcomes (rate); Cross-tree failure rate (%) |
 | `orleans.lattice.atomic_write.cross_tree.duration` | histogram (ms) | `outcome`, `tenant` | AtomicWrites | Cross-tree coordinator duration (p50/p95/p99 ms) |
 | `orleans.lattice.atomic_write.cross_tree.participants` | histogram (`{tree}`) | `outcome`, `tenant` | AtomicWrites | Cross-tree participant fan-out (trees per saga) |
+| `orleans.lattice.tx_registry.writes` | counter (`{write}`) | `tree`, `outcome`, `tenant` | AtomicWrites | Tx registry writes (rate) by outcome |
+| `orleans.lattice.tx_registry.write.mutations` | histogram (`{mutation}`) | `tree`, `outcome`, `tenant` | AtomicWrites | Tx registry group-commit coalescing factor (mutations per write) |
+| `orleans.lattice.tx_registry.write.duration` | histogram (ms) | `tree`, `outcome`, `tenant` | AtomicWrites | Tx registry write duration (mean ms) by outcome |
 | `orleans.lattice.grainindex.grains_enrolled` | counter (`{grain}`) | `index`, `path`, `tenant` | GrainIndex | Grains enrolled per second, by route |
 | `orleans.lattice.grainindex.entries` | up-down counter (`{entry}`) | `index`, `tenant` | GrainIndex | Index entries held |
 | `orleans.lattice.grainindex.write_failures` | counter (`{failure}`) | `index`, `path`, `tenant` | GrainIndex | Index write failures per second, by route |

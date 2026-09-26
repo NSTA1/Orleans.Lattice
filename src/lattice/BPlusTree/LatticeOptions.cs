@@ -646,6 +646,31 @@ public class LatticeOptions
     public const bool DefaultPrefetchEntriesScan = false;
 
     /// <summary>
+    /// When <c>true</c> (the default), single-key point reads
+    /// (<see cref="ILattice.GetAsync"/>) are first attempted on an interleavable,
+    /// optimistic shard-root path, so concurrent reads against one shard overlap
+    /// their leaf round trips instead of queueing one per round trip. The read is
+    /// validated against an in-memory routing epoch that every potentially
+    /// routing-mutating shard-root call bumps; a read that overlapped such a call (a
+    /// root promotion, a split or move-away publish, a bulk load, a state reload) is
+    /// discarded and repeated on the serial path, so the result is never less
+    /// consistent than the serial read. The optimistic read goes to the primary leaf
+    /// (bypassing the leaf cache). Uncontended present reads use the raw byte reply;
+    /// a point-write admission epoch detects overlap across the leaf await.
+    /// Overlapping point writes and missing keys require the leaf's activation epoch
+    /// and routing generation. A missing key validates only when the leaf proves
+    /// ownership of its range in the same synchronous turn as the observation.
+    /// Non-splitting point Sets preserve those proofs; topology changes invalidate
+    /// them. Old leaves without ownership metadata fall back to serial reads
+    /// whenever this proof is required.
+    /// Set to <c>false</c> to send every point read straight to the serial path.
+    /// </summary>
+    public bool OptimisticShardRootPointReads { get; set; } = DefaultOptimisticShardRootPointReads;
+
+    /// <summary>Default value for <see cref="OptimisticShardRootPointReads"/> (<c>true</c>).</summary>
+    public const bool DefaultOptimisticShardRootPointReads = true;
+
+    /// <summary>
     /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
     /// polls each physical shard's hotness counters (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>)
     /// and triggers an online adaptive split when the observed
@@ -1300,6 +1325,103 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="TxDecisionRetention"/> (60 seconds).</summary>
     public static readonly TimeSpan DefaultTxDecisionRetention = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Fail-safe admission bound on the size of the per-tree transaction
+    /// registry's persisted row, in estimated
+    /// serialised bytes. The registry persists its whole state as one grain-state
+    /// row, rewritten on every group-committed write, and that row carries one
+    /// tombstone per saga completed within <see cref="TxDecisionRetention"/>. It
+    /// therefore grows linearly with the sustained saga rate: at the default
+    /// 60-second retention and the measured JSON cost of roughly 116 bytes per
+    /// tombstone, the row reaches the ~1 MB Azure Table entity limit at about
+    /// 8 600 retained tombstones, which is a sustained rate of about 143 sagas/s.
+    /// Past that point every registry write would fail and every atomic saga on
+    /// the tree would stall.
+    /// <para>
+    /// When the registry's running estimate of its own row size (an O(1)
+    /// count-weighted estimate, never a re-serialisation) is at or above this
+    /// budget, a <b>new</b> atomic-write saga is refused with a
+    /// <see cref="LatticeSaturatedException"/> whose
+    /// <see cref="LatticeSaturatedException.SaturationSource"/> is
+    /// <see cref="LatticeSaturationSource.TxRegistryCapacity"/>. The refusal
+    /// happens before the saga persists its execute phase or touches any shard,
+    /// so nothing is written and the caller may retry with the same operation id
+    /// once capacity returns. Sagas already admitted are never refused: commit,
+    /// abort, forget, and status reads always proceed, and expired tombstones are
+    /// reclaimed on the refusal path itself, so admission resumes as soon as
+    /// tombstones age out of <see cref="TxDecisionRetention"/>.
+    /// </para>
+    /// <para>
+    /// The budget applies to <b>each registry shard</b> separately (see
+    /// <see cref="TxRegistryShardCount"/>): every shard persists its own row and
+    /// admits against its own estimate, so the per-tree ceiling scales with the
+    /// shard count. The default of 768 KiB (75% of 1 MiB) admits roughly 6 100
+    /// retained tombstones per shard at the conservative 128-byte weight the
+    /// estimate uses, which is about 100 sustained sagas/s per shard under the
+    /// default retention, or about 800 sagas/s per tree with eight shards. The bound exists to turn a silent storage-limit stall into an
+    /// attributed, retryable back-pressure signal. Set <see langword="null"/> to
+    /// disable the bound (the pre-bound behaviour); a storage provider with no
+    /// per-row limit, or a tree that never runs atomic sagas, loses nothing by
+    /// leaving it enabled.
+    /// </para>
+    /// </summary>
+    public long? TxRegistryAdmissionBudgetBytes { get; set; } = DefaultTxRegistryAdmissionBudgetBytes;
+
+    /// <summary>Default value for <see cref="TxRegistryAdmissionBudgetBytes"/> (768 KiB, 786 432 bytes).</summary>
+    public const long DefaultTxRegistryAdmissionBudgetBytes = 768 * 1024;
+
+    /// <summary>
+    /// Number of saga decision registry shards new atomic-write sagas are minted
+    /// across, per tree. Each shard is a separate transaction registry grain
+    /// activation with its own persisted row, its own
+    /// <see cref="TxRegistryAdmissionBudgetBytes"/> admission budget, and its own
+    /// decisions revision, so the sustained atomic-saga rate a single tree can
+    /// retain within <see cref="TxDecisionRetention"/> scales linearly with this
+    /// value.
+    /// <para>
+    /// <b>Opt-in, and only once every silo runs a version that understands
+    /// sharded ids.</b> The default of <c>1</c> keeps the pre-sharding layout:
+    /// one registry per tree, keyed by the bare tree id, and plain transaction ids
+    /// that always route to it, so a cluster mid-way through a rolling upgrade -
+    /// where an older silo resolves every txid against the bare-tree-id registry
+    /// - behaves exactly as before. Raise it only after the whole cluster (and any
+    /// replication peer that applies this cluster's sagas) runs this version.
+    /// </para>
+    /// <para>
+    /// The value only decides which shards <b>new</b> transaction ids are minted
+    /// across. A saga's shard is stamped into its transaction id when the id is
+    /// minted, and every later registry call for that saga - from the saga
+    /// coordinator, a leaf resolving a pending intent, a shard root, a split, or a
+    /// replication receiver - routes by the stamped index alone, never by this
+    /// setting. Tree-wide reads (multi-key <c>GetManyAsync</c> reads, scans,
+    /// cursors, backups, replication bootstrap) cover every shard up to the
+    /// tree's durable shard high-water mark, which a shard raises before its
+    /// first write, plus the legacy registry. Silos configured with different
+    /// values therefore agree on every read, and changing the value in either
+    /// direction on a live cluster is safe: raising it spreads new sagas across
+    /// more shards, and lowering it (to <c>1</c> included) reroutes nothing and
+    /// still reads every shard already written to.
+    /// </para>
+    /// <para>
+    /// Sagas minted before an upgrade (or under a value of <c>1</c>) keep routing
+    /// to the legacy registry, which the tree-wide reads always include, so
+    /// enabling sharding needs no migration and the legacy row drains within one
+    /// retention window. A value of <c>8</c> lifts the per-tree ceiling from about
+    /// 100 to about 800 sustained sagas/s at the default budget and retention,
+    /// while keeping a tree-wide read at nine registry calls, which a per-silo
+    /// coalescer shares across concurrent reads. Must be between <c>1</c> and
+    /// <see cref="MaxTxRegistryShardCount"/>. Read from the global (unnamed)
+    /// options.
+    /// </para>
+    /// </summary>
+    public int TxRegistryShardCount { get; set; } = DefaultTxRegistryShardCount;
+
+    /// <summary>Default value for <see cref="TxRegistryShardCount"/> (1, the unsharded legacy layout).</summary>
+    public const int DefaultTxRegistryShardCount = 1;
+
+    /// <summary>Upper bound for <see cref="TxRegistryShardCount"/> (256): the shard index is stamped into one byte of the transaction id.</summary>
+    public const int MaxTxRegistryShardCount = 256;
 
     /// <summary>
     /// Hard cap on how long the per-tree transaction registry will retain a
@@ -2096,17 +2218,36 @@ public class LatticeOptions
     /// independently.
     /// </para>
     /// <para>
+    /// The configured value is a <b>floor</b>, not the layout. A shard widens
+    /// itself above it by powers of two (up to 1,024 slots) whenever a slot's
+    /// estimated serialised size would exceed a 64 KiB budget, and records the
+    /// width it chose in bucket zero, so the durable pin store stays under a
+    /// storage provider's entity limit (983,040 bytes for Azure Table) on a
+    /// large tree at default options (issue #3576). A failing write backs off
+    /// instead of retrying on every flush tick, and a single coalesced flush
+    /// rewrites a bounded number of slots.
+    /// </para>
+    /// <para>
     /// Defaults to <see cref="DefaultWalMaterialiserPinBuckets"/> (1), which
     /// persists to byte-for-byte the same single
     /// <c>wal-materialiser-pins</c> slot as every build before bucketing
-    /// existed, so an existing deployment is completely unaffected until an
-    /// operator opts in. Raising the count is self-healing and needs no
+    /// existed while the shard is small enough to fit one slot's budget.
+    /// Raising the count is self-healing and needs no
     /// migration step: an activation reads the legacy slot alongside its
     /// buckets and merges it, so pins written under the previous layout keep
     /// counting toward the trim floor and are re-persisted into their bucket on
-    /// the next advance. Lowering it again is equally safe for the same reason.
-    /// Size it so <c>expected leaves per tree / (shards * buckets)</c> lands in
-    /// the low hundreds.
+    /// the next advance. Lowering it again is equally safe for the same reason;
+    /// an activation consolidates to the narrower layout only while each slot
+    /// still fits half the budget. Raise it only to start a shard at a wider
+    /// layout than it would reach on its own.
+    /// </para>
+    /// <para>
+    /// Once every bucket holding the legacy slot's pins has been written, the
+    /// legacy slot is emptied, so a consumer removed after a split is not
+    /// resurrected from it. A build that predates the split therefore finds no
+    /// pins at a bucket count of 1: during a rolling upgrade, or a rollback,
+    /// run the older silos at a bucket count of at least 2 (ideally the width
+    /// recorded in bucket zero), or drain them first.
     /// </para>
     /// </summary>
     public int WalMaterialiserPinBuckets { get; set; } = DefaultWalMaterialiserPinBuckets;
@@ -2466,11 +2607,29 @@ public class LatticeOptions
     public const int DefaultWalAppendCoalescingInFlightThreshold = 4;
 
     /// <summary>
-    /// When <c>true</c> (the default), a bulk WAL append carrying exactly one
-    /// entry is dispatched through the interleaving batched grain method
-    /// rather than the exclusive-turn per-entry overload.
+    /// When <c>true</c> (the default), every single-entry WAL append - a
+    /// point append on the internal commit-log writer as well
+    /// as a bulk append carrying exactly one entry - is dispatched through the
+    /// interleaving batched grain method rather than the exclusive-turn
+    /// per-entry overload.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Point appends are the leaf point-write path (<c>SetAsync</c>,
+    /// <c>DeleteAsync</c> and their conditional forms), CRDT merge apply,
+    /// pending-transaction staging, and inline saga terminal records. Before
+    /// issue #812 they always took the exclusive-turn overload, whatever this
+    /// option said, so a partition admitted one point append per provider
+    /// round trip: batch occupancy pinned at one entry, the pending queue
+    /// never grew past one, and caller-visible latency equalled the provider
+    /// duration. On a two-silo set-point run that capped throughput at
+    /// roughly <see cref="WalPartitions"/> divided by the provider round
+    /// trip; raising the shard count had no effect, while raising the
+    /// partition count lifted it to the offered rate. Routing point appends
+    /// through the batched method lets <see cref="WalMaxPendingBatches"/>
+    /// pipelining and <see cref="WalAppendCoalescingInFlightThreshold"/>
+    /// coalescing engage for them.
+    /// </para>
     /// <para>
     /// A bulk append of one entry historically collapsed onto the singular
     /// per-entry grain overload to match its per-call allocation cost. That
@@ -2490,8 +2649,11 @@ public class LatticeOptions
     /// offset assignment, pending-list mutation, and in-flight cap
     /// enforcement are serialised by the shard's internal state gate rather
     /// than by turn exclusivity. Ordering, durability, and offset density are
-    /// unchanged, and a bulk append of one entry becomes semantically
-    /// identical to a bulk append of two.
+    /// unchanged, and a single-entry append becomes semantically identical to
+    /// a bulk append of two. The batched method runs the same origin, move
+    /// fence, sticky-failure, and quiesce checks as the per-entry overload,
+    /// and every point-append caller awaits its append before issuing the
+    /// next, so none relied on turn exclusivity for ordering.
     /// </para>
     /// <para>
     /// The exclusive turn conferred no read guarantee that is being given up.
@@ -2512,12 +2674,17 @@ public class LatticeOptions
     /// <para>
     /// Set to <c>false</c> to restore the historical exclusive-turn dispatch.
     /// This exists as an escape hatch and as the control arm for throughput
-    /// A/B measurement; it is not a safety switch.
+    /// A/B measurement; it is not a safety switch. The
+    /// <c>orleans.lattice.wal.append.turn_wait</c> and
+    /// <c>orleans.lattice.wal.append.queue_depth</c> histograms are recorded
+    /// only by the per-entry overload, so with this option on they no longer
+    /// observe single-entry appends; the writer-side dispatch histograms and
+    /// the flush batch-occupancy histogram still do.
     /// </para>
     /// </remarks>
     public bool WalBatchedSingleEntryAppends { get; set; } = DefaultWalBatchedSingleEntryAppends;
 
-    /// <summary>Default value for <see cref="WalBatchedSingleEntryAppends"/> (<c>true</c>). A bulk append of one entry must not hold a WAL partition exclusively for a whole provider round trip, because the wide-fan-out shape that dominates batched writes produces one-entry slices almost exclusively.</summary>
+    /// <summary>Default value for <see cref="WalBatchedSingleEntryAppends"/> (<c>true</c>). A single-entry append must not hold a WAL partition exclusively for a whole provider round trip: point writes are single-entry by construction, and the wide-fan-out shape that dominates batched writes produces one-entry slices almost exclusively, so either path would otherwise cap a partition at one append per round trip (#812).</summary>
     public const bool DefaultWalBatchedSingleEntryAppends = true;
 
 

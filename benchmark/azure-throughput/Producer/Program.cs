@@ -20,7 +20,6 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using Azure.Data.Tables;
 using Azure.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +31,7 @@ using Orleans.Hosting;
 using Orleans.Lattice;
 using VehicleFleetSimulator.Abstractions;
 using VehicleFleetSimulator.AzureThroughput.Engine;
+using VehicleFleetSimulator.AzureThroughput.Producer;
 using static VehicleFleetSimulator.AzureThroughput.Engine.BenchExceptionHelpers;
 
 // Force autoflush on stdout/stderr. In a Linux container with stdout
@@ -41,6 +41,21 @@ using static VehicleFleetSimulator.AzureThroughput.Engine.BenchExceptionHelpers;
 // note in Silo/Program.cs.
 Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
 Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+
+if (args.Contains("--dry-run", StringComparer.Ordinal))
+{
+    var generator = CreateChannelGenerator(ReadInt("BENCH_VEHICLE_COUNT", 1000));
+    await RunGeneratorAndDrainAsync(generator, async ct =>
+    {
+        long drained = 0;
+        while (await generator.Reader.WaitToReadAsync(ct).ConfigureAwait(false))
+        {
+            while (generator.Reader.TryRead(out _)) drained++;
+        }
+        Console.WriteLine($"[producer] dry-run drained={drained:N0}");
+    }, CancellationToken.None);
+    return;
+}
 
 var producerMode = (Environment.GetEnvironmentVariable("BENCH_PRODUCER_MODE") ?? "tcp").Trim().ToLowerInvariant();
 if (producerMode is not ("tcp" or "orleans-client"))
@@ -202,13 +217,14 @@ static async Task RunOrleansClientProducerAsync(string[] args)
 {
     var vehicleCount = ReadInt("BENCH_VEHICLE_COUNT", 1000);
     var tickHz = ReadInt("BENCH_TICK_HZ", 5);
-    var duration = ReadInt("BENCH_DURATION_SEC", 300);
+    var duration = ReadIntAllowZero("BENCH_DURATION_SEC", 300);
     var treeId = Environment.GetEnvironmentVariable("BENCH_TREE_ID")
         ?? $"azure-throughput-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
     var tcpPort = ReadInt("BENCH_TCP_PORT", 7000);
     var batchSize = ReadInt("BENCH_BATCH_SIZE", 4096);
     var flushMs = ReadInt("BENCH_FLUSH_MS", 50);
     var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
+    var pointFanOut = ReadIntAllowZero("BENCH_POINT_FANOUT", 0);
     var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
     var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
     var walExtraAccountUris = (Environment.GetEnvironmentVariable("BENCH_WAL_EXTRA_ACCOUNT_URIS") ?? string.Empty)
@@ -251,10 +267,13 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         responseTimeoutSec,
         walPartitions,
         walAccounts,
-        "orleans-client");
+        "orleans-client")
+    {
+        PointFanOut = pointFanOut,
+    };
 
     Console.WriteLine($"[producer] mode=orleans-client vehicles={vehicleCount} tickHz={tickHz} duration={duration}s clients={clientCount}");
-    Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
+    Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} pointFanOut={settings.EffectivePointFanOut} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
 
     // One IClusterClient reaches exactly one silo for this workload. Orleans
     // buckets client-to-grain traffic by TargetGrain hash to preserve per-grain
@@ -361,24 +380,34 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         warmSw.Stop();
         Console.WriteLine($"[producer] warmup treeId={settings.TreeId} complete elapsedMs={warmSw.Elapsed.TotalMilliseconds:F0}");
 
-        var channel = Channel.CreateBounded<KeyValuePair<string, byte[]>>(new BoundedChannelOptions(capacity: 1 << 16)
+        // Read-mode keyspace pre-seed, before the measured window opens. On
+        // the single-VM path the silo seeds during startup, but the Layer 3
+        // silo returns early in cluster mode and never reaches that step, so
+        // until #3474 every Layer 3 get-point / get-many cohort read an EMPTY
+        // tree: every call was a miss, and a miss always takes the serial
+        // shard-root turn rather than the optimistic read, so the curve
+        // measured the miss path instead of the read ceiling. This producer
+        // process owns every client for the cohort, so seeding once through
+        // the first client is race-free. A failed seed fails the cohort: the
+        // report refuses read cells whose log has no preseed line.
+        if (BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount))
         {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = false,
-        });
+            await PreseedWithRetryAsync(lattice, settings, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} skipped workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} preseedKeyCount={settings.PreseedKeyCount}");
+        }
 
+        var generator = CreateChannelGenerator(vehicleCount);
         var engine = new BenchIngestEngine(
             clusterClient,
             settings,
             lifetime,
             new NoOpBenchSaturationGate(),
             logger);
-        var drainTask = Task.Run(() => engine.DrainAsync(lattices, channel.Reader, ct), CancellationToken.None);
-
-        await RunChannelGeneratorAsync(vehicleCount, tickHz, duration, channel.Writer, ct).ConfigureAwait(false);
-        channel.Writer.TryComplete();
-        await drainTask.ConfigureAwait(false);
+        await RunGeneratorAndDrainAsync(generator,
+            token => engine.DrainAsync(lattices, generator.Reader, token), ct).ConfigureAwait(false);
     }
     finally
     {
@@ -390,108 +419,46 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     }
 }
 
-static async Task RunChannelGeneratorAsync(
-    int vehicleCount,
-    int tickHz,
-    int duration,
-    ChannelWriter<KeyValuePair<string, byte[]>> writer,
-    CancellationToken ct)
+static ChannelGenerator CreateChannelGenerator(int vehicleCount)
 {
-    var vehicles = CreateVehicleIds(vehicleCount);
-    var jsonOpts = new JsonSerializerOptions { IncludeFields = false, WriteIndented = false };
-
-    var startedAt = Stopwatch.GetTimestamp();
-    var deadlineTicks = duration > 0
-        ? Stopwatch.GetTimestamp() + (long)(duration * (double)Stopwatch.Frequency)
-        : long.MaxValue;
-
-    var tickIntervalMs = Math.Max(1, 1000 / tickHz);
-    var nextTick = DateTimeOffset.UtcNow;
-    var scheduledTick = DateTimeOffset.UtcNow;
-    double innerLoopMsThisReport = 0.0;
-    double flushMsThisReport = 0.0;
-    double tickSlipMaxMsThisReport = 0.0;
-    long ticksThisReport = 0;
-
-    long totalSent = 0;
-    long sentSinceReport = 0;
-    var lastReport = Stopwatch.GetTimestamp();
-
-    while (Stopwatch.GetTimestamp() < deadlineTicks && !ct.IsCancellationRequested)
+    var raw = Environment.GetEnvironmentVariable("BENCH_GENERATOR_PARALLELISM");
+    var parallelism = Environment.ProcessorCount;
+    if (raw is not null && (!int.TryParse(raw, out parallelism) || parallelism < 0))
     {
-        var now = DateTimeOffset.UtcNow;
-        if (now < nextTick)
-        {
-            var wait = (int)Math.Max(1, (nextTick - now).TotalMilliseconds);
-            await Task.Delay(wait, ct).ConfigureAwait(false);
-            continue;
-        }
-        nextTick = now + TimeSpan.FromMilliseconds(tickIntervalMs);
-
-        var slip = (now - scheduledTick).TotalMilliseconds;
-        if (slip > tickSlipMaxMsThisReport) tickSlipMaxMsThisReport = slip;
-        scheduledTick = scheduledTick.AddMilliseconds(tickIntervalMs);
-        ticksThisReport++;
-
-        var innerStart = Stopwatch.GetTimestamp();
-        for (var i = 0; i < vehicles.Length; i++)
-        {
-            var ev = new VehicleTelemetryEvent(
-                VehicleId: vehicles[i],
-                TimestampUtc: now,
-                FromCityId: "A",
-                ToCityId: "B",
-                SegmentProgressKm: (i % 100) * 0.5,
-                SegmentLengthKm: 100.0,
-                SpeedKph: 60.0,
-                FuelLitres: 40.0,
-                Status: VehicleStatus.Driving,
-                FuelCapacityLitres: 50.0);
-
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(ev, jsonOpts);
-            var key = ev.VehicleId.ToString("N");
-            await writer.WriteAsync(new KeyValuePair<string, byte[]>(key, bytes), ct).ConfigureAwait(false);
-
-            totalSent++;
-            sentSinceReport++;
-        }
-        innerLoopMsThisReport += (Stopwatch.GetTimestamp() - innerStart) * 1000.0 / Stopwatch.Frequency;
-
-        var sinceReport = Stopwatch.GetTimestamp() - lastReport;
-        if (sinceReport >= Stopwatch.Frequency)
-        {
-            var rate = sentSinceReport / (sinceReport / (double)Stopwatch.Frequency);
-            var elapsed = (Stopwatch.GetTimestamp() - startedAt) / (double)Stopwatch.Frequency;
-            var innerAvgMs = ticksThisReport > 0 ? innerLoopMsThisReport / ticksThisReport : 0.0;
-            var flushAvgMs = ticksThisReport > 0 ? flushMsThisReport / ticksThisReport : 0.0;
-            Console.WriteLine($"[producer] t={elapsed,7:0.0}s sent={totalSent,12:N0} rate={rate,10:N0} msg/s ticks={ticksThisReport,3} innerAvgMs={innerAvgMs,7:0.00} flushAvgMs={flushAvgMs,7:0.00} slipMaxMs={tickSlipMaxMsThisReport,8:0.0}");
-            sentSinceReport = 0;
-            ticksThisReport = 0;
-            innerLoopMsThisReport = 0.0;
-            flushMsThisReport = 0.0;
-            tickSlipMaxMsThisReport = 0.0;
-            lastReport = Stopwatch.GetTimestamp();
-        }
+        throw new ArgumentException("BENCH_GENERATOR_PARALLELISM must be a non-negative integer (0 = automatic).");
     }
-
-    var totalElapsed = (Stopwatch.GetTimestamp() - startedAt) / (double)Stopwatch.Frequency;
-    Console.WriteLine($"[producer] DONE total={totalSent:N0} elapsed={totalElapsed:0.0}s avg={totalSent / Math.Max(0.001, totalElapsed):N0} msg/s");
+    if (parallelism == 0) parallelism = Environment.ProcessorCount;
+    return new ChannelGenerator(vehicleCount, parallelism);
 }
 
-static Guid[] CreateVehicleIds(int vehicleCount)
+static async Task RunGeneratorAndDrainAsync(
+    ChannelGenerator generator,
+    Func<CancellationToken, Task> drain,
+    CancellationToken ct)
 {
-    var vehicles = new Guid[vehicleCount];
-    var idBytes = new byte[16];
-    for (var i = 0; i < vehicleCount; i++)
+    using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    var drainTask = Task.Run(() => drain(stop.Token), CancellationToken.None);
+    var mode = BenchWorkloadMetadata.ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
+    var generateTask = generator.RunAsync(ReadInt("BENCH_TICK_HZ", 5),
+        ReadIntAllowZero("BENCH_DURATION_SEC", 300),
+        mode is BenchWorkloadMode.GetPoint or BenchWorkloadMode.GetMany, stop.Token);
+    try
     {
-        BitConverter.TryWriteBytes(idBytes.AsSpan(0, 4), i);
-        BitConverter.TryWriteBytes(idBytes.AsSpan(4, 4), 0xC0FFEE);
-        BitConverter.TryWriteBytes(idBytes.AsSpan(8, 4), 0xDEADBEEF);
-        BitConverter.TryWriteBytes(idBytes.AsSpan(12, 4), 0xCAFEBABE);
-        vehicles[i] = new Guid(idBytes);
+        if (await Task.WhenAny(generateTask, drainTask).ConfigureAwait(false) == drainTask)
+        {
+            await drainTask.ConfigureAwait(false);
+            await stop.CancelAsync().ConfigureAwait(false);
+        }
+        await generateTask.ConfigureAwait(false);
+        await drainTask.ConfigureAwait(false);
     }
-
-    return vehicles;
+    finally
+    {
+        await stop.CancelAsync().ConfigureAwait(false);
+        // Observe both tasks before disposing the cancellation source.
+        try { await Task.WhenAll(generateTask, drainTask).ConfigureAwait(false); }
+        catch (Exception ex) { Console.Error.WriteLine($"[producer] generation/drain stopped: {ex.Message}"); }
+    }
 }
 
 static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, CancellationToken ct)
@@ -579,6 +546,53 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
         lastException);
 }
 
+static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings settings, CancellationToken ct)
+{
+    // Every seeded entry is deterministic, so re-writing a slice is
+    // idempotent. A retry resumes from the first slice that has not landed
+    // (#3588): restarting from zero re-wrote everything already seeded, so a
+    // large seed that failed late never finished within its attempts. The
+    // attempt cap keeps a persistently failing seed loud.
+    const int MaxPreseedAttempts = 8;
+    // A saturation refusal drains on a seconds timescale, so it backs off
+    // further than the placement and activation races do.
+    const int MaxPreseedBackoffMs = 5000;
+    const int MaxPreseedSaturationBackoffMs = 20000;
+    var sliceSize = Math.Max(1, settings.BatchSize);
+    var landed = 0;
+    var sw = Stopwatch.StartNew();
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            var written = await BenchPreseed.SeedAsync(
+                lattice, settings.PreseedKeyCount, sliceSize, ct, landed, offset => landed = offset).ConfigureAwait(false);
+            sw.Stop();
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} entries={written} payloadBytes={BenchPreseed.PayloadBytes} attempts={attempt} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
+            return;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (attempt < MaxPreseedAttempts
+            && (IsOrleansMessageRejection(ex)
+                || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
+                || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
+                || WarmUpRetryClassifier.IsTransientSaturation(ex)
+                || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
+        {
+            var backoffMs = WarmUpRetryClassifier.IsTransientSaturation(ex)
+                ? Math.Min(2500 * attempt, MaxPreseedSaturationBackoffMs)
+                : Math.Min(1000 * attempt, MaxPreseedBackoffMs);
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} transient ({ex.GetType().Name}) at offset={landed}/{settings.PreseedKeyCount}; retrying in {backoffMs}ms (attempt={attempt}/{MaxPreseedAttempts})");
+            await Task.Delay(backoffMs, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            Console.Error.WriteLine($"[producer] ERROR preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} attempts={attempt} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} FAILED: {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
+    }
+}
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {
     const int MaxReshardAttempts = 12;
@@ -703,4 +717,3 @@ static int ReadIntAllowZero(string name, int @default)
     var raw = Environment.GetEnvironmentVariable(name);
     return int.TryParse(raw, out var v) && v >= 0 ? v : @default;
 }
-

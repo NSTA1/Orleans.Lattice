@@ -24,7 +24,7 @@ namespace Orleans.Lattice;
 /// same silo activation can succeed once the regime clears.
 /// </para>
 /// <para>
-/// <b>Sources.</b> Surfaces from four distinct saturation failure
+/// <b>Sources.</b> Surfaces from several distinct saturation failure
 /// shapes that share the same operational meaning ("this tree's
 /// storage layer is back-pressured; the operation was refused"):
 /// </para>
@@ -68,6 +68,13 @@ namespace Orleans.Lattice;
 ///   the last free slot of that share, which is kept for WAL GC sweep drives,
 ///   or, where the share is a single slot, while a refused sweep drive is
 ///   waiting for it (issue #3575).</description></item>
+///   <item><description>The transaction-registry capacity refusal from
+///   <c>TxRegistryGrain.EnsureSagaAdmissionAsync</c>, raised when a new
+///   atomic-write saga would grow the per-tree registry's persisted row
+///   past <see cref="LatticeOptions.TxRegistryAdmissionBudgetBytes"/>.
+///   Like the replay-permit refusal it is raised before the saga does any
+///   work, and it never refuses a saga that was already admitted.
+///   Reported as <see cref="LatticeSaturationSource.TxRegistryCapacity"/>.</description></item>
 /// </list>
 /// <para>
 /// The typed slot lets callers that care about the saturation

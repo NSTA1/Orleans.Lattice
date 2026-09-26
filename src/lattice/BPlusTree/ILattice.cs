@@ -304,6 +304,16 @@ public interface ILattice : IGrainWithStringKey
     /// </summary>
     /// <param name="entries">The key-value pairs to write atomically.</param>
     /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
+    /// call does not hold a stateless-worker turn while it awaits its saga. The
+    /// saga calls back into this interface on the same tree for its routing and
+    /// prepare legs, and those callbacks land in the same per-silo worker pool;
+    /// without interleaving, one outer call per worker exhausts the pool and the
+    /// callbacks can never run, deadlocking every in-flight atomic write until
+    /// the response timeout. Do not remove the attribute.
+    /// </remarks>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -340,6 +350,16 @@ public interface ILattice : IGrainWithStringKey
     /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when <paramref name="entries"/> contains duplicate keys or null values.</exception>
     /// <exception cref="LatticeIdempotencyKeyMismatchException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set.</exception>
     /// <exception cref="InvalidOperationException">Thrown when a write fails and compensation completes.</exception>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
+    /// call does not hold a stateless-worker turn while it awaits its saga. The
+    /// saga calls back into this interface on the same tree for its routing and
+    /// prepare legs, and those callbacks land in the same per-silo worker pool;
+    /// without interleaving, one outer call per worker exhausts the pool and the
+    /// callbacks can never run, deadlocking every in-flight atomic write until
+    /// the response timeout. Do not remove the attribute.
+    /// </remarks>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -373,6 +393,16 @@ public interface ILattice : IGrainWithStringKey
     /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when the combined batch contains a duplicate or null key, or a null upsert value.</exception>
     /// <exception cref="LatticeIdempotencyKeyMismatchException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set.</exception>
     /// <exception cref="InvalidOperationException">Thrown when a write fails and compensation completes.</exception>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
+    /// call does not hold a stateless-worker turn while it awaits its saga. The
+    /// saga calls back into this interface on the same tree for its routing and
+    /// prepare legs, and those callbacks land in the same per-silo worker pool;
+    /// without interleaving, one outer call per worker exhausts the pool and the
+    /// callbacks can never run, deadlocking every in-flight atomic write until
+    /// the response timeout. Do not remove the attribute.
+    /// </remarks>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task SetManyAtomicAsync(
         List<KeyValuePair<string, byte[]>> upserts,
         IReadOnlyList<string> deletes,
@@ -398,7 +428,17 @@ public interface ILattice : IGrainWithStringKey
     /// predicate expression to IR.
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
+    /// call does not hold a stateless-worker turn while it awaits its saga. The
+    /// saga calls back into this interface on the same tree for its routing and
+    /// prepare legs, and those callbacks land in the same per-silo worker pool;
+    /// without interleaving, one outer call per worker exhausts the pool and the
+    /// callbacks can never run, deadlocking every in-flight atomic write until
+    /// the response timeout. Do not remove the attribute.
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -408,7 +448,17 @@ public interface ILattice : IGrainWithStringKey
     /// original memoized <see cref="AtomicWriteOutcome"/> without re-evaluating
     /// the predicate against possibly-moved data; the predicate must be pure.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
+    /// call does not hold a stateless-worker turn while it awaits its saga. The
+    /// saga calls back into this interface on the same tree for its routing and
+    /// prepare legs, and those callbacks land in the same per-silo worker pool;
+    /// without interleaving, one outer call per worker exhausts the pool and the
+    /// callbacks can never run, deadlocking every in-flight atomic write until
+    /// the response timeout. Do not remove the attribute.
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<AtomicWriteOutcome> SetManyAtomicWhereAsync(List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, string operationId, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes the value for <paramref name="key"/>. Returns <c>true</c> if it existed.</summary>

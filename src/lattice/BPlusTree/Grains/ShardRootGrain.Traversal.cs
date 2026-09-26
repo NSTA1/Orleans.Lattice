@@ -377,10 +377,12 @@ internal sealed partial class ShardRootGrain
         // table, and caching it would pin that stale table until the node next
         // splits - routing every key of a newly linked child to its donor.
         // Cache only when no invalidation ran while the fetch was in flight
-        // (issue #3523); the caller still gets the snapshot it fetched.
+        // (issues #3523, #3474); interleaved reads and SetManyAsync make that
+        // overlap reachable. The caller still gets the snapshot it fetched.
         var generation = Volatile.Read(ref _routingGeneration);
         var grain = ResolveInternalGrain(internalId);
         var snapshot = await grain.GetRoutingTableAsync();
+
         if (generation == Volatile.Read(ref _routingGeneration))
         {
             _routingTableCache[internalId] = snapshot;
@@ -411,6 +413,46 @@ internal sealed partial class ShardRootGrain
     {
         _routingTableCache.TryRemove(internalId, out _);
         Interlocked.Increment(ref _routingGeneration);
+        _unstampedLeafProbeRetryAfter.Clear();
+    }
+
+    /// <summary>
+    /// Resolves the leaf a point read of <paramref name="key"/> routes to using only
+    /// the shard root's in-memory routing state and already-cached routing tables,
+    /// with no await. Returns <c>false</c> when any hop would need a cross-grain
+    /// routing-table fetch, or when the descent does not land on a leaf grain; the
+    /// caller then defers to the serial read. Keeping the optimistic read off the
+    /// fetch path means it never publishes into the routing-table cache the serial
+    /// write path shares.
+    /// </summary>
+    private bool TryResolveReadLeafFromCache(string key, out GrainId leafId)
+    {
+        var currentId = state.State.RootNodeId!.Value;
+        if (state.State.RootIsLeaf)
+        {
+            leafId = currentId;
+            return IsLeafGrainId(leafId);
+        }
+
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            if (!_routingTableCache.TryGetValue(currentId, out var snapshot))
+            {
+                break;
+            }
+
+            var (childId, childrenAreLeaves) = snapshot.Route(key);
+            if (childrenAreLeaves)
+            {
+                leafId = childId;
+                return IsLeafGrainId(leafId);
+            }
+
+            currentId = childId;
+        }
+
+        leafId = default;
+        return false;
     }
 
     /// <summary>
@@ -465,6 +507,27 @@ internal sealed partial class ShardRootGrain
 #endif
         var cache = ResolveLeafCacheGrain(leafId);
         RecordLeafAccess(leafId);
+        if (_cachedOptions?.OptimisticShardRootPointReads == true && !_leafRoutingStamps.ContainsKey(leafId)
+            && (!_unstampedLeafProbeRetryAfter.TryGetValue(leafId, out var retryAfter)
+                || Environment.TickCount64 >= retryAfter))
+        {
+            var epoch = _routingEpoch;
+            var generation = _routingGeneration;
+            var proof = await ResolveLeafGrain(leafId).GetWithVersionAsync(key);
+            if (_routingEpoch == epoch && _routingGeneration == generation && _routingMutationsInFlight == 0)
+            {
+                if (proof.LeafRoutingEpoch != Guid.Empty && proof.LeafRoutingGeneration > 0)
+                {
+                    _leafRoutingStamps[leafId] = (proof.LeafRoutingEpoch, proof.LeafRoutingGeneration);
+                    _unstampedLeafProbeRetryAfter.Remove(leafId);
+                }
+                else
+                {
+                    _unstampedLeafProbeRetryAfter[leafId] =
+                        Environment.TickCount64 + LeafOwnershipProbeRetryMilliseconds;
+                }
+            }
+        }
         return await cache.GetAsync(key);
     }
 
@@ -761,6 +824,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<SplitResult?> LinkSplitAsync(SplitResult splitResult, int height)
     {
+        using var routingMutation = EnterRoutingMutation();
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {

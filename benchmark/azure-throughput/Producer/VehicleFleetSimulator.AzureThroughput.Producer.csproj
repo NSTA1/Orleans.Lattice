@@ -15,6 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench.Tests" />
     <ProjectReference Include="..\Engine\VehicleFleetSimulator.AzureThroughput.Engine.csproj" />
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />

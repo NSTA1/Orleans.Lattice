@@ -790,6 +790,7 @@ internal sealed class WalCommitLogWriter(
             // on a registered callback path that does not depend on
             // WaitAsync(TimeSpan)'s internal timer-task plumbing.
             var dispatchTimeout = perTree.WalAppendDispatchTimeout;
+            var batched = perTree.WalBatchedSingleEntryAppends;
             if (dispatchTimeout == Timeout.InfiniteTimeSpan)
             {
                 pending.AdvanceTo(WalAppendStage.SentToShard);
@@ -800,7 +801,7 @@ internal sealed class WalCommitLogWriter(
                     // threadpool, so the writer-side diagnostic counter and
                     // log line fire even when the grain scheduler is parked.
                     // See WalAppendStage / StallWatchdog for the lifecycle.
-                    var offsetInf = await grain.AppendAsync(stamped, cancellationToken).ConfigureAwait(false);
+                    var offsetInf = await DispatchPointAppendAsync(grain, stamped, batched, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                     return offsetInf;
                 }
@@ -828,7 +829,7 @@ internal sealed class WalCommitLogWriter(
             using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadlineCts.CancelAfter(dispatchTimeout);
             pending.AdvanceTo(WalAppendStage.SentToShard);
-            var grainCall = grain.AppendAsync(stamped, deadlineCts.Token);
+            var grainCall = DispatchPointAppendAsync(grain, stamped, batched, deadlineCts.Token);
             try
             {
                 // Wedge-attribution exception: same rationale as the
@@ -901,6 +902,44 @@ internal sealed class WalCommitLogWriter(
             tracker.Unlink(pending);
             tracker.ReleaseAdmission();
             RecordDispatchOutcome(stamped.TreeId, partition, walPartitions, perTree, entryCount: 1, dispatchStartTicks);
+        }
+    }
+
+    // Selects the grain overload a point append dispatches to (#812).
+    // IWalShardGrain.AppendAsync takes an exclusive grain turn and awaits
+    // its own provider ack inside it, so a partition admits one point
+    // append per provider round trip and WalMaxPendingBatches pipelining,
+    // WalAppendCoalescingInFlightThreshold coalescing and the batch packer
+    // never engage. The [AlwaysInterleave] AppendBatchAsync overload
+    // assigns the offset under the same state gate and runs the same
+    // fences, sticky-failure and quiesce checks, so a one-entry batch is
+    // semantically the same append without the serialisation. The
+    // non-batched branch returns the grain task directly so the off-switch
+    // costs no extra state machine.
+    private static Task<long> DispatchPointAppendAsync(
+        IWalShardGrain grain,
+        WalRecord stamped,
+        bool batched,
+        CancellationToken cancellationToken)
+    {
+        return batched
+            ? DispatchBatchedPointAppendAsync(grain, stamped, cancellationToken)
+            : grain.AppendAsync(stamped, cancellationToken);
+
+        static async Task<long> DispatchBatchedPointAppendAsync(
+            IWalShardGrain grain,
+            WalRecord stamped,
+            CancellationToken cancellationToken)
+        {
+            // One single-element array per point append: not measurable
+            // against the provider round trip the exclusive turn held,
+            // the same trade AppendManyAsync already makes for count == 1.
+            // Wedge-attribution exception: this await sits inside the
+            // outbound shard-RPC dispatch, so its continuation must not be
+            // queued back onto a possibly-wedged caller grain context, or
+            // the infinite-deadline branch's diagnostic catch never runs.
+            var offsets = await grain.AppendBatchAsync(new[] { stamped }, cancellationToken).ConfigureAwait(false);
+            return offsets[0];
         }
     }
 

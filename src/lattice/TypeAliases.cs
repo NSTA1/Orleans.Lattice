@@ -119,6 +119,7 @@ internal static class TypeAliases
     internal const string Versioned = "ol.ver";
     internal const string VersionedValue = "ol.vvl";
     internal const string GatedMultiReadResult = "ol.gmr";
+    internal const string OptimisticReadResult = "ol.orr";
     internal const string LatticeRangeReadGateCoverage = "ol.rrc";
     internal const string ShardHotness = "ol.sh";
     internal const string ShardMap = "ol.sm";
@@ -131,6 +132,7 @@ internal static class TypeAliases
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
+    internal const string ShardRootDeactivating = "ol.sdx";
 
     // Range-scan page-fill stall surface. Thrown by ShardRootGrain when a
     // single page fill exceeds MaxScanPageStallDuration end to end, so the
@@ -304,6 +306,9 @@ internal static class TypeAliases
     internal const string AtomicPreValue = "ol.apv";
     internal const string AtomicWriteOutcome = "ol.awo";
     internal const string TxRegistryState = "ol.txr";
+    internal const string TxRegistryHighWaterState = "ol.txh";
+    internal const string TxRegistryWriteFailed = "ol.txf";
+    internal const string LatticeStateWriteFailed = "ol.swf";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";
     internal const string SnapshotPin = "ol.sp";
@@ -317,6 +322,7 @@ internal static class TypeAliases
     internal const string CrossTreeTxPhase = "ol.ctp";
     internal const string CrossTreeParticipant = "ol.ctc";
     internal const string CrossTreePrepareVote = "ol.ctv";
+    internal const string CrossTreeParkRetry = "ol.ctr";
     internal const string ILatticeCrossTreeTxGrain = "ol.gct";
     // Receiver-side cross-tree visibility barrier.
     internal const string ILatticeCrossTreeReceiverGrain = "ol.gcr";
@@ -479,6 +485,7 @@ internal static class TypeAliases
     internal const string IReplicationApplyGrain = "ol.gra";
     internal const string ILeafReplayCoordinatorGrain = "ol.grc";
     internal const string ITxRegistryGrain = "ol.gxr";
+    internal const string ITxRegistryHighWaterGrain = "ol.gxh";
     internal const string ILeafSnapshotStorageGrain = "ol.gsx";
     internal const string ILeafSnapshotSegmentGrain = "ol.gsg";
     internal const string ISnapshotBaselineStorageGrain = "ol.sbs";

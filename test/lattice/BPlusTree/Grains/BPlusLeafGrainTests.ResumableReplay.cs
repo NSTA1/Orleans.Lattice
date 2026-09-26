@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -120,7 +121,9 @@ public partial class BPlusLeafGrainTests
         ILeafSnapshotStorageGrain snapshotStub,
         int reclassifyEveryN,
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
-        ITxRegistryGrain? registry = null)
+        ITxRegistryGrain? registry = null,
+        int? registryShardCount = null,
+        string? registryKey = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -130,12 +133,22 @@ public partial class BPlusLeafGrainTests
         // GetStatusAsync yields the default TxStatus.InFlight, which is the
         // strict-isolation view every pre-existing resumable-replay test relies
         // on (an unresolved prepare stays clamped).
-        if (registry is not null)
+        // A registryKey pins the registry to exactly one grain key, so a test can
+        // prove which registry shard (issue #3501) the leaf consulted.
+        if (registry is not null && registryKey is not null)
+            grainFactory.GetGrain<ITxRegistryGrain>(registryKey).Returns(registry);
+        else if (registry is not null)
             grainFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(registry);
 
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(Substitute.For<ILeafCursorReporter>());
+        if (registryShardCount is { } shardCount)
+        {
+            var registryOptions = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+            registryOptions.Get(Arg.Any<string>()).Returns(new LatticeOptions { TxRegistryShardCount = shardCount });
+            sc.AddSingleton(registryOptions);
+        }
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();

@@ -73,6 +73,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// admission bound of issue #3284 exists to remove.
 /// </para>
 /// <para>
+/// <b>Saga state-write conflicts (issue #3572).</b> The envelope also
+/// absorbs a <see cref="LatticeStateWriteFailedException"/> whose
+/// <see cref="LatticeStateWriteFailedException.Conflict"/> is set: a saga
+/// grain's state write lost an optimistic-concurrency (ETag) check, typically
+/// because a storage-SDK transport retry landed the first attempt and the
+/// retry then saw the changed ETag. The grain has already marked itself
+/// conflicted and requested deactivation, so the retry, after the seed
+/// ladder's backoff, lands on a fresh activation that reloads the row and
+/// resumes idempotently from what is durable. A non-conflict state-write fault
+/// is not retried here.
+/// </para>
+/// <para>
 /// <b>Scoping.</b> This helper is consumed throughout the
 /// <see cref="LatticeGrain"/> partials - bulk load, cursors, digests, entry
 /// and key enumeration, orphan repair, projection administration, warm-up,
@@ -219,7 +231,8 @@ internal static class ShardActivationRetry
             catch (Exception ex) when (
                 ex is ShardActivationTimeoutException
                 || IsTransientSiloChurn(ex)
-                || IsRetryableSaturation(ex))
+                || IsRetryableSaturation(ex)
+                || GrainStateWriteFaults.IsTranslatedConflict(ex))
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
@@ -254,7 +267,8 @@ internal static class ShardActivationRetry
             catch (Exception ex) when (
                 ex is ShardActivationTimeoutException
                 || IsTransientSiloChurn(ex)
-                || IsRetryableSaturation(ex))
+                || IsRetryableSaturation(ex)
+                || GrainStateWriteFaults.IsTranslatedConflict(ex))
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
@@ -280,11 +294,19 @@ internal static class ShardActivationRetry
     /// cold-start seed timeout. Matched by type name - one of the Orleans
     /// types is internal - mirroring the detection the atomic-write saga
     /// coordinator already uses for the deactivation-race rejection shape.
+    /// Lattice's own <see cref="ShardRootDeactivatingException"/> is the same
+    /// condition raised one hop earlier, by a shard root that refused a point
+    /// write because it had already requested its own deactivation (#812).
     /// </summary>
     internal static bool IsTransientSiloChurn(Exception ex)
     {
         for (var e = ex; e is not null; e = e.InnerException!)
         {
+            if (e is ShardRootDeactivatingException)
+            {
+                return true;
+            }
+
             var typeName = e.GetType().Name;
             if (typeName.Contains("SiloUnavailableException", StringComparison.Ordinal)
                 || typeName.Contains("OrleansMessageRejectionException", StringComparison.Ordinal))

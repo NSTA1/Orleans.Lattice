@@ -300,7 +300,22 @@ internal static class WalMaterialiserPinRouting
     /// <param name="bucketCount">The configured bucket count.</param>
     /// <returns>The bucket ordinal, or zero when bucketing is disabled.</returns>
     public static int BucketOf(string consumerId, int bucketCount)
-        => bucketCount <= 1 ? 0 : (int)(Avalanche(StableHash(consumerId)) % (uint)bucketCount);
+        => bucketCount <= 1 ? 0 : (int)(BucketHash(consumerId) % (uint)bucketCount);
+
+    /// <summary>
+    /// Returns the width-independent bucket hash of <paramref name="consumerId"/>:
+    /// <see cref="BucketOf"/> is this value modulo the bucket count. Exposed so
+    /// the pin grain can cache one hash per consumer and re-route the whole
+    /// shard to a new layout width in a single pass without re-hashing. Because
+    /// every width the grain moves between is a power-of-two multiple or
+    /// divisor of the previous one, a consumer's slot under the wider layout is
+    /// always congruent to its slot under the narrower one modulo the narrower
+    /// width, which is what the crash-safe relayout order relies on.
+    /// </summary>
+    /// <param name="consumerId">The leaf-materialiser consumer id.</param>
+    /// <returns>The avalanched stable hash.</returns>
+    public static uint BucketHash(string consumerId)
+        => Avalanche(StableHash(consumerId));
 
     /// <summary>
     /// Returns the durable grain-state slot name for bucket

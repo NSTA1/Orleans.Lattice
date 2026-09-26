@@ -280,8 +280,8 @@ re-entry simply re-drives them until they complete.
 ### Tree-wide visibility flip
 
 After Execute completes (success path) or after Compensate completes
-(failure path), the saga records its terminal outcome on the per-tree
-`ITxRegistryGrain` via `MarkCommittedAsync(txid)` or
+(failure path), the saga records its terminal outcome on its
+`ITxRegistryGrain` shard (see [Sharded decision registry](#sharded-decision-registry)) via `MarkCommittedAsync(txid)` or
 `MarkAbortedAsync(txid)`. **This single registry write is the moment
 of tree-wide visibility flip.** It is the only point in the saga's
 lifecycle at which any reader, anywhere in the tree, can observe the
@@ -306,6 +306,116 @@ coordinator - re-drives it (the registry write and every terminal are
 idempotent) until every touched shard has received its terminal.
 Readers that race the fan-out continue to observe the registry-recorded
 outcome via dial-back until their pending entries are drained.
+
+### Sharded decision registry
+
+A tree's decision registry can be split into
+`LatticeOptions.TxRegistryShardCount` shards (default 1, which keeps the
+unsharded layout), each a separate `ITxRegistryGrain` activation keyed
+`_lattice_txshard_{n}_{treeId}` with its own persisted row, its own admission budget, and
+its own decisions revision. The shard leads the key inside the reserved
+`_lattice_` namespace, so no tree id - including one that itself contains
+digits, underscores, or a `~s3` suffix - can collide with a shard key. Every
+completed saga leaves a tombstone in its shard's row for
+`TxDecisionRetention`, so a single row caps the saga rate a tree can
+retain. Splitting the registry lifts that ceiling linearly with the shard
+count without shortening retention or evicting any decision early.
+
+The shard is chosen once, when the saga mints its transaction id at
+admission, and the shard index is stamped into the id itself (a version-8
+UUID). The id the admission check ran against is the one Prepare persists,
+so the admission check, every participant registration, the decision, and
+the `ForgetAsync` cleanup all land on the same shard. Every other caller
+that holds the txid - a leaf resolving a pending intent, a shard root, a
+split sweep, a backup, a replication receiver - routes to that shard from
+the id alone. For any one saga the owning shard is therefore still the
+single linearization point described above. Routing reads the stamped index
+directly and never consults the configured shard count, so silos with
+different values still route every txid identically.
+
+Reads that need the whole tree's decisions (multi-key reads, scans,
+cursors, point-in-time pins, backups and replication snapshots) fan out to
+every shard up to the tree's **shard high-water mark** and union the
+results. The mark is one durable value per tree, held by
+`ITxRegistryHighWaterGrain` (keyed by the tree id), and a shard raises it
+to its own index plus one before its first write in each activation; a
+failed raise fails that write. So no decision can be persisted on a shard
+the tree-wide reads do not cover. The fan-out reads the mark alongside the
+shards and widens and re-runs if it grew. The per-shard revisions are summed into
+one tree-wide equality token, and a stable snapshot re-reads the revisions
+after the fan-out and retries if any shard moved. A per-silo coalescer
+shares one fan-out between the concurrent reads of a tree: a snapshot
+caller joins the round already in flight, while a caller that needs a
+revision at least as fresh as its own arrival waits for the next round
+rather than joining one that started before it.
+
+**Write failures.** A registry shard commits its mutations as one group
+per state write, and a failed write fails every caller in the group with
+an internal `TxRegistryWriteFailedException` that names the registry key
+and the provider's fault type. Nothing that write carried is durable, so
+the caller may retry. The raw provider exception is never propagated,
+because a storage-specific exception type (an Azure Table ETag conflict,
+say) need not be loadable on the calling silo. When the fault is an
+optimistic-concurrency conflict, which means a second activation of the
+same shard has written the row, the shard deactivates itself so that the
+next call reloads the current row rather than failing forever against a
+stale ETag. The same applies to the high-water grain. The saga
+coordinator, the shard root's participant registration and the
+replication receiver retry a failed registry write up to four times, with
+a short doubling backoff, before surfacing it.
+
+**Saga state-write conflicts.** The saga grain, the cross-tree coordinator
+and the leaf-materialiser pin grain each persist their own state with the
+provider's optimistic-concurrency check. A storage SDK can retry a write whose
+first attempt actually landed, and the retry then reports a conflict against the
+ETag the landed attempt produced. The activation's cached ETag is stale from that
+point, so every later write would fail the same way. On such a conflict the grain
+marks the activation conflicted, requests deactivation, and fails every further
+call on it fast rather than writing again with the stale ETag. The next call
+lands on a fresh activation, which reloads the row and resumes from the durable
+phase, exactly as crash recovery does. Resuming is idempotent whether or not the
+conflicted write landed: a persist failure never triggers compensation and the
+decision registry entry is write-once, so a resumed saga never applies a batch
+twice. A fresh coordinator that resumes from a durable Preparing phase may
+re-decide, and its verdict need not match the one the conflicted activation held
+in memory, because a participant that voted Failed on a transient fault can vote
+Prepared on re-dispatch. That is safe because no verdict leaves an activation
+before it is durable: while a decision write is outstanding the coordinator
+reports the transaction as still in flight, a conflicted coordinator refuses to
+answer decision reads (a participant's registry treats the failed read as
+indeterminate and caches nothing), and no participant is finalized against an
+unpersisted decision. A decision that did land is re-read and never flipped.
+A terminal write (the saga's Completed or PreconditionFailed phase, or the
+coordinator's Completed phase) that reports a conflict is confirmed in place by
+re-reading the row; when it had landed, the terminal cleanup (keepalive removal,
+the retention reminder, completion metrics and events, forgetting the decision)
+runs once as normal. If the re-read also fails, the activation deactivates, and
+the next call, or the keepalive reminder, that finds the durable terminal phase
+re-arms retention, removes the keepalive and forgets the decision idempotently,
+so the row is still cleared. Completion metrics and the completed event are not
+re-emitted on that path, since a duplicate is worse than the rare loss.
+`SetManyAtomicAsync` absorbs
+the conflict by retrying on the fresh activation (the retry envelope for
+single-tree writes, and up to three re-attaches by operation id for cross-tree
+writes). A conflict that outlives that budget, or any other provider fault on a
+saga state write, surfaces to the caller as a public, serializable
+`LatticeStateWriteFailedException` that names the grain type, the grain key and
+the provider's fault type, and says whether it was a conflict. The provider
+exception itself never crosses the grain boundary, because its type need not be
+loadable on the client. Faults of types the client can load, such as a
+`TimeoutException`, propagate unchanged.
+
+**Upgrade compatibility.** Transaction ids minted before sharding, or
+while `TxRegistryShardCount` is `1`, are ordinary version-4 UUIDs and
+route to the legacy registry keyed by the bare tree id. Tree-wide reads
+always include that legacy registry, so a saga in flight across an
+upgrade, or a leaf asking for the status of a txid recorded before it,
+resolves exactly as before. The legacy row drains within one retention
+window. Sharding is opt-in because a silo running an older version
+resolves every txid against the legacy registry: raise the shard count
+only once every silo, and every replication peer that applies this
+cluster's sagas, runs a version that understands sharded ids. See
+[Configuration](configuration.md#txregistryshardcount).
 
 ### Phase 4 - Complete
 
@@ -337,7 +447,7 @@ are restored verbatim so the same activation can retry and a reactivation
 re-reads the intact pre-terminal record from disk.
 
 `ForgetAsync` does **not** evict the decision record immediately - it
-stamps a tombstone in the per-tree `ITxRegistryGrain` with a `ForgottenAt`
+stamps a tombstone in the saga's `ITxRegistryGrain` shard with a `ForgottenAt`
 timestamp and retains the committed/aborted verdict for
 `LatticeOptions.TxDecisionRetention` (default 60 s). During this window
 `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to

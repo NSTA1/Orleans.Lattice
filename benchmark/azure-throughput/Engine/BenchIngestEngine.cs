@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -322,6 +323,23 @@ internal sealed class BenchIngestEngine(
             _ = task.ContinueWith(t => { lock (flushTasks) { flushTasks.Remove(t); } }, TaskScheduler.Default);
         }
 
+        // #3581: an atomic-mode producer batch is many sagas, and each
+        // saga is its own flush unit - it takes its own flush slot, is
+        // retried on its own, and is booked written or failed on its own.
+        // Handing the whole batch to one slot ran its sagas as a single
+        // sequential chain whose ops only moved when the last saga
+        // returned; at N=4 a 2,000-entry batch was ~1,000 sagas at ~0.6 s
+        // each, so every cohort read ops=0 and wedged. The in-flight saga
+        // bound is unchanged (FlushConcurrency either way). Non-atomic
+        // modes slice to the batch itself, so their dispatch is unchanged.
+        async Task DispatchBatchAsync(List<KeyValuePair<string, byte[]>> ready)
+        {
+            foreach (var unit in BenchWorkloadDispatcher.SliceIntoFlushUnits(settings.WorkloadMode, ready, settings.AtomicBatchSize))
+            {
+                TrackFlush(await DispatchFlushAsync(unit));
+            }
+        }
+
         try
         {
             while (await reader.WaitToReadAsync(ct))
@@ -344,8 +362,7 @@ internal sealed class BenchIngestEngine(
                         // which let the threadpool accumulate thousands
                         // of pending flush tasks while the silo plodded
                         // along at its own rate.
-                        var flushTask = await DispatchFlushAsync(ready);
-                        TrackFlush(flushTask);
+                        await DispatchBatchAsync(ready);
                         nextFlush = Stopwatch.GetTimestamp() + (long)(settings.FlushInterval.TotalSeconds * Stopwatch.Frequency);
                     }
                 }
@@ -354,8 +371,7 @@ internal sealed class BenchIngestEngine(
                 {
                     var ready = batch;
                     batch = new List<KeyValuePair<string, byte[]>>(settings.BatchSize);
-                    var flushTask = await DispatchFlushAsync(ready);
-                    TrackFlush(flushTask);
+                    await DispatchBatchAsync(ready);
                     nextFlush = Stopwatch.GetTimestamp() + (long)(settings.FlushInterval.TotalSeconds * Stopwatch.Frequency);
                 }
             }
@@ -409,8 +425,7 @@ internal sealed class BenchIngestEngine(
                 }
                 else
                 {
-                    var flushTask = await DispatchFlushAsync(ready);
-                    TrackFlush(flushTask);
+                    await DispatchBatchAsync(ready);
                 }
             }
         }
@@ -755,19 +770,41 @@ internal sealed class BenchIngestEngine(
         var lastRetryWasSaturation = false;
         var modeTag = new KeyValuePair<string, object?>("mode", BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
         var treeTag = new KeyValuePair<string, object?>("tree", settings.TreeId);
-        for (var attempt = 1; attempt <= FlushMaxAttempts; attempt++)
+        // The per-entry point modes report a partial failure per entry
+        // (BenchPointFanOutException). The entries that landed are banked in
+        // `landed`, only the failed ones stay `pending` for a retry, and the
+        // retry arms below classify the underlying failure exactly as they do
+        // for a single-call mode. Every other mode leaves `pending` as the
+        // whole batch, so its accounting is unchanged.
+        var pending = batch;
+        var landed = 0;
+        async Task DispatchPendingAsync()
         {
             try
             {
                 await BenchWorkloadDispatcher.DispatchAsync(
                     settings.WorkloadMode,
                     lattice,
-                    batch,
+                    pending,
                     settings.AtomicBatchSize,
-                    settings.FlushConcurrency,
+                    settings.EffectivePointFanOut,
                     ct,
                     grainFactory,
                     settings.TreeId).ConfigureAwait(false);
+            }
+            catch (BenchPointFanOutException partial)
+            {
+                landed += partial.Succeeded;
+                pending = new List<KeyValuePair<string, byte[]>>(partial.FailedEntries);
+                ExceptionDispatchInfo.Capture(partial.InnerException!).Throw();
+            }
+        }
+
+        for (var attempt = 1; attempt <= FlushMaxAttempts; attempt++)
+        {
+            try
+            {
+                await DispatchPendingAsync().ConfigureAwait(false);
                 // Subtract our own saturation backoff so lattice.op.duration_ms
                 // stays a measure of CALL latency rather than of this method's
                 // sleeping. Without this, a saturating rung - precisely the rung
@@ -785,10 +822,10 @@ internal sealed class BenchIngestEngine(
                     // This batch was refused for saturation at least once and
                     // then landed. Under the pre-#3339 engine every one of these
                     // entries was booked as `failed`.
-                    Interlocked.Add(ref saturationRecoveredTotal, batch.Count);
+                    Interlocked.Add(ref saturationRecoveredTotal, pending.Count);
                 }
 
-                return batch.Count;
+                return landed + pending.Count;
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) when (lifetime.ApplicationStopping.IsCancellationRequested && IsShutdownRejection(ex))
@@ -804,7 +841,10 @@ internal sealed class BenchIngestEngine(
                 // ingestion failure - they are shutdown back-pressure. Return
                 // the sentinel so the dispatcher skips both counters.
                 BenchMetrics.LatticeOpRetryAttempts.Record(attempt - 1, treeTag, modeTag);
-                return ShutdownDiscarded;
+                // A point unit that banked entries before the drain rejected
+                // the rest reports what landed; its rejected remainder books
+                // as failed. That only happens after FINAL has been emitted.
+                return landed > 0 ? landed : ShutdownDiscarded;
             }
             catch (Exception ex) when (!lifetime.ApplicationStopping.IsCancellationRequested && IsOrleansMessageRejection(ex))
             {
@@ -860,7 +900,7 @@ internal sealed class BenchIngestEngine(
                 Interlocked.Increment(ref saturationRetryTotal);
                 if (attempt >= FlushMaxAttempts)
                 {
-                    Interlocked.Add(ref saturationExhaustedTotal, batch.Count);
+                    Interlocked.Add(ref saturationExhaustedTotal, pending.Count);
                     break;
                 }
 
@@ -898,13 +938,13 @@ internal sealed class BenchIngestEngine(
                         "(BENCH_RESPONSE_TIMEOUT_SEC={ResponseTimeoutSec}s). Offered rate exceeds sustained Tables " +
                         "drain rate at this rung; raise BENCH_RESPONSE_TIMEOUT_SEC, drop tickHz/vehicles, or tune WAL " +
                         "fan-out (BENCH_WAL_PARTITIONS / BENCH_WAL_MAX_PENDING_BATCHES). mode={Mode}",
-                        batch.Count, settings.ResponseTimeoutSec, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
+                        pending.Count, settings.ResponseTimeoutSec, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
                 }
                 else
                 {
-                    logger.LogWarning(ex, "[silo] flush of {Count} failed (mode={Mode})", batch.Count, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
+                    logger.LogWarning(ex, "[silo] flush of {Count} failed (mode={Mode})", pending.Count, BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
                 }
-                return 0;
+                return landed;
             }
         }
 
@@ -917,11 +957,11 @@ internal sealed class BenchIngestEngine(
         logger.LogWarning(
             lastRejection,
             "[silo] flush of {Count} failed after {Attempts} retry attempts against {Class}; {BackoffMs}ms of that was saturation back-off (mode={Mode})",
-            batch.Count,
+            pending.Count,
             FlushMaxAttempts,
             exhaustedClass,
             saturationBackoffMs,
             BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode));
-        return 0;
+        return landed;
     }
 }

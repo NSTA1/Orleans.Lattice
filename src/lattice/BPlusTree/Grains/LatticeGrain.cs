@@ -18,7 +18,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <c>MaxLocalWorkers</c> is set to 32 so the
+/// <b>Sizing history.</b> <c>MaxLocalWorkers</c> was first set to 32 so the
 /// per-silo activation pool can absorb 32 concurrent in-flight calls before any
 /// new caller starts queueing on an existing activation's non-reentrancy queue.
 /// The Orleans default (<c>Environment.ProcessorCount</c>) is much smaller on
@@ -38,6 +38,58 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// activation-scoped and remain safe under multiple parallel activations.
 /// </para>
 /// <para>
+/// <b>Raised from 32 to 256 for single-key throughput (issue #812).</b> Every
+/// point call (<c>SetAsync</c>, <c>GetAsync</c>, ...) holds one non-reentrant
+/// activation for its whole end-to-end latency, so per-silo point-op
+/// concurrency is capped at <see cref="MaxLocalWorkers"/> and, by Little's law,
+/// throughput is capped at <c>MaxLocalWorkers / latency</c>. On the ACA
+/// two-silo set-point rig (4,000 keys/s offered) the 32-worker pool held 53 of
+/// a possible 64 calls in flight at 1,445 keys/s and 36.6 ms mean latency - the
+/// pool, not storage, was the bound. At 256 workers the same rig ran 1,721
+/// keys/s at 64 shards (+19%), where the bound moved to the per-shard
+/// serialisation of point writes on <see cref="IShardRootGrain"/> (almost all
+/// of the 258 ms mean latency was queueing in the shard stage, against a 20 ms
+/// leaf commit), and 2,735 keys/s at 256 shards (495 of 512 calls in flight),
+/// with zero failures in every arm. The read side hit the same wall: on the
+/// N=2 get-point rig the silo taking remote shard hops accumulated about
+/// 318,853 ms of <c>get.duration</c> per 10 s window - an average of 32 calls
+/// always in flight, exactly the old pool size - so with a p50 hop of about
+/// 3.3 ms point reads were capped near 10,000 per second per silo by the pool
+/// alone. 256 is the value the set-point rig proved safe; it
+/// is still a hard bound, so a runaway caller cannot expand the pool without
+/// limit.
+/// </para>
+/// <para>
+/// <b>The pool size is a throughput bound, not a correctness mechanism.</b>
+/// Nothing in this grain's correctness depends on the pool being large: a
+/// call path that could only complete if a second activation were free would
+/// deadlock at any size under enough load, so such a path must be fixed where
+/// it is (for example by interleaving the re-entrant entry point), never
+/// papered over by widening the pool.
+/// </para>
+/// <para>
+/// <b>Cost of the larger pool.</b> Orleans creates stateless-worker activations
+/// only on demand - a new one is added only when every existing local
+/// activation is busy - and idle ones are collected by the normal activation
+/// collector, so a lightly loaded tree still runs one or a handful of
+/// activations and pays nothing for the higher cap. Under saturation each
+/// activation carries only its lazy routing caches: a reference to the shared
+/// <see cref="ShardMap"/>, one grain-reference slot per physical shard in
+/// <c>_cachedShards</c> (8 bytes each, so 32 KB at the 4096-shard ceiling), and a
+/// few scalars - roughly 256 x (activation overhead + shard slots) per hot tree
+/// per silo, a few MB at most. Each new activation also pays one routing
+/// resolution (a registry shard-map read for a tree with a persisted map) on its
+/// first call, amortised over its lifetime. The only behavioural cost is on the
+/// raw <see cref="ILattice.KeysAsync"/>-family enumerators: their
+/// <c>MoveNext</c> mis-routing to a sibling worker is load-proportional, so a
+/// wider pool can raise their <c>EnumerationAbortedException</c> rate under load;
+/// the resumable <c>ScanKeysAsync</c> / <c>ScanEntriesAsync</c> forms recover
+/// from it transparently. Per-caller fan-out windows sized at 32
+/// (<see cref="BoundedFanOut.DefaultWidth"/> and the tag-index row-removal
+/// window) are deliberately left at 32: they bound one caller's burst, and a
+/// window below the pool size can never exhaust the pool on its own.
+/// </para>
+/// <para>
 /// <b>The timeout diagnostic quoted above is a censored channel; do not size a
 /// queue from it.</b> Orleans emits that clause only for a request already
 /// approaching the 30 s response deadline, and the clause describes the
@@ -54,8 +106,28 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// and read <see cref="LatticeMetrics.GrainCallOutstandingDepth"/>, which
 /// records at dispatch on every call and requires no timeout to exist.
 /// </para>
+/// <para>
+/// <b>The atomic entry points interleave, and the pool size is not what makes
+/// them live.</b> <c>SetManyAtomicAsync</c> (every overload) and
+/// <c>SetManyAtomicWhereAsync</c> (every overload) await an
+/// <see cref="IAtomicWriteGrain"/> saga for its whole duration, and the saga
+/// calls back into <see cref="ILattice"/> on the same tree (routing, and one
+/// <c>SetManyAsync</c> per prepare leg). A stateless worker is placed local to
+/// its caller, so those inner calls land in this same per-silo pool. Were the
+/// entry points non-reentrant, 32 concurrent sagas on one silo would occupy
+/// every worker with an outer call waiting on an inner call that has no worker
+/// to run on, and the pool would self-deadlock until the response timeout
+/// (reproduced deterministically: 31 concurrent sagas complete, 33 hang). They
+/// therefore carry <see cref="AlwaysInterleaveAttribute"/> on
+/// <see cref="ILattice"/>, so an outer call parked on its saga never holds a
+/// worker's turn. Their bodies are pure dispatchers - request-context reads
+/// and idempotent lazy service resolution - so interleaving them breaks no
+/// per-activation invariant. Resizing the pool moves that cliff; it does not
+/// remove it. <c>LatticeAtomicEntryPointInterleaveContractTests</c> fails if
+/// any saga-awaiting entry point loses the attribute.
+/// </para>
 /// </remarks>
-[StatelessWorker(maxLocalWorkers: 32)]
+[StatelessWorker(maxLocalWorkers: MaxLocalWorkers)]
 internal sealed partial class LatticeGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
@@ -64,8 +136,35 @@ internal sealed partial class LatticeGrain(
     IServiceProvider services,
     ILogger<LatticeGrain> logger) : ILattice, ISystemLattice, IReplicationApplyGrain, IGrainBase
 {
+    /// <summary>
+    /// Maximum number of local activations of this stateless worker per silo,
+    /// which bounds per-silo concurrency of single-key calls. See the type remarks
+    /// for the sizing history and cost.
+    /// </summary>
+    internal const int MaxLocalWorkers = 256;
+
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
+
+    // Per-silo registry read coalescer (issue #3501). Resolved lazily so a
+    // directly-constructed grain in a unit test, with no registration, falls
+    // back to an uncoalesced fan-out.
+    private TxRegistryReadCoalescer? _registryReadCoalescer;
+    private bool _registryReadCoalescerResolved;
+
+    private TxRegistryReadCoalescer? RegistryReadCoalescer
+    {
+        get
+        {
+            if (!_registryReadCoalescerResolved)
+            {
+                _registryReadCoalescer = services.GetService(typeof(TxRegistryReadCoalescer)) as TxRegistryReadCoalescer;
+                _registryReadCoalescerResolved = true;
+            }
+
+            return _registryReadCoalescer;
+        }
+    }
 
     // Lazily-resolved, activation-cached replication merge-mode resolver used
     // by the single-shape-per-replicated-tree write guards. The default core
@@ -899,6 +998,20 @@ internal sealed partial class LatticeGrain(
                     var shardStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                     try
                     {
+                        // Issue #3474: try the interleavable optimistic read first so
+                        // concurrent point reads on one shard root overlap; an
+                        // unvalidated result (routing moved under the read) falls
+                        // through to the serial read, which preserves the U9h-C
+                        // contract documented on IShardRootGrain.GetAsync.
+                        if (Options.OptimisticShardRootPointReads)
+                        {
+                            var optimistic = await shard.TryGetOptimisticAsync(key);
+                            if (optimistic.IsValidated)
+                            {
+                                return optimistic.Value;
+                            }
+                        }
+
                         return await shard.GetAsync(key);
                     }
                     finally
@@ -4616,7 +4729,6 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private async ValueTask<RegistrySnapshotPair> FetchRegistrySnapshotAsync()
     {
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
         try
         {
             // Single atomic RPC returns both the dict and the revision
@@ -4629,7 +4741,16 @@ internal sealed partial class LatticeGrain(
             // produce a snapshot reflecting revision N alongside a
             // probe reading N+1 - a "false stable" hazard the
             // post-fan-out probe cannot detect.
-            var pair = await registry.SnapshotWithRevisionAsync();
+            //
+            // With the registry sharded (issue #3501) the pair is the union of
+            // every shard's self-consistent pair and the sum of their revisions;
+            // concurrent reads on this silo share one round through the
+            // coalescer (a pre-fan-out snapshot may be shared freely, see
+            // TxRegistryReadCoalescer).
+            var coalescer = RegistryReadCoalescer;
+            var pair = coalescer is not null
+                ? await coalescer.GetSnapshotAsync(TreeId)
+                : await TxRegistryFanOut.SnapshotWithRevisionAsync(grainFactory, TreeId);
             return new RegistrySnapshotPair(pair.Decisions, pair.Revision);
         }
         catch
@@ -4661,11 +4782,16 @@ internal sealed partial class LatticeGrain(
         Dictionary<Guid, TxStatus>? snap1,
         long snap1Revision)
     {
-        var registry = grainFactory.GetGrain<ITxRegistryGrain>(TreeId);
+        // Both the probe and the disambiguating snapshot must be issued after
+        // this reader's fan-out completed; the coalescer's fresh-round rule
+        // guarantees that while still sharing the round with concurrent readers.
+        var coalescer = RegistryReadCoalescer;
         long revision2;
         try
         {
-            revision2 = await registry.GetDecisionsRevisionAsync();
+            revision2 = coalescer is not null
+                ? await coalescer.GetRevisionAsync(TreeId)
+                : await TxRegistryFanOut.GetDecisionsRevisionAsync(grainFactory, TreeId);
         }
         catch
         {
@@ -4690,7 +4816,9 @@ internal sealed partial class LatticeGrain(
         Dictionary<Guid, TxStatus>? snap2;
         try
         {
-            var snap2Pair = await registry.SnapshotWithRevisionAsync();
+            var snap2Pair = coalescer is not null
+                ? await coalescer.GetFreshSnapshotAsync(TreeId)
+                : await TxRegistryFanOut.SnapshotWithRevisionAsync(grainFactory, TreeId);
             snap2 = snap2Pair.Decisions;
         }
         catch

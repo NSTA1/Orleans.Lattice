@@ -167,4 +167,36 @@ public sealed class ShardRootGrainSetManyInterleavedWritesTests
         Assert.That(h.State.EtagConflictCount, Is.EqualTo(0),
             "Interleaved SetManyAsync calls raced WriteStateAsync on the shard root - U9h fix has regressed.");
     }
+
+    [Test]
+    public async Task Two_concurrent_point_SetAsync_calls_do_not_race_the_shard_root_etag()
+    {
+        // Point SetAsync interleaves too (#812), and a point write whose leaf
+        // splits reaches the same shard-root state writes as a batch does. See
+        // the batch test above for why the exceptions are swallowed and only
+        // the conflict count is asserted.
+        var h = CreateHarness();
+        h.Leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+            .Returns(_ => Task.FromResult<SplitResult?>(new SplitResult
+            {
+                PromotedKey = "split-sep",
+                NewSiblingId = GrainId.Create("leaf", "new-sibling"),
+            }));
+
+        try
+        {
+            await Task.WhenAll(
+                Task.Run(() => h.Grain.SetAsync("a0", [0])),
+                Task.Run(() => h.Grain.SetAsync("b0", [1])));
+        }
+        catch
+        {
+            // Expected harness exits; see the batch test above.
+        }
+
+        Assert.That(h.State.WriteCount, Is.GreaterThanOrEqualTo(2),
+            "Both split-producing point writes must reach the shard-root state write, or the test proves nothing.");
+        Assert.That(h.State.EtagConflictCount, Is.EqualTo(0),
+            "Interleaved point SetAsync calls raced WriteStateAsync on the shard root.");
+    }
 }

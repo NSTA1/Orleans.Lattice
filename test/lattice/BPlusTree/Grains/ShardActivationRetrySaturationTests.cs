@@ -216,4 +216,16 @@ public class ShardActivationRetrySaturationTests
                 "the exclusion must hold through an inner chain too");
         });
     }
+
+    /// <summary>
+    /// The transaction-registry capacity refusal (issue #3475) frees capacity
+    /// only as tombstones age out of the retention window, which takes seconds,
+    /// so an immediate shard-dispatch retry could never succeed and would only
+    /// burn the retry budget. The retry belongs to the caller, after back-off.
+    /// </summary>
+    [Test]
+    public void IsRetryableSaturation_is_false_for_a_tx_registry_capacity_refusal()
+        => Assert.That(
+            ShardActivationRetry.IsRetryableSaturation(Refusal(LatticeSaturationSource.TxRegistryCapacity)),
+            Is.False);
 }

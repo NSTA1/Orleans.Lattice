@@ -1185,6 +1185,73 @@ public static class LatticeMetrics
         Meter.CreateHistogram<int>("orleans.lattice.registry.admission.queue.depth", unit: "{tree}",
             description: "Distinct tree ids waiting for a registry fan-in permit when another arrived, counting the arrival.");
 
+    // --- Saga decision registry group commit (TxRegistryGrain) -------------------
+
+    /// <summary>
+    /// Counter of whole-state writes issued by the per-tree saga decision
+    /// registry (<c>TxRegistryGrain</c>), tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> = <c>ok</c> (the write completed durably) or
+    /// <c>fault</c> (the write threw and every mutation it carried, plus any
+    /// queued behind it, was rolled back and failed to its caller), and the
+    /// tenant label.
+    /// <para>
+    /// The registry is one activation per tree and every atomic saga records
+    /// its participants, its decision and its cleanup through it, so its write
+    /// rate is the ceiling on saga throughput. The registry group-commits: at
+    /// most one write is in flight and mutations that arrive meanwhile join the
+    /// next one. Read this counter against
+    /// <see cref="TxRegistryWriteMutations"/>: a write rate that stays flat
+    /// while the mutation rate climbs is coalescing doing its job, and a write
+    /// rate that tracks the mutation rate one for one means there was no
+    /// concurrency to coalesce.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> TxRegistryWrites =
+        Meter.CreateCounter<long>("orleans.lattice.tx_registry.writes", unit: "{write}",
+            description: "Whole-state writes issued by the per-tree saga decision registry, tagged by outcome (ok or fault).");
+
+    /// <summary>
+    /// Histogram of the number of registry mutations one
+    /// <c>TxRegistryGrain</c> state write carried - the group-commit
+    /// coalescing factor. Tagged with <see cref="TagTree"/>,
+    /// <see cref="TagOutcome"/> (<c>ok</c> or <c>fault</c>, matching
+    /// <see cref="TxRegistryWrites"/>) and the tenant label. A value of one
+    /// means the write carried a single caller's mutation; larger values mean
+    /// that many callers were acknowledged by one durable write.
+    /// </summary>
+    public static readonly Histogram<int> TxRegistryWriteMutations =
+        Meter.CreateHistogram<int>("orleans.lattice.tx_registry.write.mutations", unit: "{mutation}",
+            description: "Registry mutations carried by one saga decision registry state write (the group-commit coalescing factor).");
+
+    /// <summary>
+    /// Histogram of how long one <c>TxRegistryGrain</c> whole-state write took,
+    /// in milliseconds, measured around the storage call. Tagged with
+    /// <see cref="TagTree"/>, <see cref="TagOutcome"/> (<c>ok</c> or
+    /// <c>fault</c>) and the tenant label. Because the registry serialises its
+    /// writes, this duration bounds the registry's write rate: its reciprocal is
+    /// the most writes per second one tree's registry can issue.
+    /// </summary>
+    public static readonly Histogram<double> TxRegistryWriteDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.tx_registry.write.duration", unit: "ms",
+            description: "Duration of one saga decision registry whole-state write, tagged by outcome (ok or fault).");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>ok</c> on <see cref="TxRegistryWrites"/>,
+    /// <see cref="TxRegistryWriteMutations"/> and
+    /// <see cref="TxRegistryWriteDuration"/>: the registry write completed
+    /// durably and every caller it carried was acknowledged.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> TxRegistryWriteOutcomeOk = new(TagOutcome, "ok");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>fault</c> on <see cref="TxRegistryWrites"/>,
+    /// <see cref="TxRegistryWriteMutations"/> and
+    /// <see cref="TxRegistryWriteDuration"/>: the registry write threw, and
+    /// every mutation it carried (plus any queued behind it) was rolled back
+    /// and failed to its caller.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> TxRegistryWriteOutcomeFault = new(TagOutcome, "fault");
+
     // --- Warm-up instruments (ILattice.WarmUpAsync) ------------------------------
 
     /// <summary>
@@ -8624,6 +8691,79 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeScanPageLeafReadServedTag =
         new(TagOutcome, "served");
+
+    /// <summary>
+    /// Count of shard-root optimistic point reads
+    /// (<c>IShardRootGrain.TryGetOptimisticAsync</c>, issue #3474) by outcome.
+    /// Tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>.
+    /// <para>
+    /// <c>validated</c> is the only arm the caller serves directly. Every other
+    /// arm names why the read was handed back to the serial, non-interleaved
+    /// <c>IShardRootGrain.GetAsync</c>, which holds the shard root's turn for a
+    /// full leaf round trip. A high non-<c>validated</c> share therefore predicts
+    /// per-shard-root read queueing, which is invisible on the get latency
+    /// histograms because both attempts land inside one <c>shard</c> stage
+    /// sample. Absence validates only with matching leaf ownership evidence;
+    /// the <c>absent</c> arm identifies misses without that evidence.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardRootOptimisticReadOutcomes =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.optimistic_read.outcomes", unit: "{read}",
+            description: "Count of shard-root optimistic point reads by outcome: validated, or the reason the read was handed back to the serial path.");
+
+    /// <summary><see cref="TagOutcome"/> = <c>validated</c> (served without the serial path).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadValidatedTag =
+        new(TagOutcome, "validated");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>disabled</c> (the per-tree option is off, or
+    /// the options could not be resolved).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadDisabledTag =
+        new(TagOutcome, "disabled");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>busy</c> (a routing mutation was in flight,
+    /// or the shard root owed prepare / split / graft work).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadBusyTag =
+        new(TagOutcome, "busy");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>gate_closed</c> (tree rejecting, retained
+    /// redirect, deleted, or the key's slot moved away).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadGateClosedTag =
+        new(TagOutcome, "gate_closed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>routing_cache_miss</c> (the leaf could not be
+    /// resolved from the cached routing tables).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadRoutingCacheMissTag =
+        new(TagOutcome, "routing_cache_miss");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>epoch_changed</c> (routing moved while the
+    /// leaf read was in flight, including a leaf fault raised while it moved).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadEpochChangedTag =
+        new(TagOutcome, "epoch_changed");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>absent</c> (the leaf returned no value
+    /// without matching ownership evidence; the serial path adjudicates it).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadAbsentTag =
+        new(TagOutcome, "absent");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>leaf_generation_changed</c> (no cached leaf
+    /// stamp when required, no matching ownership proof, or a raw leaf fault
+    /// while a point write overlapped).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeOptimisticReadLeafGenerationChangedTag =
+        new(TagOutcome, "leaf_generation_changed");
 
     /// <summary>
     /// Count of shard-root page-fill ceiling fires that made <b>zero</b>

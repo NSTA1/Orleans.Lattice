@@ -75,8 +75,7 @@ public class WalCommitLogWriterProviderFailureTests
         // a non-timeout, non-cancellation exception. This is the
         // canonical 409-Conflict shape the saturation sampler reads.
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<long>(new InvalidOperationException("simulated provider 409-Conflict")));
+        shard.StubPointAppend(Task.FromException<long>(new InvalidOperationException("simulated provider 409-Conflict")));
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -110,8 +109,7 @@ public class WalCommitLogWriterProviderFailureTests
         var shard = Substitute.For<IWalShardGrain>();
         // The grain observes the cancellation token and throws an
         // OCE with that token when cancelled.
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
+        shard.StubPointAppend(callInfo =>
             {
                 var token = (CancellationToken)callInfo[1];
                 dispatched.TrySetResult();
@@ -157,8 +155,7 @@ public class WalCommitLogWriterProviderFailureTests
         // downstream peer-silo's drain refusal that surfaces via
         // Orleans grain serialization.
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<long>(new LatticeShuttingDownException(
+        shard.StubPointAppend(Task.FromException<long>(new LatticeShuttingDownException(
                 "downstream peer-silo writer is draining (WalDrainBudget)")));
 
         var writer = CreateWriter(shard, new LatticeOptions
@@ -185,8 +182,7 @@ public class WalCommitLogWriterProviderFailureTests
         // derive a per-window delta. Pins the "monotonic counter" half
         // of that contract.
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<long>(new InvalidOperationException("simulated provider failure")));
+        shard.StubPointAppend(Task.FromException<long>(new InvalidOperationException("simulated provider failure")));
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -219,7 +215,7 @@ public class WalCommitLogWriterProviderFailureTests
         // not double-counting the same failure.
         var release = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(release.Task);
+        shard.StubPointAppend(release.Task);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -314,7 +310,7 @@ public class WalCommitLogWriterProviderFailureTests
         // is a single `is` check. Mirrors the historical contract on
         // the WalDrainBudget message text via the typed surface.
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
 
         var writer = CreateWriter(shard, new LatticeOptions());
         await writer.DrainAsync(CancellationToken.None);
@@ -335,7 +331,7 @@ public class WalCommitLogWriterProviderFailureTests
         // forced rewrite. This is the subclass-compatibility half of
         // the typed-exception contract.
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+        shard.StubPointAppend(Task.FromResult(0L));
 
         var writer = CreateWriter(shard, new LatticeOptions());
         await writer.DrainAsync(CancellationToken.None);
