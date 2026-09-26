@@ -205,6 +205,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Replay - Leaf replay decoded every record of a shared WAL partition.** A leaf catching up on a partition decoded and copied every other leaf's records before discarding them, so each of the partition's leaves paid for the whole gap - about 250 MB/s of short-lived arrays, and up to 47% of wall-clock paused in GC, on a large tree. The leaf's key range and shard now travel down the replay read path through a new optional `IWalStorageProvider.ReadFilteredAsync` seam taking a `WalKeyFilter`, and the in-memory, file and Azure Table WAL providers skip records the leaf does not own before decoding them. ([#3565](https://github.com/NSTA1/Orleans.Lattice/issues/3565)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.File`, `Orleans.Lattice.Storage.AzureTable`)
 
+- **Core - New workers postponed tombstone compaction.** Each new `LatticeGrain` worker re-registered its tree's compaction reminder on its first write, moving the next pass a full period out, so a tree that kept getting new workers never compacted. It now registers only when absent. ([#3592](https://github.com/NSTA1/Orleans.Lattice/issues/3592)) (`Orleans.Lattice`)
+
 ### Security
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

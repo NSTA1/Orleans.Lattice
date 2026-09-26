@@ -28,6 +28,13 @@ public partial class TombstoneCompactionGrainTests
         context.GrainId.Returns(GrainId.Create("compaction", TreeId));
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
+
+        // A fresh reminder table holds no compaction reminder. Left unstubbed,
+        // NSubstitute would answer GetReminder with an auto-created reminder, and
+        // EnsureReminderAsync registers only when the reminder is absent (issue
+        // #3592), so every test would silently see a pre-existing schedule.
+        reminderRegistry.GetReminder(Arg.Any<GrainId>(), "tombstone-compaction")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         options ??= new LatticeOptions
         {
