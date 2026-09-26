@@ -15,9 +15,10 @@
 # After DocFX, the build publishes each page's markdown alternate beside it and
 # links the page to it, places each page's note under its title, and drops the
 # dates DocFX writes into sitemap.xml, then fails unless every page has both,
-# every page's source link names a file in the repository, and llms.txt,
-# sitemap.xml and the footer's docs version are all in place (see stage.ps1 for
-# what they are).
+# every page's source link names a file in the repository, llms.txt, sitemap.xml
+# and the footer's docs version are all in place (see stage.ps1 for what they
+# are), and every file under docs/agents reached the site as a raw resource with
+# none rendered as a page, and every page's head links to its manifest.
 
 param(
     [switch]$Serve,
@@ -104,6 +105,24 @@ try {
         Copy-Item -LiteralPath $markdown.FullName -Destination $target -Force
     }
 
+    # docs/agents: the agent-only specifications, published by docfx.json as raw
+    # YAML and JSON resources. Every one must reach the site, none may render as a
+    # page, and every page's head points at the manifest, so an agent that lands
+    # anywhere can find them while a human reader sees nothing.
+    $agentSpecRoot = Join-Path (Split-Path $PSScriptRoot) 'docs/agents'
+    $agentSpecLink = $null
+    if (Test-Path $agentSpecRoot) {
+        $specSiteUrl = [string](Get-Content (Join-Path $PSScriptRoot 'docfx.json') -Raw | ConvertFrom-Json).build.sitemap.baseUrl
+        $unpublished = @(Get-ChildItem $agentSpecRoot -Recurse -File | ForEach-Object {
+            $specRelative = $_.FullName.Substring($agentSpecRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $site 'docs/agents') $specRelative))) { $specRelative }
+        })
+        if ($unpublished.Count -gt 0) { throw "$($unpublished.Count) docs/agents file(s) did not reach the site: $(($unpublished | Select-Object -First 10) -join ', '). docfx.json publishes docs/agents/**/*.json and **/*.yaml as resources." }
+        $renderedSpecs = @(Get-ChildItem (Join-Path $site 'docs/agents') -Recurse -Include *.html, *.md)
+        if ($renderedSpecs.Count -gt 0) { throw "docs/agents rendered $($renderedSpecs.Count) page(s); the specifications are for agents only and must stay raw resources: $(($renderedSpecs | Select-Object -First 5 | ForEach-Object Name) -join ', ')" }
+        $agentSpecLink = "<link rel=`"describedby`" type=`"application/json`" href=`"${specSiteUrl}docs/agents/index.json`" title=`"Machine-readable specifications for agents`">"
+    }
+
     $unpaired = New-Object System.Collections.Generic.List[string]
     $badSource = New-Object System.Collections.Generic.List[string]
     $unnoted = New-Object System.Collections.Generic.List[string]
@@ -136,6 +155,9 @@ try {
         if (-not $updated.Contains('type="text/markdown"')) {
             $link = "<link rel=`"alternate`" type=`"text/markdown`" href=`"$([System.IO.Path]::GetFileName($alternate))`" title=`"This page as markdown`">`n  "
             $updated = $updated.Insert($head, $link)
+        }
+        if ($agentSpecLink -and -not $updated.Contains($agentSpecLink)) {
+            $updated = $updated.Insert($updated.IndexOf('</head>'), "$agentSpecLink`n  ")
         }
 
         # The note goes straight after the page's title, the first thing a reader
@@ -203,7 +225,8 @@ try {
         throw "The home page's footer has no docs version. stage.ps1 writes it to obj/site-metadata.json, which docfx.json lists in globalMetadataFiles."
     }
     $packageFiles = @(Get-ChildItem (Join-Path $site 'docs') -Recurse -Filter 'llms-full.txt').Count
-    Write-Host "Agent entry points: llms.txt, llms-full.txt, $packageFiles package file(s), sitemap.xml ($($sitemapUrls.Count) page(s), undated)"
+    $specCount = if (Test-Path (Join-Path $site 'docs/agents')) { @(Get-ChildItem (Join-Path $site 'docs/agents') -Recurse -File).Count } else { 0 }
+    Write-Host "Agent entry points: llms.txt, llms-full.txt, $packageFiles package file(s), sitemap.xml ($($sitemapUrls.Count) page(s), undated), $specCount agent specification file(s) under docs/agents"
 
     if ($Serve) { docfx serve $site --port $Port }
 }

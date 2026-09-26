@@ -1,0 +1,70 @@
+schema: lattice.agents/procedure/v1
+id: retention
+name: "Read and set durable history retention"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.GetHistoryRetentionAsync and SetHistoryRetentionAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/GetHistoryRetention and SetHistoryRetention"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetHistoryRetentionMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_retention_get and lattice_treeadmin_retention_set"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: not-system-data-tree
+    check: "First-party sys data trees are not targeted for set."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: tree-admin-for-set
+    check: "Caller has Read for get and Admin for set."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: valid-window
+    check: "A supplied retention window is strictly positive."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+steps:
+  - n: 1
+    action: "Read the effective current policy."
+    api: "ILatticeTreeAdmin.GetHistoryRetentionAsync / GetHistoryRetention"
+    expects: "Returns mode and age-bound window, falling back to defaults when unset."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+  - n: 2
+    action: "Set or clear mode and window independently."
+    api: "ILatticeTreeAdmin.SetHistoryRetentionAsync / SetHistoryRetention"
+    expects: "Returns the effective policy after change."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+  - n: 3
+    action: "Read policy again to confirm applied values."
+    api: "ILatticeTreeAdmin.GetHistoryRetentionAsync / GetHistoryRetention"
+    expects: "Returns the effective policy read back from the facade."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+postconditions:
+  - check: "MetadataOnly is the default mode when no override is set."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+  - check: "Configuration is absorbed forward; already-written revision rows keep their stamped shape."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+failure_modes:
+  - id: nonpositive-window
+    signal: "A non-positive window is rejected."
+    effect: "No policy change is applied."
+    response: "Retry with a positive TimeSpan or null to clear."
+  - id: reserved-tree
+    signal: "Reserved system data tree is rejected for set."
+    effect: "No policy change is applied."
+    response: "Let the owning add-on manage retention."
+rollback:
+  supported: true
+  mechanism: "Set the previous mode and window captured before the change; already-written rows keep their stamped shape."
+  steps:
+    - action: "Call SetHistoryRetentionAsync with the previous mode and window."
+      api: "ILatticeTreeAdmin.SetHistoryRetentionAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+concurrency:
+  - rule: "Retention set is a mutating but non-destructive configuration change."
+    source: "docs/lattice.api.treeadmin/README.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/change-history.md"

@@ -1,0 +1,87 @@
+schema: lattice.agents/procedure/v1
+id: backup
+name: "Capture tree snapshots and durable backups"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.SnapshotTreeAsync and ILatticeBackupControl.CreateBackupAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/SnapshotTree and orleans.lattice.api.backup/CreateBackup"
+    source: "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CreateBackupMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_snapshot and lattice_backup_create"
+    source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+preconditions:
+  - id: backup-engine
+    check: "AddLatticeBackupApi is called after AddLatticeBackup."
+    source: "docs/lattice.api.backup/README.md"
+  - id: fresh-destination
+    check: "Snapshot destination tree does not already exist."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+  - id: source-authority
+    check: "Caller has whole-tree Admin for snapshot source and destination, or backup permission for backup scope."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "For a live tree copy, start snapshot into a fresh destination tree."
+    api: "ILatticeTreeAdmin.SnapshotTreeAsync / SnapshotTree"
+    expects: "Returns an accepted snapshot intent."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+  - n: 2
+    action: "Poll snapshot progress until no capture is in flight."
+    api: "ILatticeTreeAdmin.GetSnapshotStatusAsync / GetSnapshotStatus"
+    expects: "Reports whether a point-in-time capture is in flight."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetSnapshotStatusAsync"
+  - n: 3
+    action: "For durable backup, capture a full backup for the selected scope."
+    api: "ILatticeBackupControl.CreateBackupAsync / CreateBackup"
+    expects: "Returns the captured backup id and manifest."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+  - n: 4
+    action: "For an incremental chain, capture against the selected base backup id."
+    api: "ILatticeBackupControl.CreateIncrementalBackupAsync / CreateIncrementalBackup"
+    expects: "Returns the incremental backup id and manifest."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+  - n: 5
+    action: "Describe the backup before using it as a restore point."
+    api: "ILatticeBackupControl.DescribeBackupAsync / DescribeBackup"
+    expects: "Returns the manifest and base-first restore chain, or null when absent."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+postconditions:
+  - check: "Snapshot destination is a live tree, not a catalogued backup artifact."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "Backup capture is recorded in the backup catalog and can be described by id."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+failure_modes:
+  - id: broken-chain
+    signal: "A retained incremental backup references a deleted base backup."
+    effect: "The increment restore chain is broken."
+    response: "Delete incremental chains tip-first."
+  - id: destination-exists
+    signal: "Snapshot returns InvalidOperationException for an existing destination."
+    effect: "Snapshot is not started."
+    response: "Choose a fresh destination tree id."
+  - id: unauthorized
+    signal: "Facade raises LatticeAuthorizationDeniedException."
+    effect: "No data is captured."
+    response: "Grant the required tree or backup operation and retry."
+rollback:
+  supported: false
+  mechanism: "No snapshot abort verb is surfaced; unwanted backup artifacts are removed only through DeleteBackupAsync."
+  steps:
+    - action: "Delete an unwanted backup by id."
+      api: "ILatticeBackupControl.DeleteBackupAsync"
+      source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+  source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+concurrency:
+  - rule: "Online snapshot keeps the source serving reads and writes while live mutations shadow-forward."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+  - rule: "Backup set capture can use one causal fence so a cross-tree atomic write is not torn across the set boundary."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs"
+  - "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice.api.backup/README.md"

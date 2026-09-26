@@ -1,0 +1,4969 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "treeadmin",
+  "packages": [
+    "Orleans.Lattice.Api.TreeAdmin",
+    "Orleans.Lattice.Api.TreeAdmin.Grpc",
+    "Orleans.Lattice.Api.Abstractions"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+    "src/lattice.api.treeadmin/LatticeTreeAdmin.cs",
+    "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs",
+    "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs",
+    "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs"
+  ],
+  "in_process": {
+    "interface": "ILatticeTreeAdmin",
+    "registration": "AddLatticeTreeAdminApi",
+    "source": "src/lattice.api.treeadmin/LatticeApiTreeAdminServiceCollectionExtensions.cs#AddLatticeTreeAdminApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.treeadmin",
+    "methods_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+    "marshalling": "LatticeTreeAdminGrpcMarshallers.Create uses Orleans Serializer<T> for gRPC payloads.",
+    "metadata": [
+      {
+        "name": "active-tenant",
+        "purpose": "Carries the asserted active tenant header into LatticeActiveTenantContext.",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#StampActiveTenant"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeTreeAdminApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeTreeAdminApiAuthorizer",
+      "decision": "RequireAuthorization defaults to true; GetAuthScheme is exempt and unknown operations deny by default.",
+      "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs#LatticeTreeAdminApiGrpcAuthInterceptor"
+    }
+  },
+  "types": {
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/AuthSchemeAdvertisement.cs#AuthSchemeAdvertisement"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.treeadmin.grpc/Model/AuthSchemeAdvertisementRequest.cs#AuthSchemeAdvertisementRequest"
+    },
+    "ClusterStorageUsageSummary": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "WalRetainedBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SnapshotBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "LeafStateBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Partial",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Deep",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Trees",
+          "type": "ImmutableArray<TreeStorageUsageSnapshot>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/ClusterStorageUsageSummary.cs#ClusterStorageUsageSummary"
+    },
+    "LatticeSchemaCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "CanViewPolicy",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanViewDeadLetters",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanViewVersionConfig",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanViewRemediationStatus",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanScanCompliance",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanManagePolicy",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanManageVersion",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanRemediate",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Schema/Model/LatticeSchemaCapabilities.cs#LatticeSchemaCapabilities"
+    },
+    "LatticeSchemaComplianceReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "HasPolicy",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CompliantCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "NonCompliantCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "ScannedCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "RuleBreakdown",
+          "type": "IReadOnlyList<LatticeSchemaComplianceRuleCount>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaComplianceReport.cs#LatticeSchemaComplianceReport"
+    },
+    "LatticeSchemaDeadLetterEntry": {
+      "kind": "class",
+      "fields": [],
+      "source": "src/lattice.schema/LatticeSchemaDeadLetterEntry.cs#LatticeSchemaDeadLetterEntry"
+    },
+    "LatticeSchemaPolicy": {
+      "kind": "class",
+      "fields": [],
+      "source": "src/lattice.schema/LatticeSchemaPolicy.cs#LatticeSchemaPolicy"
+    },
+    "LatticeSchemaRemediationReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Phase",
+          "type": "LatticeSchemaRemediationPhase",
+          "required": true
+        },
+        {
+          "name": "InProgress",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "ScannedCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "OffendingKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Reason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "OffendingValuePreview",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "DestinationTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRemediationReport.cs#LatticeSchemaRemediationReport"
+    },
+    "LatticeSchemaVersionConfig": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemaId",
+          "type": "uint",
+          "required": true
+        },
+        {
+          "name": "TargetVersion",
+          "type": "uint",
+          "required": true
+        },
+        {
+          "name": "StrictIngest",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaVersionConfig.cs#LatticeSchemaVersionConfig"
+    },
+    "LatticeTreeAdminCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "CanAdministerTree",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanManageTreeLifecycle",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanViewDiagnostics",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Schema",
+          "type": "LatticeSchemaCapabilities",
+          "required": true
+        },
+        {
+          "name": "CanBulkLoad",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanRestore",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/LatticeTreeAdminCapabilities.cs#LatticeTreeAdminCapabilities"
+    },
+    "ShardMapInspection": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PhysicalTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PhysicalShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "MapVersion",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "PhysicalShardIndices",
+          "type": "ImmutableArray<int>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/ShardMapInspection.cs#ShardMapInspection"
+    },
+    "ShardProjectionDigestReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "HashHex",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EntryCount",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "CheckpointOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/ShardProjectionDigestReport.cs#ShardProjectionDigestReport"
+    },
+    "TreeAdminBulkLoadAppendRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ChunkIndex",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<DataEntry>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadAppendRequest.cs#TreeAdminBulkLoadAppendRequest"
+    },
+    "TreeAdminBulkLoadSessionRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadSessionRequest.cs#TreeAdminBulkLoadSessionRequest"
+    },
+    "TreeAdminCreateRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxLeafKeys",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxInternalChildren",
+          "type": "int?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminCreateRequest.cs#TreeAdminCreateRequest"
+    },
+    "TreeAdminCreateViewRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ViewName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SourceTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ProviderKey",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Payload",
+          "type": "byte[]",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminCreateViewRequest.cs#TreeAdminCreateViewRequest"
+    },
+    "TreeAdminDiagnosticReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "TotalLiveKeys",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalTombstones",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Deep",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "RecentSplitCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Shards",
+          "type": "ImmutableArray<ShardDiagnosticSnapshot>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeAdminDiagnosticReport.cs#TreeAdminDiagnosticReport"
+    },
+    "TreeAdminDiagnosticsRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Deep",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminDiagnosticsRequest.cs#TreeAdminDiagnosticsRequest"
+    },
+    "TreeAdminOrphanedLeafRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ResumeFrom",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Survey",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminOrphanedLeafRequest.cs#TreeAdminOrphanedLeafRequest"
+    },
+    "TreeAdminPurgeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Confirm",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminPurgeRequest.cs#TreeAdminPurgeRequest"
+    },
+    "TreeAdminReshardRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetShardCount",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminReshardRequest.cs#TreeAdminReshardRequest"
+    },
+    "TreeAdminResizeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "NewMaxLeafKeys",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "NewMaxInternalChildren",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminResizeRequest.cs#TreeAdminResizeRequest"
+    },
+    "TreeAdminRestoreRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminRestoreRequest.cs#TreeAdminRestoreRequest"
+    },
+    "TreeAdminRestoreSetRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SetId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminRestoreSetRequest.cs#TreeAdminRestoreSetRequest"
+    },
+    "TreeAdminSetAliasRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PhysicalTreeId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminSetAliasRequest.cs#TreeAdminSetAliasRequest"
+    },
+    "TreeAdminSetConfigRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Update",
+          "type": "TreeConfigurationUpdate",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminSetConfigRequest.cs#TreeAdminSetConfigRequest"
+    },
+    "TreeAdminSetRetentionRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "TreeHistoryRetentionMode?",
+          "required": false
+        },
+        {
+          "name": "Window",
+          "type": "TimeSpan?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminSetRetentionRequest.cs#TreeAdminSetRetentionRequest"
+    },
+    "TreeAdminShardRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminShardRequest.cs#TreeAdminShardRequest"
+    },
+    "TreeAdminSnapshotRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DestinationTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "TreeSnapshotMode",
+          "required": true
+        },
+        {
+          "name": "MaxLeafKeys",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxInternalChildren",
+          "type": "int?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminSnapshotRequest.cs#TreeAdminSnapshotRequest"
+    },
+    "TreeAdminStorageUsageRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Deep",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminStorageUsageRequest.cs#TreeAdminStorageUsageRequest"
+    },
+    "TreeAdminTagIndexListRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminTagIndexListRequest.cs#TreeAdminTagIndexListRequest"
+    },
+    "TreeAdminTagIndexRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "IndexName",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminTagIndexRequest.cs#TreeAdminTagIndexRequest"
+    },
+    "TreeAdminTreeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminTreeRequest.cs#TreeAdminTreeRequest"
+    },
+    "TreeAdminViewListRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminViewListRequest.cs#TreeAdminViewListRequest"
+    },
+    "TreeAdminViewRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ViewName",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminViewRequest.cs#TreeAdminViewRequest"
+    },
+    "TreeAdminWalMovePlanRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Partition",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "TargetProviderKey",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminWalMovePlanRequest.cs#TreeAdminWalMovePlanRequest"
+    },
+    "TreeAdminWalReclaimRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Partition",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "SourceProviderKey",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminWalReclaimRequest.cs#TreeAdminWalReclaimRequest"
+    },
+    "TreeAliasResolution": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "PhysicalTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "IsAliased",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeAliasResolution.cs#TreeAliasResolution"
+    },
+    "TreeBulkLoadChunkAck": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ChunkIndex",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "AcceptedEntryCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "NextChunkIndex",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeBulkLoadChunkAck.cs#TreeBulkLoadChunkAck"
+    },
+    "TreeBulkLoadResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TotalLiveKeys",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeBulkLoadResult.cs#TreeBulkLoadResult"
+    },
+    "TreeBulkLoadSession": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeBulkLoadSession.cs#TreeBulkLoadSession"
+    },
+    "TreeCompactionTriggerResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "Accepted",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeCompactionTriggerResult.cs#TreeCompactionTriggerResult"
+    },
+    "TreeConfigurationReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Exists",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "PhysicalTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ShardCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxLeafKeys",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "MaxInternalChildren",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "PublishEvents",
+          "type": "bool?",
+          "required": false
+        },
+        {
+          "name": "MaintainProjectionDigest",
+          "type": "bool?",
+          "required": false
+        },
+        {
+          "name": "ProjectionDigestPermanentlyDisabled",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "HistoryRetentionMode",
+          "type": "HistoryRetentionMode?",
+          "required": false
+        },
+        {
+          "name": "HistoryRetentionWindowTicks",
+          "type": "long?",
+          "required": false
+        },
+        {
+          "name": "WalMaxRetainedBytes",
+          "type": "long?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeConfigurationReport.cs#TreeConfigurationReport"
+    },
+    "TreeCreationResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Created",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "MaxLeafKeys",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "MaxInternalChildren",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeCreationResult.cs#TreeCreationResult"
+    },
+    "TreeDeletionStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "IsDeleted",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "DeletedAtUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "RecoveryDeadlineUtc",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "PurgeInProgress",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "PurgeComplete",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CanRecover",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeDeletionStatus.cs#TreeDeletionStatus"
+    },
+    "TreeExistenceResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Exists",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeExistenceResult.cs#TreeExistenceResult"
+    },
+    "TreeHistoryRetention": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "TreeHistoryRetentionMode",
+          "required": true
+        },
+        {
+          "name": "Window",
+          "type": "TimeSpan",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeHistoryRetention.cs#TreeHistoryRetention"
+    },
+    "TreeHotnessReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "TotalReads",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalWrites",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalOpsPerSecond",
+          "type": "double",
+          "required": true
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Shards",
+          "type": "ImmutableArray<ShardHotnessSnapshot>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeHotnessReport.cs#TreeHotnessReport"
+    },
+    "TreeOrphanedLeafReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DryRun",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "LeavesWalked",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "Findings",
+          "type": "ImmutableArray<TreeOrphanedLeafFinding>",
+          "required": false
+        },
+        {
+          "name": "ResumeFrom",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Gaps",
+          "type": "ImmutableArray<TreeOrphanedLeafGap>",
+          "required": false
+        },
+        {
+          "name": "Survey",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeOrphanedLeafReport.cs#TreeOrphanedLeafReport"
+    },
+    "TreeReshardStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "InProgress",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CurrentPhysicalShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "MapVersion",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "RequestedShardCount",
+          "type": "int?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeReshardStatus.cs#TreeReshardStatus"
+    },
+    "TreeResizeStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "InProgress",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CurrentMaxLeafKeys",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "CurrentMaxInternalChildren",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "RequestedMaxLeafKeys",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "RequestedMaxInternalChildren",
+          "type": "int?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeResizeStatus.cs#TreeResizeStatus"
+    },
+    "TreeRestoreResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "BackupId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Mode",
+          "type": "TreeRestoreMode",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ManifestChain",
+          "type": "IReadOnlyList<string>",
+          "required": true
+        },
+        {
+          "name": "EntriesApplied",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "ShadowPhysicalTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "PreviousPhysicalTreeId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#TreeRestoreResult"
+    },
+    "TreeRestoreSetResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Results",
+          "type": "IReadOnlyList<TreeRestoreResult>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreSetResult.cs#TreeRestoreSetResult"
+    },
+    "TreeShardMapView": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "HasCustomMap",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "MapVersion",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PhysicalShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PhysicalShardIndices",
+          "type": "ImmutableArray<int>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeShardMapView.cs#TreeShardMapView"
+    },
+    "TreeSnapshotStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "InProgress",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "RequestedDestinationTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "RequestedMode",
+          "type": "TreeSnapshotMode?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeSnapshotStatus.cs#TreeSnapshotStatus"
+    },
+    "TreeStatsReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "VirtualShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "TotalLiveKeys",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalTombstones",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "LeafStateBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SnapshotBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "WalRetainedBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "PartialStorage",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeStatsReport.cs#TreeStatsReport"
+    },
+    "TreeTagIndexCatalog": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Indexes",
+          "type": "ImmutableArray<TreeTagIndexInfo>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeTagIndexCatalog.cs#TreeTagIndexCatalog"
+    },
+    "TreeTagIndexStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "IndexName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "CoveredTrees",
+          "type": "ImmutableArray<string>",
+          "required": false
+        },
+        {
+          "name": "ReconcileIdle",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeTagIndexStatus.cs#TreeTagIndexStatus"
+    },
+    "TreeTagReconcileReport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "IndexName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TreesCovered",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "KeysScanned",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "MembershipRowsScanned",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "OrphanRowsRemoved",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeTagReconcileReport.cs#TreeTagReconcileReport"
+    },
+    "TreeViewCatalog": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Views",
+          "type": "ImmutableArray<TreeViewInfo>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewCatalog.cs#TreeViewCatalog"
+    },
+    "TreeViewReconcileResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ViewName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SourceTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DriftRepaired",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewReconcileResult.cs#TreeViewReconcileResult"
+    },
+    "TreeViewStatus": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "ViewName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SourceTreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "IsAggregation",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "ApplyLag",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "ActiveTreeId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ProviderKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ProjectionVersion",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewStatus.cs#TreeViewStatus"
+    },
+    "TreeWalMovePlan": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Partition",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "FromProviderKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ToProviderKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "PlacementVersion",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SourceLowestOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SourceHighestOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "EntriesToCopy",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TargetResolvableOnThisSilo",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "AlreadyAtTarget",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalMovePlan.cs#TreeWalMovePlan"
+    },
+    "TreeWalMoveReceipt": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Partition",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "FromProviderKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "ToProviderKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "PreviousPlacementVersion",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "NewPlacementVersion",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "CopiedFromOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "CopiedThroughOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SourceHighestOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TargetHighestOffset",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SourceRetained",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Outcome",
+          "type": "TreeWalMoveOutcome",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalMoveReceipt.cs#TreeWalMoveReceipt"
+    },
+    "TreeWalPlacement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "DefaultProviderKey",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Partitions",
+          "type": "ImmutableArray<TreeWalPartitionPlacement>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalPlacement.cs#TreeWalPlacement"
+    },
+    "TreeWalPlacementAudit": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "PartitionCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "Partitions",
+          "type": "ImmutableArray<TreeWalPartitionPlacement>",
+          "required": true
+        },
+        {
+          "name": "AllResolvableOnThisSilo",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "KnownProviderKeys",
+          "type": "ImmutableArray<string>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalPlacementAudit.cs#TreeWalPlacementAudit"
+    },
+    "SchemaTreeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ILatticeSchemaControl"
+    },
+    "SchemaAdminRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "type": "operation-specific schema payload",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ILatticeSchemaControl"
+    }
+  },
+  "operations": [
+    {
+      "id": "append-bulk-load",
+      "in_process": "ILatticeTreeAdmin.AppendBulkLoadAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/AppendBulkLoad",
+      "transport_scope": "both",
+      "request": "TreeAdminBulkLoadAppendRequest",
+      "response": "TreeBulkLoadChunkAck",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Same operationId and chunkIndex are idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+      },
+      "concurrency": {
+        "rule": "Entries must be strictly ascending by key and chunkIndex is monotonic.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AppendBulkLoad"
+      ]
+    },
+    {
+      "id": "audit-orphaned-leaves",
+      "in_process": "ILatticeTreeAdmin.AuditOrphanedLeavesAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/AuditOrphanedLeaves",
+      "transport_scope": "both",
+      "request": "TreeAdminOrphanedLeafRequest",
+      "response": "TreeOrphanedLeafReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "One bounded read-only batch.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync"
+      },
+      "concurrency": {
+        "rule": "Drive batches with ResumeFrom until IsComplete is true.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AuditOrphanedLeaves"
+      ]
+    },
+    {
+      "id": "audit-wal-placement",
+      "in_process": "ILatticeTreeAdmin.AuditWalPlacementAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/AuditWalPlacement",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeWalPlacementAudit",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AuditWalPlacement"
+      ]
+    },
+    {
+      "id": "begin-bulk-load",
+      "in_process": "ILatticeTreeAdmin.BeginBulkLoadAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/BeginBulkLoad",
+      "transport_scope": "both",
+      "request": "TreeAdminBulkLoadSessionRequest",
+      "response": "TreeBulkLoadSession",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Same operationId opens or resumes the session.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+      },
+      "concurrency": {
+        "rule": "Target tree must be empty before bulk load.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#BeginBulkLoad"
+      ]
+    },
+    {
+      "id": "check-tree-exists",
+      "in_process": "ILatticeTreeAdmin.CheckTreeExistsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CheckTreeExists",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeExistenceResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CheckTreeExistsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CheckTreeExistsAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CheckTreeExistsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CheckTreeExistsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CheckTreeExists"
+      ]
+    },
+    {
+      "id": "commit-bulk-load",
+      "in_process": "ILatticeTreeAdmin.CommitBulkLoadAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CommitBulkLoad",
+      "transport_scope": "both",
+      "request": "TreeAdminBulkLoadSessionRequest",
+      "response": "TreeBulkLoadResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CommitBulkLoadAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Same operationId confirms already durable chunks.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CommitBulkLoadAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CommitBulkLoadAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CommitBulkLoadAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CommitBulkLoad"
+      ]
+    },
+    {
+      "id": "create-tree",
+      "in_process": "ILatticeTreeAdmin.CreateTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CreateTree",
+      "transport_scope": "both",
+      "request": "TreeAdminCreateRequest",
+      "response": "TreeCreationResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Creating an already registered tree is a no-op.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CreateTree"
+      ]
+    },
+    {
+      "id": "create-view",
+      "in_process": "ILatticeTreeAdmin.CreateViewAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/CreateView",
+      "transport_scope": "both",
+      "request": "TreeAdminCreateViewRequest",
+      "response": "TreeViewStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateViewAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateViewAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateViewAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CreateView"
+      ]
+    },
+    {
+      "id": "delete-tree",
+      "in_process": "ILatticeTreeAdmin.DeleteTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/DeleteTree",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Deleting an already deleted tree is a no-op.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+      },
+      "concurrency": {
+        "rule": "Trees that source materialised views are rejected.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#DeleteTree"
+      ]
+    },
+    {
+      "id": "drop-view",
+      "in_process": "ILatticeTreeAdmin.DropViewAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/DropView",
+      "transport_scope": "both",
+      "request": "TreeAdminViewRequest",
+      "response": "TreeAdminViewRequest",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DropViewAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Dropping an already absent runtime view is idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DropViewAsync"
+      },
+      "concurrency": {
+        "rule": "Startup-declared views cannot be dropped at runtime.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DropViewAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DropViewAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#DropView"
+      ]
+    },
+    {
+      "id": "get-auth-scheme",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetAuthScheme",
+      "transport_scope": "grpc_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#GetAuthScheme",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#GetAuthScheme"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Unauthenticated discovery has no side effects.",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#GetAuthScheme"
+      },
+      "concurrency": {
+        "rule": "GetAuthScheme is exempt from authorization.",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#GetAuthScheme"
+      },
+      "sources": [
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#GetAuthScheme",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetAuthScheme"
+      ]
+    },
+    {
+      "id": "get-diagnostics",
+      "in_process": "ILatticeTreeAdmin.GetDiagnosticsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetDiagnostics",
+      "transport_scope": "both",
+      "request": "TreeAdminDiagnosticsRequest",
+      "response": "TreeAdminDiagnosticReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only diagnostics.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetDiagnostics"
+      ]
+    },
+    {
+      "id": "get-history-retention",
+      "in_process": "ILatticeTreeAdmin.GetHistoryRetentionAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetHistoryRetention",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeHistoryRetention",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetHistoryRetentionAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetHistoryRetention"
+      ]
+    },
+    {
+      "id": "get-projection-digest",
+      "in_process": "ILatticeTreeAdmin.GetProjectionDigestAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetProjectionDigest",
+      "transport_scope": "both",
+      "request": "TreeAdminShardRequest",
+      "response": "ShardProjectionDigestReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetProjectionDigestAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only digest.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetProjectionDigestAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetProjectionDigestAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetProjectionDigestAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetProjectionDigest"
+      ]
+    },
+    {
+      "id": "get-reshard-status",
+      "in_process": "ILatticeTreeAdmin.GetReshardStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetReshardStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeReshardStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetReshardStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetReshardStatus"
+      ]
+    },
+    {
+      "id": "get-resize-status",
+      "in_process": "ILatticeTreeAdmin.GetResizeStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetResizeStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeResizeStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetResizeStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetResizeStatus"
+      ]
+    },
+    {
+      "id": "get-shard-hotness",
+      "in_process": "ILatticeTreeAdmin.GetShardHotnessAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetShardHotness",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeHotnessReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardHotnessAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Cheap non-blocking read-only sample.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardHotnessAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardHotnessAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardHotnessAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetShardHotness"
+      ]
+    },
+    {
+      "id": "get-shard-map",
+      "in_process": "ILatticeTreeAdmin.GetShardMapAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetShardMap",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeShardMapView",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardMapAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardMapAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardMapAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetShardMapAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetShardMap"
+      ]
+    },
+    {
+      "id": "get-snapshot-status",
+      "in_process": "ILatticeTreeAdmin.GetSnapshotStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetSnapshotStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeSnapshotStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetSnapshotStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetSnapshotStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetSnapshotStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetSnapshotStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetSnapshotStatus"
+      ]
+    },
+    {
+      "id": "get-storage-usage",
+      "in_process": "ILatticeTreeAdmin.GetStorageUsageAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetStorageUsage",
+      "transport_scope": "both",
+      "request": "TreeAdminStorageUsageRequest",
+      "response": "ClusterStorageUsageSummary",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetStorageUsageAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only storage accounting.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetStorageUsageAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetStorageUsageAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetStorageUsageAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetStorageUsage"
+      ]
+    },
+    {
+      "id": "get-tag-index-status",
+      "in_process": "ILatticeTreeAdmin.GetTagIndexStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetTagIndexStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminTagIndexRequest",
+      "response": "TreeTagIndexStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTagIndexStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTagIndexStatus"
+      ]
+    },
+    {
+      "id": "get-tree-config",
+      "in_process": "ILatticeTreeAdmin.GetTreeConfigAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetTreeConfig",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeConfigurationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeConfigAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeConfigAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTreeConfig"
+      ]
+    },
+    {
+      "id": "get-tree-deletion-status",
+      "in_process": "ILatticeTreeAdmin.GetTreeDeletionStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetTreeDeletionStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTreeDeletionStatus"
+      ]
+    },
+    {
+      "id": "get-tree-stats",
+      "in_process": "ILatticeTreeAdmin.GetTreeStatsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetTreeStats",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeStatsReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeStatsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only statistics snapshot.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeStatsAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeStatsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeStatsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetTreeStats"
+      ]
+    },
+    {
+      "id": "get-view-status",
+      "in_process": "ILatticeTreeAdmin.GetViewStatusAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetViewStatus",
+      "transport_scope": "both",
+      "request": "TreeAdminViewRequest",
+      "response": "TreeViewStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetViewStatus"
+      ]
+    },
+    {
+      "id": "get-wal-placement",
+      "in_process": "ILatticeTreeAdmin.GetWalPlacementAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/GetWalPlacement",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeWalPlacement",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetWalPlacementAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetWalPlacementAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetWalPlacementAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetWalPlacementAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetWalPlacement"
+      ]
+    },
+    {
+      "id": "inspect-shard-map",
+      "in_process": "ILatticeTreeAdmin.InspectShardMapAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/InspectShardMap",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "ShardMapInspection",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#InspectShardMapAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only topology inspection.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#InspectShardMapAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#InspectShardMapAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#InspectShardMapAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#InspectShardMap"
+      ]
+    },
+    {
+      "id": "list-tag-indexes",
+      "in_process": "ILatticeTreeAdmin.ListTagIndexesAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListTagIndexes",
+      "transport_scope": "both",
+      "request": "TreeAdminTagIndexListRequest",
+      "response": "TreeTagIndexCatalog",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListTagIndexesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListTagIndexesAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListTagIndexesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListTagIndexesAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListTagIndexes"
+      ]
+    },
+    {
+      "id": "list-views",
+      "in_process": "ILatticeTreeAdmin.ListViewsAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListViews",
+      "transport_scope": "both",
+      "request": "TreeAdminViewListRequest",
+      "response": "TreeViewCatalog",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewsAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewsAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewsAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListViews"
+      ]
+    },
+    {
+      "id": "plan-wal-move",
+      "in_process": "ILatticeTreeAdmin.PlanWalMoveAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/PlanWalMove",
+      "transport_scope": "both",
+      "request": "TreeAdminWalMovePlanRequest",
+      "response": "TreeWalMovePlan",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read-only preview.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#PlanWalMove"
+      ]
+    },
+    {
+      "id": "probe-capabilities",
+      "in_process": "ILatticeTreeAdmin.ProbeCapabilitiesAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ProbeCapabilities",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "LatticeTreeAdminCapabilities",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "No side effects; denials are flags.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ProbeCapabilitiesAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ProbeCapabilities"
+      ]
+    },
+    {
+      "id": "purge-tree",
+      "in_process": "ILatticeTreeAdmin.PurgeTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/PurgeTree",
+      "transport_scope": "both",
+      "request": "TreeAdminPurgeRequest",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "Irreversible hard purge has no retry-safe contract.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PurgeTreeAsync"
+      },
+      "concurrency": {
+        "rule": "confirm must be true before irreversible purge.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PurgeTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PurgeTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#PurgeTree"
+      ]
+    },
+    {
+      "id": "reclaim-moved-wal-source",
+      "in_process": "ILatticeTreeAdmin.ReclaimMovedWalSourceAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ReclaimMovedWalSource",
+      "transport_scope": "both",
+      "request": "TreeAdminWalReclaimRequest",
+      "response": "TreeWalMoveReceipt",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "Irreversible finalisation has no retry-safe contract.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+      },
+      "concurrency": {
+        "rule": "Refused if the source provider is the live placement.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReclaimMovedWalSource"
+      ]
+    },
+    {
+      "id": "reconcile-tag-index",
+      "in_process": "ILatticeTreeAdmin.ReconcileTagIndexAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ReconcileTagIndex",
+      "transport_scope": "both",
+      "request": "TreeAdminTagIndexRequest",
+      "response": "TreeTagReconcileReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Online and idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReconcileTagIndex"
+      ]
+    },
+    {
+      "id": "reconcile-view",
+      "in_process": "ILatticeTreeAdmin.ReconcileViewAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ReconcileView",
+      "transport_scope": "both",
+      "request": "TreeAdminViewRequest",
+      "response": "TreeViewReconcileResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileViewAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Online and idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileViewAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileViewAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileViewAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReconcileView"
+      ]
+    },
+    {
+      "id": "recover-tree",
+      "in_process": "ILatticeTreeAdmin.RecoverTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/RecoverTree",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+      },
+      "concurrency": {
+        "rule": "Available within the soft-delete recovery window.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RecoverTree"
+      ]
+    },
+    {
+      "id": "repair-orphaned-leaves",
+      "in_process": "ILatticeTreeAdmin.RepairOrphanedLeavesAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/RepairOrphanedLeaves",
+      "transport_scope": "both",
+      "request": "TreeAdminOrphanedLeafRequest",
+      "response": "TreeOrphanedLeafReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Re-running is safe after a timeout.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+      },
+      "concurrency": {
+        "rule": "Audit, repair to completion, then re-audit.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RepairOrphanedLeaves"
+      ]
+    },
+    {
+      "id": "reshard-tree",
+      "in_process": "ILatticeTreeAdmin.ReshardTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ReshardTree",
+      "transport_scope": "both",
+      "request": "TreeAdminReshardRequest",
+      "response": "TreeReshardStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Current count or matching in-flight target is a no-op.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+      },
+      "concurrency": {
+        "rule": "A reshard with different target, or a resize, is rejected.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReshardTree"
+      ]
+    },
+    {
+      "id": "resize-tree",
+      "in_process": "ILatticeTreeAdmin.ResizeTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ResizeTree",
+      "transport_scope": "both",
+      "request": "TreeAdminResizeRequest",
+      "response": "TreeResizeStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Matching in-flight target is a no-op.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+      },
+      "concurrency": {
+        "rule": "A resize with different parameters, or a reshard, is rejected.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ResizeTree"
+      ]
+    },
+    {
+      "id": "resolve-tree-alias",
+      "in_process": "ILatticeTreeAdmin.ResolveTreeAliasAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ResolveTreeAlias",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeAliasResolution",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResolveTreeAliasAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResolveTreeAliasAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResolveTreeAliasAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResolveTreeAliasAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ResolveTreeAlias"
+      ]
+    },
+    {
+      "id": "restore-tree",
+      "in_process": "ILatticeTreeAdmin.RestoreTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/RestoreTree",
+      "transport_scope": "both",
+      "request": "TreeAdminRestoreRequest",
+      "response": "TreeRestoreResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Same operationId converges to the same state.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTree"
+      ]
+    },
+    {
+      "id": "restore-tree-set",
+      "in_process": "ILatticeTreeAdmin.RestoreTreeSetAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/RestoreTreeSet",
+      "transport_scope": "both",
+      "request": "TreeAdminRestoreSetRequest",
+      "response": "TreeRestoreSetResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Re-running the same set restore converges to the same state.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+      },
+      "concurrency": {
+        "rule": "Replicated member trees flip together as an all-or-nothing saga.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTreeSet"
+      ]
+    },
+    {
+      "id": "revert-tree-restore",
+      "in_process": "ILatticeTreeAdmin.RevertTreeRestoreAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/RevertTreeRestore",
+      "transport_scope": "both",
+      "request": "TreeRestoreResult",
+      "response": "TreeRestoreResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Shadow-cutover revert is idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RevertTreeRestore"
+      ]
+    },
+    {
+      "id": "schema-advance-and-migrate",
+      "in_process": "ILatticeSchemaControl.AdvanceAndMigrateAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "LatticeSchemaRemediationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+          "issue": 3635
+        },
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-advance-target-version",
+      "in_process": "ILatticeSchemaControl.AdvanceTargetVersionAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "LatticeSchemaVersionConfig",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+          "issue": 3635
+        },
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-clear-policy",
+      "in_process": "ILatticeSchemaControl.ClearPolicyAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "bool",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+          "issue": 3635
+        },
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-clear-version-config",
+      "in_process": "ILatticeSchemaControl.ClearVersionConfigAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "bool",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+          "issue": 3635
+        },
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearVersionConfigAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearVersionConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearVersionConfigAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-count-dead-letters",
+      "in_process": "ILatticeSchemaControl.CountDeadLettersAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "int",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-get-policy",
+      "in_process": "ILatticeSchemaControl.GetPolicyAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaPolicy",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-get-remediation-status",
+      "in_process": "ILatticeSchemaControl.GetRemediationStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaRemediationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-get-version-config",
+      "in_process": "ILatticeSchemaControl.GetVersionConfigAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaVersionConfig",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-list-dead-letters",
+      "in_process": "ILatticeSchemaControl.ListDeadLettersAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "IAsyncEnumerable<LatticeSchemaDeadLetterEntry>",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-migrate-to-target-version",
+      "in_process": "ILatticeSchemaControl.MigrateToTargetVersionAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "LatticeSchemaRemediationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-probe-capabilities",
+      "in_process": "ILatticeSchemaControl.ProbeCapabilitiesAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaCapabilities",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-remediate",
+      "in_process": "ILatticeSchemaControl.RemediateAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "LatticeSchemaRemediationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-scan-compliance",
+      "in_process": "ILatticeSchemaControl.ScanComplianceAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaComplianceReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-set-policy",
+      "in_process": "ILatticeSchemaControl.SetPolicyAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "void",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+          "issue": 3635
+        },
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "schema-set-version-config",
+      "in_process": "ILatticeSchemaControl.SetVersionConfigAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "transport_scope_source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods",
+      "request": "SchemaAdminRequest",
+      "response": "void",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
+          "issue": 3635
+        },
+        "basis": "Delegated schema facade operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetVersionConfigAsync"
+      },
+      "concurrency": {
+        "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetVersionConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetVersionConfigAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#LatticeTreeAdminGrpcMethods"
+      ]
+    },
+    {
+      "id": "set-history-retention",
+      "in_process": "ILatticeTreeAdmin.SetHistoryRetentionAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/SetHistoryRetention",
+      "transport_scope": "both",
+      "request": "TreeAdminSetRetentionRequest",
+      "response": "TreeHistoryRetention",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+      },
+      "concurrency": {
+        "rule": "Already-written rows keep their stamped shape.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetHistoryRetention"
+      ]
+    },
+    {
+      "id": "set-tree-alias",
+      "in_process": "ILatticeTreeAdmin.SetTreeAliasAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/SetTreeAlias",
+      "transport_scope": "both",
+      "request": "TreeAdminSetAliasRequest",
+      "response": "TreeAliasResolution",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+      },
+      "concurrency": {
+        "rule": "Only one level of alias indirection is allowed.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeAlias"
+      ]
+    },
+    {
+      "id": "set-tree-config",
+      "in_process": "ILatticeTreeAdmin.SetTreeConfigAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/SetTreeConfig",
+      "transport_scope": "both",
+      "request": "TreeAdminSetConfigRequest",
+      "response": "TreeConfigurationReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeConfig"
+      ]
+    },
+    {
+      "id": "snapshot-tree",
+      "in_process": "ILatticeTreeAdmin.SnapshotTreeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/SnapshotTree",
+      "transport_scope": "both",
+      "request": "TreeAdminSnapshotRequest",
+      "response": "TreeSnapshotStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Matching in-flight destination and mode is a no-op.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+      },
+      "concurrency": {
+        "rule": "Different in-flight snapshot or existing destination is rejected.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SnapshotTree"
+      ]
+    },
+    {
+      "id": "trigger-shard-compaction",
+      "in_process": "ILatticeTreeAdmin.TriggerShardCompactionAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/TriggerShardCompaction",
+      "transport_scope": "both",
+      "request": "TreeAdminShardRequest",
+      "response": "TreeCompactionTriggerResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Compaction is online and idempotent.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+      },
+      "concurrency": {
+        "rule": "Operator trigger bypasses background cooldown.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#TriggerShardCompaction"
+      ]
+    },
+    {
+      "id": "undo-tree-resize",
+      "in_process": "ILatticeTreeAdmin.UndoTreeResizeAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/UndoTreeResize",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeResizeStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "No idempotency contract is stated.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+      },
+      "concurrency": {
+        "rule": "Available during resize or before pre-resize purge.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#UndoTreeResize"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "bulk-load-order",
+      "type": "BulkLoadOrderException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "Bulk-load order contract breach.",
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/BulkLoadOrderException.cs#BulkLoadOrderException"
+    },
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": true,
+      "meaning": "Request was cancelled.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "Unhandled failure.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "invalid-argument",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "Request validation failed.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "not-found",
+      "type": "KeyNotFoundException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "Keyed resource not found.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "permission-denied",
+      "type": "LatticeAuthorizationDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "Authorization denied.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "precondition-failed",
+      "type": "InvalidOperationException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "Facade precondition failed.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "tenant-access-denied",
+      "type": "LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "Active tenant was denied.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "tree-not-empty",
+      "type": "TreeNotEmptyException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "Bulk-load target is not empty.",
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeNotEmptyException.cs#TreeNotEmptyException"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+schema: lattice.agents/procedure/v1
+id: tree-delete-recover
+name: "Soft-delete, recover, and purge a tree"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.DeleteTreeAsync, RecoverTreeAsync, PurgeTreeAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/DeleteTree, RecoverTree, PurgeTree"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#DeleteTreeMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_delete, lattice_treeadmin_tree_recover, lattice_treeadmin_tree_purge"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: not-reserved
+    check: "Tree id is not reserved."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: purge-confirmation
+    check: "Hard purge call sets confirm to true."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: tree-lifecycle
+    check: "Caller has whole-tree TreeLifecycle authority for mutating verbs."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "Read deletion status before acting."
+    api: "ILatticeTreeAdmin.GetTreeDeletionStatusAsync / GetTreeDeletionStatus"
+    expects: "Reports live/deleted state, recovery deadline, purge progress, and recoverability."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
+  - n: 2
+    action: "Soft-delete the tree when reversible removal is intended."
+    api: "ILatticeTreeAdmin.DeleteTreeAsync / DeleteTree"
+    expects: "Marks shards deleted and schedules deferred hard purge."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+  - n: 3
+    action: "Recover within the recovery window when rollback is required."
+    api: "ILatticeTreeAdmin.RecoverTreeAsync / RecoverTree"
+    expects: "Restores normal operation and cancels deferred purge."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+  - n: 4
+    action: "Hard-purge only with explicit confirmation."
+    api: "ILatticeTreeAdmin.PurgeTreeAsync / PurgeTree"
+    expects: "Irreversibly removes tree state and unregisters the tree."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PurgeTreeAsync"
+postconditions:
+  - check: "Soft-delete is reversible until the recovery window elapses or purge runs."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+  - check: "Purge is irreversible."
+    source: "docs/lattice.api.treeadmin/README.md"
+failure_modes:
+  - id: not-deleted
+    signal: "Recover rejects a tree that is not deleted."
+    effect: "No state change."
+    response: "Read deletion status before recover."
+  - id: purge-unconfirmed
+    signal: "Purge with confirm false or omitted is rejected."
+    effect: "No hard purge occurs."
+    response: "Set confirm only after irreversible deletion is intended."
+  - id: view-source
+    signal: "Delete is rejected while the tree is the source of a materialised view."
+    effect: "Tree remains live."
+    response: "Drop dependent views first."
+rollback:
+  supported: true
+  mechanism: "RecoverTreeAsync reverses soft delete within the recovery window; purge has no rollback."
+  steps:
+    - action: "Call RecoverTreeAsync before the recovery deadline."
+      api: "ILatticeTreeAdmin.RecoverTreeAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+    - action: "After purge, restore only from backup if available."
+      api: "ILatticeTreeAdmin.RestoreTreeAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+concurrency:
+  - rule: "Delete is idempotent for an already-deleted tree."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - rule: "Purge may be in progress or complete according to deletion status."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/tree-deletion.md"
