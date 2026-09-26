@@ -20,7 +20,19 @@ public partial class TxRegistryGrainTests
     {
         const int sagas = 256;
         const int readers = 16;
+
+        // The fewest writes a completed run can persist: every saga persists its
+        // participants, its verdict and its forget, and applies each only once
+        // the call before it was acknowledged durable, so no one write can carry
+        // two of them.
+        const int minimumPersistedWrites = 3;
         var bound = TimeSpan.FromSeconds(60);
+
+        // The fault schedule (issue #3563): the second write attempt fails, then
+        // one in eleven after it. It is keyed on the attempt count rather than
+        // drawn per write, because group commit decides how few writes a run
+        // makes, and a per-write probability over few enough writes injects none.
+        static bool IsScheduledFault(int attempt) => attempt == 2 || (attempt > 2 && attempt % 11 == 0);
 
         var turn = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
         var state = new FakePersistentState<TxRegistryState>();
@@ -28,6 +40,7 @@ public partial class TxRegistryGrainTests
         var rngLock = new object();
         var injectedFaults = 0;
         var writeAttempts = 0;
+        var faultedCalls = 0;
         state.BeforeWrite = async () =>
         {
             int delayMs;
@@ -36,13 +49,8 @@ public partial class TxRegistryGrainTests
                 delayMs = rng.Next(0, 4);
             }
 
-            // Fault injection is deterministic in the write count (issue #3563):
-            // group commit coalesces the run into few enough writes that a
-            // per-write probability can inject none at all. The second write
-            // always fails, then one in eleven after it; the latency jitter
-            // stays seeded.
-            var attempt = Interlocked.Increment(ref writeAttempts);
-            var fault = attempt == 2 || (attempt > 2 && attempt % 11 == 0);
+            // Only the latency jitter is seeded; faults follow the attempt count.
+            var fault = IsScheduledFault(Interlocked.Increment(ref writeAttempts));
             if (delayMs > 0)
             {
                 await Task.Delay(delayMs);
@@ -75,6 +83,7 @@ public partial class TxRegistryGrainTests
                 catch (TxRegistryWriteFailedException) when (attempt < 200)
                 {
                     // Callers retry a failed registry write; so does the saga.
+                    Interlocked.Increment(ref faultedCalls);
                 }
             }
         }
@@ -125,6 +134,7 @@ public partial class TxRegistryGrainTests
                 catch (TxRegistryWriteFailedException)
                 {
                     // A reader that mutates (pins) sees the same injected faults.
+                    Interlocked.Increment(ref faultedCalls);
                 }
             }
         }
@@ -151,12 +161,30 @@ public partial class TxRegistryGrainTests
         await all;
         await Task.WhenAll(readerTasks).WaitAsync(bound);
 
+        var tally = $"write attempts={writeAttempts}, persisted={state.WriteCount}, injected faults={injectedFaults}, faulted calls={faultedCalls}";
+        TestContext.Out.WriteLine(tally);
+
+        // Coverage is entailed, not sampled: a completed run persists at least
+        // minimumPersistedWrites writes, every attempt either persists or faults,
+        // and the schedule faults one of the first minimumPersistedWrites
+        // attempts, so every completed run exercises the group-failure path
+        // whatever the interleaving.
         Assert.Multiple(() =>
         {
             Assert.That(state.MaxConcurrentWrites, Is.EqualTo(1),
                 "The registry must never have more than one state write outstanding.");
+            Assert.That(Enumerable.Range(1, minimumPersistedWrites).Any(IsScheduledFault), Is.True,
+                "The fault schedule must fire within the fewest writes a completed run makes.");
+            Assert.That(state.WriteCount, Is.GreaterThanOrEqualTo(minimumPersistedWrites),
+                $"Each saga must persist its participants, verdict and forget in successive writes ({tally}).");
+            Assert.That(writeAttempts, Is.EqualTo(state.WriteCount + injectedFaults),
+                $"Every write attempt must either persist or be an injected fault ({tally}).");
+            Assert.That(injectedFaults, Is.EqualTo(Enumerable.Range(1, writeAttempts).Count(IsScheduledFault)),
+                $"Faults must follow the attempt-count schedule, not chance ({tally}).");
             Assert.That(injectedFaults, Is.GreaterThan(0),
                 "The run must actually exercise the group-failure path.");
+            Assert.That(faultedCalls, Is.GreaterThanOrEqualTo(injectedFaults),
+                $"Every injected fault must reach at least one caller as a failed write ({tally}).");
         });
     }
 }
