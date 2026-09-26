@@ -63,11 +63,12 @@ FORM: Order diagram, candidate 7 of 7, seed a5e4ebc3. Staging: one proportional 
 1. [Configuration](docs/lattice/configuration.md) The options reference and per-tree overrides. <span class="lt-shared">Also on Build</span>
 2. [Tree sizing](docs/lattice/tree-sizing.md) Resize a live tree's leaf and internal-node limits, with an undo window.
 3. [WAL tuning](docs/lattice/wal-tuning.md) How the write-ahead log's concurrency limits meet a durable backend's throughput envelope.
-4. [Metrics](docs/lattice/metrics.md) Runtime telemetry through `System.Diagnostics.Metrics`, for any OpenTelemetry exporter.
-5. [Dashboards](docs/lattice.dashboards/README.md) Bundled Grafana dashboards for the Lattice meters.
-6. [Troubleshooting](docs/lattice/troubleshooting.md) Symptom-driven diagnosis, starting from a `DiagnoseAsync` report.
-7. [Disaster recovery](docs/lattice.backup/disaster-recovery.md) Recovering backups after losing the cluster that took them.
-8. [Explorer console](docs/lattice.explorer/running-the-explorer.md) An auth-aware web console over the cluster's gRPC APIs, with capability-gated admin areas. <span class="lt-status">in progress</span>
+4. [Multi-silo scaling](docs/lattice/performance-multi-silo.md) What each workload gains as silos are added, measured on real Azure Storage.
+5. [Metrics](docs/lattice/metrics.md) Runtime telemetry through `System.Diagnostics.Metrics`, for any OpenTelemetry exporter.
+6. [Dashboards](docs/lattice.dashboards/README.md) Bundled Grafana dashboards for the Lattice meters.
+7. [Troubleshooting](docs/lattice/troubleshooting.md) Symptom-driven diagnosis, starting from a `DiagnoseAsync` report.
+8. [Disaster recovery](docs/lattice.backup/disaster-recovery.md) Recovering backups after losing the cluster that took them.
+9. [Explorer console](docs/lattice.explorer/running-the-explorer.md) An auth-aware web console over the cluster's gRPC APIs, with capability-gated admin areas. <span class="lt-status">in progress</span>
 
 </div>
 </div>
