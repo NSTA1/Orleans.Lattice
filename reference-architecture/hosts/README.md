@@ -3,11 +3,11 @@
 Three minimal, production-shaped reference host projects for the active-active,
 cross-region Orleans.Lattice estate described in the root `reference-architecture.md`.
 Each project references the **published Orleans.Lattice NuGet packages** (from
-nuget.org): the Silo and MCP heads pin the 9.7.x line (`Orleans.Lattice` itself
-at 9.7.1), and the Explorer head pins the 9.4.x line of the
+nuget.org): the Silo and MCP heads pin the 9.8.x line (every package at
+9.8.0), and the Explorer head pins the 9.4.x line of the
 `Orleans.Lattice.Explorer.*` libraries - including
 `Orleans.Lattice.Explorer.Entra.Web` for hosted-web OIDC sign-in - plus
-`Orleans.Lattice.Caching.AzureBlob` 9.7.1 for its distributed token cache. Each
+`Orleans.Lattice.Caching.AzureBlob` 9.8.0 for its distributed token cache. Each
 `.csproj` holds the exact pins. They are not project references into `src/`, so
 each head consumes the released library exactly as a real deployment would.
 

@@ -25,9 +25,9 @@
     transitively.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="9.7.1" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="9.7.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="9.8.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
   </ItemGroup>
@@ -35,28 +35,31 @@
   <!--
     Transitive security floors.
 
-    Orleans.Lattice.Api.Mcp 9.7.0 is pinned with the matching facade clients, so the
-    dependency floors it emits still name the pre-wave versions (Orleans.Lattice
-    >= 9.6.1, the facade gRPC clients >= 9.6.0). NuGet resolves a floor to the
-    LOWEST version that satisfies it, so without the pins below this head would
-    restore the unpatched graph - including the api.state.grpc lockout bypass
-    fixed in the wave.
+    A package's dependency floors are fixed when it is packed, and NuGet resolves
+    a floor to the LOWEST version that satisfies it. So when a patch wave
+    republishes the core or a facade client but not Api.Mcp, the floors Api.Mcp
+    emits still name the unpatched versions, and without the pins below this head
+    would restore the unpatched graph (issue #2413; the first case was the
+    api.state.grpc lockout bypass fixed in the 9.6.2 wave). At 9.8.0 every pin
+    equals the floor Api.Mcp 9.8.0 emits.
 
     These are deliberate version overrides, not new direct dependencies: the
     packages still arrive transitively via Api.Mcp exactly as documented above,
-    and each pin only raises the resolved version to the patched release. Remove
-    a pin once Api.Mcp ships a version whose own floor is at or above it.
+    and each pin only raises the resolved version to the patched release. Keep
+    them and advance them with every wave: the 9.7.1 patch reached this head only
+    through the Orleans.Lattice pin, because Api.Mcp 9.7.0 still floored it at
+    9.7.0.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="9.7.1" />
-    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.7.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="9.7.0" />
+    <PackageReference Include="Orleans.Lattice" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.8.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="9.8.0" />
   </ItemGroup>
 
   <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
