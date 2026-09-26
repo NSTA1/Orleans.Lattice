@@ -222,6 +222,12 @@ param(
 	# partition recovery. -1 inherits the shipping library default; 0 is the
 	# control arm reproducing the pre-#3402 release-the-whole-herd behaviour.
 	[int] $WalSaturationRecoveryReleaseBatch = -1,
+	# Layer 3 only. Producer clients per silo (run-cohort-aca.ps1 -ClientsPerSilo,
+	# capped at 64 in total). The generator runs inside those clients, so at
+	# small silo counts the default of 4 can cap a fast read cell on the
+	# producer rather than the cluster; the report then grades it
+	# producer-bound. Raise it to measure such a cell. Recorded per cohort.
+	[ValidateRange(1, 64)][int] $Layer3ClientsPerSilo = 4,
 	# Layer 3 only. True-throughput escalation: a cell whose first cohort
 	# completes at least this fraction of the offered load is re-run at double
 	# the per-silo rung, at most -MaxRungEscalations times. 0 disables it and
@@ -1328,6 +1334,7 @@ function Invoke-Layer3Cohorts {
 		[int] $WalAdmissionCallBudgetSec = 15,
 		[int] $WalAppendCoalescingInFlightThreshold = -1,
 		[int] $WalSaturationRecoveryReleaseBatch = -1,
+		[int] $ClientsPerSilo = 4,
 		# True-throughput escalation. A cohort whose completed-work rate is
 		# at least SaturationRatio x the offered rate measured the offered
 		# load, not the cluster, so its rung is doubled and the cohort re-run,
@@ -1447,6 +1454,7 @@ function Invoke-Layer3Cohorts {
 							-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 							-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 							-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+							-ClientsPerSilo   $ClientsPerSilo `
 							-CohortTag        $cohortTag | Out-Host
 					} catch {
 						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -1476,6 +1484,7 @@ function Invoke-Layer3Cohorts {
 						rungTickHz      = $perSilo.TickHz
 						rungDurationSec = $perSilo.DurationSec
 						flushConcurrencyPerSilo = $fcPerSilo
+						clientsPerSilo  = $ClientsPerSilo
 						offerBound      = $false
 						executionState  = 'unknown'
 					}
@@ -3042,6 +3051,7 @@ function Main {
 				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 				-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 				-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+				-ClientsPerSilo     $Layer3ClientsPerSilo `
 				-SaturationRatio    $SaturationRatio `
 				-MaxRungEscalations $MaxRungEscalations `
 				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
