@@ -79,6 +79,57 @@ public class BenchPreseedTests
     }
 
     [Test]
+    public async Task SeedAsync_resumes_from_the_last_landed_slice_after_a_failure()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var keys = new List<string>();
+        var calls = 0;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                if (++calls == 2)
+                {
+                    return Task.FromException(new InvalidOperationException("saturated"));
+                }
+
+                keys.AddRange(ci.Arg<List<KeyValuePair<string, byte[]>>>().Select(e => e.Key));
+                return Task.CompletedTask;
+            });
+        var landed = 0;
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            BenchPreseed.SeedAsync(lattice, count: 10, sliceSize: 4, CancellationToken.None, landed, o => landed = o));
+        Assert.That(landed, Is.EqualTo(4));
+
+        var reported = new List<int>();
+        var written = await BenchPreseed.SeedAsync(lattice, 10, 4, CancellationToken.None, landed, o => { landed = o; reported.Add(o); });
+
+        Assert.That(written, Is.EqualTo(10));
+        Assert.That(reported, Is.EqualTo(new[] { 8, 10 }));
+        Assert.That(keys, Is.EqualTo(Enumerable.Range(0, 10).Select(GeneratorKey).ToArray()), "no landed slice is re-written");
+    }
+
+    [Test]
+    public async Task SeedAsync_with_start_offset_at_count_writes_nothing()
+    {
+        var lattice = Substitute.For<ILattice>();
+
+        var written = await BenchPreseed.SeedAsync(lattice, 10, 4, CancellationToken.None, startOffset: 10);
+
+        Assert.That(written, Is.EqualTo(10));
+        await lattice.DidNotReceiveWithAnyArgs().SetManyAsync(default!, default);
+    }
+
+    [TestCase(-1)]
+    [TestCase(11)]
+    public void SeedAsync_rejects_a_start_offset_outside_the_seed(int startOffset)
+    {
+        var lattice = Substitute.For<ILattice>();
+
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BenchPreseed.SeedAsync(lattice, 10, 4, CancellationToken.None, startOffset));
+    }
+
+    [Test]
     public void SeedAsync_rejects_non_positive_slice_size()
     {
         var lattice = Substitute.For<ILattice>();
