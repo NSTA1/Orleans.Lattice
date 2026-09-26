@@ -31,6 +31,7 @@ public sealed partial class TelemetryToolHandlersTests
             () => TelemetryToolHandlers.QueryRangeAsync(
                 client,
                 ReadAll(),
+                TelemetryAuthorizers.Allowed(),
                 Guardrails(),
                 cts.Token,
                 "up",
@@ -47,7 +48,7 @@ public sealed partial class TelemetryToolHandlersTests
         cts.Cancel();
 
         Assert.CatchAsync<OperationCanceledException>(
-            () => TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), cts.Token));
+            () => TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), cts.Token));
     }
 
     [Test]
@@ -58,7 +59,7 @@ public sealed partial class TelemetryToolHandlersTests
         cts.Cancel();
 
         Assert.CatchAsync<OperationCanceledException>(
-            () => TelemetryToolHandlers.MetricMetadataAsync(client, ReadAll(), cts.Token, "up"));
+            () => TelemetryToolHandlers.MetricMetadataAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), cts.Token, "up"));
     }
 
     // ---- Non-success and unrecognisable envelopes ----
@@ -69,7 +70,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client("{\"status\":\"error\",\"data\":{}}", out _);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, metric: null);
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, metric: null);
 
         Assert.Multiple(() =>
         {
@@ -83,7 +84,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"data\":{\"resultType\":\"vector\",\"result\":[]}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -97,7 +98,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":[1,2]}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -111,7 +112,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":{\"result\":[]}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -125,7 +126,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":{\"resultType\":7,\"result\":[]}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.That(result.Success, Is.False);
     }
@@ -135,7 +136,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":{\"resultType\":\"vector\"}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -151,7 +152,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(
             "{\"status\":\"success\",\"data\":{\"resultType\":\"histogram\",\"result\":[]}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -169,7 +170,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(
             "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":{}}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -187,6 +188,7 @@ public sealed partial class TelemetryToolHandlersTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             client,
             ReadAll(),
+            TelemetryAuthorizers.Allowed(),
             Guardrails(),
             CancellationToken.None,
             "up",
@@ -212,6 +214,7 @@ public sealed partial class TelemetryToolHandlersTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             client,
             ReadAll(),
+            TelemetryAuthorizers.Allowed(),
             Guardrails(),
             CancellationToken.None,
             "up",
@@ -234,7 +237,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"value\":[1.0,\"1\"]}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -252,7 +255,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":\"up\",\"value\":[1.0,\"1\"]}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.That(result.Series[0].Labels, Is.Empty);
     }
@@ -265,7 +268,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":{\"__name__\":\"up\",\"replica\":3},\"value\":[1.0,\"1\"]}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -282,7 +285,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":{\"__name__\":\"up\"}}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -299,7 +302,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":{\"__name__\":\"up\"},\"value\":\"1\"}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.That(result.Series[0].Samples, Is.Empty);
     }
@@ -312,7 +315,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":{\"__name__\":\"up\"},\"value\":[1.0]}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.That(result.Series[0].Samples, Is.Empty);
     }
@@ -325,7 +328,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":{\"__name__\":\"up\"},\"value\":[\"not-a-number\",\"1\"]}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -343,7 +346,7 @@ public sealed partial class TelemetryToolHandlersTests
             + "[{\"metric\":{\"__name__\":\"up\"},\"value\":[1.5,42]}]}}";
         var client = Client(json, out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -361,7 +364,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(
             "{\"status\":\"success\",\"data\":{\"resultType\":\"scalar\",\"result\":\"42\"}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "42");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "42");
 
         Assert.Multiple(() =>
         {
@@ -376,7 +379,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(
             "{\"status\":\"success\",\"data\":{\"resultType\":\"string\",\"result\":[1.0,\"hello\"]}}", out _);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "\"hello\"");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "\"hello\"");
 
         Assert.Multiple(() =>
         {
@@ -394,7 +397,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client("{\"status\":\"success\",\"data\":[]}", out _);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, metric: null);
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, metric: null);
 
         Assert.Multiple(() =>
         {
@@ -411,7 +414,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(json, out _);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, metric: null);
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, metric: null);
 
         Assert.Multiple(() =>
         {
@@ -426,7 +429,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client("{\"status\":\"success\",\"data\":{\"up\":[\"gauge\"]}}", out _);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, metric: null);
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, metric: null);
 
         Assert.Multiple(() =>
         {
@@ -446,7 +449,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(json, out _);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, metric: null);
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, metric: null);
 
         Assert.Multiple(() =>
         {
@@ -465,7 +468,7 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client(json, out _);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, metric: null);
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, metric: null);
 
         Assert.Multiple(() =>
         {
@@ -485,7 +488,8 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
 
         var result = await TelemetryToolHandlers.QueryAsync(
-            client, DenyAll("lattice_wal_append_total"), CancellationToken.None, "1 + 1");
+            client, DenyAll("lattice_wal_append_total"),
+            TelemetryAuthorizers.Allowed(), CancellationToken.None, "1 + 1");
 
         Assert.Multiple(() =>
         {
@@ -503,6 +507,7 @@ public sealed partial class TelemetryToolHandlersTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             client,
             DenyAll("lattice_wal_append_total"),
+            TelemetryAuthorizers.Allowed(),
             Guardrails(),
             CancellationToken.None,
             "1 + 1",
@@ -524,7 +529,8 @@ public sealed partial class TelemetryToolHandlersTests
         var client = Client("{\"status\":\"success\",\"data\":[]}", out _);
 
         var result = await TelemetryToolHandlers.ListMetricsAsync(
-            client, DenyAll("lattice_wal_*"), CancellationToken.None);
+            client, DenyAll("lattice_wal_*"),
+            TelemetryAuthorizers.Allowed(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -538,7 +544,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":{}}", out _);
 
-        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), CancellationToken.None);
+        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -552,7 +558,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\"}", out _);
 
-        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), CancellationToken.None);
+        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -566,7 +572,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":[\"up\",null,\"down\"]}", out _);
 
-        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), CancellationToken.None);
+        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None);
 
         Assert.That(result.Metrics, Is.EqualTo(new[] { "up", "down" }));
     }
@@ -579,6 +585,7 @@ public sealed partial class TelemetryToolHandlersTests
             () => TelemetryToolHandlers.QueryRangeAsync(
                 client: null!,
                 ReadAll(),
+                TelemetryAuthorizers.Allowed(),
                 Guardrails(),
                 CancellationToken.None,
                 "up",
@@ -592,6 +599,7 @@ public sealed partial class TelemetryToolHandlersTests
             () => TelemetryToolHandlers.QueryRangeAsync(
                 Client("{}", out _),
                 policy: null!,
+                TelemetryAuthorizers.Allowed(),
                 Guardrails(),
                 CancellationToken.None,
                 "up",
@@ -605,6 +613,7 @@ public sealed partial class TelemetryToolHandlersTests
             () => TelemetryToolHandlers.QueryRangeAsync(
                 Client("{}", out _),
                 ReadAll(),
+                TelemetryAuthorizers.Allowed(),
                 Guardrails(),
                 CancellationToken.None,
                 query: null!,
@@ -616,19 +625,21 @@ public sealed partial class TelemetryToolHandlersTests
     public void Query_rejects_a_null_policy()
         => Assert.ThrowsAsync<ArgumentNullException>(
             () => TelemetryToolHandlers.QueryAsync(
-                Client("{}", out _), policy: null!, CancellationToken.None, "up"));
+                Client("{}", out _), policy: null!,
+                TelemetryAuthorizers.Allowed(), CancellationToken.None, "up"));
 
     [Test]
     public void ListMetrics_rejects_a_null_policy()
         => Assert.ThrowsAsync<ArgumentNullException>(
             () => TelemetryToolHandlers.ListMetricsAsync(
-                Client("{}", out _), policy: null!, CancellationToken.None));
+                Client("{}", out _), policy: null!,
+                TelemetryAuthorizers.Allowed(), CancellationToken.None));
 
     [Test]
     public void MetricMetadata_rejects_a_null_client()
         => Assert.ThrowsAsync<ArgumentNullException>(
             () => TelemetryToolHandlers.MetricMetadataAsync(
-                client: null!, ReadAll(), CancellationToken.None, "up"));
+                client: null!, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up"));
 
     // ---- The instant query carries its optional evaluation timestamp ----
 
@@ -640,6 +651,7 @@ public sealed partial class TelemetryToolHandlersTests
         var result = await TelemetryToolHandlers.QueryAsync(
             client,
             ReadAll(),
+            TelemetryAuthorizers.Allowed(),
             CancellationToken.None,
             "up",
             DateTimeOffset.FromUnixTimeSeconds(1435781451));
@@ -657,7 +669,7 @@ public sealed partial class TelemetryToolHandlersTests
     {
         var client = Client("{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":[]}}", out var handler);
 
-        await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.That(handler.LastRequest!.RequestUri!.Query, Does.Not.Contain("time="));
     }
@@ -673,6 +685,7 @@ public sealed partial class TelemetryToolHandlersTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             client,
             ReadAll(),
+            TelemetryAuthorizers.Allowed(),
             Guardrails(maxRange: TimeSpan.FromHours(1), maxStep: TimeSpan.FromMinutes(5)),
             CancellationToken.None,
             "up",
@@ -696,6 +709,7 @@ public sealed partial class TelemetryToolHandlersTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             client,
             ReadAll(),
+            TelemetryAuthorizers.Allowed(),
             Guardrails(),
             CancellationToken.None,
             "up",

@@ -88,6 +88,7 @@ public sealed class TelemetryBindingRegressionTests
         var result = await TelemetryToolHandlers.QueryAsync(
             provider.GetRequiredService<IPrometheusQueryClient>(),
             provider.GetRequiredService<TelemetryMetricAccessPolicy>(),
+            TelemetryAuthorizers.Allowed(),
             CancellationToken.None,
             query);
 
@@ -107,6 +108,7 @@ public sealed class TelemetryBindingRegressionTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             provider.GetRequiredService<IPrometheusQueryClient>(),
             provider.GetRequiredService<TelemetryMetricAccessPolicy>(),
+            TelemetryAuthorizers.Allowed(),
             provider.GetRequiredService<IOptions<LatticeApiMcpTelemetryOptions>>(),
             CancellationToken.None,
             query,
@@ -171,6 +173,7 @@ public sealed class TelemetryBindingRegressionTests
         var result = await TelemetryToolHandlers.ListMetricsAsync(
             provider.GetRequiredService<IPrometheusQueryClient>(),
             provider.GetRequiredService<TelemetryMetricAccessPolicy>(),
+            TelemetryAuthorizers.Allowed(),
             CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -189,6 +192,7 @@ public sealed class TelemetryBindingRegressionTests
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
             provider.GetRequiredService<IPrometheusQueryClient>(),
             provider.GetRequiredService<TelemetryMetricAccessPolicy>(),
+            TelemetryAuthorizers.Allowed(),
             CancellationToken.None,
             "up");
 
@@ -456,6 +460,7 @@ public sealed class TelemetryBindingRegressionTests
         var result = await TelemetryToolHandlers.QueryAsync(
             provider.GetRequiredService<IPrometheusQueryClient>(),
             provider.GetRequiredService<TelemetryMetricAccessPolicy>(),
+            TelemetryAuthorizers.Allowed(),
             CancellationToken.None,
             "up");
 
@@ -510,6 +515,7 @@ public sealed class TelemetryBindingRegressionTests
         var result = await TelemetryToolHandlers.QueryRangeAsync(
             provider.GetRequiredService<IPrometheusQueryClient>(),
             provider.GetRequiredService<TelemetryMetricAccessPolicy>(),
+            TelemetryAuthorizers.Allowed(),
             provider.GetRequiredService<IOptions<LatticeApiMcpTelemetryOptions>>(),
             CancellationToken.None,
             "up",
