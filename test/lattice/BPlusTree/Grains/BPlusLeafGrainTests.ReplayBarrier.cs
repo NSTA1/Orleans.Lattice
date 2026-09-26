@@ -90,6 +90,12 @@ public partial class BPlusLeafGrainTests
                 + "so requiring a completed replay before a capture would disable the mechanism in "
                 + "the only circumstance it exists for. A capture claims coverage only for offsets "
                 + "actually applied, so it is correct at any point in a replay.",
+            ["BankDurablePinAsync"] =
+                "Issue #3599. The WAL GC's permit-free first tier for a floor-holding leaf, graded "
+                + "by re-reading the pin. Waiting for the replay would park the sweep behind the "
+                + "replay the #2871 reactivation path owns; instead it returns without work while a "
+                + "replay is outstanding (the replay owns the checkpoint until it latches), the pin "
+                + "does not move, and the sweep escalates. It never reads or serves projection data.",
         };
 
     /// <summary>

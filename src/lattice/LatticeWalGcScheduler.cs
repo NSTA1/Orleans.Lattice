@@ -4724,6 +4724,29 @@ internal sealed class LatticeWalGcScheduler(
             // takes one from, so it neither blocks the leaf's foreground traffic
             // nor escapes the concurrency bound.
             var leaf = factory.GetGrain<IBPlusLeafGrain>(leafGrainId);
+
+            // Issue #3599: the permit-free first tier. A floor holder whose pin
+            // froze below its persisted checkpoint is owed only the drive's
+            // TAIL - flush, capture, publish - not its replay, and the replay is
+            // the part that takes a permit from the per-silo gate. So bank first,
+            // grade it on the same #3185 offset axis, and escalate to the drive
+            // only when this consumer's pin did not move. A bank that faults is
+            // not a verdict on the leaf: it falls through to the drive exactly
+            // as a bank that moved nothing does. Gated on a readable pre-offset
+            // because without one no lift can be proven, and an unprovable lift
+            // must not suppress the drive (fail closed, as the grading below).
+            if (preOffset is { } bankBefore)
+            {
+                var banked = await TryBankDurablePinAsync(leaf, treeId, blockingConsumerId, bankBefore, stoppingToken)
+                    .ConfigureAwait(false);
+                if (banked)
+                {
+                    RecordBlockedLeafReactivation(
+                        DriveOutcomeTag(LeafStarvationDriveOutcome.Lifted), treeTag, tenantTag);
+                    return new ReactivationTouchResult(ReactivationOutcome.Completed, OffsetAdvanceOwed: false);
+                }
+            }
+
             var drive = await leaf.DriveStarvedCheckpointAsync().ConfigureAwait(false);
 
             // Grade the drive on the axis its admission was granted on (issue
@@ -4961,6 +4984,66 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         return refusal.Message;
+    }
+
+    /// <summary>
+    /// The permit-free first tier of a floor-holder touch (issue #3599): asks
+    /// the leaf to bank its durable pin with
+    /// <see cref="IBPlusLeafGrain.BankDurablePinAsync"/> and reports whether
+    /// <paramref name="consumerId"/>'s own durable pin offset rose above
+    /// <paramref name="preOffset"/> as a result.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Graded on the same axis, by the same read, as the drive it precedes
+    /// (issue #3185), so a bank credited here is indistinguishable in effect from
+    /// a drive credited there. It is counted on the same
+    /// <c>drove_lifted</c> arm for that reason, and adds no metric instrument.
+    /// </para>
+    /// <para>
+    /// Fail-closed in both directions that matter. A fault from the call, or an
+    /// unreadable offset afterwards, returns <see langword="false"/>, which
+    /// escalates to the drive - the pre-#3599 behaviour - rather than suppressing
+    /// it on an unproven lift.
+    /// </para>
+    /// </remarks>
+    /// <param name="leaf">The floor-holding leaf.</param>
+    /// <param name="treeId">The tree the pin belongs to.</param>
+    /// <param name="consumerId">The floor-holding consumer.</param>
+    /// <param name="preOffset">The consumer's durable pin offset read before the bank.</param>
+    /// <param name="stoppingToken">The service's stopping token; a cancellation it caused is rethrown.</param>
+    private async Task<bool> TryBankDurablePinAsync(
+        IBPlusLeafGrain leaf, string treeId, string consumerId, long preOffset, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await leaf.BankDurablePinAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not bank the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay; escalating to a starvation drive (issue #3599).",
+                consumerId,
+                treeId);
+
+            return false;
+        }
+
+        var postOffset = await TryReadDurablePinOffsetAsync(treeId, consumerId).ConfigureAwait(false);
+        var lifted = postOffset is { } after && after > preOffset;
+        logger.Log(
+            lifted ? LogLevel.Information : LogLevel.Debug,
+            "WAL GC banked the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay permit: its offset went from {PinOffsetBefore} to {PinOffsetAfter}. {Verdict} (issue #3599).",
+            consumerId,
+            treeId,
+            preOffset,
+            postOffset,
+            lifted
+                ? "The pin moved, so no starvation drive is spent on it."
+                : "The pin did not move, so the sweep escalates to a starvation drive.");
+
+        return lifted;
     }
 
     /// <summary>

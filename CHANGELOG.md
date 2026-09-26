@@ -66,6 +66,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Indexing - Gitignore escapes matched a literal backslash.** A `\` escape in a `.gitignore` pattern was read as a backslash, so `\#*\#` and `.\#*` from GitHub's Emacs template never matched and `\*` or an escaped trailing space misfired. The escaped character is now matched literally. ([#3466](https://github.com/NSTA1/Orleans.Lattice/issues/3466)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **WAL - A write-idle leaf froze the GC floor at a stale pin.** A checkpoint persist published its pin before its own snapshot capture, and only a replay-permit drive republished it. The pin now publishes after the capture, and the coverage-lag check and GC sweep bank it without a permit. ([#3599](https://github.com/NSTA1/Orleans.Lattice/issues/3599)) (`Orleans.Lattice`)
+
 - **Indexing - Saturation and degradation signals.** The ingestor inferred WAL saturation from three consecutive failures and misread a Throttled tree as Saturated; it now defers only when the saturation signal reports Saturated. The hydration-drift `index_degraded` outcome now logs at Warning. ([#2683](https://github.com/NSTA1/Orleans.Lattice/issues/2683), [#2688](https://github.com/NSTA1/Orleans.Lattice/issues/2688)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Retrieval - Keyword search starved memory and file content.** The keyword fallback shared one 5,000-record candidate bound across its three trees, so a large structural tree exhausted it and memory entries and file bodies went unsearchable. Each tree now scans under its own bound. ([#3525](https://github.com/NSTA1/Orleans.Lattice/pull/3525)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

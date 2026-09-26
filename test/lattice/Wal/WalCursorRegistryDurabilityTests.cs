@@ -8,6 +8,7 @@ using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Testing;
 using Orleans.Runtime;
+using Orleans.Storage;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.Wal;
@@ -58,10 +59,14 @@ public sealed class WalCursorRegistryDurabilityTests
     [OneTimeTearDown]
     public async Task OneTimeTearDown()
     {
+        SnapshotWriteFaultingStorage.FailSnapshotWrites = false;
         await _cluster.StopAllSilosAsync();
         await _cluster.DisposeAsync();
         SiloServiceProviderCaptureForPinDurabilityTests.Reset();
     }
+
+    [TearDown]
+    public void TearDown() => SnapshotWriteFaultingStorage.FailSnapshotWrites = false;
 
     [Test]
     public async Task Note_durable_frontier_persists_a_pin_through_the_grain_factory()
@@ -96,6 +101,13 @@ public sealed class WalCursorRegistryDurabilityTests
         // strengthened contract: a checkpointed-but-uncovered partition publishes a
         // Zero block pin that pins the GC at the head of the log, never a trimmable
         // real frontier. This never weakens no-loss; it retains strictly more WAL.
+        //
+        // #3599: snapshot writes are refused for this test so the leaf really is
+        // uncovered. Left to itself the zero-coverage repair (#2692) captures a
+        // covering snapshot and the persist tail now banks it, which is correct
+        // but is the covered case, not the one this test pins. A refused capture
+        // must also leave the pin at the Zero block, never raise it.
+        SnapshotWriteFaultingStorage.FailSnapshotWrites = true;
         var treeId = "wcr-pin-" + Guid.NewGuid().ToString("N")[..8];
         var setup = await SeedCheckpointedHeadWithLiveTailAsync(treeId, captureSnapshot: false);
 
@@ -127,6 +139,10 @@ public sealed class WalCursorRegistryDurabilityTests
         // AND the uncovered prefix (its sole durable copy). No-loss is preserved
         // and strengthened; the prefix becomes trimmable only once covered (see the
         // captureSnapshot=true sibling, Reactivated_leaf_replays_live_tail...).
+        //
+        // #3599: snapshot writes are refused so the prefix stays uncovered; see
+        // the sibling test above for why.
+        SnapshotWriteFaultingStorage.FailSnapshotWrites = true;
         var treeId = "wcr-floor-" + Guid.NewGuid().ToString("N")[..8];
         _ = await SeedCheckpointedHeadWithLiveTailAsync(treeId, captureSnapshot: false);
 
@@ -453,7 +469,18 @@ public sealed class WalCursorRegistryDurabilityTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Lattice state lives in ordinary memory storage behind a thin
+            // decorator that can refuse leaf-snapshot writes on demand (see
+            // SnapshotWriteFaultingStorage), so the uncovered-leaf tests can
+            // hold a leaf genuinely uncovered.
+            siloBuilder.AddLattice((silo, name) =>
+            {
+                var innerName = name + "-inner";
+                silo.AddMemoryGrainStorage(innerName);
+                silo.Services.AddKeyedSingleton<IGrainStorage>(
+                    name,
+                    (sp, _) => new SnapshotWriteFaultingStorage(sp.GetRequiredKeyedService<IGrainStorage>(innerName)));
+            });
             siloBuilder.AddWalCursorRegistry();
             siloBuilder.AddLatticeWalGc();
             siloBuilder.ConfigureLattice(o =>
@@ -471,6 +498,48 @@ public sealed class WalCursorRegistryDurabilityTests
             siloBuilder.Services.AddHostedService(
                 sp => sp.GetRequiredService<SiloServiceProviderCaptureForPinDurabilityTests>());
         }
+    }
+
+    /// <summary>
+    /// Decorates the fixture's memory grain storage and, while
+    /// <see cref="FailSnapshotWrites"/> is set, refuses every write of leaf
+    /// snapshot state, so no capture can land and the leaf stays genuinely
+    /// uncovered.
+    /// </summary>
+    /// <remarks>
+    /// Without it the uncovered-leaf tests would not be testing an uncovered
+    /// leaf. The zero-coverage repair (#2692) captures a snapshot for a
+    /// checkpointed-but-uncovered partition on its own, and since #3599 the
+    /// persist tail republishes the pin once that capture is kept, so the
+    /// seeded leaf becomes covered and legitimately publishes a real pin. The
+    /// Zero block pin contract these tests pin is about a checkpoint with NO
+    /// durable coverage behind it, which a refused snapshot write reproduces
+    /// exactly - and it doubles as the end-to-end check that a capture which
+    /// cannot land never raises the pin. Every other state passes through
+    /// untouched. The flag is static because the TestingHost silo runs
+    /// in-process, and the fixture's tests run sequentially.
+    /// </remarks>
+    private sealed class SnapshotWriteFaultingStorage(IGrainStorage inner) : IGrainStorage
+    {
+        private const string LeafSnapshotStateName = "leaf-snapshot";
+
+        internal static volatile bool FailSnapshotWrites;
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ReadStateAsync(stateName, grainId, grainState);
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (FailSnapshotWrites && string.Equals(stateName, LeafSnapshotStateName, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Leaf snapshot writes are refused by the test fixture.");
+            }
+
+            return inner.WriteStateAsync(stateName, grainId, grainState);
+        }
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
     }
 }
 
