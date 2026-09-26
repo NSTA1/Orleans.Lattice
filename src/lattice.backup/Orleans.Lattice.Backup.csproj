@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Backup</PackageId>
-    <Version>9.7.1</Version>
+    <Version>9.8.0</Version>
     <Description>Backup and restore add-on for Orleans.Lattice. Provides the backup catalog, manifest and set model, full and incremental capture, restore and revert orchestration, retention pruning, scheduling, health tracking, metrics, and the pluggable ILatticeBackupSink seam for in-cluster or durable external storage.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

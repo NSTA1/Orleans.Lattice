@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Backup</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice backup and restore. Exposes fail-closed backup administration for listing catalog entries and chains, reading scheduler status, capturing full or incremental backups, restoring single trees or backup sets, reverting restores, deleting retained backups, and checking backup health; transport packages adapt over this facade.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

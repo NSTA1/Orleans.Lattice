@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Backup.Grpc</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Code-first gRPC transport binding and strongly typed client for Orleans.Lattice.Api.Backup. Exposes the backup control facade over a remote gRPC surface with a default-deny authorization interceptor, credential bridging, and auth-scheme discovery.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

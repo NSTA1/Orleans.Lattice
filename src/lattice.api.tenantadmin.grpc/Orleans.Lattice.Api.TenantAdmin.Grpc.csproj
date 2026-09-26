@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TenantAdmin.Grpc</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Code-first gRPC transport binding and strongly typed client for Orleans.Lattice.Api.TenantAdmin. Exposes tenant lifecycle, admin-subject, cross-tenant grant, quota and usage, region authorization, residency, and self-service RPCs over a remote gRPC surface with a default-deny authorization interceptor and auth-scheme discovery.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

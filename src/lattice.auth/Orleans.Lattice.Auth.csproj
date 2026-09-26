@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Auth</PackageId>
-    <Version>9.7.0</Version>
+    <Version>9.8.0</Version>
     <Description>Authorization add-on for Orleans.Lattice. Ships the authorization rule model, durable policy store, decision engine, credential context, and read/write enforcement seams that gate lattice operations through a fail-closed access policy backed by reserved lattice trees with per-key history.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
