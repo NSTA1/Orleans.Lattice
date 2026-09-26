@@ -191,6 +191,26 @@ internal sealed class LatticeWalGcScheduler(
     private readonly HashSet<string> _primedTrees = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Consecutive terminal-breach candidate passes per tree (issue #3149): a
+    /// pass over the byte ceiling, with an available cursor floor, that
+    /// reclaimed nothing. Absent means a run of zero. Confined to the
+    /// <see cref="ExecuteAsync"/> loop like the fields above, and pruned
+    /// alongside <see cref="_cadence"/>.
+    /// </summary>
+    private readonly Dictionary<string, int> _terminalBreachRuns = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Consecutive breaching passes a tree must accumulate before
+    /// <see cref="LatticeMetrics.WalGcTerminalBreach"/> starts advancing for it
+    /// (issue #3149). A breaching tree polls at the interval floor, so this is
+    /// several minutes of uninterrupted zero-reclaim over-ceiling passes at the
+    /// default floor - long past any consumer that is merely a pass or two
+    /// behind, and far short of the hundreds of passes the condition persisted
+    /// for, unannounced, before the signal existed.
+    /// </summary>
+    internal const int TerminalBreachPasses = 10;
+
+    /// <summary>
     /// Minimum time a tree must have been continuously blocked by the same
     /// consumer before the sweep will reactivate its leaf.
     /// </summary>
@@ -2481,6 +2501,18 @@ internal sealed class LatticeWalGcScheduler(
                 LatticeMetrics.WalGcCeilingUnsatisfiable.Add(1, treeTag, tenantTag);
             }
 
+            // The terminal-breach verdict (issue #3149): over the ceiling with a
+            // usable floor, reclaiming nothing, for TerminalBreachPasses passes
+            // running. Every existing arm reads that as a transient
+            // (`over_ceiling` backs off and retries); this is what says the
+            // retries have stopped helping. A blocked floor is excluded because
+            // `blocked` already names that tree and its remedy.
+            RecordTerminalBreach(
+                treeId,
+                overCeiling && !reclaimed && report.CursorFloorState == WalGcCursorFloorState.Available,
+                treeTag,
+                tenantTag);
+
             // Self-healing remedy for the blocked condition, not just a label
             // for it (issue #2710 Limitation 2). A blocked tree stays blocked
             // until the offending leaf activates and replays, and nothing on
@@ -3019,6 +3051,49 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Advances or ends <paramref name="treeId"/>'s run of terminal-breach
+    /// candidate passes, and advances
+    /// <see cref="LatticeMetrics.WalGcTerminalBreach"/> by one once the run has
+    /// reached <see cref="TerminalBreachPasses"/> (issue #3149).
+    /// <para>
+    /// Recorded once per breaching pass, not once per episode, so the rate is
+    /// readable against <c>wal.gc.passes</c> exactly as
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> is. The run lives
+    /// only in memory: a silo restart starts it again from zero, which delays
+    /// the signal by at most one threshold's worth of passes and never
+    /// fabricates it.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the pass collected.</param>
+    /// <param name="breaching">Whether this pass was over the ceiling, with an available floor, and reclaimed nothing.</param>
+    /// <param name="treeTag">The pass's tree tag.</param>
+    /// <param name="tenantTag">The pass's tenant tag.</param>
+    private void RecordTerminalBreach(
+        string treeId,
+        bool breaching,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        if (!breaching)
+        {
+            _terminalBreachRuns.Remove(treeId);
+            return;
+        }
+
+        _terminalBreachRuns.TryGetValue(treeId, out var run);
+        if (run < TerminalBreachPasses)
+        {
+            run++;
+            _terminalBreachRuns[treeId] = run;
+        }
+
+        if (run >= TerminalBreachPasses)
+        {
+            LatticeMetrics.WalGcTerminalBreach.Add(1, treeTag, tenantTag);
+        }
+    }
+
+    /// <summary>
     /// Emits a one-time zero observation for each WAL-retention series that a
     /// reader must be able to distinguish "measured, never happened" from "not
     /// reporting" on, so the series exists before its first real event.
@@ -3136,6 +3211,12 @@ internal sealed class LatticeWalGcScheduler(
         // from the emitter's mints a second series the emitter can never join,
         // which leaves a permanent zero sitting beside the real value.
         LatticeMetrics.WalGcCeilingUnsatisfiable.Add(0, treeTag, tenantTag);
+
+        // Zero-prime the terminal-breach counter (issue #3149) with the same
+        // (tree, tenant) pair RecordTerminalBreach emits under, so a flat zero
+        // is a measured "this tree is not stuck over its ceiling" rather than
+        // the silence the condition used to sit behind.
+        LatticeMetrics.WalGcTerminalBreach.Add(0, treeTag, tenantTag);
 
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
@@ -3558,6 +3639,7 @@ internal sealed class LatticeWalGcScheduler(
             {
                 _cadence.Remove(entry.Key);
                 _primedTrees.Remove(entry.Key);
+                _terminalBreachRuns.Remove(entry.Key);
                 _blockedConsumers.Remove(entry.Key);
                 snapshotPins?.Forget(entry.Key);
             }
