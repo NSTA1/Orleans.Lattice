@@ -59,6 +59,49 @@ try {
         Assert-Case "$($case.Name) warning" (($warnings.Count -gt 0) -eq $case.Bound)
     }
 
+    # Measured pl3c set-point N=2: the generator slipped without blocking,
+    # but the cluster retired 4,738 of the 10,673 keys/s it generated.
+    [IO.File]::WriteAllText($log, '[producer] DONE total=486,000 elapsed=45.537s avg=10,673 msg/s genBlockedFrac=0.167 slipMaxMs=4968.5')
+    $cohort = New-Cohort 4738
+    $warnings = @()
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningVariable warnings -WarningAction SilentlyContinue
+    Assert-Case 'cluster below generated rate is a cluster ceiling' (-not $cohort.producerBound -and $warnings.Count -eq 0)
+    Assert-Case 'generated rate is recorded' ($cohort.producerGeneratedPerSec -eq 10673)
+
+    # Measured pl3c get-many N=1: the cluster retired everything generated.
+    [IO.File]::WriteAllText($log, '[producer] DONE total=14,112,000 elapsed=45.162s avg=312,476 msg/s genBlockedFrac=0.074 slipMaxMs=1164.3')
+    $cohort = New-Cohort 312451
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'cluster keeping pace with a slow generator is producer-bound' $cohort.producerBound
+
+    # The same cohort at its real rung (64,000 vehicles x 5 Hz = 320,000 keys/s):
+    # the generator reached 97.6% of the offered rate, so the start-up slip
+    # did not bound the cell and it must escalate instead.
+    $cohort = New-Cohort 312451
+    $cohort.rungVehicles = 64000
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'generator on schedule is not producer-bound' (-not $cohort.producerBound)
+
+    # Measured pl3d set-many-atomic N=1 c2: a 1.4 s start-up slip, then 4,000 msg/s
+    # on schedule against 4,000 offered.
+    [IO.File]::WriteAllText($log, '[producer] DONE total=175,000 elapsed=45.166s avg=3,875 msg/s genBlockedFrac=0.065 slipMaxMs=1485.6')
+    $cohort = New-Cohort 3653
+    $cohort.rungVehicles = 800
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'start-up slip on an on-schedule generator is not producer-bound' (-not $cohort.producerBound)
+    $cohort = New-Cohort 3600
+    $cohort.rungVehicles = 900
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'generator below 90 percent of offered is producer-bound' $cohort.producerBound
+
+    [IO.File]::WriteAllText($log, '[producer] DONE total=1 elapsed=1s avg=1,000 msg/s genBlockedFrac=0.010 slipMaxMs=5000.0')
+    $cohort = New-Cohort 900
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'pace threshold at 90 percent of generated is producer-bound' $cohort.producerBound
+    $cohort = New-Cohort 899
+    Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log -WarningAction SilentlyContinue
+    Assert-Case 'below 90 percent of generated is not producer-bound' (-not $cohort.producerBound)
+
     [IO.File]::WriteAllText($log, '[producer] DONE total=1 elapsed=1s avg=900,000 msg/s genBlockedFrac=0.5 slipMaxMs=20.0')
     $cohort = New-Cohort 900000
     Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log

@@ -72,17 +72,38 @@ internal static class BenchPreseed
     /// leaves, and a re-run against retained storage is a populated tree.
     /// Every entry is deterministic, so a retried slice is idempotent.
     /// </summary>
-    /// <returns>The number of entries written.</returns>
-    public static async Task<int> SeedAsync(ILattice lattice, int count, int sliceSize, CancellationToken ct)
+    /// <remarks>
+    /// A retry resumes from <paramref name="startOffset"/>, the offset
+    /// <paramref name="onSliceWritten"/> last reported, rather than from zero
+    /// (#3588): restarting re-wrote every slice that had already landed, so a
+    /// large seed that failed late could never finish within its attempts.
+    /// </remarks>
+    /// <param name="lattice">The tree to seed.</param>
+    /// <param name="count">The number of entries in the whole seed.</param>
+    /// <param name="sliceSize">The maximum entries per SetManyAsync call.</param>
+    /// <param name="ct">Cancels the seed between slices.</param>
+    /// <param name="startOffset">The first entry to write; entries before it have already landed.</param>
+    /// <param name="onSliceWritten">Called with the offset of the next unwritten entry after each slice lands.</param>
+    /// <returns>The number of entries in the whole seed, <paramref name="count"/>.</returns>
+    public static async Task<int> SeedAsync(
+        ILattice lattice,
+        int count,
+        int sliceSize,
+        CancellationToken ct,
+        int startOffset = 0,
+        Action<int>? onSliceWritten = null)
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sliceSize);
+        ArgumentOutOfRangeException.ThrowIfNegative(startOffset);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(startOffset, count);
         var entries = BuildEntries(count);
-        for (var offset = 0; offset < entries.Count; offset += sliceSize)
+        for (var offset = startOffset; offset < entries.Count; offset += sliceSize)
         {
             ct.ThrowIfCancellationRequested();
             var slice = entries.GetRange(offset, Math.Min(sliceSize, entries.Count - offset));
             await lattice.SetManyAsync(slice, ct).ConfigureAwait(false);
+            onSliceWritten?.Invoke(offset + slice.Count);
         }
         return entries.Count;
     }

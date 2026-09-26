@@ -222,6 +222,12 @@ param(
 	# partition recovery. -1 inherits the shipping library default; 0 is the
 	# control arm reproducing the pre-#3402 release-the-whole-herd behaviour.
 	[int] $WalSaturationRecoveryReleaseBatch = -1,
+	# Layer 3 only. Producer clients per silo (run-cohort-aca.ps1 -ClientsPerSilo,
+	# capped at 64 in total). The generator runs inside those clients, so at
+	# small silo counts the default of 4 can cap a fast read cell on the
+	# producer rather than the cluster; the report then grades it
+	# producer-bound. Raise it to measure such a cell. Recorded per cohort.
+	[ValidateRange(1, 64)][int] $Layer3ClientsPerSilo = 4,
 	# Layer 3 only. True-throughput escalation: a cell whose first cohort
 	# completes at least this fraction of the offered load is re-run at double
 	# the per-silo rung, at most -MaxRungEscalations times. 0 disables it and
@@ -587,8 +593,8 @@ $Layer2Rows = @(
 # slot, and the point modes fan out at most that many calls per slot, so for
 # those workloads this bound - not the offered rate - is what an
 # undersized client would measure. The rig default of 8 was measured to cap
-# them below the cluster's own ceiling; 64 lifts that cap clear of it (the
-# 2-key sagas reach the transaction-registry refusal ceiling there). The
+# them below the cluster's own ceiling; 64 lifts that cap clear of it (at 64
+# the 2-key sagas are bound by per-saga durable-write latency, #3591). The
 # point modes fan each of the FlushConcurrencyPerSilo x N slots out into
 # FlushConcurrencyPerSilo calls (BENCH_POINT_FANOUT), so their in-flight
 # call count is FlushConcurrencyPerSilo^2 x N: linear in N, with constant
@@ -1328,12 +1334,17 @@ function Invoke-Layer3Cohorts {
 		[int] $WalAdmissionCallBudgetSec = 15,
 		[int] $WalAppendCoalescingInFlightThreshold = -1,
 		[int] $WalSaturationRecoveryReleaseBatch = -1,
+		[int] $ClientsPerSilo = 4,
 		# True-throughput escalation. A cohort whose completed-work rate is
 		# at least SaturationRatio x the offered rate measured the offered
 		# load, not the cluster, so its rung is doubled and the cohort re-run,
 		# at most MaxRungEscalations times per cell. 0 disables escalation.
 		[double] $SaturationRatio = 0.9,
 		[int] $MaxRungEscalations = 3,
+		# How many times one cohort is re-run at the same rung because it
+		# read an unseeded keyspace, before it is kept (and excluded from the
+		# aggregate as UNSEEDED).
+		[int] $MaxUnseededRetries = 2,
 		# Cells from an earlier run of this sweep (state.layer3.cohorts),
 		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
 		# over and skipped; see -Resume.
@@ -1414,6 +1425,7 @@ function Invoke-Layer3Cohorts {
 				# published rung is what it is, never aggregated.
 				$probes = New-Object System.Collections.Generic.List[object]
 				$escalations = 0
+				$unseededRetries = 0
 				$accepted = $null
 				while ($true) {
 					$vehicles = $vehPerSilo * $silos
@@ -1447,6 +1459,7 @@ function Invoke-Layer3Cohorts {
 							-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 							-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 							-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+							-ClientsPerSilo   $ClientsPerSilo `
 							-CohortTag        $cohortTag | Out-Host
 					} catch {
 						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -1476,6 +1489,7 @@ function Invoke-Layer3Cohorts {
 						rungTickHz      = $perSilo.TickHz
 						rungDurationSec = $perSilo.DurationSec
 						flushConcurrencyPerSilo = $fcPerSilo
+						clientsPerSilo  = $ClientsPerSilo
 						offerBound      = $false
 						executionState  = 'unknown'
 					}
@@ -1491,9 +1505,29 @@ function Invoke-Layer3Cohorts {
 					if ($entry.producerBound) { $accepted = $entry; break }
 					# An unseeded read cohort measured the miss path; a higher
 					# offered load would not make it a read measurement.
-					if ($entry.unseeded) { $accepted = $entry; break }
+					# It is not evidence of headroom either, so it must not spend
+					# the cell's first-cohort escalation turn: accepting it made
+					# the next cohort the cell's second, which is never allowed
+					# to escalate, so a cell whose first cohort lost its seed was
+					# published as a lower bound at the starting rung. Re-run it
+					# at the same rung, a bounded number of times.
+					if ($entry.unseeded) {
+						if ($unseededRetries -lt $MaxUnseededRetries) {
+							$unseededRetries++
+							$unseededLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.unseeded$unseededRetries.log"
+							if (Test-Path $unseededLog) { Remove-Item $unseededLog -Force }
+							Move-Item $expectedLog $unseededLog -Force
+							Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) is UNSEEDED; re-running it at the same rung (retry $unseededRetries/$MaxUnseededRetries)"
+							continue
+						}
+						$accepted = $entry; break
+					}
 					if (-not $reachedOffered) { $accepted = $entry; break }
-					if ($cohortList.Count -gt 0 -or $escalations -ge $MaxRungEscalations) {
+					# An UNSEEDED cohort kept after its retries ran out is excluded
+					# from the aggregate, so it does not count as the cell's
+					# first cohort: the next one may still escalate.
+					$seededSoFar = @($cohortList | Where-Object { -not $_.unseeded }).Count
+					if ($seededSoFar -gt 0 -or $escalations -ge $MaxRungEscalations) {
 						$entry.offerBound = $true
 						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode): completed $($parsed.FinalThroughput) of $offered offered keys/s, which is offer-bound; not escalating further ($escalations escalation(s) used). The cell is a lower bound."
 						$accepted = $entry
@@ -1663,6 +1697,7 @@ function Set-Layer3ProducerEvidence {
 	)
 	$slip = $null
 	$blocked = $null
+	$generated = $null
 	# Use paired full-run totals, never maxima drawn from different windows.
 	# Slip alone (including legacy logs) cannot distinguish a slow generator
 	# from one that fell behind because the cluster held its channel full.
@@ -1674,17 +1709,37 @@ function Set-Layer3ProducerEvidence {
 		if ($line.Line -match 'genBlockedFrac=\s*([\d.]+)') {
 			$blocked = [double]$Matches[1]
 		}
+		if ($line.Line -match '\savg=\s*([\d,.]+)\s*msg/s') {
+			$generated = [double]($Matches[1] -replace ',', '')
+		}
 	}
 	$offered = [double](Get-StateOr $Cohort 'rungVehicles' 0) * [double](Get-StateOr $Cohort 'rungTickHz' 0)
 	$achieved = Get-StateOr $Cohort 'finalThroughput' $null
+	# A slow generator only bounds the cell when the cluster kept pace with
+	# what it did generate. The point-write modes buffer a whole flush batch
+	# per slot, so the generator can run behind schedule without blocking
+	# while the cluster retires well under half of what was generated and
+	# drains the backlog long after the producer finishes; that cell is a
+	# cluster ceiling, and grading it producer-bound would publish a real
+	# measurement as a lower bound and drop its curve from every chart.
+	$clusterKeptPace = ($null -eq $generated) -or ($generated -le 0) -or ($null -eq $achieved) -or
+		([double]$achieved -ge (0.9 * $generated))
+	# Slip is a maximum, so one start-up stall can push it past the threshold
+	# while the generator then runs on schedule for the rest of the cohort. A
+	# generator that generated at least 90% of the offered rate did not bound
+	# the cell: the cohort reached its offered load and is a candidate for
+	# escalation, not a producer ceiling.
+	$generatorBehind = ($null -eq $generated) -or ($offered -le 0) -or ([double]$generated -lt (0.9 * $offered))
 	$bound = ($null -ne $slip -and $slip -gt 1000) -and
-		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2)
+		($null -ne $blocked -and $blocked -ge 0 -and $blocked -lt 0.2) -and
+		$clusterKeptPace -and $generatorBehind
 	$Cohort['producerSlipMaxMs'] = $slip
 	$Cohort.Remove('producerGenBlockedFracMax')
 	$Cohort['producerGenBlockedFrac'] = $blocked
+	$Cohort['producerGeneratedPerSec'] = $generated
 	$Cohort['producerBound'] = $bound
 	if ($bound) {
-		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure; rendering a lower bound, not a cluster ceiling."
+		Write-Warning "[layer3] PRODUCER-BOUND $LogPath : DONE slipMaxMs=$slip genBlockedFrac=$blocked generated=$generated achieved=$achieved offered=$offered keys/s. Generation is behind schedule with little channel back-pressure and the cluster kept pace with it; rendering a lower bound, not a cluster ceiling."
 	}
 }
 
@@ -3027,6 +3082,7 @@ function Main {
 				-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
 				-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 				-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+				-ClientsPerSilo     $Layer3ClientsPerSilo `
 				-SaturationRatio    $SaturationRatio `
 				-MaxRungEscalations $MaxRungEscalations `
 				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
