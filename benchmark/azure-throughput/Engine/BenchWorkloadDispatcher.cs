@@ -221,6 +221,15 @@ public static class BenchWorkloadDispatcher
     /// capped at the caller-supplied flush concurrency rather than
     /// thrashing the threadpool with one Task per entry.
     /// </summary>
+    /// <remarks>
+    /// Every entry is its own call with its own outcome, so a failure is
+    /// reported per entry: when any call faults the method throws
+    /// <see cref="BenchPointFanOutException"/> carrying the completed count
+    /// and the failed entries, and the ingest engine books the rest as
+    /// written. Rethrowing the first fault alone booked a whole flush unit of
+    /// up to 4,096 entries as failed for one Azure Tables timeout, which
+    /// understated the point-write cells by as much as 40%.
+    /// </remarks>
     private static async Task FanOutAsync(
         List<KeyValuePair<string, byte[]>> batch,
         int parallelism,
@@ -229,12 +238,8 @@ public static class BenchWorkloadDispatcher
     {
         var maxInFlight = Math.Max(1, parallelism);
         using var gate = new SemaphoreSlim(maxInFlight, maxInFlight);
-        // Track every issued task so a single failure surfaces via
-        // Task.WhenAll rather than escaping into the threadpool. The
-        // FlushAsync caller wraps DispatchAsync in retry/shutdown
-        // handling that treats a thrown exception as a transient
-        // failure or as a real fault; either way a fan-out task that
-        // faulted must propagate.
+        // Track every issued task so a failure surfaces here rather than
+        // escaping into the threadpool.
         var tasks = new List<Task>(batch.Count);
         for (var i = 0; i < batch.Count; i++)
         {
@@ -252,7 +257,55 @@ public static class BenchWorkloadDispatcher
                 }
             }, ct));
         }
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Inspected per task below.
+        }
+
+        List<KeyValuePair<string, byte[]>>? failed = null;
+        Exception? firstFailure = null;
+        var canceled = 0;
+        for (var i = 0; i < tasks.Count; i++)
+        {
+            var task = tasks[i];
+            if (task.IsCanceled)
+            {
+                canceled++;
+                continue;
+            }
+
+            if (!task.IsFaulted)
+            {
+                continue;
+            }
+
+            var ex = task.Exception!.InnerExceptions.Count == 1 ? task.Exception.InnerException! : task.Exception;
+            if (ex is OperationCanceledException)
+            {
+                canceled++;
+                continue;
+            }
+
+            failed ??= new List<KeyValuePair<string, byte[]>>();
+            failed.Add(batch[i]);
+            firstFailure ??= ex;
+        }
+
+        if (failed is not null)
+        {
+            throw new BenchPointFanOutException(tasks.Count - failed.Count - canceled, failed, firstFailure!);
+        }
+
+        if (canceled > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new OperationCanceledException("A point call of the flush unit was canceled.");
+        }
     }
 
     /// <summary>
