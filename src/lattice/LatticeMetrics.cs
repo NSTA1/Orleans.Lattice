@@ -2048,6 +2048,12 @@ public static class LatticeMetrics
     ///     (<see cref="WalGcCursorFloorState.BlockedByUnusablePin"/>).
     ///   </description></item>
     ///   <item><description>
+    ///     <see cref="OutcomeNoPartitions"/> - no partition's pinned provider
+    ///     could be resolved on this silo, so none was visited. Takes precedence
+    ///     over the other non-reclaiming arms; inspect WAL placement and the
+    ///     silo's provider registrations rather than inferring an empty WAL.
+    ///   </description></item>
+    ///   <item><description>
     ///     <see cref="OutcomeNoConsumer"/> - it reclaimed nothing because no
     ///     consumer has ever reported a cursor
     ///     (<see cref="WalGcCursorFloorState.NoCursorReported"/>), so the cursor
@@ -2986,6 +2992,14 @@ public static class LatticeMetrics
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeNoConsumer = new(TagOutcome, "no_consumer");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>no_partitions</c>: a WAL GC pass visited no
+    /// partition because none of its pinned provider keys resolved on this silo.
+    /// Unlike <see cref="OutcomeIdle"/>, this makes no claim about eligible WAL.
+    /// Primed at zero per collected tree and diagnostic only.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeNoPartitions = new(TagOutcome, "no_partitions");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>blocked</c> (a WAL GC pass that reclaimed

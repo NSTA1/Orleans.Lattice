@@ -513,6 +513,7 @@ public sealed class LatticeWalGc(
                 LatticeTenantLabel.ForTree(treeName));
         }
 
+        var partitionsVisited = 0;
         if (censusUnavailable || (!anyPartitionHasCursorPredicate && !hasTtlPredicate))
         {
             // A census-unavailable pass (issue #3576) takes this exit
@@ -547,6 +548,7 @@ public sealed class LatticeWalGc(
                 cancellationToken.ThrowIfCancellationRequested();
                 if (ResolvePartitionProvider(partition) is { } idleProvider)
                 {
+                    partitionsVisited++;
                     await idleProvider
                         .EvaluateCompactionAsync(treeName, partition, cancellationToken)
                         .ConfigureAwait(false);
@@ -567,7 +569,7 @@ public sealed class LatticeWalGc(
             // breach is published but no bytes are reclaimed.
             var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
             return new LatticeWalGcReport(
-                treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, 0,
+                treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitionsVisited, 0,
                 ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId,
                 blockingConsumerIds, false, logicalBefore,
                 EvaluateCeilingSatisfiability(ceiling, logicalBefore));
@@ -656,6 +658,7 @@ public sealed class LatticeWalGc(
                 continue;
             }
 
+            partitionsVisited++;
             var partitionOffsetFloor = PartitionOffsetFloor(partition);
 
             // Forced progress: the hold is enabled, this partition has no
@@ -696,7 +699,7 @@ public sealed class LatticeWalGc(
         var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
 
         return new LatticeWalGcReport(
-            treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitions, totalTrimmed,
+            treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitionsVisited, totalTrimmed,
             ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId,
             blockingConsumerIds, retainedBacklog, logicalAfter,
             EvaluateCeilingSatisfiability(ceiling, logicalAfter));
