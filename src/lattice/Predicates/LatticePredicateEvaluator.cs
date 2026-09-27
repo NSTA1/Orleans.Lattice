@@ -47,6 +47,28 @@ internal static class LatticePredicateEvaluator
     /// as a JSON document.
     /// </summary>
     public static bool Matches(byte[]? value, in LatticePredicateNode predicate)
+        => Matches(value, predicate, IsFastPathEligible(predicate));
+
+    /// <summary>
+    /// Evaluates <paramref name="predicate"/> against <paramref name="value"/>
+    /// with the fast-path eligibility decision supplied by the caller.
+    /// <para>
+    /// Eligibility is a property of the predicate tree alone, so it is
+    /// loop-invariant for a scan: every row of a range read is folded against
+    /// the same predicate, and the parameterless overload re-walks that whole
+    /// tree once per row to rediscover an answer that cannot have changed. A
+    /// caller that folds many rows against one predicate computes it once with
+    /// <see cref="IsFastPathEligible"/> and passes it here.
+    /// </para>
+    /// <para>
+    /// <paramref name="fastPathEligible"/> must be
+    /// <see cref="IsFastPathEligible"/> evaluated over the same
+    /// <paramref name="predicate"/>; it selects which of two evaluators folds
+    /// the tree, and passing a value derived from a different predicate would
+    /// route to an evaluator that cannot resolve this one's member paths.
+    /// </para>
+    /// </summary>
+    public static bool Matches(byte[]? value, in LatticePredicateNode predicate, bool fastPathEligible)
     {
         if (value is null || value.Length == 0)
             return false;
@@ -57,18 +79,32 @@ internal static class LatticePredicateEvaluator
         // instead of materializing a JsonDocument. The reader is a ref struct,
         // so the common numeric / boolean predicate resolves with zero heap
         // allocation - the JsonDocument object and its metadata database are
-        // never built. A single zero-alloc validation pass reproduces the
+        // never built. A zero-alloc validation pass reproduces the
         // exact "must be well-formed JSON, else false" contract even when the
         // tree short-circuits before resolving any member; malformed input
         // throws JsonException from the reader exactly as JsonDocument.Parse
-        // would, and is caught here as a non-match.
-        if (IsFastPathEligible(predicate))
+        // would, and is caught here as a non-match. That pass runs only on a
+        // row the tree admits - see the ordering note below.
+        if (fastPathEligible)
         {
             try
             {
                 ReadOnlySpan<byte> json = value;
+                // Evaluate before validating. The two gates are not independent:
+                // a malformed payload and a predicate that folds to false both
+                // yield the same answer, so the validation scan is observable
+                // only on a row the tree would otherwise admit. Deferring it
+                // behind that check preserves the contract exactly - a row that
+                // folds to true is still validated before it is returned, and
+                // malformed input still throws JsonException and is caught as a
+                // non-match - while a selective range scan, where most rows are
+                // rejected, stops paying for a full forward token scan of every
+                // rejected value.
+                if (!EvaluateBoolean(predicate, json, 0))
+                    return false;
+
                 Validate(json);
-                return EvaluateBoolean(predicate, json, 0);
+                return true;
             }
             catch (JsonException)
             {
@@ -96,8 +132,14 @@ internal static class LatticePredicateEvaluator
     /// path is a single, non-empty top-level property name. Nested ('a.b')
     /// paths and member-free predicates fall to the JsonDocument slow path so
     /// dotted resolution and the parse-as-validation gate are preserved exactly.
+    /// <para>
+    /// This is a pure function of the predicate tree, so a caller folding many
+    /// rows against one predicate should evaluate it once and pass the result
+    /// to <see cref="Matches(byte[], in LatticePredicateNode, bool)"/> rather
+    /// than let the parameterless overload re-walk the tree per row.
+    /// </para>
     /// </summary>
-    private static bool IsFastPathEligible(in LatticePredicateNode node)
+    internal static bool IsFastPathEligible(in LatticePredicateNode node)
     {
         int memberCount = 0;
         return CollectFastPathMembers(node, ref memberCount) && memberCount > 0;
@@ -131,9 +173,13 @@ internal static class LatticePredicateEvaluator
     /// performs - malformed input throws <see cref="JsonException"/> - without
     /// allocating a document. Decoupling the validity gate from evaluation
     /// keeps the contract exact even when the tree short-circuits before
-    /// resolving (and thereby reading past) the malformed region.
+    /// resolving (and thereby reading past) the malformed region. It runs
+    /// after evaluation rather than before it because the two gates agree on
+    /// every rejected row: a malformed payload and a predicate that folds to
+    /// false both answer false, so the scan is observable only on a row the
+    /// tree admits.
     /// </summary>
-    private static void Validate(ReadOnlySpan<byte> json)
+    internal static void Validate(ReadOnlySpan<byte> json)
     {
         var reader = new Utf8JsonReader(json);
         while (reader.Read())
@@ -389,7 +435,7 @@ internal static class LatticePredicateEvaluator
     // only member resolution differs - each Member node is resolved by a fresh
     // forward scan of the (already validated) buffer.
 
-    private static bool EvaluateBoolean(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
+    internal static bool EvaluateBoolean(in LatticePredicateNode node, ReadOnlySpan<byte> json, int depth)
     {
         ThrowIfTooDeep(depth);
         switch (node.Kind)

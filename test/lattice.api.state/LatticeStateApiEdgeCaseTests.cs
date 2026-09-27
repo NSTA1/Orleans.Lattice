@@ -156,18 +156,21 @@ public sealed partial class LatticeStateApiEdgeCaseTests
             revision,
             previewBudget,
             null,
-            CrdtProvenanceDecoderRegistry.Default);
+            CrdtProvenanceDecoderRegistry.Default,
+            null);
 
     private static IReadOnlyList<CrdtMemberChange> DecodeMemberChanges(
         EntryRevision revision,
         CrdtShapeRegistry? shapeRegistry,
-        CrdtProvenanceDecoderRegistry? decoderRegistry = null) =>
+        CrdtProvenanceDecoderRegistry? decoderRegistry = null,
+        CrdtProvenanceDelta[]? deltaBuffer = null) =>
         InvokeStatic<IReadOnlyList<CrdtMemberChange>>(
             "DecodeMemberChanges",
             "tree",
             revision,
             shapeRegistry,
-            decoderRegistry ?? CrdtProvenanceDecoderRegistry.Default);
+            decoderRegistry ?? CrdtProvenanceDecoderRegistry.Default,
+            deltaBuffer);
 
     private static CrdtShape ThrowingShape(LatticeMergeMode mode) => new(
         mode,
