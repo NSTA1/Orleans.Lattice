@@ -2025,6 +2025,79 @@
       ]
     },
     {
+      "id": "get-physical-shard-count",
+      "in_process": "ILatticeStateQuery.GetPhysicalShardCountAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId",
+      "response": "int?",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only; reissue the same call.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "A single fan-out-free grain call that reads the routing map, safe against a saturated tree whose shard roots are contended; null when the tree is hidden, a system tree, or missing.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetPhysicalShardCountAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetPhysicalShardCountAsync",
+        "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.GetPhysicalShardCountAsync"
+      ]
+    },
+    {
+      "id": "get-shard-summaries",
+      "in_process": "ILatticeStateQuery.GetShardSummariesAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, bool deep = true",
+      "response": "ShardSummariesResult",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only; reissue the same call.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "Fans a diagnostics read out to every shard (cached per tree for DiagnosticsCacheTtl); results are ordered by shard index; a materialised view is read under an authorised view-read scope; a hidden, system, or missing tree yields the typed not-found result.",
+        "source": "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.GetShardSummariesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetShardSummariesAsync",
+        "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.GetShardSummariesAsync",
+        "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.DiagnosticsCacheTtl"
+      ]
+    },
+    {
       "id": "get-tree-structure",
       "in_process": "ILatticeStateQuery.GetTreeStructureAsync",
       "grpc_method": "/orleans.lattice.api.state/GetTreeStructure",
@@ -2075,6 +2148,43 @@
         "src/lattice.api.state.grpc/LatticeStateGrpcService.cs#GetTreeStructure",
         "src/lattice.api.state.grpc/LatticeStateGrpcMethods.cs#GetTreeStructureMethodName",
         "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetTreeStructureAsync"
+      ]
+    },
+    {
+      "id": "get-tree-summary",
+      "in_process": "ILatticeStateQuery.GetTreeSummaryAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, bool deep = true",
+      "response": "TreeSummaryResult",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only; reissue the same call.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The state facade is read-only and never mutates tree data or configuration.",
+        "source": "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#ILatticeStateQuery"
+      },
+      "concurrency": {
+        "rule": "Answered from DiagnoseAsync, whose report is cached per tree for DiagnosticsCacheTtl, so repeated callers inside that window share one snapshot; a hidden, reserved, or missing tree yields the typed not-found result.",
+        "source": "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.GetTreeSummaryAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/State/ILatticeStateQuery.cs#GetTreeSummaryAsync",
+        "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.GetTreeSummaryAsync",
+        "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.DiagnosticsCacheTtl"
       ]
     },
     {

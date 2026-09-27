@@ -1352,6 +1352,370 @@
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]
+    },
+    {
+      "id": "tenant-scoped-check-tree-exists",
+      "in_process": "ILatticeTenantScopedTreeAdmin.CheckTreeExistsAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name",
+      "response": "TreeExistenceResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller is not authorized to read the tree."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only; reissue the same call.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#CheckTreeExistsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A pure read with no side effects.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#CheckTreeExistsAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#CheckTreeExistsAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-clear-schema-policy",
+      "in_process": "ILatticeTenantScopedTreeAdmin.ClearSchemaPolicyAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name",
+      "response": "bool",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Reissue the same call; a repeat reports false.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ClearSchemaPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Returns true when a policy was removed; a repeat finds no policy and returns false.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ClearSchemaPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree. Schema verbs delegate to the in-process schema admin, which does not authorize; callers must arrive through an authorized tenant-administration transport.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ClearSchemaPolicyAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-create-tree",
+      "in_process": "ILatticeTenantScopedTreeAdmin.CreateTreeAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name, int? shardCount, int? maxLeafKeys, int? maxInternalChildren",
+      "response": "TreeCreationResult",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "The active tenant quota, including owned-tree count, would be exceeded."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller is not authorized to administer the tree."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Reissue the same call; registration is idempotent.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#CreateTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Registration is idempotent.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#CreateTreeAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree. The create is admitted against the tenant quota before the tree is registered.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#CreateTreeAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-delete-tree",
+      "in_process": "ILatticeTenantScopedTreeAdmin.DeleteTreeAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks the tree-lifecycle capability."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Reissue the same call; soft delete is idempotent.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#DeleteTreeAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Soft delete is idempotent and reversible until the recovery window elapses.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#DeleteTreeAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#DeleteTreeAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-get-schema-policy",
+      "in_process": "ILatticeTenantScopedTreeAdmin.GetSchemaPolicyAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name",
+      "response": "LatticeSchemaPolicy?",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only; reissue the same call.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#GetSchemaPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A read; null when no policy exists.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#GetSchemaPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree. Schema verbs delegate to the in-process schema admin, which does not authorize; callers must arrive through an authorized tenant-administration transport.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#GetSchemaPolicyAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-get-tree-deletion-status",
+      "in_process": "ILatticeTenantScopedTreeAdmin.GetTreeDeletionStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller is not authorized to read the tree."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only; reissue the same call.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#GetTreeDeletionStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "A pure read with no side effects.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#GetTreeDeletionStatusAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#GetTreeDeletionStatusAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-purge-tree",
+      "in_process": "ILatticeTenantScopedTreeAdmin.PurgeTreeAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name, bool confirm",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty, or confirm is false."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks the tree-lifecycle capability."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether a repeated purge is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "Irreversible hard purge bypassing the soft-delete window; requires confirm true.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#PurgeTreeAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#PurgeTreeAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-recover-tree",
+      "in_process": "ILatticeTenantScopedTreeAdmin.RecoverTreeAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name",
+      "response": "TreeDeletionStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks the tree-lifecycle capability."
+        }
+      ],
+      "retry": {
+        "status": "uncertain",
+        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
+        "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
+        "issue": 3635
+      },
+      "idempotency": {
+        "idempotent": {
+          "status": "uncertain",
+          "reason": "No source states whether a repeated recover is idempotent after an ambiguous failure.",
+          "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
+          "issue": 3635
+        },
+        "basis": "Recovers a soft-deleted tree within its recovery window.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#RecoverTreeAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#RecoverTreeAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
+    },
+    {
+      "id": "tenant-scoped-set-schema-policy",
+      "in_process": "ILatticeTenantScopedTreeAdmin.SetSchemaPolicyAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string name, LatticeSchemaPolicy policy",
+      "response": "void",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "name is null or empty, a rule is invalid, or policy is null."
+        },
+        {
+          "error_id": "tenant-scope-required",
+          "condition": "No active tenant is in scope."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Reissue the same call.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#SetSchemaPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Sets or replaces the policy; a repeat with the same policy leaves the same state.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#SetSchemaPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree. Schema verbs delegate to the in-process schema admin, which does not authorize; callers must arrive through an authorized tenant-administration transport. The policy is enforced immediately on subsequent writes.",
+        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#ILatticeTenantScopedTreeAdmin"
+      },
+      "sources": [
+        "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#SetSchemaPolicyAsync",
+        "src/lattice.api.tenantadmin/LatticeTenantScopedTreeAdmin.cs#LatticeTenantScopedTreeAdmin"
+      ]
     }
   ],
   "error_taxonomy": [
@@ -1410,6 +1774,22 @@
       "retryable": false,
       "meaning": "The transport authorizer, access gate, or active-tenant validation denied the caller.",
       "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "quota-exceeded",
+      "type": "LatticeQuotaExceededException",
+      "grpc_status": null,
+      "retryable": false,
+      "meaning": "The active tenant quota would be exceeded.",
+      "source": "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException"
+    },
+    {
+      "id": "tenant-scope-required",
+      "type": "TenantScopeRequiredException",
+      "grpc_status": null,
+      "retryable": false,
+      "meaning": "No active tenant is in scope; the tenant-scoped facade refuses the call before any tree is named.",
+      "source": "src/lattice.api.tenantadmin/TenantScopeRequiredException.cs#TenantScopeRequiredException"
     },
     {
       "id": "unimplemented",

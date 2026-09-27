@@ -72,7 +72,7 @@ topologies:
       - "PACKAGES.md"
 configuration_schema:
   - type: "AzureTableWalStorageOptions"
-    package: "lattice.storage.azuretable"
+    package: "Orleans.Lattice.Storage.AzureTable"
     registration:
       value: "AddAzureTableWalStorage"
       source: "src/lattice.storage.azuretable/LatticeAzureTableServiceCollectionExtensions.cs#AddAzureTableWalStorage"
@@ -170,7 +170,7 @@ configuration_schema:
         default: "DefaultCompressionMinPayloadBytes"
         source: "src/lattice.storage.azuretable/AzureTableWalStorageOptions.cs#AzureTableWalStorageOptions.CompressionMinPayloadBytes"
   - type: "AzureTelemetryBackendTokenOptions"
-    package: "lattice.api.mcp.telemetry.azure"
+    package: "Orleans.Lattice.Api.Mcp.Telemetry.Azure"
     registration:
       value: "AddAzureTelemetryBackendToken"
       source: "src/lattice.api.mcp.telemetry.azure/LatticeAzureTelemetryTokenServiceCollectionExtensions.cs#AddAzureTelemetryBackendToken"
@@ -188,10 +188,10 @@ configuration_schema:
         default: "TimeSpan.FromMinutes(5)"
         source: "src/lattice.api.mcp.telemetry.azure/AzureTelemetryBackendTokenOptions.cs#AzureTelemetryBackendTokenOptions.RefreshSkew"
   - type: "BoundedExponentialRetryPolicyOptions"
-    package: "lattice"
+    package: "Orleans.Lattice"
     registration:
-      value: "AddLattice, AddLatticeAtomicAction, AddLatticeAutoTrainingCompressionDictionary, AddLatticeCompressionDictionaries, AddLatticeCompressionDictionaryProvider, AddLatticeCompressor ..."
-      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeCompressor"
+      value: "AddLatticeRetryPolicy"
+      source: "src/lattice/LatticeServiceCollectionExtensions.cs#AddLatticeRetryPolicy"
     properties:
       - name: "MaxAttempts"
         type: "int"
@@ -210,10 +210,10 @@ configuration_schema:
         default: "null"
         source: "src/lattice/BoundedExponentialRetryPolicyOptions.cs#BoundedExponentialRetryPolicyOptions.RetryableExceptionClassifier"
   - type: "CompressionDictionaryTrainingOptions"
-    package: "lattice"
+    package: "Orleans.Lattice"
     registration:
-      value: "AddLattice, AddLatticeAtomicAction, AddLatticeAutoTrainingCompressionDictionary, AddLatticeCompressionDictionaries, AddLatticeCompressionDictionaryProvider, AddLatticeCompressor ..."
-      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeCompressor"
+      value: "AddLatticeAutoTrainingCompressionDictionary"
+      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeAutoTrainingCompressionDictionary"
     properties:
       - name: "Enabled"
         type: "bool"
@@ -256,7 +256,7 @@ configuration_schema:
         default: "1u"
         source: "src/lattice/CompressionDictionaryTrainingOptions.cs#CompressionDictionaryTrainingOptions.FirstDictionaryId"
   - type: "DurableVectorIndexOptions"
-    package: "lattice.vector"
+    package: "Orleans.Lattice.Vector"
     registration:
       value: "Declared options type; no package extension method was found by source scan."
       source: "src/lattice.vector/Persistence/DurableVectorIndexOptions.cs#DurableVectorIndexOptions"
@@ -266,7 +266,7 @@ configuration_schema:
         default: "new()"
         source: "src/lattice.vector/Persistence/DurableVectorIndexOptions.cs#DurableVectorIndexOptions.Index"
   - type: "EnvVarCredentialAuthorizerOptions"
-    package: "lattice.api.state.grpc"
+    package: "Orleans.Lattice.Api.State.Grpc"
     registration:
       value: "AddEnvVarCredentialAuthorizer, AddLatticeStateApiGrpc"
       source: "src/lattice.api.state.grpc/EnvVarCredentialAuthorizerServiceCollectionExtensions.cs#AddEnvVarCredentialAuthorizer"
@@ -284,10 +284,10 @@ configuration_schema:
         default: "TimeSpan.FromMinutes(1)"
         source: "src/lattice.api.state.grpc/Security/EnvVarCredentialAuthorizerOptions.cs#EnvVarCredentialAuthorizerOptions.LockoutDuration"
   - type: "ExplorerAuthUiOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.UI"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddLatticeExplorerWeb"
+      source: "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
     properties:
       - name: "UseServerFormPost"
         type: "bool"
@@ -302,23 +302,23 @@ configuration_schema:
         default: "\"/auth/logout\""
         source: "src/lattice.explorer/UI/Authentication/ExplorerAuthUiOptions.cs#ExplorerAuthUiOptions.LogoutPath"
   - type: "ExplorerConfigStoreOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.Core"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddExplorerConfiguration"
+      source: "src/lattice.explorer/Core/Configuration/ExplorerConfigurationServiceCollectionExtensions.cs#AddExplorerConfiguration"
     properties:
       - name: "FilePath"
         type: "string"
         default: "DefaultFilePath()"
         source: "src/lattice.explorer/Core/Configuration/ExplorerConfigStoreOptions.cs#ExplorerConfigStoreOptions.FilePath"
   - type: "ExplorerContentSecurityPolicyOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.Core"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddLatticeExplorerEntraWebAuth"
+      source: "src/lattice.explorer.entra.web/ExplorerEntraWebServiceCollectionExtensions.cs#AddLatticeExplorerEntraWebAuth"
     properties: []
   - type: "ExplorerEntraOptions"
-    package: "lattice.explorer.entra"
+    package: "Orleans.Lattice.Explorer.Entra"
     registration:
       value: "AddExplorerEntraAuth"
       source: "src/lattice.explorer.entra/ExplorerEntraServiceCollectionExtensions.cs#AddExplorerEntraAuth"
@@ -344,7 +344,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.explorer.entra/ExplorerEntraOptions.cs#ExplorerEntraOptions.DeviceCodeCallback"
   - type: "ExplorerEntraWebOptions"
-    package: "lattice.explorer.entra.web"
+    package: "Orleans.Lattice.Explorer.Entra.Web"
     registration:
       value: "AddLatticeExplorerEntraWebAuth"
       source: "src/lattice.explorer.entra.web/ExplorerEntraWebServiceCollectionExtensions.cs#AddLatticeExplorerEntraWebAuth"
@@ -402,20 +402,20 @@ configuration_schema:
         default: "null"
         source: "src/lattice.explorer.entra.web/ExplorerEntraWebOptions.cs#ExplorerEntraWebOptions.ConfigureCookieOptions"
   - type: "ExplorerNavigationOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.Core"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddLatticeExplorerWeb"
+      source: "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
     properties:
       - name: "AllowEndpointConfiguration"
         type: "bool"
         default: "true"
         source: "src/lattice.explorer/Core/Navigation/ExplorerNavigationOptions.cs#ExplorerNavigationOptions.AllowEndpointConfiguration"
   - type: "ExplorerReauthOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.Core"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddExplorerAuth"
+      source: "src/lattice.explorer/Core/Authentication/ExplorerAuthServiceCollectionExtensions.cs#AddExplorerAuth"
     properties:
       - name: "ChallengePath"
         type: "string?"
@@ -430,17 +430,17 @@ configuration_schema:
         default: "DefaultReturnUrlParameter"
         source: "src/lattice.explorer/Core/Authentication/ExplorerReauthOptions.cs#ExplorerReauthOptions.ReturnUrlParameter"
   - type: "ExplorerSignOutOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.Core"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddExplorerAuth"
+      source: "src/lattice.explorer/Core/Authentication/ExplorerAuthServiceCollectionExtensions.cs#AddExplorerAuth"
     properties:
       - name: "FederatedSignOutPath"
         type: "string?"
         default: "null"
         source: "src/lattice.explorer/Core/Authentication/ExplorerSignOutOptions.cs#ExplorerSignOutOptions.FederatedSignOutPath"
   - type: "FileWalStorageOptions"
-    package: "lattice.storage.file"
+    package: "Orleans.Lattice.Storage.File"
     registration:
       value: "AddFileWalStorage"
       source: "src/lattice.storage.file/LatticeFileServiceCollectionExtensions.cs#AddFileWalStorage"
@@ -470,13 +470,13 @@ configuration_schema:
         default: "DefaultMaxReadBatchBytes"
         source: "src/lattice.storage.file/FileWalStorageOptions.cs#FileWalStorageOptions.MaxReadBatchBytes"
   - type: "GrainIndexDeclarationOptions"
-    package: "lattice.grainindex"
+    package: "Orleans.Lattice.GrainIndex"
     registration:
       value: "AddGrainIndexKeySource, ConfigureGrainIndex, ConfigureGrainIndexOutbox"
       source: "src/lattice.grainindex/GrainIndexServiceCollectionExtensions.cs#AddGrainIndexKeySource"
     properties: []
   - type: "GrainIndexOptions"
-    package: "lattice.grainindex"
+    package: "Orleans.Lattice.GrainIndex"
     registration:
       value: "AddGrainIndexKeySource, ConfigureGrainIndex, ConfigureGrainIndexOutbox"
       source: "src/lattice.grainindex/GrainIndexServiceCollectionExtensions.cs#AddGrainIndexKeySource"
@@ -510,7 +510,7 @@ configuration_schema:
         default: "GrainIndexProjectionMode.Synchronous"
         source: "src/lattice.grainindex/GrainIndexOptions.cs#GrainIndexOptions.ProjectionMode"
   - type: "GrainIndexOutboxOptions"
-    package: "lattice.grainindex"
+    package: "Orleans.Lattice.GrainIndex"
     registration:
       value: "AddGrainIndexKeySource, ConfigureGrainIndex, ConfigureGrainIndexOutbox"
       source: "src/lattice.grainindex/GrainIndexServiceCollectionExtensions.cs#AddGrainIndexKeySource"
@@ -528,7 +528,7 @@ configuration_schema:
         default: "DefaultMaxBatchSize"
         source: "src/lattice.grainindex/GrainIndexOutboxOptions.cs#GrainIndexOutboxOptions.MaxBatchSize"
   - type: "JwtAuthenticatorOptions"
-    package: "lattice.membership"
+    package: "Orleans.Lattice.Membership"
     registration:
       value: "AddLatticeJwtAuthenticator, AddLatticeMembership, AddStaticIdentityDirectory, ConfigureLatticeMembership"
       source: "src/lattice.membership/LatticeMembershipServiceCollectionExtensions.cs#AddLatticeMembership"
@@ -562,7 +562,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.membership/JwtAuthenticatorOptions.cs#JwtAuthenticatorOptions.ValidationParameters"
   - type: "LatticeApiAuthOptions"
-    package: "lattice.api.auth"
+    package: "Orleans.Lattice.Api.Auth"
     registration:
       value: "AddLatticeAuthApi"
       source: "src/lattice.api.auth/LatticeApiAuthServiceCollectionExtensions.cs#AddLatticeAuthApi"
@@ -572,7 +572,7 @@ configuration_schema:
         default: "1000"
         source: "src/lattice.api.auth/LatticeApiAuthOptions.cs#LatticeApiAuthOptions.MaxExplanationRules"
   - type: "LatticeApiBackupOptions"
-    package: "lattice.api.backup"
+    package: "Orleans.Lattice.Api.Backup"
     registration:
       value: "AddLatticeBackupApi"
       source: "src/lattice.api.backup/LatticeApiBackupServiceCollectionExtensions.cs#AddLatticeBackupApi"
@@ -586,7 +586,7 @@ configuration_schema:
         default: "1000"
         source: "src/lattice.api.backup/LatticeApiBackupOptions.cs#LatticeApiBackupOptions.MaxListPageSize"
   - type: "LatticeApiDataOptions"
-    package: "lattice.api.data"
+    package: "Orleans.Lattice.Api.Data"
     registration:
       value: "AddLatticeDataApi"
       source: "src/lattice.api.data/LatticeApiDataServiceCollectionExtensions.cs#AddLatticeDataApi"
@@ -604,10 +604,10 @@ configuration_schema:
         default: "256"
         source: "src/lattice.api.data/LatticeApiDataOptions.cs#LatticeApiDataOptions.RangeDeleteStepSize"
   - type: "LatticeApiMcpManagedIdentityAdministratorOptions"
-    package: "lattice.api.mcp"
+    package: "Orleans.Lattice.Api.Mcp"
     registration:
-      value: "AddBackupTools, AddDataTools, AddLatticeMcp, AddLatticeMcpManagedIdentityAdministrator, AddLatticeMcpRemote, AddReplicationTools ..."
-      source: "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#AddDataTools"
+      value: "AddLatticeMcpManagedIdentityAdministrator"
+      source: "src/lattice.api.mcp/Remote/LatticeMcpManagedIdentityAdministratorServiceCollectionExtensions.cs#AddLatticeMcpManagedIdentityAdministrator"
     properties:
       - name: "Credential"
         type: "TokenCredential?"
@@ -622,10 +622,10 @@ configuration_schema:
         default: "TimeSpan.FromMinutes(5)"
         source: "src/lattice.api.mcp/Remote/LatticeApiMcpManagedIdentityAdministratorOptions.cs#LatticeApiMcpManagedIdentityAdministratorOptions.RefreshSkew"
   - type: "LatticeApiMcpOptions"
-    package: "lattice.api.mcp"
+    package: "Orleans.Lattice.Api.Mcp"
     registration:
-      value: "AddBackupTools, AddDataTools, AddLatticeMcp, AddLatticeMcpManagedIdentityAdministrator, AddLatticeMcpRemote, AddReplicationTools ..."
-      source: "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#AddDataTools"
+      value: "AddLatticeMcp"
+      source: "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs#AddLatticeMcp"
     properties:
       - name: "RequireAuthorization"
         type: "bool"
@@ -704,10 +704,10 @@ configuration_schema:
         default: "false"
         source: "src/lattice.api.mcp/LatticeApiMcpOptions.cs#LatticeApiMcpOptions.EnableTenantAdminControlTools"
   - type: "LatticeApiMcpRemoteOptions"
-    package: "lattice.api.mcp"
+    package: "Orleans.Lattice.Api.Mcp"
     registration:
-      value: "AddBackupTools, AddDataTools, AddLatticeMcp, AddLatticeMcpManagedIdentityAdministrator, AddLatticeMcpRemote, AddReplicationTools ..."
-      source: "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#AddDataTools"
+      value: "AddLatticeMcpRemote"
+      source: "src/lattice.api.mcp/Remote/LatticeMcpRemoteServiceCollectionExtensions.cs#AddLatticeMcpRemote"
     properties:
       - name: "RegionId"
         type: "string"
@@ -798,10 +798,10 @@ configuration_schema:
         default: "false"
         source: "src/lattice.api.mcp/Remote/LatticeApiMcpRemoteOptions.cs#LatticeApiMcpRemoteOptions.EnableTenantControl"
   - type: "LatticeApiMcpRemoteRegionOptions"
-    package: "lattice.api.mcp"
+    package: "Orleans.Lattice.Api.Mcp"
     registration:
-      value: "AddBackupTools, AddDataTools, AddLatticeMcp, AddLatticeMcpManagedIdentityAdministrator, AddLatticeMcpRemote, AddReplicationTools ..."
-      source: "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#AddDataTools"
+      value: "AddLatticeMcpRemote (entries of LatticeApiMcpRemoteOptions.Regions)"
+      source: "src/lattice.api.mcp/Remote/LatticeMcpRemoteServiceCollectionExtensions.cs#AddLatticeMcpRemote"
     properties:
       - name: "RegionId"
         type: "required string"
@@ -844,25 +844,25 @@ configuration_schema:
         default: "null"
         source: "src/lattice.api.mcp/Remote/LatticeApiMcpRemoteRegionOptions.cs#LatticeApiMcpRemoteRegionOptions.Telemetry"
   - type: "LatticeApiMcpTelemetryOptions"
-    package: "lattice.api.mcp.telemetry"
+    package: "Orleans.Lattice.Api.Mcp.Telemetry"
     registration:
       value: "AddTelemetryTools"
       source: "src/lattice.api.mcp.telemetry/LatticeMcpTelemetryServiceCollectionExtensions.cs#AddTelemetryTools"
     properties: []
   - type: "LatticeApiReplicationOptions"
-    package: "lattice.api.replication"
+    package: "Orleans.Lattice.Api.Replication"
     registration:
       value: "AddLatticeReplicationApi"
       source: "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#AddLatticeReplicationApi"
     properties: []
   - type: "LatticeApiSchemaOptions"
-    package: "lattice.api.schema"
+    package: "Orleans.Lattice.Api.Schema"
     registration:
       value: "AddLatticeSchemaApi"
       source: "src/lattice.api.schema/LatticeApiSchemaServiceCollectionExtensions.cs#AddLatticeSchemaApi"
     properties: []
   - type: "LatticeApiStateOptions"
-    package: "lattice.api.state"
+    package: "Orleans.Lattice.Api.State"
     registration:
       value: "AddLatticeStateApi"
       source: "src/lattice.api.state/LatticeApiStateServiceCollectionExtensions.cs#AddLatticeStateApi"
@@ -920,19 +920,19 @@ configuration_schema:
         default: "LatticeStateApiReadVisibility.Auto"
         source: "src/lattice.api.state/LatticeApiStateOptions.cs#LatticeApiStateOptions.ReadVisibility"
   - type: "LatticeApiTenantAdminOptions"
-    package: "lattice.api.tenantadmin"
+    package: "Orleans.Lattice.Api.TenantAdmin"
     registration:
       value: "AddLatticeTenantAdminApi, AddLatticeTenantScopedTreeAdminApi"
       source: "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs#AddLatticeTenantAdminApi"
     properties: []
   - type: "LatticeApiTreeAdminOptions"
-    package: "lattice.api.treeadmin"
+    package: "Orleans.Lattice.Api.TreeAdmin"
     registration:
       value: "AddLatticeTreeAdminApi"
       source: "src/lattice.api.treeadmin/LatticeApiTreeAdminServiceCollectionExtensions.cs#AddLatticeTreeAdminApi"
     properties: []
   - type: "LatticeAuthApiGrpcOptions"
-    package: "lattice.api.auth.grpc"
+    package: "Orleans.Lattice.Api.Auth.Grpc"
     registration:
       value: "AddLatticeAuthApiGrpc"
       source: "src/lattice.api.auth.grpc/LatticeAuthApiGrpcServiceCollectionExtensions.cs#AddLatticeAuthApiGrpc"
@@ -950,7 +950,7 @@ configuration_schema:
         default: "\"Bearer\""
         source: "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs#LatticeAuthApiGrpcOptions.CredentialScheme"
   - type: "LatticeAuthOptions"
-    package: "lattice.auth"
+    package: "Orleans.Lattice.Auth"
     registration:
       value: "AddLatticeAuth, ConfigureLatticeAuth"
       source: "src/lattice.auth/LatticeAuthServiceCollectionExtensions.cs#AddLatticeAuth"
@@ -1012,7 +1012,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.auth/LatticeAuthOptions.cs#LatticeAuthOptions.AuditTrailTimeToLive"
   - type: "LatticeAzureBlobCacheOptions"
-    package: "lattice.caching.azureblob"
+    package: "Orleans.Lattice.Caching.AzureBlob"
     registration:
       value: "AddAzureBlobDistributedCache"
       source: "src/lattice.caching.azureblob/LatticeAzureBlobCacheServiceCollectionExtensions.cs#AddAzureBlobDistributedCache"
@@ -1050,7 +1050,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.caching.azureblob/LatticeAzureBlobCacheOptions.cs#LatticeAzureBlobCacheOptions.ConfigureClientOptions"
   - type: "LatticeBackupApiGrpcOptions"
-    package: "lattice.api.backup.grpc"
+    package: "Orleans.Lattice.Api.Backup.Grpc"
     registration:
       value: "AddLatticeBackupApiGrpc"
       source: "src/lattice.api.backup.grpc/LatticeBackupApiGrpcServiceCollectionExtensions.cs#AddLatticeBackupApiGrpc"
@@ -1072,7 +1072,7 @@ configuration_schema:
         default: "\"Bearer\""
         source: "src/lattice.api.backup.grpc/LatticeBackupApiGrpcOptions.cs#LatticeBackupApiGrpcOptions.CredentialScheme"
   - type: "LatticeBackupAzureBlobOptions"
-    package: "lattice.backup.azureblob"
+    package: "Orleans.Lattice.Backup.AzureBlob"
     registration:
       value: "AddLatticeBackupAzureBlob"
       source: "src/lattice.backup.azureblob/LatticeBackupAzureBlobServiceCollectionExtensions.cs#AddLatticeBackupAzureBlob"
@@ -1106,7 +1106,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.backup.azureblob/LatticeBackupAzureBlobOptions.cs#LatticeBackupAzureBlobOptions.ConfigureClientOptions"
   - type: "LatticeBackupHealthOptions"
-    package: "lattice.backup"
+    package: "Orleans.Lattice.Backup"
     registration:
       value: "AddLatticeBackup, ConfigureLatticeBackup, ConfigureLatticeBackupHealth, ConfigureLatticeBackupSchedule"
       source: "src/lattice.backup/LatticeBackupServiceCollectionExtensions.cs#AddLatticeBackup"
@@ -1120,7 +1120,7 @@ configuration_schema:
         default: "DefaultSweepInterval"
         source: "src/lattice.backup/LatticeBackupHealthOptions.cs#LatticeBackupHealthOptions.DefaultInterval"
   - type: "LatticeBackupOptions"
-    package: "lattice.backup"
+    package: "Orleans.Lattice.Backup"
     registration:
       value: "AddLatticeBackup, ConfigureLatticeBackup, ConfigureLatticeBackupHealth, ConfigureLatticeBackupSchedule"
       source: "src/lattice.backup/LatticeBackupServiceCollectionExtensions.cs#AddLatticeBackup"
@@ -1162,7 +1162,7 @@ configuration_schema:
         default: "TimeSpan.FromSeconds(15)"
         source: "src/lattice.backup/LatticeBackupOptions.cs#LatticeBackupOptions.SinkSharingProbeTimeout"
   - type: "LatticeBackupScheduleOptions"
-    package: "lattice.backup"
+    package: "Orleans.Lattice.Backup"
     registration:
       value: "AddLatticeBackup, ConfigureLatticeBackup, ConfigureLatticeBackupHealth, ConfigureLatticeBackupSchedule"
       source: "src/lattice.backup/LatticeBackupServiceCollectionExtensions.cs#AddLatticeBackup"
@@ -1196,7 +1196,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.backup/LatticeBackupScheduleOptions.cs#LatticeBackupScheduleOptions.RetentionMaxAge"
   - type: "LatticeDataApiGrpcOptions"
-    package: "lattice.api.data.grpc"
+    package: "Orleans.Lattice.Api.Data.Grpc"
     registration:
       value: "AddLatticeDataApiGrpc"
       source: "src/lattice.api.data.grpc/LatticeDataApiGrpcServiceCollectionExtensions.cs#AddLatticeDataApiGrpc"
@@ -1218,7 +1218,7 @@ configuration_schema:
         default: "\"lattice-active-tenant\""
         source: "src/lattice.api.data.grpc/LatticeDataApiGrpcOptions.cs#LatticeDataApiGrpcOptions.ActiveTenantHeaderName"
   - type: "LatticeEntraAuthenticatorOptions"
-    package: "lattice.membership.entra"
+    package: "Orleans.Lattice.Membership.Entra"
     registration:
       value: "AddEntraCredentialAuthenticator"
       source: "src/lattice.membership.entra/LatticeEntraServiceCollectionExtensions.cs#AddEntraCredentialAuthenticator"
@@ -1260,7 +1260,7 @@ configuration_schema:
         default: "TimeSpan.FromMinutes(5)"
         source: "src/lattice.membership.entra/LatticeEntraAuthenticatorOptions.cs#LatticeEntraAuthenticatorOptions.RefreshInterval"
   - type: "LatticeEntraGraphOptions"
-    package: "lattice.membership.entra.graph"
+    package: "Orleans.Lattice.Membership.Entra.Graph"
     registration:
       value: "AddEntraGraphGroupResolver"
       source: "src/lattice.membership.entra.graph/LatticeEntraGraphServiceCollectionExtensions.cs#AddEntraGraphGroupResolver"
@@ -1298,10 +1298,10 @@ configuration_schema:
         default: "EntraDirectorySubjectIdSource.ObjectId"
         source: "src/lattice.membership.entra.graph/LatticeEntraGraphOptions.cs#LatticeEntraGraphOptions.DirectorySubjectIdSource"
   - type: "LatticeExplorerWebOptions"
-    package: "lattice.explorer"
+    package: "Orleans.Lattice.Explorer.Web"
     registration:
-      value: "AddExplorerAccess, AddExplorerAccessPlugin, AddExplorerAppearance, AddExplorerAuth, AddExplorerBackup, AddExplorerBackupsPlugin ..."
-      source: "src/lattice.explorer/DesignSystem/LatticeDesignSystemServiceCollectionExtensions.cs#AddLatticeExplorerDesignSystem"
+      value: "AddLatticeExplorerWeb"
+      source: "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
     properties:
       - name: "ConfigFilePath"
         type: "string?"
@@ -1336,7 +1336,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.explorer/WebHosting/LatticeExplorerWebOptions.cs#LatticeExplorerWebOptions.ConfigureDataProtection"
   - type: "LatticeIdentityDirectoryOptions"
-    package: "lattice.membership"
+    package: "Orleans.Lattice.Membership"
     registration:
       value: "AddLatticeJwtAuthenticator, AddLatticeMembership, AddStaticIdentityDirectory, ConfigureLatticeMembership"
       source: "src/lattice.membership/LatticeMembershipServiceCollectionExtensions.cs#AddLatticeMembership"
@@ -1354,7 +1354,7 @@ configuration_schema:
         default: "false"
         source: "src/lattice.membership/LatticeIdentityDirectoryOptions.cs#LatticeIdentityDirectoryOptions.ValidationRequired"
   - type: "LatticeMembershipOptions"
-    package: "lattice.membership"
+    package: "Orleans.Lattice.Membership"
     registration:
       value: "AddLatticeJwtAuthenticator, AddLatticeMembership, AddStaticIdentityDirectory, ConfigureLatticeMembership"
       source: "src/lattice.membership/LatticeMembershipServiceCollectionExtensions.cs#AddLatticeMembership"
@@ -1384,7 +1384,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.membership/LatticeMembershipOptions.cs#LatticeMembershipOptions.ClaimToGroups"
   - type: "LatticeOidcAuthenticatorOptions"
-    package: "lattice.membership.oidc"
+    package: "Orleans.Lattice.Membership.Oidc"
     registration:
       value: "AddLatticeOidc"
       source: "src/lattice.membership.oidc/LatticeOidcServiceCollectionExtensions.cs#AddLatticeOidc"
@@ -1422,10 +1422,10 @@ configuration_schema:
         default: "TimeSpan.FromMinutes(5)"
         source: "src/lattice.membership.oidc/LatticeOidcAuthenticatorOptions.cs#LatticeOidcAuthenticatorOptions.RefreshInterval"
   - type: "LatticeOptions"
-    package: "lattice"
+    package: "Orleans.Lattice"
     registration:
-      value: "AddLattice, AddLatticeAtomicAction, AddLatticeAutoTrainingCompressionDictionary, AddLatticeCompressionDictionaries, AddLatticeCompressionDictionaryProvider, AddLatticeCompressor ..."
-      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeCompressor"
+      value: "ConfigureLattice"
+      source: "src/lattice/LatticeServiceCollectionExtensions.cs#ConfigureLattice"
     properties:
       - name: "KeysPageSize"
         type: "int"
@@ -2012,7 +2012,7 @@ configuration_schema:
         default: "DefaultShardHealingBackpressureOpsPerSecond"
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.ShardHealingBackpressureOpsPerSecond"
   - type: "LatticeReplicationApiGrpcOptions"
-    package: "lattice.api.replication.grpc"
+    package: "Orleans.Lattice.Api.Replication.Grpc"
     registration:
       value: "AddLatticeReplicationApiGrpc"
       source: "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.cs#AddLatticeReplicationApiGrpc"
@@ -2034,7 +2034,7 @@ configuration_schema:
         default: "\"Bearer\""
         source: "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcOptions.cs#LatticeReplicationApiGrpcOptions.CredentialScheme"
   - type: "LatticeReplicationGrpcOptions"
-    package: "lattice.replication.grpc"
+    package: "Orleans.Lattice.Replication.Grpc"
     registration:
       value: "AddLatticeReplicationGrpc"
       source: "src/lattice.replication.grpc/LatticeReplicationGrpcServiceCollectionExtensions.cs#AddLatticeReplicationGrpc"
@@ -2052,7 +2052,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.replication.grpc/LatticeReplicationGrpcOptions.cs#LatticeReplicationGrpcOptions.LocalClusterId"
   - type: "LatticeReplicationHealthCheckOptions"
-    package: "lattice.replication"
+    package: "Orleans.Lattice.Replication"
     registration:
       value: "AddLatticeAutoSharedDictionary, AddLatticeReplication, AddLatticeReplicationSecretsFromConfiguration, ConfigureLatticeReplication, ConfigureLatticeReplicationSecurity"
       source: "src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs#AddLatticeReplication"
@@ -2082,7 +2082,7 @@ configuration_schema:
         default: "DefaultInboundCriticalAfter"
         source: "src/lattice.replication/LatticeReplicationHealthCheckOptions.cs#LatticeReplicationHealthCheckOptions.InboundCriticalAfter"
   - type: "LatticeReplicationOptions"
-    package: "lattice.replication"
+    package: "Orleans.Lattice.Replication"
     registration:
       value: "AddLatticeAutoSharedDictionary, AddLatticeReplication, AddLatticeReplicationSecretsFromConfiguration, ConfigureLatticeReplication, ConfigureLatticeReplicationSecurity"
       source: "src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs#AddLatticeReplication"
@@ -2372,7 +2372,7 @@ configuration_schema:
         default: "DefaultRemediationCircuitResetInterval"
         source: "src/lattice.replication/LatticeReplicationOptions.cs#LatticeReplicationOptions.RemediationCircuitResetInterval"
   - type: "LatticeReplicationSecurityOptions"
-    package: "lattice.replication"
+    package: "Orleans.Lattice.Replication"
     registration:
       value: "AddLatticeAutoSharedDictionary, AddLatticeReplication, AddLatticeReplicationSecretsFromConfiguration, ConfigureLatticeReplication, ConfigureLatticeReplicationSecurity"
       source: "src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs#AddLatticeReplication"
@@ -2390,7 +2390,7 @@ configuration_schema:
         default: "true"
         source: "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs#LatticeReplicationSecurityOptions.ScanConfigurationForSecrets"
   - type: "LatticeScalingHealthCheckOptions"
-    package: "lattice.scaling"
+    package: "Orleans.Lattice.Scaling"
     registration:
       value: "AddLatticeScalingSignal"
       source: "src/lattice.scaling/LatticeScalingServiceCollectionExtensions.cs#AddLatticeScalingSignal"
@@ -2412,7 +2412,7 @@ configuration_schema:
         default: "true"
         source: "src/lattice.scaling/LatticeScalingHealthCheckOptions.cs#LatticeScalingHealthCheckOptions.DegradeOnStorageOverThreshold"
   - type: "LatticeScalingSignalOptions"
-    package: "lattice.scaling"
+    package: "Orleans.Lattice.Scaling"
     registration:
       value: "AddLatticeScalingSignal"
       source: "src/lattice.scaling/LatticeScalingServiceCollectionExtensions.cs#AddLatticeScalingSignal"
@@ -2470,7 +2470,7 @@ configuration_schema:
         default: "DefaultStorageRecommendationsEnabled"
         source: "src/lattice.scaling/LatticeScalingSignalOptions.cs#LatticeScalingSignalOptions.StorageRecommendationsEnabled"
   - type: "LatticeSchemaApiGrpcOptions"
-    package: "lattice.api.schema.grpc"
+    package: "Orleans.Lattice.Api.Schema.Grpc"
     registration:
       value: "AddLatticeSchemaApiGrpc"
       source: "src/lattice.api.schema.grpc/LatticeSchemaApiGrpcServiceCollectionExtensions.cs#AddLatticeSchemaApiGrpc"
@@ -2492,7 +2492,7 @@ configuration_schema:
         default: "\"Bearer\""
         source: "src/lattice.api.schema.grpc/LatticeSchemaApiGrpcOptions.cs#LatticeSchemaApiGrpcOptions.CredentialScheme"
   - type: "LatticeSchemaEnforcementOptions"
-    package: "lattice.schema"
+    package: "Orleans.Lattice.Schema"
     registration:
       value: "AddLatticeSchemaEnforcement, AddLatticeSchemaVersioning, AddLatticeValueTransform, ConfigureLatticeSchemaEnforcement, ConfigureLatticeSchemaVersioning"
       source: "src/lattice.schema/LatticeSchemaEnforcementServiceCollectionExtensions.cs#AddLatticeSchemaEnforcement"
@@ -2510,7 +2510,7 @@ configuration_schema:
         default: "4096"
         source: "src/lattice.schema/LatticeSchemaEnforcementOptions.cs#LatticeSchemaEnforcementOptions.DeadLetterPreviewMaxBytes"
   - type: "LatticeSchemaVersioningOptions"
-    package: "lattice.schema"
+    package: "Orleans.Lattice.Schema"
     registration:
       value: "AddLatticeSchemaEnforcement, AddLatticeSchemaVersioning, AddLatticeValueTransform, ConfigureLatticeSchemaEnforcement, ConfigureLatticeSchemaVersioning"
       source: "src/lattice.schema/LatticeSchemaEnforcementServiceCollectionExtensions.cs#AddLatticeSchemaEnforcement"
@@ -2524,7 +2524,7 @@ configuration_schema:
         default: "4096"
         source: "src/lattice.schema/LatticeSchemaVersioningOptions.cs#LatticeSchemaVersioningOptions.DeadLetterPreviewMaxBytes"
   - type: "LatticeStateApiGrpcOptions"
-    package: "lattice.api.state.grpc"
+    package: "Orleans.Lattice.Api.State.Grpc"
     registration:
       value: "AddEnvVarCredentialAuthorizer, AddLatticeStateApiGrpc"
       source: "src/lattice.api.state.grpc/EnvVarCredentialAuthorizerServiceCollectionExtensions.cs#AddEnvVarCredentialAuthorizer"
@@ -2546,10 +2546,10 @@ configuration_schema:
         default: "\"Bearer\""
         source: "src/lattice.api.state.grpc/LatticeStateApiGrpcOptions.cs#LatticeStateApiGrpcOptions.CredentialScheme"
   - type: "LatticeTagIndexReconciliationOptions"
-    package: "lattice"
+    package: "Orleans.Lattice"
     registration:
-      value: "AddLattice, AddLatticeAtomicAction, AddLatticeAutoTrainingCompressionDictionary, AddLatticeCompressionDictionaries, AddLatticeCompressionDictionaryProvider, AddLatticeCompressor ..."
-      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeCompressor"
+      value: "ConfigureLatticeTagIndexReconciliation"
+      source: "src/lattice/LatticeServiceCollectionExtensions.cs#ConfigureLatticeTagIndexReconciliation"
     properties:
       - name: "Enabled"
         type: "bool"
@@ -2568,7 +2568,7 @@ configuration_schema:
         default: "false"
         source: "src/lattice/BPlusTree/LatticeTagIndexReconciliationOptions.cs#LatticeTagIndexReconciliationOptions.ProbeOnly"
   - type: "LatticeTelemetryApiGrpcOptions"
-    package: "lattice.api.telemetry.grpc"
+    package: "Orleans.Lattice.Api.Telemetry.Grpc"
     registration:
       value: "AddLatticeTelemetryApiGrpc"
       source: "src/lattice.api.telemetry.grpc/LatticeTelemetryApiGrpcServiceCollectionExtensions.cs#AddLatticeTelemetryApiGrpc"
@@ -2590,7 +2590,7 @@ configuration_schema:
         default: "LatticeActiveTenantAssertion.DefaultHeaderName"
         source: "src/lattice.api.telemetry.grpc/LatticeTelemetryApiGrpcOptions.cs#LatticeTelemetryApiGrpcOptions.ActiveTenantHeaderName"
   - type: "LatticeTelemetryOptions"
-    package: "lattice.api.telemetry"
+    package: "Orleans.Lattice.Api.Telemetry"
     registration:
       value: "AddLatticeTelemetryApi, AddLatticeTelemetryBackend"
       source: "src/lattice.api.telemetry/LatticeApiTelemetryServiceCollectionExtensions.cs#AddLatticeTelemetryBackend"
@@ -2624,7 +2624,7 @@ configuration_schema:
         default: "LatticeTelemetryMetricAccessMode.ReadAll"
         source: "src/lattice.api.telemetry/LatticeTelemetryOptions.cs#LatticeTelemetryOptions.MetricAccess"
   - type: "LatticeTenancyOptions"
-    package: "lattice.tenancy"
+    package: "Orleans.Lattice.Tenancy"
     registration:
       value: "AddLatticeTenancy, ConfigureLatticeTenancy"
       source: "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs#AddLatticeTenancy"
@@ -2646,7 +2646,7 @@ configuration_schema:
         default: "true"
         source: "src/lattice.tenancy/LatticeTenancyOptions.cs#LatticeTenancyOptions.SeedDefaultTenant"
   - type: "LatticeTenantAdminApiGrpcOptions"
-    package: "lattice.api.tenantadmin.grpc"
+    package: "Orleans.Lattice.Api.TenantAdmin.Grpc"
     registration:
       value: "AddLatticeTenantAdminApiGrpc"
       source: "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcServiceCollectionExtensions.cs#AddLatticeTenantAdminApiGrpc"
@@ -2668,7 +2668,7 @@ configuration_schema:
         default: "LatticeActiveTenantAssertion.DefaultHeaderName"
         source: "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcOptions.cs#LatticeTenantAdminApiGrpcOptions.ActiveTenantHeaderName"
   - type: "LatticeTenantRateLimiterOptions"
-    package: "lattice.tenancy"
+    package: "Orleans.Lattice.Tenancy"
     registration:
       value: "AddLatticeTenancy, ConfigureLatticeTenancy"
       source: "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs#AddLatticeTenancy"
@@ -2698,7 +2698,7 @@ configuration_schema:
         default: "0.2"
         source: "src/lattice.tenancy/LatticeTenantRateLimiterOptions.cs#LatticeTenantRateLimiterOptions.DemandReserveFraction"
   - type: "LatticeTreeAdminApiGrpcOptions"
-    package: "lattice.api.treeadmin.grpc"
+    package: "Orleans.Lattice.Api.TreeAdmin.Grpc"
     registration:
       value: "AddLatticeTreeAdminApiGrpc"
       source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminApiGrpcServiceCollectionExtensions.cs#AddLatticeTreeAdminApiGrpc"
@@ -2720,10 +2720,10 @@ configuration_schema:
         default: "\"Bearer\""
         source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminApiGrpcOptions.cs#LatticeTreeAdminApiGrpcOptions.CredentialScheme"
   - type: "LatticeViewOptions"
-    package: "lattice"
+    package: "Orleans.Lattice"
     registration:
-      value: "AddLattice, AddLatticeAtomicAction, AddLatticeAutoTrainingCompressionDictionary, AddLatticeCompressionDictionaries, AddLatticeCompressionDictionaryProvider, AddLatticeCompressor ..."
-      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeCompressor"
+      value: "ConfigureLatticeView"
+      source: "src/lattice/Views/LatticeViewsServiceCollectionExtensions.cs#ConfigureLatticeView"
     properties:
       - name: "BatchSize"
         type: "int"
@@ -2806,7 +2806,7 @@ configuration_schema:
         default: "DefaultHistoryHybridFullValueWindow"
         source: "src/lattice/Views/LatticeViewOptions.cs#LatticeViewOptions.HistoryHybridFullValueWindow"
   - type: "OnyxEmbeddingOptions"
-    package: "lattice.api.mcp.repocontext"
+    package: "Orleans.Lattice.Api.Mcp.RepoContext"
     registration:
       value: "AddOnyxEmbeddingProvider, AddRepoContextTools"
       source: "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#AddRepoContextTools"
@@ -2836,7 +2836,7 @@ configuration_schema:
         default: "null"
         source: "src/lattice.api.mcp.repocontext/Embedding/OnyxEmbeddingOptions.cs#OnyxEmbeddingOptions.RequestTimeout"
   - type: "RepoContextTtlOptions"
-    package: "lattice.api.mcp.repocontext"
+    package: "Orleans.Lattice.Api.Mcp.RepoContext"
     registration:
       value: "AddOnyxEmbeddingProvider, AddRepoContextTools"
       source: "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#AddRepoContextTools"
@@ -2850,13 +2850,13 @@ configuration_schema:
         default: "true"
         source: "src/lattice.api.mcp.repocontext/RepoContextTtlOptions.cs#RepoContextTtlOptions.StructuralRecordsNeverExpire"
   - type: "StaticIdentityDirectoryOptions"
-    package: "lattice.membership"
+    package: "Orleans.Lattice.Membership"
     registration:
       value: "AddLatticeJwtAuthenticator, AddLatticeMembership, AddStaticIdentityDirectory, ConfigureLatticeMembership"
       source: "src/lattice.membership/LatticeMembershipServiceCollectionExtensions.cs#AddLatticeMembership"
     properties: []
   - type: "TenantObservabilityOptions"
-    package: "lattice.tenancy"
+    package: "Orleans.Lattice.Tenancy"
     registration:
       value: "AddLatticeTenancy, ConfigureLatticeTenancy"
       source: "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs#AddLatticeTenancy"
@@ -2870,7 +2870,7 @@ configuration_schema:
         default: "DefaultPublishInterval"
         source: "src/lattice.tenancy/TenantObservabilityOptions.cs#TenantObservabilityOptions.PublishInterval"
   - type: "TenantUsageAccountingOptions"
-    package: "lattice.tenancy"
+    package: "Orleans.Lattice.Tenancy"
     registration:
       value: "AddLatticeTenancy, ConfigureLatticeTenancy"
       source: "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs#AddLatticeTenancy"
@@ -2892,7 +2892,7 @@ configuration_schema:
         default: "TimeSpan.FromSeconds(30)"
         source: "src/lattice.tenancy/TenantUsageAccountingOptions.cs#TenantUsageAccountingOptions.MeterInterval"
   - type: "TreeWalMoveOptions"
-    package: "lattice.api.abstractions"
+    package: "Orleans.Lattice.Api.Abstractions"
     registration:
       value: "Declared options type; no package extension method was found by source scan."
       source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalMoveOptions.cs#TreeWalMoveOptions"
@@ -2910,7 +2910,7 @@ configuration_schema:
         default: "false"
         source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeWalMoveOptions.cs#TreeWalMoveOptions.DisableVerifyAfterCopy"
   - type: "VectorIndexOptions"
-    package: "lattice.vector"
+    package: "Orleans.Lattice.Vector"
     registration:
       value: "Declared options type; no package extension method was found by source scan."
       source: "src/lattice.vector/VectorIndexOptions.cs#VectorIndexOptions"
@@ -2924,10 +2924,10 @@ configuration_schema:
         default: "0x9E3779B97F4A7C15UL"
         source: "src/lattice.vector/VectorIndexOptions.cs#VectorIndexOptions.Seed"
   - type: "WalMoveOptions"
-    package: "lattice"
+    package: "Orleans.Lattice"
     registration:
-      value: "AddLattice, AddLatticeAtomicAction, AddLatticeAutoTrainingCompressionDictionary, AddLatticeCompressionDictionaries, AddLatticeCompressionDictionaryProvider, AddLatticeCompressor ..."
-      source: "src/lattice/LatticeCompressionServiceCollectionExtensions.cs#AddLatticeCompressor"
+      value: "per-call argument to ILatticeAdmin.ExecuteWalMoveAsync"
+      source: "src/lattice/ILatticeAdmin.cs#ExecuteWalMoveAsync"
     properties:
       - name: "QuiesceLease"
         type: "TimeSpan"
@@ -2946,7 +2946,7 @@ configuration_schema:
         default: "0"
         source: "src/lattice/WalMoveOptions.cs#WalMoveOptions.MaxConcurrentPartitionMoves"
   - type: "WalSaturationReceiverFlowControlOptions"
-    package: "lattice.replication"
+    package: "Orleans.Lattice.Replication"
     registration:
       value: "AddLatticeAutoSharedDictionary, AddLatticeReplication, AddLatticeReplicationSecretsFromConfiguration, ConfigureLatticeReplication, ConfigureLatticeReplicationSecurity"
       source: "src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs#AddLatticeReplication"

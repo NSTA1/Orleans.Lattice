@@ -493,6 +493,66 @@ invariants:
     sources:
       - "docs/lattice/state-primitives.md"
       - ".github/instructions/primitives.instructions.md"
+  - id: mcp-region-catalog-validated-tenant-scope
+    name: "MCP region catalog honours only a validated tenant assertion"
+    description: "With tenancy active, a tenant-asserted region discovery call is scoped to the asserted tenant only when ITenantContextResolver resolves that same tenant; otherwise it advertises the current region alone with no tenantScope annotation."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Mcp"
+      components:
+        - "LatticeApiMcpRegionCatalog"
+        - "ITenantContextResolver"
+        - "ITenantRegionVisibilityResolver"
+    violation_modes:
+      - "An unvalidated lattice-active-tenant header value is used to scope or annotate the region list."
+      - "A refused assertion falls back to the full routing topology."
+      - "A refused assertion is echoed back as a tenantScope annotation."
+    detection_signals:
+      - type: test
+        name: "MCP region catalog tenant scope tests"
+        source: "test/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalogTenantScopeTests.cs"
+    remediation:
+      - step: "Re-resolve the asserted tenant through ITenantContextResolver and honour it only on an exact match."
+        source: "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+      - step: "Treat a missing ITenantContextResolver, a refusal, or a mismatch as a refusal that advertises the current region alone."
+        source: "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog"
+    sources:
+      - "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs"
+  - id: mcp-telemetry-call-time-capability
+    name: "MCP telemetry tools enforce the cluster-wide Telemetry capability at call time"
+    description: "Every MCP telemetry tool authorizes LatticeOperation.Telemetry over LatticeScope.ClusterWideTreeId before any backend call, and discovery carries Telemetry only from a cluster-wide Allow rule."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Mcp"
+        - "Orleans.Lattice.Api.Mcp.Telemetry"
+        - "Orleans.Lattice.Api.Telemetry"
+      components:
+        - "TelemetryToolHandlers"
+        - "TelemetryAccessAuthorizer"
+        - "AuthAdminMcpPermissionResolver"
+    violation_modes:
+      - "A telemetry tool runs caller-supplied PromQL after only a discovery-time check."
+      - "A tree-scoped Telemetry grant makes the telemetry group discoverable or satisfies a per-tool minimum."
+      - "A key-filtered allow is treated as authorizing cluster telemetry."
+      - "A capability denial echoes the subject id or the gate reason to the caller."
+    detection_signals:
+      - type: test
+        name: "Telemetry tool capability gate tests"
+        source: "test/lattice.api.mcp.telemetry/TelemetryToolCapabilityGateTests.cs"
+      - type: test
+        name: "Auth-admin MCP permission resolver tests"
+        source: "test/lattice.api.mcp/AuthAdminMcpPermissionResolverTests.cs"
+    remediation:
+      - step: "Open every telemetry tool handler with TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync before policy, guardrails, or backend calls."
+        source: "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers"
+      - step: "Register TelemetryAccessAuthorizer from AddTelemetryTools so the gate applies without the transport-neutral facade."
+        source: "src/lattice.api.mcp.telemetry/LatticeMcpTelemetryServiceCollectionExtensions.cs#AddTelemetryTools"
+      - step: "Mask cluster-wide-only operations out of any rule that is not written at cluster-wide scope during discovery."
+        source: "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.CarriedOperations"
+    sources:
+      - "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs"
+      - "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs"
+      - "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs"
   - id: mcp-tool-authorization-lockstep
     name: "MCP tool authorization lockstep"
     description: "The same MCP authorizer gates both tool advertisement and tool invocation, with only the capabilities meta-tool ungated."
