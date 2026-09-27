@@ -55,7 +55,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal sealed class CredentialStampingTool : DelegatingMcpServerTool
 {
-    private readonly LatticeApiMcpGroup _group;
+    private readonly LatticeApiMcpGroup? _group;
     private readonly Tool _protocolTool;
     private readonly IReadOnlySet<string> _allowedArguments;
     private readonly string _acceptedArgumentsDescription;
@@ -64,6 +64,24 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
     /// <param name="inner">The facade-backed tool to run under the caller's credential.</param>
     /// <param name="group">The facade group the wrapped tool belongs to, for region validation.</param>
     public CredentialStampingTool(McpServerTool inner, LatticeApiMcpGroup group)
+        : this(inner, (LatticeApiMcpGroup?)group)
+    {
+    }
+
+    /// <summary>
+    /// Wraps an app-contributed <paramref name="inner"/> tool that belongs to no
+    /// facade group. It runs in-process in the current region, so a supplied
+    /// <c>region</c> is accepted only when it names the current region; any other
+    /// region is rejected fail-closed rather than served locally under a peer
+    /// region's name.
+    /// </summary>
+    /// <param name="inner">The app tool to run under the caller's credential.</param>
+    public CredentialStampingTool(McpServerTool inner)
+        : this(inner, (LatticeApiMcpGroup?)null)
+    {
+    }
+
+    private CredentialStampingTool(McpServerTool inner, LatticeApiMcpGroup? group)
         : base(inner)
     {
         _group = group;
@@ -179,7 +197,17 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
                 $"This server cannot target region '{requestedRegion}'; region targeting is not configured.");
         }
 
-        return router.Resolve(requestedRegion, _group);
+        if (_group is not { } group)
+        {
+            // App tool: served in-process, so only the current region is a valid target.
+            return string.Equals(requestedRegion.Trim(), router.DefaultRegionId, StringComparison.Ordinal)
+                ? LatticeApiMcpRegionRoute.Default(router.DefaultRegionId)
+                : LatticeApiMcpRegionRoute.Rejected(
+                    $"The '{ProtocolTool.Name}' tool is served by an app co-hosted with this server and runs in "
+                    + $"the current region '{router.DefaultRegionId}' only; it cannot target region '{requestedRegion}'.");
+        }
+
+        return router.Resolve(requestedRegion, group);
     }
 
     private async ValueTask<CallToolResult> InvokeInnerAsync(
