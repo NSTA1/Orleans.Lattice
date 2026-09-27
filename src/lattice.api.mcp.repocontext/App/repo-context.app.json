@@ -1,0 +1,71 @@
+{
+  "identity": {
+    "slug": "repo-context",
+    "version": "1.0.0",
+    "provenance": { "source": "in-image", "publisher": "first-party" }
+  },
+  "trees": [
+    { "name": "structural", "adoptedTreeId": "repo-context-structural", "rebuildable": false },
+    { "name": "symbol", "adoptedTreeId": "repo-context-symbol", "rebuildable": false },
+    { "name": "memory", "adoptedTreeId": "repo-context-memory", "rebuildable": false },
+    { "name": "content", "adoptedTreeId": "repo-context-content", "rebuildable": false },
+    { "name": "xref", "adoptedTreeId": "repo-context-xref", "rebuildable": false },
+    { "name": "session", "adoptedTreeId": "repo-context-session", "rebuildable": false },
+    { "name": "vector-membership", "adoptedTreeId": "repo-context-vector-membership", "rebuildable": true },
+    { "name": "vector-payload", "adoptedTreeId": "repo-context-vector-payload", "rebuildable": false },
+    { "name": "vector-metadata", "adoptedTreeId": "repo-context-vector-metadata", "rebuildable": true },
+    { "name": "vector-index", "adoptedTreeId": "repo-context-vector-index", "rebuildable": true },
+    { "name": "vector-coverage", "adoptedTreeId": "repo-context-vector-coverage", "rebuildable": true }
+  ],
+  "roles": [
+    {
+      "name": "reader",
+      "operations": ["Read", "RangeRead"],
+      "scopes": [
+        { "tree": "structural" },
+        { "tree": "symbol" },
+        { "tree": "memory" },
+        { "tree": "content" },
+        { "tree": "xref" },
+        { "tree": "session" },
+        { "tree": "vector-membership" },
+        { "tree": "vector-payload" },
+        { "tree": "vector-metadata" },
+        { "tree": "vector-index" },
+        { "tree": "vector-coverage" }
+      ]
+    },
+    {
+      "name": "curator",
+      "operations": ["Read", "Write", "Delete", "RangeRead", "RangeDelete"],
+      "scopes": [
+        { "tree": "structural" },
+        { "tree": "symbol" },
+        { "tree": "memory" },
+        { "tree": "content" },
+        { "tree": "xref" },
+        { "tree": "session" },
+        { "tree": "vector-membership" },
+        { "tree": "vector-payload" },
+        { "tree": "vector-metadata" },
+        { "tree": "vector-index" },
+        { "tree": "vector-coverage" }
+      ]
+    }
+  ],
+  "subscriptions": [],
+  "mcpTools": [
+    { "name": "health", "description": "Reports repository-context reachability and retrieval readiness.", "role": "reader" },
+    { "name": "recall", "description": "Fetches one repository-context record by its full key.", "role": "reader" },
+    { "name": "scan", "description": "Walks an ordered, paged range of repository-context entries.", "role": "reader" },
+    { "name": "list_topics", "description": "Enumerates a repository's agent-memory topics with live entry counts.", "role": "reader" },
+    { "name": "search", "description": "Ranks repository-context records against a natural-language query.", "role": "reader" },
+    { "name": "index_status", "description": "Reports the progress of a repository's indexing job.", "role": "reader" },
+    { "name": "neighbors", "description": "Walks the typed knowledge-linking edges out of a memory entry.", "role": "reader" },
+    { "name": "outline", "description": "Returns the declared-symbol skeleton of one indexed file.", "role": "reader" },
+    { "name": "related", "description": "Resolves a file's imports, dependents and covering tests.", "role": "reader" },
+    { "name": "context", "description": "Packs a ranked, explained source bundle under a hard token ceiling.", "role": "reader" },
+    { "name": "stats", "description": "Summarises the repository-context surface's own recent token usage.", "role": "reader" },
+    { "name": "claim_status", "description": "Reports the claim recorded on a memory record and its lock status.", "role": "reader" }
+  ]
+}

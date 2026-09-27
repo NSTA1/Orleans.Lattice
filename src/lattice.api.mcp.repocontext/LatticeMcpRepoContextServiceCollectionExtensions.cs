@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Api.Mcp.Apps;
+using Orleans.Lattice.Apps;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -79,12 +81,28 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// path.
     /// </para>
     /// </param>
+    /// <param name="registerAsApp">
+    /// Whether the repository-context surface is <b>additionally</b> registered as the
+    /// installable app <c>repo-context</c>. Defaults to <see langword="false"/>, in which
+    /// case nothing beyond the long-standing registration happens: the
+    /// <c>repocontext_*</c> tool group, its advertised tools and the
+    /// <c>lattice_capabilities</c> report are unchanged. When <see langword="true"/> the
+    /// app's embedded manifest is registered with the in-image app source (making the app
+    /// installable, not installed), the installable-app MCP tool surface is added, and the
+    /// group's always-on read-only tools are contributed to it under the app-local names the
+    /// manifest declares, so an installed and enabled app advertises them as
+    /// <c>repo-context_{tool}</c> alongside - never instead of - the group tools. The
+    /// manifest adopts the package's existing trees, so activation requires operator-approved
+    /// ceiling exception scopes for them. The host remains responsible for the app registry
+    /// (<c>AddLatticeApps</c>) and for an MCP authorizer that admits the namespaced names.
+    /// </param>
     /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddRepoContextTools(
         this IServiceCollection services,
         bool enableWrites = false,
         bool workspaceMode = false,
-        string? workspaceRoot = null)
+        string? workspaceRoot = null,
+        bool registerAsApp = false)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -121,9 +139,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // offered. The handler re-checks the *effective* DI-resolved guard at
         // invocation, which is what covers a host that registered its own
         // non-enforcing guard here despite passing a root.
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(
-                new RepoContextToolGroup(enableWrites, workspaceMode, workspaceGuarded: roots.Count != 0)));
+        var toolGroup = new RepoContextToolGroup(enableWrites, workspaceMode, workspaceGuarded: roots.Count != 0);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(toolGroup));
+
+        if (registerAsApp)
+        {
+            AddRepoContextApp(services, toolGroup);
+        }
 
         services.TryAddSingleton(new RepoContextWorkspaceGuard(roots.ToArray()));
 
@@ -470,5 +492,45 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         }
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers the opt-in app path: the embedded manifest with the in-image app source,
+    /// the installable-app MCP tool surface, and the provider that adapts the registered
+    /// group's tools. Performed once however many times the opt-in is repeated, because a
+    /// second in-image registration of the same slug would fail the app as a duplicate.
+    /// </summary>
+    /// <param name="services">The host's service collection.</param>
+    /// <param name="candidate">The tool group built by this call, used only when no group was registered earlier.</param>
+    private static void AddRepoContextApp(IServiceCollection services, RepoContextToolGroup candidate)
+    {
+        RepoContextToolGroup? registered = null;
+        foreach (var descriptor in services)
+        {
+            if (descriptor.IsKeyedService)
+            {
+                continue;
+            }
+
+            if (descriptor.ServiceType == typeof(IAppMcpToolProvider)
+                && descriptor.ImplementationInstance is RepoContextAppMcpToolProvider)
+            {
+                return;
+            }
+
+            if (registered is null
+                && descriptor.ServiceType == typeof(ILatticeApiMcpToolGroup)
+                && descriptor.ImplementationInstance is RepoContextToolGroup group)
+            {
+                registered = group;
+            }
+        }
+
+        services.AddLatticeApp(
+            RepoContextAppManifest.Slug,
+            typeof(RepoContextAppManifest).Assembly,
+            RepoContextAppManifest.ResourceName);
+        services.AddAppMcpTools();
+        services.AddSingleton<IAppMcpToolProvider>(new RepoContextAppMcpToolProvider(registered ?? candidate));
     }
 }
