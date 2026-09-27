@@ -91,17 +91,12 @@ public sealed class DashboardJsonTests
         new HashSet<string>(StringComparer.Ordinal)
         {
             // orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap (issue
-            // #2183) is a provider-conditional safety counter. It fires only
-            // when a leaf's durable UnresolvedReplayWork row grows past the
-            // MaxDurableUnresolvedReplayWork cap, which is a persist hazard only
-            // on an Azure Table deployment (1MB entity cap) and is benign on the
-            // default `local` SQLite profile the bundled dashboards target -
-            // where it sits flat at zero. A bundled panel would therefore show
-            // every default-deployment operator a permanently-empty graph; the
-            // signal belongs in an Azure-Table alert rule keyed off the metric
-            // name, which docs/lattice/metrics.md and the panel-map row both
-            // direct operators to. Documented in both reference docs; left off
-            // the bundled panels deliberately.
+            // #2183) remains alert-only rather than a bundled trend panel.
+            // Alert on every profile: Azure Table bounds persisted growth by
+            // rejecting oversized writes; SQLite permits larger rows that can
+            // exhaust the activation read budget or memory before repair runs.
+            // A normally quiet series does not make that read risk harmless.
+            // Both reference docs prescribe an alert keyed off this metric.
             "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap",
 
             // The three registry fan-in gate state histograms (issue #3266) are
