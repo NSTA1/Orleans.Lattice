@@ -4131,6 +4131,20 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalDrainLagConsumerFreshness = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Minimum interval between repeat drain-lag holder warnings while a tree stays
+    /// above <see cref="WalSaturationMaterialiserLagThreshold"/>. Defaults to ten
+    /// minutes; <see langword="null"/> keeps edge-only logging. Each observation
+    /// names up to three eligible consumers with the lowest cursors, outside metrics.
+    /// Recovery clears the per-tree interval so a new crossing logs immediately.
+    /// Read from the global (unnamed) options on each sampler tick; per-tree
+    /// overrides do not apply. Must be positive when set.
+    /// </summary>
+    public TimeSpan? WalDrainLagHolderLogInterval { get; set; } = DefaultWalDrainLagHolderLogInterval;
+
+    /// <summary>Default value for <see cref="WalDrainLagHolderLogInterval"/> (10 minutes).</summary>
+    public static readonly TimeSpan DefaultWalDrainLagHolderLogInterval = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// WAL saturation input that escalates a tree to
     /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> when writes to
     /// its <b>durable</b> leaf-materialiser pin store take longer than this, or
