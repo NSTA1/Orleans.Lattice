@@ -10,7 +10,7 @@ frame by frame and FFmpeg encodes, so the same source always produces the same
 video. A video is reviewed, diffed and rebuilt like any other source file.
 
 - **The plan** - audiences, the Build / Evaluate / Operate paths, the episode
-  list, where to start, and the decisions still open - is in
+  list, the production order, and the decisions still open - is in
   [series.md](series.md).
 - **The look** - canvas, type, colour roles, the order-diagram vocabulary,
   motion, code, captions and audio - is in [frame.md](frame.md).

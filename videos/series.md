@@ -11,7 +11,7 @@ is in [frame.md](frame.md); how to work in this folder is in
 - [Shape: one front door, three paths, two deep dives](#shape-one-front-door-three-paths-two-deep-dives)
 - [Episodes](#episodes)
 - [Format rules](#format-rules)
-- [Where to start](#where-to-start)
+- [Production order](#production-order)
 - [How an episode is made](#how-an-episode-is-made)
 - [Tooling in place](#tooling-in-place)
 - [Voice](#voice)
@@ -49,96 +49,164 @@ flowchart TD
     Door["Front door<br/>Orleans.Lattice in three minutes"]
     Door --> Build["Build<br/>developers"]
     Door --> Evaluate["Evaluate<br/>architects and tech leads"]
-    Door --> Operate["Operate<br/>operators"]
-    Evaluate --> Secure["Deep dive: Secure"]
-    Operate --> Secure
-    Evaluate --> How["Deep dive: How it works"]
-    Build --> How
+    Door --> Operate["Operate<br/>operators<br/>(held for the Explorer)"]
+    Evaluate -->|at its end| Secure["Deep dive: Secure and govern<br/>watched in order<br/>(held for the Explorer)"]
+    Operate -->|at its end| Secure
+    Build --> How["Deep dive: How it works<br/>standalone episodes"]
+    Evaluate --> How
+    Operate --> How
 ```
 
 - **Front door** (three minutes at most, for everyone): a first minute in plain
   words for any viewer - what state is, why keeping it in more than one place
   is hard, and what Orleans.Lattice does differently - then what the platform
   is, the three positions it takes, and the Local -> Team -> Global journey
-  with an unchanged `ILattice` programming model. It ends by pointing each
-  reader to a path.
-- **Each path opens with an entry episode** that assumes only the front door.
-  Later episodes on the path assume the entry episode.
-- **Deep dives** are reached from the paths rather than from the front door:
-  Secure from Evaluate and Operate, How it works from Evaluate and Build.
+  with an unchanged `ILattice` programming model. It ends on the three ways in,
+  and names each path's first episode once that episode is published.
+- **A path is watched in order**, like the site's list of the same name. Its
+  first episode assumes only the front door, and each later episode assumes
+  the ones before it. Every episode after the first opens with a one-line
+  recap of what it builds on, so a viewer who arrives from a search or a link
+  can still join anywhere.
+- **Each episode names the site pages it introduces**, and a path takes them
+  in the order of the site's list, except where this plan gives a reason.
+- **Deep dives are reached from the paths**, not from the front door. Secure and
+  govern is a short run watched in order, reached from the ends of Evaluate
+  and Operate. How it works is a set of standalone episodes, each reached from
+  the path episode that leads to it, so they can be watched in any order.
 
 ## Episodes
 
-Sources are the pages each episode is drawn from and links on to. Every episode
-is a proposal until its brief is written.
+Each episode has a code - its path's letter and its place on the path - by
+which the production order and the other episodes refer to it. **Introduces**
+names the documentation pages the episode is the way into: its ending points
+to them, and its brief lists everything else it draws on. **Leads to** names
+the deep dive it hands on to. Every episode is a proposal until its
+brief is written.
 
 ### Front door
 
-| Episode | Beats | Sources |
-| --- | --- | --- |
-| Orleans.Lattice in three minutes | in plain words: what state is, why it is hard to keep in more than one place, and what Lattice does instead; then the store lives in the cluster; conflict resolution is algebraic (the join); everything else is a seam; Local -> Team -> Global with the same programming model; pick your path | [README](../README.md) "What is it?", "Why it exists", "The deployment journey"; [reference architecture](../reference-architecture.md) "Disaster recovery" |
+| # | Episode | Beats | Sources |
+| --- | --- | --- | --- |
+| F | **Orleans.Lattice in three minutes** (published) | in plain words: what state is, why it is hard to keep in more than one place, and what Lattice does instead; then the store lives in the cluster; conflict resolution is algebraic (the join); everything else is a seam; Local -> Team -> Global with the same programming model; the three ways in, each with its first episode once that is published | [README](../README.md) "What is it?", "Why it exists", "The deployment journey"; [reference architecture](../reference-architecture.md) "Disaster recovery" |
+
+F2 and F3 are re-cuts of F, not episodes: its ending is re-cut to name each
+path's first episode as they are published (see
+[Production order](#production-order)).
 
 ### Build (developers)
 
-| Episode | Idea | Sources |
-| --- | --- | --- |
-| **Hello, Lattice** (entry) | register the silo, resolve `ILattice`, write and read typed values | [README Quick Start](../README.md#quick-start), [API reference](../docs/lattice/api.md) |
-| Scans and cursors | ordered, range-bounded scans; cursors that survive failover | [API reference](../docs/lattice/api.md) |
-| Atomic writes | all-or-nothing across keys and across trees | [Atomic writes](../docs/lattice/atomic-writes.md) |
-| TTL and soft delete | per-entry expiry; recovery inside the retention window | [TTL](../docs/lattice/ttl.md) |
-| Going durable | from the in-memory WAL to the file and Azure Table backends | [File WAL](../docs/lattice.storage.file/README.md), [WAL storage providers](../docs/lattice/wal-storage-providers.md) |
-| Moving in from another store | bulk-loading from Redis, a relational database or Cosmos DB | [External store migration](../docs/lattice/external-store-migration.md) |
+Watched in order, then on to the site's Samples page. It departs from the
+site's list twice, each for a reason. **Values that merge** comes second,
+ahead of predicate operations, because the front door leaves a developer with
+"for plain values, the last writer wins", and the next question is what a
+value that merges looks like. **Configuration**, which the site lists on both
+Build and Operate, comes late, in Going durable: a developer needs only the
+registration code it changes, and its options and per-tree overrides are
+Operate's first episode.
+
+| # | Episode | Idea | Introduces | Leads to |
+| --- | --- | --- | --- | --- |
+| B1 | **Hello, Lattice** (first) | register Lattice on a silo, resolve a tree by name, and write and read typed values | [Quick start](../README.md#quick-start), [API reference](../docs/lattice/api.md) | |
+| B2 | Values that merge | a plain value keeps the last write, while a counter, register, set or map merges concurrent writes by construction; how to choose | [CRDT primitives](../docs/crdt/readme.md) | H1 |
+| B3 | Scans, filters and cursors | ordered, range-bounded scans; filters that run on the server; cursors that survive failover | [Predicate operations](../docs/lattice/predicated-operations.md), [API reference](../docs/lattice/api.md) | |
+| B4 | Atomic writes | all-or-nothing across keys and across trees | [Atomic writes](../docs/lattice/atomic-writes.md) | H4 |
+| B5 | TTL and soft delete | per-entry expiry; recovery inside the retention window | [TTL](../docs/lattice/ttl.md) | |
+| B6 | Going durable | the registration code only: durable grain storage and a durable write-ahead log in place of the in-memory defaults, on the file or Azure Table backend; what that guarantees is Operate's first episode | [Configuration](../docs/lattice/configuration.md), [WAL storage providers](../docs/lattice/wal-storage-providers.md), [File WAL](../docs/lattice.storage.file/README.md), [Azure Table storage](../docs/lattice.storage.azuretable/README.md) | |
+| B7 | Moving in from another store | bulk-loading from Redis, a relational database or Cosmos DB | [External store migration](../docs/lattice/external-store-migration.md) | |
 
 ### Evaluate (architects and tech leads)
 
-| Episode | Idea | Sources |
-| --- | --- | --- |
-| **When Lattice fits** (entry) | the three positions against a database, a cache and a queue; the categories it composes into | [README](../README.md) "Why it exists", "What you can build" |
-| The deployment journey | Local, Team, Global: what each stage adds, and what stays the same | [README](../README.md#the-deployment-journey) |
-| The guarantees, and how they are tested | consistency, crash safety, convergence; chaos tests and the verification tier | [Consistency](../docs/lattice/consistency.md), [chaos tests](../docs/lattice/chaos-tests.md) |
-| A reference estate | active-active across regions on Azure Container Apps | [Reference architecture](../reference-architecture.md) |
+Watched in order, in the order of the site's list, then on to Secure and
+govern. The deployment journey is the front door's to tell, so Evaluate does
+not retell it. The README has no "when not to use it" section, so When Lattice
+fits takes its limits from the pages that state them - [Consistency](../docs/lattice/consistency.md),
+the [API reference](../docs/lattice/api.md) and the [WAL](../docs/lattice/wal.md)
+among them - and its brief cites each one.
+
+| # | Episode | Idea | Introduces | Leads to |
+| --- | --- | --- | --- | --- |
+| E1 | **When Lattice fits, and when it doesn't** (first) | in plain words first; then the three positions against a database, a cache and a queue, the categories it composes into, and, as plainly, where it does not fit | [What it is and why it exists](../README.md#what-is-it), [A core plus seams](../README.md#architecture-a-core-plus-seams) | |
+| E2 | The guarantees | what a caller of `ILattice` observes, operation by operation - linearizable, snapshot or eventually consistent - and what holds through a crash | [Consistency guarantees](../docs/lattice/consistency.md) | H2 |
+| E3 | The evidence | how the guarantees are shown to hold, and what was measured: chaos tests on a live cluster, the machine-checked commit protocol, and single-silo throughput and latency on real Azure Tables | [Chaos tests](../docs/lattice/chaos-tests.md), [Verified atomic commit](../docs/lattice/verified-atomic-commit.md), [Single-silo performance](../docs/lattice/performance-single-silo.md) | H5 |
+| E4 | A reference estate | active-active across regions on Azure Container Apps, with its deployment kit | [Reference architecture](../reference-architecture.md) | |
 
 ### Operate (operators)
 
-| Episode | Idea | Sources |
-| --- | --- | --- |
-| **What the write-ahead log guarantees** (entry) | the durability boundary, and how the backend choice changes it | [WAL](../docs/lattice/wal.md), [WAL storage providers](../docs/lattice/wal-storage-providers.md) |
-| Backup and cold restore | a shared sink as the source of truth; restoring into a fresh cluster | [Backup](../docs/lattice.backup/README.md), [disaster recovery](../docs/lattice.backup/disaster-recovery.md) |
-| Scaling on a signal | the cluster-aggregate signal an autoscaler such as KEDA scrapes | [Scaling](../docs/lattice.scaling/README.md) |
-| Metrics and dashboards | what the instruments mean and where they are charted | [Dashboards](../docs/lattice.dashboards/README.md) |
-| Diagnosing a tree | reading a `DiagnoseAsync` report, symptom by symptom | [Troubleshooting](../docs/lattice/troubleshooting.md) |
+**Held until the Explorer is released** (see
+[Production order](#production-order)): an operator works through its console,
+which is being redesigned, so this path is made once the new console ships, and
+shows it wherever an operator would use it, alongside the API it drives. Where
+the console itself, last on the site's list, goes on the path is decided then.
+Watched in order, then on to Secure and govern. It departs from the site's list
+once, for a reason: **Metrics and dashboards** comes second, ahead of sizing,
+tuning and scaling, because an operator sizes, tunes and scales from what the
+instruments show.
 
-### Deep dive: Secure (from Evaluate and Operate)
+| # | Episode | Idea | Introduces | Leads to |
+| --- | --- | --- | --- | --- |
+| O1 | **Where your data lives, and when it's safe** (first) | the two storage surfaces - grain storage and the write-ahead log - the durability boundary, and how the backend choice changes it; where options and per-tree overrides are set | [Configuration](../docs/lattice/configuration.md), [WAL](../docs/lattice/wal.md), [WAL storage providers](../docs/lattice/wal-storage-providers.md) | |
+| O2 | Metrics and dashboards | what the instruments mean and where they are charted | [Metrics](../docs/lattice/metrics.md), [Dashboards](../docs/lattice.dashboards/README.md) | |
+| O3 | Sizing and tuning | resizing a live tree, with an undo window; the write-ahead log's concurrency limits against a backend's throughput envelope | [Tree sizing](../docs/lattice/tree-sizing.md), [WAL tuning](../docs/lattice/wal-tuning.md) | H3 |
+| O4 | Scaling | what each workload gains as silos are added, and the cluster-aggregate signal an autoscaler such as KEDA scrapes | [Multi-silo scaling](../docs/lattice/performance-multi-silo.md), [Scaling](../docs/lattice.scaling/README.md) | |
+| O5 | Running active-active | replication between clusters: each region serving reads and writes, and how their writes converge | [Replication](../docs/lattice.replication/README.md) | |
+| O6 | Diagnosing a tree | reading a `DiagnoseAsync` report, symptom by symptom | [Troubleshooting](../docs/lattice/troubleshooting.md) | |
+| O7 | Backup and cold restore | a shared sink as the source of truth; restoring into a fresh cluster | [Backup](../docs/lattice.backup/README.md), [Disaster recovery](../docs/lattice.backup/disaster-recovery.md) | |
 
-| Episode | Idea | Sources |
-| --- | --- | --- |
-| Fail-closed by default | default-deny policy per tree, prefix or key, on the core data path | [Security](../docs/lattice/security.md) |
-| Identity | OIDC and Entra membership resolving credentials to subjects | [OIDC](../docs/lattice.membership.oidc/README.md), [Entra](../docs/lattice.membership.entra/README.md) |
-| One gate for every surface | gRPC client, operator console and AI agent all pass the same check | [Security](../docs/lattice/security.md) |
+### Deep dive: Secure and govern (after Evaluate and Operate)
 
-### Deep dive: How it works (from Evaluate and Build)
+**Held until the Explorer is released**, like Operate: the console has its own
+areas for access, schemas and tenants, and is one of the surfaces the last
+episode is about. Watched in order, following the security pipeline the docs
+describe: who the caller is, what they may do, what a tree may hold and whose
+it is, and every surface that reaches it. Identity comes first because a policy
+names a subject. The site's Videos tab still labels this group "Deep dive:
+Secure" (`$videoPaths` in `docs-site/stage.ps1`); rename it there when S1 is
+published, keeping its path id, `secure`.
 
-| Episode | Idea | Sources |
-| --- | --- | --- |
-| Conflict-free merges in 90 seconds | two concurrent writes and their join: why merges need no lock and no consensus | [CRDT primitives](../docs/crdt/readme.md), [state primitives](../docs/lattice/state-primitives.md) |
-| Clocks and version vectors | ordering events without a shared clock | [Version vector](../docs/crdt/versionvector.md) |
-| Trees that split online | sharded B+ trees rebalancing under load without downtime | [Architecture](../docs/lattice/architecture.md), [tree structure](../docs/lattice/tree-structure.md) |
-| Atomic commit without consensus | the protocol behind all-or-nothing writes | [Verified atomic commit](../docs/lattice/verified-atomic-commit.md) |
-| How it is verified | TLA+, Coyote and chaos tests, and what each one proves | [Verified atomic commit](../docs/lattice/verified-atomic-commit.md), [verified WAL](../docs/lattice/verified-wal.md), [chaos tests](../docs/lattice/chaos-tests.md) |
+| # | Episode | Idea | Introduces |
+| --- | --- | --- | --- |
+| S1 | Identity | membership resolving a credential to a subject: the built-in JWT authenticator, or OIDC or Entra for a corporate identity provider | [Membership](../docs/lattice.membership/README.md), [OIDC](../docs/lattice.membership.oidc/README.md), [Entra](../docs/lattice.membership.entra/README.md) |
+| S2 | Fail-closed by default | default-deny policy per tree, prefix or key, enforced on the core data path: a denied write throws and a denied read reports absent | [Security](../docs/lattice/security.md), [Authorization](../docs/lattice.auth/README.md) |
+| S3 | Schemas and tenants | what a tree may hold, enforced and versioned; tenants kept apart in one cluster or many | [Schema](../docs/lattice.schema/README.md), [Tenancy](../docs/lattice.tenancy/README.md) |
+| S4 | One gate for every surface | a gRPC client, the Explorer's console and an AI agent on the MCP server all authorize through the same gate as the data path, never a bypass | [Security](../docs/lattice/security.md#external-surfaces), [MCP server](../docs/lattice.api.mcp/README.md) |
+
+### Deep dive: How it works (standalone)
+
+Each episode is reached from the path episode beside it, and assumes only what
+that episode taught, so the set can be watched in any order and from any path.
+
+| # | Episode | Idea | Introduces | Reached from |
+| --- | --- | --- | --- | --- |
+| H1 | Conflict-free merges in 90 seconds | two concurrent writes and their join: why merges need no lock and no consensus, told with a scenario the front door does not use (a G-Set or an MV-Register, not its G-Counter) | [CRDT primitives](../docs/crdt/readme.md), the scenario's guide ([G-Set](../docs/crdt/gset.md) or [MV-Register](../docs/crdt/mvregister.md)), [state primitives](../docs/lattice/state-primitives.md) | B2 |
+| H2 | Clocks and version vectors | ordering events without a shared clock | [Version vector](../docs/crdt/versionvector.md) | E2 |
+| H3 | Trees that split online | sharded B+ trees rebalancing under load without downtime | [Architecture](../docs/lattice/architecture.md), [tree structure](../docs/lattice/tree-structure.md) | O3 |
+| H4 | Atomic commit without consensus | the protocol behind all-or-nothing writes | [Verified atomic commit](../docs/lattice/verified-atomic-commit.md) | B4 |
+| H5 | How it is verified | TLA+, Coyote and chaos tests, and what each one proves | [Verified atomic commit](../docs/lattice/verified-atomic-commit.md), [verified WAL](../docs/lattice/verified-wal.md), [chaos tests](../docs/lattice/chaos-tests.md) | E3 |
 
 ## Format rules
 
 - **Two to five minutes, one idea.** The front door is three minutes at most; a
   deep-dive concept can be ninety seconds.
-- **Plain words first where the audience is mixed.** An episode that any
-  viewer may open - the front door, and each path's entry episode - begins
-  with a short part that uses no technical terms and one everyday example,
-  drawn in the same notation as the rest, and then says "in technical terms"
-  where the rest begins.
+- **Plain words first only where the audience is mixed.** The front door and
+  Evaluate's first episode, which any viewer may open, begin with a short part
+  that uses no technical terms and one everyday example, drawn in the same
+  notation as the rest, and then say "in technical terms" where the rest
+  begins. Every other episode starts in technical terms: its path already
+  says who is watching.
+- **A one-line recap, so a viewer can join anywhere.** Every episode after a
+  path's first opens with a sentence on what it builds on: a sentence, not a
+  scene, and never a retelling.
 - **No presenter on screen.** Diagrams, code and narration only, so a change to
   the product is a re-render rather than a re-shoot.
-- **Every episode ends on a next step**: the next episode on its path, and its
-  companion page.
+- **Every episode ends on where to go next**: the next episode on its path (at
+  a path's end, what it hands on to), the deep dive it leads to, if any, and
+  its companion page. The video names them by their titles in this plan, which
+  are settled before they are made, so publishing the next episode needs no
+  re-cut; the companion page gains its link to it when it is published.
+  Writing both from the plan - each episode's path and order in
+  `episode.json`, its code and deep dive here - is planned tooling, not yet
+  built; until then an ending is written by hand from the tables above.
 - **Evergreen or versioned.** How it works episodes describe the model and
   rarely change. Build and Operate episodes describe the API and the operating
   surface; they state the release line they describe and are re-rendered when
@@ -148,26 +216,47 @@ is a proposal until its brief is written.
 - **Only what has shipped.** An episode covers released packages; anything else
   is labelled as unreleased on screen.
 
-## Where to start
+## Production order
 
-1. **The tooling** (this folder as it stands): the workspace, its guards, the
-   CI lane, the voice pipeline, and the site's design system read through the brand seam. Nothing here is an episode.
-2. **Pilot: the front door** - [episodes/introduction/](episodes/introduction/),
+The next item to make is always the first below that is not done, and a deep
+dive is made straight after the episode that leads to it. The first episodes
+for developers and for evaluators come first, so both have a way in; then
+Build straight through, then the rest of Evaluate.
+
+**Operate and Secure and govern wait for the Explorer.** An operator works
+through its console, which is being redesigned; the console has its own areas
+for access, schemas, tenants and backups; and it is one of the surfaces the
+last Secure and govern episode is about. So both paths are held at the end of
+the order until the redesigned console is released, and their episodes then
+show it wherever an operator would use it, alongside the API it drives.
+Releasing the hold is a change to this plan. If the console is still not
+ready when everything before the hold is done, Secure and govern's first three
+episodes can be released to go ahead code-first.
+
+1. **The tooling** - done: the workspace, its guards, the CI lane, the voice
+   pipeline, and the site's design system read through the brand seam. Nothing
+   here is an episode.
+2. **The pilot, the front door** - done: [episodes/introduction/](episodes/introduction/),
    built from nine shared scenes: the title card; for everyone, what an
    application remembers and the same value kept in more than one place; then
    the store in its cluster, the cluster, the join, the core and its seams,
-   the deployment journey, and the ways in. It is the root every path links back to, it forces the style,
-   voice and pacing decisions before there are ten episodes to change, and its
-   source is the most-reviewed prose in the repository. It is scripted,
-   fact-checked, narrated, stamped, checked and published: the docs site plays
-   it on the home page and under Videos. Expect to re-cut it after steps 3 and 4.
-3. **Hello, Lattice**, the Build entry: it proves the compiled-code path, and
-   the README Quick Start it draws on is already written as verified snippets.
-4. **Conflict-free merges in 90 seconds**, the first How it works episode: it is
-   evergreen, and it stress-tests the diagram vocabulary.
+   the deployment journey, and the ways in. It is the root every path links
+   back to, it forced the style, voice and pacing decisions before there were
+   ten episodes to change, and its source is the most-reviewed prose in the
+   repository. It is published: the docs site plays it on the home page and
+   under Videos. Its ending is re-cut twice, each time as an item of its own:
+   F2 names Build's and Evaluate's first episodes and brings the cut back
+   within three minutes (the current cut runs 3:01), and F3 names Operate's
+   first episode once it exists.
+3. **The order**, each item in turn:
 
-Together those cover the widest audiences and all three production modes:
-narrative and diagram, code walkthrough, and concept animation.
+   | Step | Items | Completes |
+   | --- | --- | --- |
+   | 1 | B1, E1, F2 | a first episode for developers and for evaluators, and the front door re-cut to name them |
+   | 2 | B2, H1, B3, B4, H4, B5, B6, B7 | Build, with its two deep dives |
+   | 3 | E2, H2, E3, H5, E4 | Evaluate, with its two deep dives |
+   | Held for the Explorer | O1, F3, O2, O3, H3, O4, O5, O6, O7 | Operate, with its deep dive, and the front door naming its first episode |
+   | Held for the Explorer | S1, S2, S3, S4 | Secure and govern, and the 28 episodes planned here |
 
 ## How an episode is made
 
@@ -342,8 +431,8 @@ What the pilot measured (the introduction's first published cut, 2:52,
   about 175), and 11.6 MB for its published re-render of the same sources,
   which differed only by encoder variation; the two-minute first cut was
   8.0 MB, and a draft is about three quarters of the high-quality size. That
-  is about 4 MB a minute, so the 24 episodes planned here, at about three
-  minutes each, are roughly 300 MB a full set, and every re-render of one
+  is about 4 MB a minute, so the 28 episodes planned here, at about three
+  minutes each, are roughly 340 MB a full set, and every re-render of one
   episode is another 10 to 20 MB.
 - **Render time:** 3 min 39 s for the high-quality render on one worker, on a
   laptop with every core busy: about 1.3 times real time. Its start-up probes
@@ -353,7 +442,7 @@ What the pilot measured (the introduction's first published cut, 2:52,
   WAV (24 kHz 16-bit mono, so about 2.9 MB a minute), 1.5 MB as 96 kbit/s AAC
   and 0.7 MB as 48 kbit/s Opus - small enough to commit.
 
-What that means for each option: A puts 300 MB in history for the first set and
+What that means for each option: A puts 340 MB in history for the first set and
 more with every re-cut, downloaded by every full-history CI checkout. B fits
 GitHub Free's Git LFS allowance (10 GiB of storage, 10 GiB a month of
 bandwidth) for a while, but every pushed version counts against storage, every
@@ -372,7 +461,7 @@ Checked against the live services on 2026-09-24:
   site needs; adaptive streaming (HLS or DASH) would also work as static
   files, but is not worth it at 4 MB a minute.
 - **The site has room.** The published site is 41.7 MB (725 files) of its
-  1 GB, so the current cut of all 24 planned episodes, about 260 MB, fits.
+  1 GB, so the current cut of all 28 planned episodes, about 325 MB, fits.
   100 GB a month is about 9,000 full plays of the introduction, and a visitor
   who never presses play downloads only the poster (the player is
   `preload="none"`).
@@ -427,7 +516,9 @@ all.
 
 - **AI and agents path** - the MCP server, vector search and RepoContext - once
   `lattice.vector` and RepoContext have shipped.
-- **The Explorer** is out of scope while it is redesigned.
+- **The Explorer** is out of scope while it is redesigned, and the Operate and
+  Secure and govern paths, which need its console, are held until it is
+  released (see [Production order](#production-order)).
 - **What's new** episodes per release wave, drawn from the changelog.
 - **Sample spotlights**: one variable-driven template filled per sample, once
   the core paths exist.
