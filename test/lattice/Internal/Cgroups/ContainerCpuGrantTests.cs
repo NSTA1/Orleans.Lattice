@@ -1,6 +1,6 @@
-using Orleans.Lattice.Internal;
+using Orleans.Lattice.Internal.Cgroups;
 
-namespace Orleans.Lattice.Tests.Internal;
+namespace Orleans.Lattice.Tests.Internal.Cgroups;
 
 /// <summary>
 /// Covers the shared cgroup CPU-grant reader that decouples pool sizing from
