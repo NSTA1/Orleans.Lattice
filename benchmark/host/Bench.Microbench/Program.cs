@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, orphanedsurvey.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, orphanedsurvey.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -491,6 +491,13 @@ if (string.Equals(suite, "historyreadtrims", StringComparison.OrdinalIgnoreCase)
     Console.WriteLine("[microbench] suite   -> historyreadtrims (HistoryReadOrderingTrimBenchmarks)");
     var historyReadTrimsSummary = BenchmarkRunner.Run<HistoryReadOrderingTrimBenchmarks>(config);
     return historyReadTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "ormapfilterhoisttrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ormapfilterhoisttrims (OrMapDecodeAndFilterHoistTrimBenchmarks)");
+    var orMapFilterHoistSummary = BenchmarkRunner.Run<OrMapDecodeAndFilterHoistTrimBenchmarks>(config);
+    return orMapFilterHoistSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "tagrowtrims", StringComparison.OrdinalIgnoreCase))
