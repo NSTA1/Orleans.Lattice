@@ -25,18 +25,38 @@ name: Coverage
 # failure here narrows to a day's merges rather than to one. Coverage gates
 # nothing and build-and-test tests every pull request before it merges, so that
 # is the right trade. CiCoverageLaneScheduleTests holds this shape in place.
+#
+# The schedule alone is not enough. GitHub documents `schedule` as best-effort:
+# an event can be delayed or dropped. Since the Actions incidents of 2026-08-26
+# that has been the norm rather than the exception (see
+# https://github.com/orgs/community/discussions/207346): the 03:17 slot below
+# was created at 08:49 UTC on 25 September, 08:36 UTC on 26 September and
+# 09:16 UTC on 27 September, 5h19m-5h59m late, with `created_at` equal to
+# `run_started_at` to the second - the event itself was late, not a runner -
+# and GitHub may drop one outright. `workflow_dispatch` is
+# unaffected. So coverage-catch-up.yml checks on every push to main whether
+# tonight's run exists and, once the slot is two hours past with none, dispatches
+# this workflow with `catch_up: true`. Whichever of the schedule and the
+# catch-up arrives first measures; the other skips (see the `measured` job).
 on:
   schedule:
     # 03:17 UTC. The quietest hour on main - not one of those 207 pushes landed
     # between 03:00 and 04:00 UTC - and off the top of the hour, when GitHub
     # delays and can drop scheduled runs under load. GitHub also disables a
     # public repository's schedules after 60 days without activity.
+    # The `slot` in the `measured` job and in coverage-catch-up.yml must match
+    # this expression; CiCoverageLaneScheduleTests pins the three together.
     - cron: '17 3 * * *'
   # Manual trigger: re-run after a transient failure, measure a merge without
   # waiting for the night, or validate a change to this lane on a branch before
-  # merging it - otherwise the change would land on main unverified. A dispatched
-  # run always measures.
+  # merging it - otherwise the change would land on main unverified. A manual
+  # dispatch always measures; only a catch-up dispatch is subject to the skip.
   workflow_dispatch:
+    inputs:
+      catch_up:
+        description: 'Stand in for a missed nightly run: skip if tonight is already covered. Set by coverage-catch-up.yml.'
+        type: boolean
+        default: false
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
 # The `measured` job additionally reads this workflow's own run history.
@@ -57,6 +77,15 @@ jobs:
   # last successful run measured. That is exact rather than a heuristic, because
   # the same commit measures the same coverage, and it fails open: another commit,
   # a failed last run, an API error or a manual dispatch all measure.
+  #
+  # A nightly run - the schedule, or a catch-up dispatch standing in for it -
+  # also skips when an earlier run of this lane already exists since tonight's
+  # slot opened, so a late schedule arriving after the catch-up does not measure
+  # the night twice. "Earlier" is by run id, which GitHub assigns in creation
+  # order, so of any set of nightly runs the first always measures and the skip
+  # can never fire on all of them. A failed earlier run counts - retrying it
+  # would spend another hour on the same failure, which is already red - and a
+  # cancelled one does not.
   measured:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -66,10 +95,11 @@ jobs:
     outputs:
       measure: ${{ steps.head.outputs.measure }}
     steps:
-      - name: Skip a commit the last successful run already measured
+      - name: Skip a commit already measured, or a night already covered
         id: head
         env:
           GH_TOKEN: ${{ github.token }}
+          CATCH_UP: ${{ inputs.catch_up }}
         run: |
           set -uo pipefail
           # GITHUB_WORKFLOW_REF is <owner>/<repo>/.github/workflows/<file>@<ref>.
@@ -79,8 +109,29 @@ jobs:
             -f branch="${GITHUB_REF_NAME}" -f status=success -f per_page=1 \
             --jq '.workflow_runs[0].head_sha // ""')" || last=""
 
-          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ -n "$last" ] && [ "$last" = "$GITHUB_SHA" ]; then
+          nightly=false
+          if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$CATCH_UP" = true ]; then
+            nightly=true
+          fi
+
+          # Tonight's slot: the most recent 03:17 UTC, matching the cron above.
+          slot="03:17"
+          now="$(date -u +%s)"
+          opened="$(date -u -d "$(date -u +%F) ${slot}" +%s)"
+          if [ "$now" -lt "$opened" ]; then
+            opened=$((opened - 86400))
+          fi
+          since="$(date -u -d "@${opened}" +%Y-%m-%dT%H:%M:%SZ)"
+          earlier="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+            -f branch="${GITHUB_REF_NAME}" -f created=">=${since}" -f per_page=100 \
+            --jq "[.workflow_runs[] | select(.id < ${GITHUB_RUN_ID} and .conclusion != \"cancelled\")] | length")" || earlier=0
+          case "$earlier" in ''|*[!0-9]*) earlier=0 ;; esac
+
+          if [ "$nightly" = true ] && [ -n "$last" ] && [ "$last" = "$GITHUB_SHA" ]; then
             echo "::notice title=Coverage already measured::${GITHUB_SHA} is the commit the last successful run measured, so this run skips the measurement."
+            echo "measure=false" >> "$GITHUB_OUTPUT"
+          elif [ "$nightly" = true ] && [ "$earlier" -gt 0 ]; then
+            echo "::notice title=Night already covered::An earlier run of this lane started since the ${since} slot, so this run skips the measurement."
             echo "measure=false" >> "$GITHUB_OUTPUT"
           else
             echo "measure=true" >> "$GITHUB_OUTPUT"
