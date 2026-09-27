@@ -27,6 +27,53 @@ public sealed class BacklogParkedBlockerHygieneTests
         AssertParkingDecisions(ReadTemplate("backlog-protocol.md"));
     }
 
+    [Test]
+    public void Protocol_result_fields_name_the_outcome_comment_at_every_mention()
+    {
+        AssertOutcomeComments(ReadTemplate("backlog-protocol.md"));
+    }
+
+    [Test]
+    public void Protocol_first_result_mention_names_the_destination_and_excludes_tool_arguments()
+    {
+        var protocol = ReadTemplate("backlog-protocol.md");
+        var first = protocol.IndexOf("`result=", StringComparison.Ordinal);
+        Assert.That(first, Is.GreaterThanOrEqualTo(0), "the first outcome field must exist");
+        var end = protocol.IndexOf("\n\n", first, StringComparison.Ordinal);
+        Assert.That(end, Is.GreaterThan(first), "the explanation must be in the first-use paragraph");
+        var explanation = Regex.Replace(protocol[first..end], @"\s+", " ");
+        Assert.That(explanation, Does.Contain("on the mirrored issue"));
+        Assert.That(explanation, Does.Contain(
+            "`result` is a field of that outcome comment, never an argument to `repocontext_release_claim`"));
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    [TestCase(3)]
+    public void Removing_any_result_comment_destination_is_detected(int occurrence)
+    {
+        var protocol = ReadTemplate("backlog-protocol.md");
+        AssertOutcomeComments(protocol);
+        var destinations = Regex.Matches(protocol, @"outcome\s+comment\s+carrying\s+(?=`result=)");
+        var destination = destinations[occurrence];
+        var mutant = protocol.Remove(destination.Index, destination.Length);
+        Assert.Throws<AssertionException>(() => AssertOutcomeComments(mutant));
+    }
+
+    private static void AssertOutcomeComments(string protocol)
+    {
+        var mentions = Regex.Matches(protocol, @"`[^`\n]*\bresult=[^`\n]+`");
+        Assert.That(mentions, Has.Count.EqualTo(4), "audit every outcome field if the protocol adds or removes one");
+        foreach (Match mention in mentions)
+        {
+            Assert.That(
+                Regex.IsMatch(protocol[..mention.Index], @"outcome\s+comment\s+carrying\s+$"),
+                Is.True,
+                $"{mention.Value} must explicitly name its outcome comment at the point of use");
+        }
+    }
+
     [TestCase("backlog-worker.base.md", "## Phase 1 - Compute the ready set")]
     [TestCase("backlog-worker.base.md", "## Phase 7 - Complete or release")]
     [TestCase("backlog-pm.base.md", "## Phase 0 - Ground yourself, unprompted, on every session start")]

@@ -235,8 +235,11 @@ Three rules make the tag trustworthy:
 
 A worker that cannot merge - because it lost its claim, because review requested
 changes, or because it ran out of run - **does not tag the item complete**. It
-writes an honest `resumeNote`, posts `result=released`, and leaves the item live
-for the next holder. That is the normal path, not a failure.
+writes an honest `resumeNote`, posts an outcome comment carrying
+`result=released` on the mirrored issue, and leaves the item live for the next
+holder. `result` is a field of that outcome comment, never an argument to
+`repocontext_release_claim` or any other tool. That is the normal path, not a
+failure.
 
 #### When the dispatch reserves the merge to the project manager
 
@@ -250,9 +253,10 @@ The reservation does not weaken the completion rule; it moves **who satisfies
 it**. Read it as a two-party sequence:
 
 - **The worker never tags the item complete, and that is not a failure path.**
-  It is the same `result=released` stand-down described above, reached for a
-  different reason: not that the worker *could not* merge, but that it was
-  *instructed not to*. It writes an honest resume block, releases the claim
+  It is the same stand-down with an outcome comment carrying `result=released`
+  described above, reached for a different reason: not that the worker *could
+  not* merge, but that it was *instructed not to*. It writes an honest resume
+  block, releases the claim
   under its fencing token, and reports plainly that the merge is outstanding and
   reserved.
 - **The project manager tags the item complete once it has merged**, under a
@@ -932,17 +936,18 @@ does not wait to burn the remaining attempts. The two cases that matter:
 - The specification is wrong, not merely hard - the item as written cannot be
   satisfied.
 
-Releasing instead is the failure mode this exists to prevent. `result=released`
+Releasing instead is the failure mode this exists to prevent. Releasing the claim
+and posting an outcome comment carrying `result=released` on the mirrored issue
 leaves the item live and immediately re-claimable, so the next worker draws it,
 re-derives the same finding, and releases in turn; the fleet spends a session per
 tick relearning one conclusion. A deliberate park costs one attempt and states
 the conclusion once.
 
 **Say why, in both places a later reader will look.** The `resumeNote` carries
-the finding for the next holder, and the `outcome ... result=parked` comment
-carries it for the human who must decide. A park with no stated reason is
-indistinguishable from a crash and will be unparked without the finding being
-addressed.
+the finding for the next holder, and the outcome comment carrying `result=parked`
+on the mirrored issue carries it for the human who must decide. A park with no
+stated reason is indistinguishable from a crash and will be unparked without the
+finding being addressed.
 
 **Parking is safe to get wrong in one direction only.** It can only ever remove
 an item from the ready set, and `Parked --> Ready` requires a human, so an
