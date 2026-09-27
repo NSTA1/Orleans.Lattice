@@ -189,4 +189,58 @@ public sealed partial class PromQlMetricExtractorTests
             Assert.That(references.HasUnresolvableNameMatcher, Is.False);
         });
     }
+
+    [Test]
+    public void An_unmatched_paren_inside_a_comment_in_a_grouping_list_does_not_hide_the_aggregand()
+    {
+        // The grouping-list skip counted parentheses over the raw text, so the '('
+        // inside this '#' comment left the depth permanently above zero and the
+        // skip swallowed the whole remainder of the expression - including the
+        // aggregand's selector. Prometheus discards the comment and evaluates
+        // 'up + sum by (job) (denied_metric)', so the denied name has to reach the
+        // gate.
+        var references = Extract("up + sum by (job # (\n) (denied_metric)");
+
+        Assert.That(references.Names, Does.Contain("denied_metric"));
+    }
+
+    [Test]
+    public void An_unmatched_paren_inside_a_quoted_label_name_does_not_hide_the_aggregand()
+    {
+        // The same defect reached through a quoted label name, which Prometheus
+        // reads as a single token. A raw depth count sees the quoted '(' as a real
+        // one and over-consumes.
+        var references = Extract("sum by (\"(\") (denied_metric)");
+
+        Assert.That(references.Names, Does.Contain("denied_metric"));
+    }
+
+    [Test]
+    public void A_comment_inside_a_grouping_list_does_not_disturb_a_well_formed_query()
+    {
+        // The comment-aware skip must still stop at the list's own ')'.
+        var references = Extract("sum by (job # grouped by job\n) (up)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "up" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+            Assert.That(references.HasUnconstrainedSelector, Is.False);
+        });
+    }
+
+    [Test]
+    public void A_closing_paren_inside_a_quoted_label_name_does_not_end_the_grouping_list()
+    {
+        // The mirror of the over-consumption case: a ')' inside a string is not a
+        // list terminator, so ending the skip there would leave the real ')' to
+        // re-open operand position and mis-scan the aggregand.
+        var references = Extract("sum by (\")\") (up)");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "up" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+        });
+    }
 }
