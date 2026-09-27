@@ -311,8 +311,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.set.stage.duration` | histogram (ms) | `tree`, `stage`, `tenant` | CommitPath | SetAsync stage breakdown p95 (ms) |
 | `orleans.lattice.set_many.duration` | histogram (ms) | `tree`, `tenant` | CommitPath | SetAsync / SetManyAsync envelope p50 (ms); SetAsync / SetManyAsync envelope p95 (ms) |
 | `orleans.lattice.set_many.stage.duration` | histogram (ms) | `tree`, `stage`, `tenant` | CommitPath | SetManyAsync stage breakdown p95 (ms) |
-| `orleans.lattice.shard_root.set_many.leaf_rpc.duration` | histogram (ms) | `tree`, `tenant` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
-| `orleans.lattice.shard_root.set_many.local_apply.duration` | histogram (ms) | `tree`, `tenant` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
+| `orleans.lattice.set_many_where_predicate.duration` | histogram (ms) | `tree`, `tenant` | CommitPath | SetAsync / SetManyAsync envelope p50 (ms); SetAsync / SetManyAsync envelope p95 (ms) |
+| `orleans.lattice.shard_root.set_many.leaf_rpc.duration` | histogram (ms) | `tree`, `operation`, `tenant` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
+| `orleans.lattice.shard_root.set_many.local_apply.duration` | histogram (ms) | `tree`, `operation`, `tenant` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
 | `orleans.lattice.shard_root.set_many.shadow_forward.duration` | histogram (ms) | `tree`, `tenant` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
 | `orleans.lattice.warmup.invocations` | counter (`{call}`) | `tree`, `tenant` | CommitPath | WarmUpAsync - invocations and duration |
 | `orleans.lattice.warmup.duration` | histogram (ms) | `tree`, `shard_count`, `tenant` | CommitPath | WarmUpAsync - invocations and duration |
