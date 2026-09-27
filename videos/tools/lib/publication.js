@@ -68,8 +68,9 @@ export function cutOf(digests) {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
 }
 
-const EPISODE_FIELDS = new Set(["path", "order", "poster", "published"]);
+const EPISODE_FIELDS = new Set(["path", "order", "items", "poster", "published"]);
 const POSTER_FIELDS = new Set(["scene", "beat", "offset"]);
+const ITEM_CODE = /^[FBEOSH](?:[1-9]\d*)?$/;
 
 /**
  * What is wrong with an episode's metadata (episodes/<slug>/episode.json),
@@ -77,6 +78,8 @@ const POSTER_FIELDS = new Set(["scene", "beat", "offset"]);
  *
  *   path       the series path the episode is on, one of PATHS
  *   order      its place on that path, from 1
+ *   items      the series items (videos/series.json) its published cut
+ *              completes: its own code, and any re-cut of it the cut made
  *   poster     the moment its poster shows: a scene id, then optionally a beat
  *              of that scene (from 0) and an offset in seconds from it
  *   published  written by `npm run publish`: the cut the companion page pins,
@@ -90,6 +93,14 @@ export function episodeProblems(meta) {
   }
   if (!PATHS.includes(meta.path)) problems.push(`path must be one of ${PATHS.join(", ")}`);
   if (!Number.isInteger(meta.order) || meta.order < 1) problems.push("order must be a whole number from 1");
+  if (meta.items !== undefined) {
+    const items = meta.items;
+    if (!Array.isArray(items) || items.length === 0 || items.some((code) => typeof code !== "string" || !ITEM_CODE.test(code))) {
+      problems.push("items must list the codes of the series items the episode completes, such as \"B1\"");
+    } else if (new Set(items).size !== items.length) {
+      problems.push("items must list each code once");
+    }
+  }
   const poster = meta.poster;
   if (!poster || typeof poster !== "object" || typeof poster.scene !== "string" || poster.scene === "") {
     problems.push("poster.scene must name a scene of the composition");

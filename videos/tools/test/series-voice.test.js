@@ -14,6 +14,7 @@ import {
   spokenCues,
   startChatterbox,
   verdictOf,
+  voicePython,
 } from "../lib/series-voice.js";
 import { seedFor } from "../lib/verify.js";
 
@@ -88,7 +89,29 @@ test("the worker is started with the voice's settings, and not at all without it
   assert.equal(value("--cfg-weight"), "0.35");
   assert.equal(value("--recognisers"), "base.en,small.en");
   assert.equal(value("--threads"), "6");
-  assert.throws(() => startChatterbox({ chatterbox }, { env: {} }), /set VIDEOS_VOICE_PYTHON/);
+  const empty = mkdtempSync(path.join(tmpdir(), "series-voice-state-"));
+  try {
+    assert.throws(() => startChatterbox({ chatterbox }, { env: {}, state: empty }), /run 'npm run voice:setup', or set VIDEOS_VOICE_PYTHON/);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});
+
+test("the voice's Python is VIDEOS_VOICE_PYTHON, or the environment voice:setup made in the state directory", () => {
+  const state = mkdtempSync(path.join(tmpdir(), "series-voice-state-"));
+  try {
+    assert.equal(voicePython({ VIDEOS_VOICE_PYTHON: "/opt/py" }, "linux", state), "/opt/py");
+    assert.equal(voicePython({}, "linux", state), null, "nothing made yet");
+    mkdirSync(path.join(state, "voice", "bin"), { recursive: true });
+    writeFileSync(path.join(state, "voice", "bin", "python"), "");
+    assert.equal(voicePython({}, "linux", state), path.join(state, "voice", "bin", "python"));
+    assert.equal(voicePython({}, "win32", state), null, "Windows keeps it under Scripts");
+    mkdirSync(path.join(state, "voice", "Scripts"), { recursive: true });
+    writeFileSync(path.join(state, "voice", "Scripts", "python.exe"), "");
+    assert.equal(voicePython({}, "win32", state), path.join(state, "voice", "Scripts", "python.exe"));
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+  }
 });
 
 test("voice.json must name an engine the workspace runs", () => {

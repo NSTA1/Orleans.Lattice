@@ -178,7 +178,7 @@ that episode taught, so the set can be watched in any order and from any path.
 
 | # | Episode | Idea | Introduces | Reached from |
 | --- | --- | --- | --- | --- |
-| H1 | Conflict-free merges in 90 seconds | two concurrent writes and their join: why merges need no lock and no consensus, told with a scenario the front door does not use (a G-Set or an MV-Register, not its G-Counter) | [CRDT primitives](../docs/crdt/readme.md), the scenario's guide ([G-Set](../docs/crdt/gset.md) or [MV-Register](../docs/crdt/mvregister.md)), [state primitives](../docs/lattice/state-primitives.md) | B2 |
+| H1 | Conflict-free merges in 90 seconds | two concurrent writes and their join: why merges need no lock and no consensus, told with a scenario the front door does not use - a [G-Set](../docs/crdt/gset.md) or an [MV-Register](../docs/crdt/mvregister.md), not its G-Counter; the brief picks one, and adds its guide to what the episode introduces | [CRDT primitives](../docs/crdt/readme.md), [state primitives](../docs/lattice/state-primitives.md) | B2 |
 | H2 | Clocks and version vectors | ordering events without a shared clock | [Version vector](../docs/crdt/versionvector.md) | E2 |
 | H3 | Trees that split online | sharded B+ trees rebalancing under load without downtime | [Architecture](../docs/lattice/architecture.md), [tree structure](../docs/lattice/tree-structure.md) | O3 |
 | H4 | Atomic commit without consensus | the protocol behind all-or-nothing writes | [Verified atomic commit](../docs/lattice/verified-atomic-commit.md) | B4 |
@@ -204,9 +204,11 @@ that episode taught, so the set can be watched in any order and from any path.
   its companion page. The video names them by their titles in this plan, which
   are settled before they are made, so publishing the next episode needs no
   re-cut; the companion page gains its link to it when it is published.
-  Writing both from the plan - each episode's path and order in
-  `episode.json`, its code and deep dive here - is planned tooling, not yet
-  built; until then an ending is written by hand from the tables above.
+  Both come from the plan. `npm run series -- ending <code>` prints the ending
+  the plan gives an episode, to start its closing scene from, and
+  `npm run series -- endings` fails when a published episode's closing scene
+  does not name what it leads to. `npm run companions` writes each companion
+  page's Where next from the plan.
 - **Evergreen or versioned.** How it works episodes describe the model and
   rarely change. Build and Operate episodes describe the API and the operating
   surface; they state the release line they describe and are re-rendered when
@@ -229,9 +231,19 @@ for access, schemas, tenants and backups; and it is one of the surfaces the
 last Secure and govern episode is about. So both paths are held at the end of
 the order until the redesigned console is released, and their episodes then
 show it wherever an operator would use it, alongside the API it drives.
-Releasing the hold is a change to this plan. If the console is still not
-ready when everything before the hold is done, Secure and govern's first three
-episodes can be released to go ahead code-first.
+Releasing the hold is a change to this plan and to
+[series.json](series.json), which holds this order as data. If the console is
+still not ready when everything before the hold is done, Secure and govern's
+first three episodes can be released to go ahead code-first.
+
+The order is kept, not just stated:
+
+- `npm run series -- next` names the next item, which is what a scheduled run
+  of the [Video Producer](../.github/agents/video-producer.agent.md) makes (see
+  [README.md, "Production, review and release"](README.md#production-review-and-release)).
+- An item is done when a published episode's `episode.json` lists it in its
+  `items`. The required check fails any change that publishes an item while
+  one before it is not done.
 
 1. **The tooling** - done: the workspace, its guards, the CI lane, the voice
    pipeline, and the site's design system read through the brand seam. Nothing
@@ -252,6 +264,7 @@ episodes can be released to go ahead code-first.
 
    | Step | Items | Completes |
    | --- | --- | --- |
+   | Pilot | F | the front door, published |
    | 1 | B1, E1, F2 | a first episode for developers and for evaluators, and the front door re-cut to name them |
    | 2 | B2, H1, B3, B4, H4, B5, B6, B7 | Build, with its two deep dives |
    | 3 | E2, H2, E3, H5, E4 | Evaluate, with its two deep dives |
@@ -262,6 +275,8 @@ episodes can be released to go ahead code-first.
 
 1. **Brief** - `episodes/<slug>/BRIEF.md`: the path and audience, the one idea,
    the corpus pages it draws on, and what the viewer can do afterwards.
+   `npm run series -- next --json` names the item to make next, and gives its
+   code, its slug, the pages it introduces and the ending the plan gives it.
 2. **Script** - `episodes/<slug>/SCRIPT.md`: narration under a
    `## Narration` heading, one paragraph per cue, `### <scene>` headings to
    label scenes, HTML comments for direction notes. Written form, plain ASCII,
@@ -291,8 +306,11 @@ episodes can be released to go ahead code-first.
 6. **Companion page** - `docs/videos/<slug>.md`: a short introduction whose
    first sentence is the episode's one-line idea, then the video block and the
    transcript, both written by `npm run companions`, and the compiled snippets
-   shown on screen (`npm run snippets`). `episodes/<slug>/episode.json` names
-   the episode's path, its place on it, and the moment its poster shows.
+   shown on screen (`npm run snippets`), and its Where next, which
+   `npm run companions` writes from the plan. `episodes/<slug>/episode.json`
+   names the episode's path, its place on it, the series items it completes
+   (`items`: its own code, and any re-cut of it), and the moment its poster
+   shows.
 7. **Check and render** - `npm run check -- --episode <slug>`, then
    `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4`,
    which also writes the render's receipt: what it was rendered from.
@@ -301,9 +319,17 @@ episodes can be released to go ahead code-first.
 9. **Publish** - `npm run publish -- <slug>`: while the render's receipt still
    matches the sources, it writes the video, its captions and its poster into
    `docs-site/media/`, named by their cut, removes the episode's earlier cut,
-   and records the new cut in `episode.json` and the companion page. Commit
-   the three files with the episode: the pull request carries the video, and
-   the site plays what is committed.
+   and records the new cut in `episode.json` and the companion page. The
+   page of any episode that leads to this one now links to it. Commit the
+   three files with the episode: the pull request carries the video, and the
+   site plays what is committed.
+10. **Review and approval** - `npm run packet -- <slug>` writes the review
+    packet, which is the pull request's description. It carries the video, the
+    moments to listen to, the script, the sources and a ledger of the feedback
+    acted on. The pull request goes to `main` with the `video-series` label,
+    and merging it is the episode's approval. Promote videos then puts
+    approved episodes on the site (see
+    [README.md, "Production, review and release"](README.md#production-review-and-release)).
 
 ## Tooling in place
 
@@ -330,6 +356,14 @@ What is in place, and why.
 | Publishing from a receipt | a published video must show what the repository says, and its captions and poster must come from the same cut | `npm run render ... -o <file>` writes a receipt of the render's sources; `npm run publish -- <slug>` checks it and writes the files to commit into `docs-site/media/` ([tools/lib/publication.js](tools/lib/publication.js)) |
 | Captions a reader can follow | a caption that ends mid-phrase, or runs past two lines, makes the viewer wait or squint | at most two lines of 42 characters, broken after a clause and never after a word that belongs with the next ([tools/lib/narration.js](tools/lib/narration.js)) |
 | Agent conventions | agents do most of the authoring and must know the rules above | `.github/skills/video-production/SKILL.md` |
+| The plan as data, its order enforced | an automation works through the queue, and approval by merging must follow the series' order | [series.json](series.json); `npm run series -- check`, in the required content gates of `ci.yml` and in the videos lane |
+| Endings and Where next from the plan | an episode names what comes next by its plan title, and its page links to that episode once it is published | `npm run series -- ending` and `endings`; the companion page's `where-next` block, written by `npm run companions` |
+| What outlives a worktree | a scheduled run starts in a fresh worktree. Without a copy of the clips and takes, it would speak an episode again from nothing and lose the takes a reviewer picked | the per-user state directory (`VIDEOS_HOME`); `npm run voice:setup`; [tools/lib/cache.js](tools/lib/cache.js) |
+| One run at a time | two runs must not make the same item | `npm run series -- lease` ([tools/lib/lease.js](tools/lib/lease.js)) |
+| A review packet | the reviewer approves by merging, so the pull request must carry everything needed to judge the episode | `npm run packet` ([tools/lib/packet.js](tools/lib/packet.js)) |
+| Promotion to the site | approved episodes wait on `main` until a person releases them onto the newest release line, as a gapless run of the order | [promote-videos.yml](../.github/workflows/promote-videos.yml), [tools/promote.js](tools/promote.js) |
+| Renders on a loaded machine | the CLI's 5-second version probes fail when memory is short | `npm run render -- ... --warm` ([tools/lib/warm.js](tools/lib/warm.js)) |
+| The producer | the order of work for the automation, its limits, and how it answers review | [video-producer.agent.md](../.github/agents/video-producer.agent.md) |
 
 ## Voice
 
@@ -347,8 +381,9 @@ What is in place, and why.
   one revision, and how it reads: exaggeration 0.75 and CFG weight 0.35 (the
   expressive end of its range, chosen by ear against the defaults and against
   Chatterbox Turbo) at temperature 0.8. It runs on the CPU, in a Python 3.11
-  environment pinned by [voice/requirements.txt](voice/requirements.txt), with
-  no account or key, and no network once the models are downloaded. On a laptop
+  environment pinned by [voice/requirements.txt](voice/requirements.txt), which
+  `npm run voice:setup` makes in the per-user state directory, with no account
+  or key, and no network once the models are downloaded. On a laptop
   it takes eight to twenty times as long as the speech it makes, so a
   three-minute episode takes the better part of an hour; clips are cached, so
   a change to one cue re-speaks only that cue.
@@ -370,8 +405,9 @@ What is in place, and why.
   audition` makes several takes of it (take n is narration's attempt n, so
   the kept take is among them), each checked, on a page to listen and pick
   from, and `--pick` makes the chosen take the cue's clip; a picked take
-  stands whatever the recognisers heard. Takes live in `renders/takes/` and
-  are never committed: the published cut is the record of what was chosen.
+  stands whatever the recognisers heard. Takes live in `renders/takes/`, with
+  a copy in the per-user state directory so that they outlive the worktree,
+  and are never committed: the published cut is the record of what was chosen.
 - **Listened for, too:** recognisers ignore sounds that are not speech, and
   Chatterbox sometimes fails to stop cleanly, adding a squeal or a burst
   after its last word (the introduction's first Chatterbox cut had one at

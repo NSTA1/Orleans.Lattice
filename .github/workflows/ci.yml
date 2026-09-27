@@ -2181,6 +2181,21 @@ jobs:
           # with every other checkout in this workflow.
           fetch-depth: 0
 
+      # The video series is made, and approved, in the order videos/series.md
+      # sets: the items its published episodes complete must always be a
+      # gapless run from the start of that order (videos/series.json), so an
+      # episode cannot be merged ahead of the one before it. It is here, in the
+      # required path, because merging is the approval and the videos lane
+      # (videos.yml) is advisory. The check uses Node's built-ins only, so the
+      # workspace is not installed.
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Video series order
+        run: node videos/tools/series.js check
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
