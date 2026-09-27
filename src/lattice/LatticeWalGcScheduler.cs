@@ -2471,7 +2471,7 @@ internal sealed class LatticeWalGcScheduler(
 
             RecordPass(
                 1,
-                ClassifyPass(reclaimed, overCeiling, stranded, report.CursorFloorState),
+                ClassifyPass(reclaimed, overCeiling, stranded, report.CursorFloorState, report.ShardsScanned == 0),
                 treeTag,
                 tenantTag);
 
@@ -3169,6 +3169,7 @@ internal sealed class LatticeWalGcScheduler(
         // reads a measured zero for as long as the partition stays total, which
         // is precisely the assertion it exists to make.
         RecordPass(0, LatticeMetrics.OutcomeNoConsumer, treeTag, tenantTag);
+        RecordPass(0, LatticeMetrics.OutcomeNoPartitions, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeUnclassified, treeTag, tenantTag);
 
         // The third arm split out of `idle` (issue #3119), primed on the same
@@ -3429,6 +3430,12 @@ internal sealed class LatticeWalGcScheduler(
     /// </summary>
     /// <remarks>
     /// <para>
+    /// <paramref name="noPartitions"/> precedes the non-reclaiming floor arms:
+    /// an unresolved provider is not an empty WAL. The collector counts only
+    /// partitions it actually visited, including compaction-only visits on its
+    /// no-predicate return. This classification changes no scheduling policy.
+    /// </para>
+    /// <para>
     /// <paramref name="overCeiling"/> refines the
     /// <see cref="WalGcCursorFloorState.Available"/> arm only, and it is the
     /// third split out of <c>idle</c> (issue #3119). The floor state cannot
@@ -3472,16 +3479,19 @@ internal sealed class LatticeWalGcScheduler(
         bool reclaimed,
         bool overCeiling,
         bool stranded,
-        WalGcCursorFloorState floorState)
+        WalGcCursorFloorState floorState,
+        bool noPartitions)
         => reclaimed
             ? LatticeMetrics.OutcomeReclaimed
-            : floorState != WalGcCursorFloorState.Available
-                ? ClassifyUnreclaimed(floorState)
-                : overCeiling
-                    ? LatticeMetrics.OutcomeOverCeiling
-                    : stranded
-                        ? LatticeMetrics.OutcomeStranded
-                        : ClassifyUnreclaimed(floorState);
+            : noPartitions
+                ? LatticeMetrics.OutcomeNoPartitions
+                : floorState != WalGcCursorFloorState.Available
+                    ? ClassifyUnreclaimed(floorState)
+                    : overCeiling
+                        ? LatticeMetrics.OutcomeOverCeiling
+                        : stranded
+                            ? LatticeMetrics.OutcomeStranded
+                            : ClassifyUnreclaimed(floorState);
 
     /// <summary>
     /// The ceiling the adaptive ladder may relax to while a tree is still holding
