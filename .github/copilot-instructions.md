@@ -439,7 +439,8 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     patch ships straight to NuGet without ever being built on trunk - keep both
     when editing any of those triggers. (`docs.yml` has
     no `branches:` filter and so already covers every base; `coverage.yml` runs
-    nightly on a schedule, `publish.yml` is push-triggered, and
+    nightly on a schedule, `coverage-catch-up.yml` runs on `push` to `main`
+    only, `publish.yml` is push-triggered, and
     `ci-serial-old.yml` is manual-dispatch only, so none of them is affected.)
     The same four workflows also run on `push` to `*/epic/**` (never
     `release/**`): an advisory integration-branch lane that evaluates the bucket

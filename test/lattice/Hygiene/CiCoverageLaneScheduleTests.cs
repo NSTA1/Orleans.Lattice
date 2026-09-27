@@ -30,11 +30,23 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// and a skip that fired every night would freeze the coverage report with nothing red
 /// anywhere.
 /// </para>
+/// <para>
+/// <b>Why a catch-up lane.</b> GitHub's <c>schedule</c> trigger is best-effort, and
+/// after the Actions incidents of 2026-08-26 the 03:17 UTC slot was created more than
+/// five hours late on each of 25, 26 and 27 September, the last at 09:16 UTC.
+/// <c>coverage-catch-up.yml</c> dispatches the lane on the first push to
+/// main once the slot is past its grace period with no run, and a nightly run skips
+/// when an earlier run already covered the night, so the night is measured once
+/// whichever arrives first. The three copies of the slot - the cron and the two
+/// <c>slot=</c> constants - must agree, or the catch-up would look for the wrong night.
+/// </para>
 /// </summary>
 [TestFixture]
 public sealed class CiCoverageLaneScheduleTests
 {
     private const string CoverageWorkflow = ".github/workflows/coverage.yml";
+
+    private const string CatchUpWorkflow = ".github/workflows/coverage-catch-up.yml";
 
     /// <summary>
     /// The lane must be triggered by a schedule and by hand, and by nothing that fires
@@ -108,7 +120,8 @@ public sealed class CiCoverageLaneScheduleTests
                 + "the next night from measuring the same commit again");
 
             Assert.That(check, Does.Contain("[ \"$GITHUB_EVENT_NAME\" = schedule ]"),
-                "only a scheduled run may skip; a dispatched run is a request to measure");
+                "only a nightly run - the schedule, or a catch-up standing in for it - may skip; a "
+                + "manual dispatch is a request to measure");
 
             Assert.That(check, Does.Contain("[ \"$last\" = \"$GITHUB_SHA\" ]"),
                 "the skip must require this run's commit to be exactly the one already measured - "
@@ -139,6 +152,127 @@ public sealed class CiCoverageLaneScheduleTests
     }
 
     /// <summary>
+    /// A nightly run may also skip when an earlier run of the lane already covered the
+    /// night, and only then: "earlier" must be by run id, so the first of any set of
+    /// nightly runs always measures, and a cancelled run must not count as covering.
+    /// </summary>
+    [Test]
+    public void A_nightly_run_skips_a_night_only_an_earlier_run_already_covered()
+    {
+        var yaml = Read();
+        var check = Job(yaml, "measured");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(check, Does.Match(@"(?m)^\s+CATCH_UP:\s*\$\{\{\s*inputs\.catch_up\s*\}\}\s*$"),
+                "the check job must read the 'catch_up' dispatch input, or a catch-up dispatch is "
+                + "treated as a manual one and measures the night a second time");
+
+            Assert.That(check, Does.Contain("[ \"$CATCH_UP\" = true ]"),
+                "a catch-up dispatch must be treated as a nightly run, so a late schedule and the "
+                + "catch-up standing in for it measure the night once between them");
+
+            Assert.That(check, Does.Contain("select(.id < ${GITHUB_RUN_ID}"),
+                "the night-covered skip must count only runs created before this one. Counting every "
+                + "run since the slot would let two nightly runs each see the other and both skip, "
+                + "so the night would not be measured at all, with nothing red anywhere.");
+
+            Assert.That(check, Does.Contain(".conclusion != \\\"cancelled\\\""),
+                "a cancelled run measured nothing, so it must not count as covering the night");
+
+            Assert.That(check, Does.Contain("-f created=\">=${since}\""),
+                "the night-covered skip must look only at runs since tonight's slot opened, or last "
+                + "night's run would stop tonight's");
+        });
+    }
+
+    /// <summary>
+    /// The coverage lane must accept the catch-up dispatch input, and it must default to
+    /// false so a manual dispatch still always measures.
+    /// </summary>
+    [Test]
+    public void The_coverage_lane_accepts_a_catch_up_dispatch()
+    {
+        var triggers = TopLevelBlock(Read(), "on");
+
+        Assert.That(triggers, Does.Match(
+                @"(?ms)^  workflow_dispatch:\s*\r?\n    inputs:\s*\r?\n      catch_up:.*?^        type:\s*boolean\s*\r?$.*?^        default:\s*false\s*\r?$"),
+            $"{CoverageWorkflow} must declare a boolean 'catch_up' dispatch input defaulting to false: "
+            + $"{CatchUpWorkflow} sets it, and a manual dispatch that leaves it unset must still measure");
+    }
+
+    /// <summary>
+    /// The catch-up lane must run on every push to main and nothing else, dispatch the
+    /// coverage lane as a catch-up, count any non-cancelled run as covering the night, and
+    /// never cancel anything.
+    /// </summary>
+    [Test]
+    public void The_catch_up_lane_dispatches_the_coverage_lane_when_the_schedule_misses()
+    {
+        var yaml = Read(CatchUpWorkflow);
+        var triggers = TopLevelBlock(yaml, "on", CatchUpWorkflow);
+        var job = Job(yaml, "catch-up", CatchUpWorkflow);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(triggers, Does.Match(@"(?m)^  push:\s*\r?\n    branches:\s*\[\s*main\s*\]\s*\r?$"),
+                $"{CatchUpWorkflow} must run on every push to main: a push is the only reliable event "
+                + "that follows a missed schedule, and main is the only branch coverage is measured on");
+
+            Assert.That(triggers, Does.Not.Match(@"(?m)^  (schedule|pull_request|pull_request_target):"),
+                $"{CatchUpWorkflow} must not run on a schedule, which is the unreliable event it "
+                + "exists to cover, nor on pull requests, which never measure coverage");
+
+            Assert.That(job, Does.Contain("gh workflow run coverage.yml")
+                    .And.Contain("-f catch_up=true"),
+                "the catch-up must dispatch coverage.yml with catch_up=true, so a late schedule that "
+                + "arrives after it skips instead of measuring the night again");
+
+            Assert.That(job, Does.Match(@"(?m)^\s+actions:\s*write\s*$"),
+                "the catch-up job must grant 'actions: write'; without it the dispatch is refused and "
+                + "a missed schedule is never caught up");
+
+            Assert.That(job, Does.Contain("select(.conclusion != \"cancelled\")"),
+                "the catch-up must count an in-progress, failed or skipped run as covering the night. "
+                + "Counting only successes would re-dispatch an hour-long failing run on every merge.");
+
+            Assert.That(job, Does.Match(@"(?m)^    timeout-minutes:\s*\d+\s*$"),
+                "the catch-up job must declare a timeout; it takes seconds and must not hold a runner");
+
+            Assert.That(yaml, Does.Not.Contain("cancel-in-progress"),
+                $"{CatchUpWorkflow} must not cancel runs. It runs on every push to main, where a "
+                + "cancelled check run rolls up as a failure on the commit.");
+        });
+    }
+
+    /// <summary>
+    /// The cron and the two <c>slot=</c> constants that compute tonight's slot must name the
+    /// same time, or the catch-up and the skip would look for the wrong night.
+    /// </summary>
+    [Test]
+    public void The_nightly_slot_agrees_across_the_cron_and_both_lanes()
+    {
+        var cron = Regex.Match(TopLevelBlock(Read(), "on"), @"(?m)^\s+- cron:\s*'(?<minute>\d+) (?<hour>\d+) \* \* \*'");
+
+        Assert.That(cron.Success, Is.True,
+            $"expected a daily '<minute> <hour> * * *' cron in {CoverageWorkflow}; if the schedule "
+            + "changed shape, the slot computation in both lanes must change with it");
+
+        var expected = $"slot=\"{int.Parse(cron.Groups["hour"].Value):00}:{int.Parse(cron.Groups["minute"].Value):00}\"";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Job(Read(), "measured"), Does.Contain(expected),
+                $"the measured job in {CoverageWorkflow} must compute tonight's slot as {expected}, "
+                + "matching the cron");
+
+            Assert.That(Job(Read(CatchUpWorkflow), "catch-up", CatchUpWorkflow), Does.Contain(expected),
+                $"{CatchUpWorkflow} must compute tonight's slot as {expected}, matching the cron in "
+                + CoverageWorkflow);
+        });
+    }
+
+    /// <summary>
     /// One hung run must not be able to hold the lane, and any dispatch waiting behind
     /// it, for GitHub's six-hour default.
     /// </summary>
@@ -163,12 +297,12 @@ public sealed class CiCoverageLaneScheduleTests
     /// starts in the first column. Fails rather than returning an empty string, because
     /// every assertion above would pass against one.
     /// </summary>
-    private static string TopLevelBlock(string yaml, string key)
+    private static string TopLevelBlock(string yaml, string key, string file = CoverageWorkflow)
     {
         var start = Regex.Match(yaml, $@"^{Regex.Escape(key)}:[ \t]*\r?$", RegexOptions.Multiline);
 
         Assert.That(start.Success, Is.True,
-            $"expected a top-level '{key}:' block in {CoverageWorkflow}; if it moved, this fixture "
+            $"expected a top-level '{key}:' block in {file}; if it moved, this fixture "
             + "stopped guarding it and must be updated with it");
 
         var rest = yaml[(start.Index + start.Length)..];
@@ -176,7 +310,7 @@ public sealed class CiCoverageLaneScheduleTests
         var block = end.Success ? rest[..end.Index] : rest;
 
         Assert.That(block.Trim(), Is.Not.Empty,
-            $"the '{key}:' block in {CoverageWorkflow} is empty, so nothing asserted about it means anything");
+            $"the '{key}:' block in {file} is empty, so nothing asserted about it means anything");
 
         return block;
     }
@@ -185,12 +319,12 @@ public sealed class CiCoverageLaneScheduleTests
     /// Reads one job's block by its id, up to the next job at the same indentation or the
     /// end of the file. Fails rather than returning an empty string, for the same reason.
     /// </summary>
-    private static string Job(string yaml, string jobId)
+    private static string Job(string yaml, string jobId, string file = CoverageWorkflow)
     {
         var start = Regex.Match(yaml, $@"^  {Regex.Escape(jobId)}:[ \t]*\r?$", RegexOptions.Multiline);
 
         Assert.That(start.Success, Is.True,
-            $"expected a job with id '{jobId}' in {CoverageWorkflow}. If it was renamed, this fixture "
+            $"expected a job with id '{jobId}' in {file}. If it was renamed, this fixture "
             + "stopped guarding it and must be updated with it.");
 
         var rest = yaml[(start.Index + start.Length)..];
@@ -198,14 +332,14 @@ public sealed class CiCoverageLaneScheduleTests
         var block = next.Success ? rest[..next.Index] : rest;
 
         Assert.That(block.Trim(), Is.Not.Empty,
-            $"the job '{jobId}' in {CoverageWorkflow} has an empty body, so nothing asserted about it "
+            $"the job '{jobId}' in {file} has an empty body, so nothing asserted about it "
             + "means anything");
 
         return block;
     }
 
-    private static string Read() =>
+    private static string Read(string file = CoverageWorkflow) =>
         File.ReadAllText(Path.Combine(
             HygieneRepository.FindRepoRoot(),
-            CoverageWorkflow.Replace('/', Path.DirectorySeparatorChar)));
+            file.Replace('/', Path.DirectorySeparatorChar)));
 }
