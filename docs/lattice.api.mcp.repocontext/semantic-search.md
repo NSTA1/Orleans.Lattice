@@ -9,6 +9,13 @@
 
 If nothing matches at all, `mode` is `empty`. The path that answered is always reported, so a caller can tell meaning-based retrieval from a fallback scan.
 
+For the repository's current serving verdict, call `repocontext_health` with
+`repoId`; see [Repository readiness](tools.md#repository-readiness). Do not infer
+serving from an ingest job that says `Completed`, another repository's host-wide
+readiness, or missing metric series. The passive verdict names the local blocker
+and distinguishes unknown evidence from measured emptiness. Per-result attribution
+below still describes the query that actually ran.
+
 ## Which path answered: `retrievalPath`
 
 Alongside `mode`, every `repocontext_search` and `repocontext_context` result carries a `retrievalPath` value from a closed, server-derived vocabulary (the `RepoContextRetrievalPath` constants). It is additive - `mode` keeps its values and meaning - and it separates an intended keyword-only deployment from a real capability loss, which `mode: keyword` alone cannot:

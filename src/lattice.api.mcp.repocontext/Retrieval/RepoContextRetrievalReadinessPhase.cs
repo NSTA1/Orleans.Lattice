@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// Whether the host can serve <b>semantic</b> repository-context retrieval right now.
+/// Whether the observed host or repository can serve <b>semantic</b> repository-context retrieval right now.
 /// This is deliberately separate from the container's lifecycle phase: a silo can have
 /// joined, proven its durable stores writable, and be serving MCP traffic while its
 /// vector plane is still replaying and cannot answer a single semantic query.
@@ -31,8 +31,9 @@ public enum RepoContextRetrievalReadinessPhase
     KeywordOnly = 2,
 
     /// <summary>
-    /// No repository is registered at all, so there is nothing this host could be asked
-    /// to retrieve from. The host is legitimately <b>ready</b> - blocking here would
+    /// At host scope no repository is registered; at repository scope there is
+    /// nothing indexed to serve. This is not demonstrated semantic readiness for
+    /// that repository. The empty host is legitimately <b>ready</b> - blocking here would
     /// wedge a fresh box before its first repository could ever be onboarded - but
     /// nothing has been <b>demonstrated</b>, which is exactly why this is a phase of its
     /// own rather than <see cref="Serving"/>.

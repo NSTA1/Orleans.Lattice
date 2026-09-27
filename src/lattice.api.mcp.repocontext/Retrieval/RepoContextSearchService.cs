@@ -195,12 +195,13 @@ internal sealed partial class RepoContextSearchService
                 ex,
                 "repocontext_search for repository {RepoId} falling back to keyword recall: the semantic path threw.",
                 repoId);
-            semantic = SemanticOutcome.IndexDegraded;
+            semantic = SemanticOutcome.IndexDegraded with { Reason = "semantic_path_fault:" + ex.GetType().Name };
         }
 
         // One observation per call, at the single seam every query funnels through: the
         // resolved path is the authoritative statement of what retrieval could do.
         _readiness?.Observe(semantic.RetrievalPath);
+        ObserveRepository(repoId, semantic.RetrievalPath, semantic.Reason);
 
         if (semantic.Hits is { Count: > 0 })
         {
@@ -262,25 +263,27 @@ internal sealed partial class RepoContextSearchService
     /// </summary>
     /// <param name="Hits">The hydrated hits, or <see langword="null"/> when the semantic path did not answer.</param>
     /// <param name="RetrievalPath">The resolved retrieval-path value.</param>
+    /// <param name="Reason">The condition observed at the semantic decision seam, without query or exception content.</param>
     private readonly record struct SemanticOutcome(
         IReadOnlyList<RepoContextSearchHit>? Hits,
-        string RetrievalPath)
+        string RetrievalPath,
+        string? Reason = null)
     {
         /// <summary>No embedding provider is bound: an intended keyword-only deployment.</summary>
         internal static SemanticOutcome NoEmbedder { get; } =
-            new(null, RepoContextRetrievalPath.KeywordNoEmbedder);
+            new(null, RepoContextRetrievalPath.KeywordNoEmbedder, "no_embedding_provider");
 
         /// <summary>An embedder is bound but the vector plane could not serve the query.</summary>
         internal static SemanticOutcome VectorPlaneUnavailable { get; } =
-            new(null, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable);
+            new(null, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable, "no_semantic_matches_in_query_space");
 
         /// <summary>The semantic index ran but is degraded: it threw, or ranked candidates that no longer hydrate.</summary>
         internal static SemanticOutcome IndexDegraded { get; } =
-            new(null, RepoContextRetrievalPath.KeywordIndexDegraded);
+            new(null, RepoContextRetrievalPath.KeywordIndexDegraded, "semantic_candidates_did_not_hydrate");
 
         /// <summary>The plane is not serving and the exact fallback that would answer is suppressed by a guard.</summary>
         internal static SemanticOutcome ExactFallbackSuppressed { get; } =
-            new(null, RepoContextRetrievalPath.KeywordExactFallbackSuppressed);
+            new(null, RepoContextRetrievalPath.KeywordExactFallbackSuppressed, "exact_fallback_suppressed");
     }
 
     private async Task<SemanticOutcome> TrySemanticAsync(
@@ -304,7 +307,7 @@ internal sealed partial class RepoContextSearchService
                 _logger.LogInformation(
                     "repocontext_search for repository {RepoId} falling back to keyword recall: the embedding provider is unavailable.",
                     repoId);
-                return SemanticOutcome.VectorPlaneUnavailable;
+                return SemanticOutcome.VectorPlaneUnavailable with { Reason = "embedding_provider_unavailable" };
             }
 
             embed = await _embeddingProvider
@@ -318,7 +321,7 @@ internal sealed partial class RepoContextSearchService
                 "repocontext_search for repository {RepoId} falling back to keyword recall: the query embedding did not succeed ({Error}).",
                 repoId,
                 embed.Error ?? "no vector returned");
-            return SemanticOutcome.VectorPlaneUnavailable;
+            return SemanticOutcome.VectorPlaneUnavailable with { Reason = "query_embedding_failed" };
         }
 
         var querySpace = EmbeddingSpaceTag.FromSpace(embed.Space);
@@ -522,7 +525,14 @@ internal sealed partial class RepoContextSearchService
     {
         try
         {
+            var before = entries.Count;
             await ScanTreeAsync(treeName, prefix, entries, cancellationToken).ConfigureAwait(false);
+            if (treeName == RepoContextTrees.Content)
+            {
+                ObserveContent(repoId, entries.Count == before
+                    ? RepoContextRetrievalReadinessPhase.NothingRegistered
+                    : RepoContextRetrievalReadinessPhase.Serving, entries.Count == before ? "content_scan_empty" : null);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -539,6 +549,10 @@ internal sealed partial class RepoContextSearchService
                 "repocontext_search keyword scan for repository {RepoId} skipped tree {Tree}: it could not be enumerated.",
                 repoId,
                 treeName);
+            if (treeName == RepoContextTrees.Content)
+            {
+                ObserveContent(repoId, RepoContextRetrievalReadinessPhase.Building, "content_scan_fault:" + ex.GetType().Name);
+            }
         }
     }
 

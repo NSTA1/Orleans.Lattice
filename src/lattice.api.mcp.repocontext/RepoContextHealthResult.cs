@@ -14,9 +14,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// the first made a degraded host indistinguishable from a healthy one at the
 /// probe an agent is instructed to call first, so a caller that was being served
 /// keyword recall over a two-day-stale index read green and proceeded. The
-/// readiness fields close that gap by reporting the same
+/// host-only readiness fields close that gap by reporting the same
 /// <see cref="RepoContextRetrievalReadinessState"/> the <c>/health/ready</c>
 /// endpoint already reads, so the two consumers of that signal cannot disagree.
+/// When a repository id is supplied, the fields instead describe that repository's
+/// serving plane, with its passive component evidence in <see cref="Repository"/>.
+/// No process-wide readiness observation contributes to that scoped verdict.
 /// </para>
 /// <para>
 /// <b>Why <see cref="Available"/> does not become false when retrieval is
@@ -65,10 +68,10 @@ public sealed record RepoContextHealthResult
     public required string Status { get; init; }
 
     /// <summary>
-    /// Whether the host can serve the retrieval it is configured for: the vector
+    /// Whether the requested scope can serve the retrieval it is configured for: the vector
     /// plane is serving, or no embedder is bound and keyword recall is the intended
-    /// steady state. <see langword="false"/> means semantic retrieval is not being
-    /// served and results will be degraded keyword recall.
+    /// steady state. At repository scope, an empty corpus is not ready and a
+    /// negative can also mean serving has not yet been demonstrated by this server.
     /// </summary>
     public required bool RetrievalReady { get; init; }
 
@@ -81,4 +84,11 @@ public sealed record RepoContextHealthResult
     /// cannot serve and is not.
     /// </summary>
     public required string RetrievalPhase { get; init; }
+
+    /// <summary>
+    /// Repository-scoped evidence when the caller supplies a repository id.
+    /// Omitted entirely from the legacy host-only payload.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RepoContextRepositoryReadiness? Repository { get; init; }
 }
