@@ -289,6 +289,15 @@ public static class RepoContextHostBuilder
         var heapCeilingMeter = new RepoContextHeapCeilingMeter();
         builder.Services.AddSingleton(heapCeilingMeter);
 
+        // SQLite grain-storage lock attribution (issue #2431). Constructed eagerly for
+        // the same reason as its neighbours: its failure counter is pre-minted at zero
+        // and its gauges are observable, and none of that reaches the exposition until
+        // the meter exists. Registered before UseOrleans so the storage decorator the
+        // durability wiring installs records on this instance rather than creating
+        // its own on first use.
+        var storageLockMeter = new RepoContextGrainStorageLockMeter();
+        builder.Services.AddSingleton(storageLockMeter);
+
         // What that ceiling turned out to cost: the peak commitment reached and the
         // margin actually consumed, remembered at its worst rather than sampled at a
         // moment, and recorded on the data mount so the next process is sized from a

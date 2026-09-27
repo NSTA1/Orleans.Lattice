@@ -48,7 +48,7 @@ The host selects a durability profile from the `LATTICE_DURABILITY` environment 
 
 Every profile applies finite per-tree tombstone compaction to the churn trees (structural, symbol, content, cross-reference, session, memory, the vector membership and metadata projection trees, the approximate-index tree, and the vector-coverage digest), so re-write, re-embed, and forget tombstones are reaped rather than accumulating. The write-once, content-addressed vector-payload tree is excluded because it never deletes in place.
 
-SQLite grain storage and reminders derive their busy-retry window from the resolved Orleans `SiloMessagingOptions.ResponseTimeout`: half the budget, rounded down to whole seconds (15 seconds for the default 30-second request budget). This leaves headroom for a held write lock to surface as `SQLITE_BUSY` before the enclosing request times out; it is not an end-to-end deadline guarantee when a request also queues or performs several storage operations. Budgets below two seconds are rejected because a zero command timeout means unlimited retries. Very large budgets are capped at SQLite's signed 32-bit millisecond limit. Startup schema initialization uses the same derivation with the Orleans default budget and applies the matching `busy_timeout` PRAGMA; runtime providers use the resolved budget through their connection-string command timeout.
+SQLite grain storage and reminders derive their busy-retry window from the resolved Orleans `SiloMessagingOptions.ResponseTimeout`: half the budget, rounded down to whole seconds (15 seconds for the default 30-second request budget). This leaves headroom for a held write lock to surface as `SQLITE_BUSY` before the enclosing request times out; it is not an end-to-end deadline guarantee when a request also queues or performs several storage operations. Budgets below two seconds are rejected because a zero command timeout means unlimited retries. Very large budgets are capped at SQLite's signed 32-bit millisecond limit. Startup schema initialization uses the same derivation with the Orleans default budget and applies the matching `busy_timeout` PRAGMA; runtime providers use the resolved budget through their connection-string command timeout. Every lock failure on the grain store is attributed to the grain and write convoy that suffered it; see [SQLite grain-storage lock attribution](#sqlite-grain-storage-lock-attribution).
 
 ## Data root and fail-fast
 
@@ -750,3 +750,32 @@ The state values are `0` disabled, `1` failing with nothing ever captured, `2` c
 
 A series that is **absent** rather than valued means the host did not construct the meter, or the collector refused the series at one of its ceilings. It never means backup is healthy. This is why every instrument here is observable and constructed unconditionally, including on a deployment with no sink configured, which reports state `0` as a value: an instrument created on a first failure would be missing during exactly the window an alert is meant to cover, and a series first created late can be refused outright by the series cap.
 
+
+### SQLite grain-storage lock attribution
+
+On the `local` profile every tree shares one SQLite file, and SQLite admits one writer at a time. A lock storm recorded on a deployed container (issue #2431) could only be attributed afterwards by proximity - which grain types appeared in the log lines near each `database is locked` - and log lines from concurrent activations interleave, so that was never attribution. It also could not say whether the busy window had actually been exhausted, or how many writers were queued when a write failed.
+
+The SQLite grain-storage arm therefore wraps the provider in an observing decorator. It changes no timeout and no retry, rethrows the provider's own exception unchanged, and ignores every failure that is not a lock failure. For each failure whose cause chain holds `SQLITE_BUSY` or `SQLITE_LOCKED` it writes one `GrainStorageLockContention` warning (category `Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextLockAttributingGrainStorage`) carrying:
+
+| Field | Meaning |
+|-------|---------|
+| `Operation` | `read`, `write` or `clear`. |
+| `GrainType`, `GrainId`, `StateName` | The grain whose own call failed - attribution, not proximity. |
+| `SqliteErrorCode`, `SqliteExtendedErrorCode` | The primary and extended result codes, so `SQLITE_BUSY_SNAPSHOT` (517) and `SQLITE_BUSY_RECOVERY` (261) are told apart from a plain busy. |
+| `ElapsedMs`, `BusyWindowMs`, `Wait` | How long the call ran against the busy window read from the provider's own connection string. `Wait` is `exhausted` when it failed at or after the window and `early` when SQLite refused the lock before it. |
+| `WritesAtEntry`, `WritesAtFailure`, `PeakWrites`, `ReadsAtFailure` | The write convoy - writes and clears in flight, counting the failed call when it is one - when the call started and when it failed, its high-water mark since start, and the reads in flight beside it. |
+
+Writes and clears form the convoy because both need the write lock; reads are reported beside it, because in `WAL` journal mode a reader does not queue for that lock. Four instruments on the host meter carry the same evidence in aggregate:
+
+| Instrument | Meaning |
+|------------|---------|
+| `lattice_repocontext_grain_storage_lock_failures_total` | Lock failures by `operation` and `wait`. |
+| `lattice_repocontext_grain_storage_lock_convoy_width` | Writes in flight when each lock failure surfaced; `_sum / _count` is the mean width at failure. |
+| `lattice_repocontext_grain_storage_writes_in_flight` | Writes and clears in flight now. |
+| `lattice_repocontext_grain_storage_writes_in_flight_peak` | The most writes and clears in flight at once since start. |
+
+**Read `wait` first.** A convoy outlasting the busy window fails `exhausted`, with a wide `WritesAtFailure`; a lock SQLite refuses without waiting fails `early`, whatever the convoy. The two call for opposite remedies - widening the write path against throttling the convoy - which is why they are separate arms rather than one total. The peak gauge exists because a scrape interval is far wider than a convoy, so the instantaneous gauge can sample either side of one.
+
+**Zero semantics.** Every arm of the failure counter is published at zero from process start, so an absent series means the host did not construct the meter or the collector refused it, never that no lock failure happened. The convoy-width summary is the exception: a zero sample would bias its mean, so it is absent until the first failure; read its absence against the failure counter. None carries a tenant dimension, because the grain store is shared by every tree on the host. Reminders share the same SQLite file but are not wrapped, so a reminder write can hold the lock without appearing in the convoy.
+
+To provoke the condition rather than wait for it, hold the write lock from a second connection with `BEGIN IMMEDIATE`: every writer queued behind it waits out the window and fails `exhausted`. `RepoContextLockAttributingGrainStorageTests` does exactly that against Orleans' real ADO.NET provider and this host's schema.

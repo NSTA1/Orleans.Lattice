@@ -2,6 +2,8 @@ using System.Data.Common;
 using Azure.Data.Tables;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Orleans.Configuration;
@@ -9,6 +11,7 @@ using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Storage.AzureTable;
 using Orleans.Lattice.Storage.File;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -194,6 +197,13 @@ public static class DurabilitySelector
                         .Configure<IOptions<SiloMessagingOptions>>((options, messaging) =>
                             options.ConnectionString = SqliteSchemaInitializer.BuildConnectionString(
                                 config.SqlitePath, messaging.Value.ResponseTimeout));
+
+                    // Attribute every SQLite lock failure to the grain, operation and
+                    // write convoy that suffered it (issue #2431). The lock storm that
+                    // motivated this could only be attributed by log proximity, which
+                    // is not attribution. Observes only: nothing is retried or
+                    // re-timed.
+                    AddSqliteLockAttribution(services.Services, name);
                     break;
             }
         });
@@ -214,6 +224,72 @@ public static class DurabilitySelector
         // filter is what makes that population visible during a healthy run,
         // which is the run in which the question has to be answerable.
         silo.AddLatticeGrainCallObservation();
+    }
+
+    /// <summary>
+    /// Wraps the keyed grain-storage provider registered under <paramref name="name"/>
+    /// in a <see cref="RepoContextLockAttributingGrainStorage"/>, so every SQLite lock
+    /// failure it raises is attributed to its grain and measured against the busy
+    /// window and the write convoy. The busy window is read from the provider's own
+    /// resolved connection string, so it cannot drift from the window the provider
+    /// actually retries for.
+    /// </summary>
+    /// <param name="services">The service collection the provider is registered in.</param>
+    /// <param name="name">The grain-storage provider name.</param>
+    /// <returns>The same <paramref name="services"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="name"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">No keyed grain storage is registered under <paramref name="name"/>.</exception>
+    /// <remarks>
+    /// The <see cref="RepoContextGrainStorageLockMeter"/> the decorator records on is
+    /// taken from the container when the host registered one - the host constructs it
+    /// eagerly so its instruments exist before the first scrape - and created on first
+    /// use otherwise.
+    /// </remarks>
+    public static IServiceCollection AddSqliteLockAttribution(this IServiceCollection services, string name)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(name);
+
+        var registered = services.LastOrDefault(d =>
+            d.IsKeyedService
+            && d.ServiceType == typeof(IGrainStorage)
+            && Equals(d.ServiceKey, name))
+            ?? throw new InvalidOperationException(
+                $"No keyed {nameof(IGrainStorage)} is registered under '{name}', so there is nothing to attribute lock failures on.");
+
+        services.TryAddSingleton(_ => new RepoContextGrainStorageLockMeter());
+
+        services.Remove(registered);
+        services.AddKeyedSingleton<IGrainStorage>(name, (sp, key) =>
+        {
+            var inner = CreateRegistered(registered, sp, key);
+            var connectionString = sp.GetRequiredService<IOptionsMonitor<AdoNetGrainStorageOptions>>()
+                .Get(name).ConnectionString;
+            var busyWindow = TimeSpan.FromSeconds(new SqliteConnectionStringBuilder(connectionString).DefaultTimeout);
+
+            return new RepoContextLockAttributingGrainStorage(
+                inner,
+                sp.GetRequiredService<RepoContextGrainStorageLockMeter>(),
+                sp.GetRequiredService<ILogger<RepoContextLockAttributingGrainStorage>>(),
+                busyWindow);
+        });
+
+        return services;
+    }
+
+    private static IGrainStorage CreateRegistered(ServiceDescriptor registered, IServiceProvider sp, object? key)
+    {
+        if (registered.KeyedImplementationInstance is IGrainStorage instance)
+        {
+            return instance;
+        }
+
+        if (registered.KeyedImplementationFactory is { } factory)
+        {
+            return (IGrainStorage)factory(sp, key);
+        }
+
+        return (IGrainStorage)ActivatorUtilities.CreateInstance(sp, registered.KeyedImplementationType!);
     }
 
     private static void ConfigureReminders(ISiloBuilder silo, RepoContextHostConfiguration config)
