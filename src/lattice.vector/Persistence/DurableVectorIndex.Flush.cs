@@ -14,6 +14,12 @@ public sealed partial class DurableVectorIndex
     private string? _chunkBoundaryCursor;
     private string? _durableCursor;
 
+    // The vector count the manifest of the current generation last committed.
+    // An ingest checkpoint never commits less than this: the durable cursor
+    // already vouches for every vector it covers, so a smaller commit would
+    // leave the cursor past vectors no longer durable (#3669).
+    private int _committedCount;
+
     // The uncommitted generation the slot arrays currently describe, or -1 when
     // they describe the committed one. A write of a new generation that fails
     // part-way leaves the partitions it did commit recorded here, so the retry
@@ -150,6 +156,7 @@ public sealed partial class DurableVectorIndex
         _centroidsPersisted = header.PartitionCount > 0;
         _centroidEpoch = centroidEpoch;
         _generation = generation;
+        _committedCount = header.Count;
         _writingGeneration = -1;
         _writingCentroidEpoch = -1;
         _persistedPartitions = slots;
@@ -169,16 +176,37 @@ public sealed partial class DurableVectorIndex
     /// that the cursor lags by less than one chunk, which the next build step
     /// simply re-consumes.
     /// </para>
+    /// <para>
+    /// A replacement or a removal costs the cell that property, and the
+    /// checkpoint then re-flushes the cell incrementally instead (#3669).
+    /// </para>
     /// </summary>
     private async Task WriteIngestCheckpointAsync(bool complete, CancellationToken cancellationToken)
     {
         if (!_ingestAppendOnly || _index.PartitionCount > 0)
         {
-            // Something removed or replaced a vector mid-build, so the cell is no
-            // longer append-only and its committed chunks can no longer be
-            // trusted to be a prefix of the current one. Fall back to rewriting
-            // the whole cell under a fresh epoch.
-            await WritePartitionsAsync(_generation, full: true, cancellationToken).ConfigureAwait(false);
+            // Something removed or replaced a vector mid-build, so the committed
+            // chunks are no longer a prefix of the cell. They are still almost all
+            // of it: the cell is a dense array that a removal backfills from the
+            // tail and a replacement re-appends to, so one mutation disturbs at
+            // most two chunks plus the tail. An incremental flush compares every
+            // chunk's content hash with the one stored at the same position and
+            // writes only those that differ, under a fresh epoch, so the cost is
+            // the chunks that changed rather than the whole cell.
+            //
+            // Rewriting the whole cell here instead is what made every checkpoint
+            // of a large ingest cost a complete image of the index, and what made
+            // a checkpoint that outlived the call timeout unrecoverable: its retry
+            // started again from the first chunk and wrote the whole cell again.
+            // Measured against what was last committed, a retry now rewrites only
+            // what is still different, however far the failed attempt got.
+            //
+            // This commits the true in-memory count, partial tail chunk included,
+            // because only that count is described by the cursor: once a removal
+            // has backfilled a position from the tail, no prefix of the cell is a
+            // prefix of the source. The append path below refuses to commit less
+            // and rewrites the partial tail before it trusts it.
+            await WritePartitionsAsync(_generation, full: false, cancellationToken).ConfigureAwait(false);
             _ingestAppendOnly = true;
             _chunkBoundaryCursor = _cursor;
             _durableCursor = _cursor;
@@ -190,21 +218,44 @@ public sealed partial class DurableVectorIndex
         EnsureSlotArrays(1);
 
         var itemsPerChunk = _options.EffectiveItemsPerChunk;
-        var epoch = _persistedChunkCount[0] == 0 ? header.IndexVersion : _persistedEpoch[0];
         var chunks = complete
             ? header.ChunkCount
             : _index.Count / itemsPerChunk;
         var committedCount = complete ? _index.Count : chunks * itemsPerChunk;
 
+        if (!complete && committedCount < _committedCount)
+        {
+            // The committed prefix ends mid-chunk - a true count committed by the
+            // fallback above or by an ordinary flush - and no chunk boundary has
+            // been crossed since. A boundary-aligned commit would be SHORTER than
+            // what is durable, while the cursor it pairs with names the longer
+            // prefix, so the vectors between the two would be lost on the next
+            // load. What is committed already covers more than this checkpoint
+            // could, so it stands, and so does its cursor.
+            return;
+        }
+
         // Chunks below the committed count are immutable while ingesting, so only
-        // the ones at or past it are rendered and written.
+        // the ones at or past it are rendered and written. A stored chunk past the
+        // last whole committed chunk is a partial tail, which has to be rewritten
+        // rather than trusted to hold a full chunk's worth of vectors.
+        var fromSequence = Math.Min(Math.Min(_persistedChunkCount[0], _committedCount / itemsPerChunk), chunks);
+
+        // The partial tail is still named by the commit record, so a rewrite of it
+        // goes under a fresh epoch rather than over the live key: interrupted, it
+        // must leave the committed prefix readable.
+        var storedChunks = _persistedChunkEpochs[0].Length;
+        var epoch = storedChunks == 0
+            ? header.IndexVersion
+            : fromSequence < storedChunks ? NextEpoch(0, header.IndexVersion) : _persistedEpoch[0];
+
         await FlushPartitionAsync(
             snapshot,
             _generation,
             partition: 0,
             first: 0,
             chunks,
-            fromSequence: Math.Min(_persistedChunkCount[0], chunks),
+            fromSequence,
             epoch,
             onlyChanged: false,
             committedCount,
@@ -218,6 +269,7 @@ public sealed partial class DurableVectorIndex
         await CommitManifestAsync(_generation, _centroidEpoch, committedHeader, committedCount, cancellationToken)
             .ConfigureAwait(false);
 
+        _committedCount = committedCount;
         _persistedPartitions = 1;
 
         if (!complete)
