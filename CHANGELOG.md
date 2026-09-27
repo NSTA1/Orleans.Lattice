@@ -182,7 +182,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
-- **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. (`Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)
+- **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. ([#3747](https://github.com/NSTA1/Orleans.Lattice/pull/3747)) (`Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)
 
 - **Security - A comment hid a metric from the allow-list.** The PromQL grouping-list scanner counted parentheses blind to comments and quoted strings, so an unmatched `(` in either swallowed the rest of the query and hid the aggregand's selector from the deny-all metric gate. ([#3686](https://github.com/NSTA1/Orleans.Lattice/pull/3686)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)
 
