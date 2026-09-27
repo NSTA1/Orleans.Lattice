@@ -118,6 +118,44 @@ public sealed class LatticeTreeAdminBulkLoadTests
     }
 
     [Test]
+    public async Task BeginBulkLoadAsync_drops_the_cached_diagnostics_before_probing()
+    {
+        // The emptiness guard is a correctness decision, but DiagnoseAsync is served
+        // from a per-tree cache for DiagnosticsCacheTtl (default 5 s). A deep report
+        // cached while the tree was empty - by an earlier begin, say - would admit a
+        // second session onto a tree that chunks have since been grafted onto. The
+        // facade must drop the cached reports first so the probe samples the shards.
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Wire(factory);
+        var stats = Substitute.For<ILatticeStats>();
+        factory.GetGrain<ILatticeStats>(Tree).Returns(stats);
+        StubDiagnose(lattice, liveKeys: 0);
+        var facade = Create(factory);
+
+        await facade.BeginBulkLoadAsync(Tree, Op);
+
+        Received.InOrder(() =>
+        {
+            stats.InvalidateAsync();
+            lattice.DiagnoseAsync(true, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public void BeginBulkLoadAsync_denied_by_gate_does_not_touch_the_diagnostics_cache()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        Wire(factory);
+        var stats = Substitute.For<ILatticeStats>();
+        factory.GetGrain<ILatticeStats>(Tree).Returns(stats);
+        var facade = Create(factory, allow: false);
+
+        Assert.That(async () => await facade.BeginBulkLoadAsync(Tree, Op),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        stats.DidNotReceive().InvalidateAsync();
+    }
+
+    [Test]
     public void BeginBulkLoadAsync_denied_by_gate_throws_and_does_not_dial_lattice()
     {
         var factory = Substitute.For<IGrainFactory>();

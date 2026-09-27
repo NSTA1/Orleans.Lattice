@@ -59,6 +59,14 @@ internal sealed class LatticeStatsGrain(
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
+    public Task InvalidateAsync()
+    {
+        _cachedShallow = null;
+        _cachedDeep = null;
+        return Task.CompletedTask;
+    }
+
     private async Task<TreeDiagnosticReport> BuildReportAsync(bool deep, CancellationToken cancellationToken)
     {
         // Resolve routing (physical tree ID + shard map) via the public entry point

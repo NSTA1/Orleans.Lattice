@@ -96,6 +96,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Scan - An uncapped point-in-time cursor pin expired after 60 seconds.** Setting `MaxCursorSnapshotPinTtl` to `Timeout.InfiniteTimeSpan` floored the pin to `TxDecisionRetention`, or expired it at once with retention off; it now disables the cap as documented. ([#3631](https://github.com/NSTA1/Orleans.Lattice/issues/3631)) (`Orleans.Lattice`)
 
+- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s, so a session opened just after a chunk was grafted saw a stale empty report. The probe now drops the cached reports and samples the shards afresh. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+
+- **Memory - Tool arguments honour their documented contract.** `repocontext_remember` rejects `kind: Unspecified` like any other unrecognised kind, and `repocontext_neighbors` applies its documented default of 50 to a non-positive `maxNodes` instead of the 100 ceiling. ([#3651](https://github.com/NSTA1/Orleans.Lattice/issues/3651), [#3652](https://github.com/NSTA1/Orleans.Lattice/issues/3652)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 ### Security
 
 - **Security - Telemetry tools were ungated.** The MCP telemetry tools ran caller-supplied PromQL against the metrics backend without consulting the telemetry capability, so any caller able to reach the group could read every series. Each tool now authorizes before any backend work. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp.Telemetry`)

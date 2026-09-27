@@ -299,6 +299,13 @@ internal sealed partial class RepoContextStore
     private const int MaxNeighborNodes = 100;
 
     /// <summary>
+    /// The node budget a traversal applies when the caller supplies a non-positive
+    /// one: the same default <c>repocontext_neighbors</c> documents for an omitted
+    /// <c>maxNodes</c>, not the hard ceiling.
+    /// </summary>
+    internal const int DefaultNeighborNodes = 50;
+
+    /// <summary>
     /// Walks the knowledge-linking edges out of the memory entry (or any linkable
     /// record) at <paramref name="key"/> and returns the adjacent entries, hydrated
     /// from the store of record. A breadth-first walk follows each entry's
@@ -312,7 +319,7 @@ internal sealed partial class RepoContextStore
     /// <param name="key">The seed key to traverse from. Must be a well-formed key.</param>
     /// <param name="relation">An optional relation to restrict the walk to; when <see langword="null"/> every relation is followed.</param>
     /// <param name="depth">The maximum number of hops, clamped to [1, <see cref="MaxNeighborDepth"/>].</param>
-    /// <param name="maxNodes">The maximum number of neighbors to return, clamped to [1, <see cref="MaxNeighborNodes"/>].</param>
+    /// <param name="maxNodes">The maximum number of neighbors to return, clamped to [1, <see cref="MaxNeighborNodes"/>]; a non-positive value applies <see cref="DefaultNeighborNodes"/>.</param>
     /// <param name="cancellationToken">Cancels the traversal.</param>
     /// <returns>The seed key, whether it exists, the reached neighbors best-first by discovery order, and whether the walk was truncated by the node cap.</returns>
     /// <exception cref="McpException">The seed key is malformed.</exception>
@@ -325,7 +332,7 @@ internal sealed partial class RepoContextStore
     {
         _ = ParseKey(key);
         var clampedDepth = Math.Clamp(depth <= 0 ? 1 : depth, 1, MaxNeighborDepth);
-        var clampedMax = Math.Clamp(maxNodes <= 0 ? MaxNeighborNodes : maxNodes, 1, MaxNeighborNodes);
+        var clampedMax = Math.Clamp(maxNodes <= 0 ? DefaultNeighborNodes : maxNodes, 1, MaxNeighborNodes);
 
         var seed = await RecallAsync(key, cancellationToken).ConfigureAwait(false);
         if (!seed.Exists)

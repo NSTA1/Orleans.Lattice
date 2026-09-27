@@ -896,6 +896,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // tree masquerade as empty. Deep is not asymptotically dearer here - both modes
         // walk the whole leaf chain; deep just reads per-leaf stats (live + tombstones)
         // instead of a live-only count.
+        //
+        // The probe is a correctness decision, so it must not be answered from the
+        // diagnostics cache (LatticeOptions.DiagnosticsCacheTtl, default 5 s). A deep
+        // report cached while the tree was still empty - by an earlier begin, or by
+        // any other DiagnoseAsync caller - would otherwise admit a second session onto
+        // a tree that chunks have since been grafted onto. Dropping the cached reports
+        // first forces the gated DiagnoseAsync below to sample the shards afresh.
+        await _grainFactory.GetGrain<ILatticeStats>(effectiveTreeId)
+            .InvalidateAsync()
+            .ConfigureAwait(false);
         var diagnostics = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .DiagnoseAsync(deep: true, cancellationToken)
             .ConfigureAwait(false);
