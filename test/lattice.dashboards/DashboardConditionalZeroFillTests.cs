@@ -113,12 +113,13 @@ internal static class InstrumentEmissionCensus
     /// dotted name as.
     /// </summary>
     /// <remarks>
-    /// The forms mirror <c>DashboardJsonTests.AddInstrumentForms</c>, including its
-    /// deliberate retention of the <c>_milliseconds_*</c> and <c>_seconds_*</c>
-    /// spellings that issue #3260 tracks. Those spellings are dead on a live
-    /// scrape, but they are what the dashboards currently write, so resolving them
-    /// is what lets this gate adjudicate those panels rather than report them as
-    /// unknown. Repairing them is issue #3260's job, not this gate's.
+    /// This is a binder, not a naming gate: it attaches a panel token to the
+    /// instrument it names so that this gate can adjudicate the panel's zero-fill.
+    /// It therefore accepts the unit-blind forms a panel author might write as well
+    /// as the exact series <see cref="PrometheusExporterNaming"/> derives from the
+    /// declared unit and kind. Whether a token is the exact family
+    /// <c>.AddPrometheusExporter()</c> emits is <c>DashboardJsonTests</c>'s verdict
+    /// (issue #3260), not this gate's.
     /// </remarks>
     /// <param name="dottedName">The canonical dotted instrument name.</param>
     /// <returns>The candidate Prometheus family names, including the bare form.</returns>
@@ -139,6 +140,14 @@ internal static class InstrumentEmissionCensus
         yield return underscored + "_seconds_bucket";
         yield return underscored + "_seconds_count";
         yield return underscored + "_seconds_sum";
+
+        if (DashboardJsonTests.TryGetExporterSeriesNames(dottedName, out var exact))
+        {
+            foreach (var series in exact)
+            {
+                yield return series;
+            }
+        }
     }
 
     private static Census Build()

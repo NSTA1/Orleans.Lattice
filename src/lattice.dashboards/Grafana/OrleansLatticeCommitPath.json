@@ -947,7 +947,7 @@
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 356 },
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "spanNulls": false } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_wait_oldest_age{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "oldest parked wait {{tree}}" }
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_wait_oldest_age_seconds{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "oldest parked wait {{tree}}" }
       ]
     },
     {
