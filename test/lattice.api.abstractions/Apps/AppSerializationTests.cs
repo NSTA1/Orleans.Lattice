@@ -142,9 +142,12 @@ public sealed class AppSerializationTests
     [TestCaseSource(nameof(LifecycleStates))]
     public void Round_trip_preserves_every_lifecycle_state(AppLifecycleState state)
     {
-        var result = new AppLifecycleResult { Slug = "inventory", Version = "1.0.0", State = state };
-        var copy = _serializer.Deserialize<AppLifecycleResult>(_serializer.SerializeToArray(result));
-        Assert.That(copy, Is.EqualTo(result));
+        var result = new AppDescriptor
+        {
+            Slug = "inventory", Version = "1.0.0", Provenance = Provenance, State = state,
+        };
+        var copy = _serializer.Deserialize<AppDescriptor>(_serializer.SerializeToArray(result));
+        Assert.That(copy.State, Is.EqualTo(state));
     }
 
     private static IEnumerable<AppLifecycleState> LifecycleStates() => Enum.GetValues<AppLifecycleState>();

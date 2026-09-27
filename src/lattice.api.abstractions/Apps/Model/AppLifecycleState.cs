@@ -3,7 +3,10 @@ namespace Orleans.Lattice.Api.Apps;
 /// <summary>Wire-visible installation lifecycle, independent of the registry implementation.</summary>
 public enum AppLifecycleState
 {
-    /// <summary>The described source version has no matching installation.</summary>
+    /// <summary>
+    /// A source version without a matching installation, returned only by
+    /// <see cref="ILatticeAppsControl.DescribeAsync"/>. Never returned by list or lifecycle mutations.
+    /// </summary>
     NotInstalled = 0,
     /// <summary>The app is installed but has not been enabled.</summary>
     Installed = 1,
@@ -13,6 +16,12 @@ public enum AppLifecycleState
     Disabled = 3,
     /// <summary>The app was uninstalled; this does not imply physical data purge.</summary>
     Uninstalled = 4,
-    /// <summary>The app failed activation and is not enabled.</summary>
+    /// <summary>
+    /// An installed app's last activation is known to have failed and the app is not
+    /// enabled. Inspection-only: <see cref="ILatticeAppsControl.DescribeAsync"/> and
+    /// <see cref="ILatticeAppsControl.ListAsync"/> may report this when failure evidence
+    /// is available; implementations must not infer it from a disabled registry state.
+    /// Lifecycle mutations report failures by exception, not by returning this state.
+    /// </summary>
     Failed = 5,
 }

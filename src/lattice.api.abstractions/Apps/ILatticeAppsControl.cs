@@ -10,6 +10,10 @@ namespace Orleans.Lattice.Api.Apps;
 /// metadata. Probes do not grant authority. Bindings opt in explicitly and never load app code to inspect
 /// a manifest. Responses and exception messages must not disclose composed physical
 /// tree ids; tree references use app slugs and local names instead.
+/// Lifecycle mutations return only Installed, Enabled, Disabled, or Uninstalled;
+/// failures throw with sanitized messages. NotInstalled is exclusive to DescribeAsync.
+/// DescribeAsync and ListAsync may report Failed only from known activation-failure
+/// evidence, never by interpreting a disabled registry state as a failure.
 /// </remarks>
 public interface ILatticeAppsControl
 {
