@@ -895,8 +895,15 @@ internal sealed partial class BPlusLeafGrain
     /// (empty txid or unknown tree id) - the strict-isolation default,
     /// which keeps the key hidden until the registry can be reached.
     /// </para>
+    /// <para>
+    /// Issue #2215: a registry call that fails in transport throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> carrying
+    /// the tree, <paramref name="key"/> and <paramref name="txid"/>, rather
+    /// than the raw transport exception and never a guessed status. There is
+    /// deliberately no retry here - the caller owns retry policy.
+    /// </para>
     /// </summary>
-    private async ValueTask<TxStatus> ResolvePendingStatusAsync(Guid txid)
+    private async ValueTask<TxStatus> ResolvePendingStatusAsync(Guid txid, string? key = null)
     {
         if (txid == Guid.Empty) return TxStatus.InFlight;
 
@@ -914,9 +921,16 @@ internal sealed partial class BPlusLeafGrain
 
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        return await TxRegistryRouting
-            .GetRegistry(grainFactory, treeId, txid)
-            .GetStatusAsync(txid);
+        try
+        {
+            return await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid)
+                .GetStatusAsync(txid);
+        }
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(treeId, key, 1, [txid], ex);
+        }
     }
 
     /// <summary>
@@ -1216,8 +1230,22 @@ internal sealed partial class BPlusLeafGrain
             return (hidden, pendingKeys);
         }
 
-        var outcomes = await TxRegistryFanOut.GetStatusManyAsync(
-            grainFactory, treeId, txids);
+        Dictionary<Guid, TxStatus> outcomes;
+        try
+        {
+            outcomes = await TxRegistryFanOut.GetStatusManyAsync(
+                grainFactory, treeId, txids);
+        }
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
+        {
+            // Issue #2215: the scan-path registry fetch translates a transport
+            // failure into the same typed, retryable exception as the
+            // single-key path. The single-snapshot discipline is unchanged;
+            // only the error type is.
+            throw LatticeTransactionOutcomeUnavailableException.Create(
+                treeId, key: null, pendingKeys.Count, txids, ex);
+        }
+
         return (outcomes, pendingKeys);
     }
 
