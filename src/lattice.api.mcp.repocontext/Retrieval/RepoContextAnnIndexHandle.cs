@@ -218,6 +218,20 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// </summary>
     public bool IsServing => Volatile.Read(ref _serving);
 
+    private bool CanAnswer => !_disposed && IsServing && _index is not null;
+
+    internal RepoContextSemanticReadiness DescribeReadiness()
+    {
+        var canAnswer = CanAnswer;
+        var saturated = !canAnswer && OpenSaturation == RepoContextAnnOpenSaturationState.Unavailable;
+        return new(
+            canAnswer,
+            canAnswer ? null : saturated ? "ann_open_saturated" : "ann_not_serving",
+            Progress,
+            saturated,
+            AnnCanServe: canAnswer);
+    }
+
     /// <summary>
     /// The build progress the last completed step reported, which is what the
     /// plane surfaces as its honest "warming up or steady state" answer.
@@ -437,7 +451,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     public async ValueTask<RepoContextAnnSearchOutcome> SearchAsync(
         ReadOnlyMemory<float> query, int k, CancellationToken cancellationToken)
     {
-        if (_disposed || !IsServing)
+        if (!CanAnswer)
         {
             return RepoContextAnnSearchOutcome.Bootstrapping;
         }

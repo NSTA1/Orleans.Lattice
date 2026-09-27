@@ -940,6 +940,19 @@ sum against a single term is what made a working index look dead.
 
 ## Health and degraded mode
 
+**Repository verdict first.** Once the repository id is known, call
+`repocontext_health {repoId}` for passive per-repository readiness, its actual
+blocking reason, and component snapshots. Do not reconstruct serving readiness
+from ingest completion, vector counts, logs or exposition. The no-argument health
+call still describes the host, not every repository it holds. An unobserved exact
+fallback reports `Building` until a real query demonstrates it; the health call
+never embeds, searches, hydrates or consumes a recovery probe. Unknown component
+evidence is not empty. See `docs/lattice.api.mcp.repocontext/tools.md` for the
+snapshot's limits and empty-repository semantics. Continue to use `index_status`
+for job progress and per-result `retrievalPath` for the answer that actually ran;
+the diagnostic details below explain those sources, not a replacement readiness
+algorithm for callers.
+
 - `repocontext_health` - is the surface registered and reachable
   (`available`), **and** whether retrieval can actually serve
   (`retrievalReady` / `retrievalPhase`). Read both: `available` reports

@@ -24,6 +24,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 internal interface IRepoContextAnnIndex
 {
+    /// <summary>Reads an existing repository/space handle without opening or advancing it.</summary>
+    RepoContextSemanticReadiness DescribeReadiness(string repoId, EmbeddingSpaceTag space) => default;
+
     /// <summary>
     /// Searches the plane for a repository and embedding space, returning up to
     /// <paramref name="k"/> matches in descending score order along with the path
