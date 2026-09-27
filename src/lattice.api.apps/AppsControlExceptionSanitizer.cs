@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.Apps;
 /// </remarks>
 internal static class AppsControlExceptionSanitizer
 {
-    private const int MaxChainDepth = 8;
+    private const int MaxInspectedExceptions = 32;
 
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
 
@@ -58,10 +58,11 @@ internal static class AppsControlExceptionSanitizer
 
     /// <summary>
     /// Builds a sanitized replacement for <paramref name="exception"/> when its
-    /// message, or any message in its inner-exception chain, carries a composed
-    /// tree id. The replacement keeps the exception's category (cancellation, with
+    /// message, or the message of any exception in its inner or aggregated graph, carries
+    /// a composed tree id, or when the graph is too large to inspect fully. The replacement
+    /// keeps the exception's category (cancellation, with
     /// its token; authorization; tenant; argument; not-found; timeout; otherwise
-    /// invalid-operation) and drops the inner chain, which could still carry the id.
+    /// invalid-operation) and drops the inner graph, which could still carry the id.
     /// </summary>
     /// <param name="exception">The exception about to cross the facade.</param>
     /// <param name="ownApp">The slug the verb named; may be null.</param>
@@ -96,9 +97,21 @@ internal static class AppsControlExceptionSanitizer
 
     private static bool ChainContainsComposedId(Exception exception)
     {
-        var current = exception;
-        for (var depth = 0; current is not null && depth < MaxChainDepth; depth++)
+        // Walks the whole exception graph - every inner exception and every aggregated one - up
+        // to a node budget. A graph larger than the budget cannot be certified free of composed
+        // ids, so it is treated as carrying one (fail closed) and replaced.
+        Span<Exception?> pending = new Exception?[MaxInspectedExceptions];
+        var count = 0;
+        var inspected = 0;
+        pending[count++] = exception;
+        while (count > 0)
         {
+            var current = pending[--count]!;
+            if (++inspected > MaxInspectedExceptions)
+            {
+                return true;
+            }
+
             if (ContainsComposedId(current.Message))
             {
                 return true;
@@ -108,17 +121,35 @@ internal static class AppsControlExceptionSanitizer
             {
                 foreach (var inner in aggregate.InnerExceptions)
                 {
-                    if (ContainsComposedId(inner.Message))
+                    if (!TryPush(pending, ref count, inner))
                     {
                         return true;
                     }
                 }
             }
-
-            current = current.InnerException;
+            else if (current.InnerException is { } inner && !TryPush(pending, ref count, inner))
+            {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private static bool TryPush(Span<Exception?> pending, ref int count, Exception? exception)
+    {
+        if (exception is null)
+        {
+            return true;
+        }
+
+        if (count == pending.Length)
+        {
+            return false;
+        }
+
+        pending[count++] = exception;
+        return true;
     }
 
     private static bool MayContainComposedId([NotNullWhen(true)] string? text) =>

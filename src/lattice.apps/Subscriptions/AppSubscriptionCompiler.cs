@@ -23,7 +23,9 @@ namespace Orleans.Lattice.Apps;
 /// tree) is out-of-namespace and must be covered by an
 /// <see cref="AppCapabilityCeiling.ApprovedExceptionScopes"/> entry, judged by the same tenant-local
 /// coverage rule the role compiler uses. The observed scope is the tree, or a prefix scope when
-/// <see cref="AppSubscriptionDeclaration.KeyPrefix"/> is set. Any denial fails the app's whole
+/// <see cref="AppSubscriptionDeclaration.KeyPrefix"/> is set. As for roles, no exception can
+/// approve observing the cluster-wide sentinel, a reserved <c>_lattice_</c> or system-data
+/// <c>sys-</c> tree, or a tenant-qualified <c>t/</c> id. Any denial fails the app's whole
 /// subscription activation; nothing is partially activated.
 /// </para>
 /// </remarks>
@@ -93,7 +95,7 @@ public static class AppSubscriptionCompiler
                 var scope = subscription.KeyPrefix is null
                     ? new LatticeScope(LatticeScopeKind.Tree, localTreeId)
                     : new LatticeScope(LatticeScopeKind.Prefix, localTreeId, subscription.KeyPrefix);
-                if (!AppSubscriptionScopeCoverage.IsCovered(scope, exceptions))
+                if (!AppTreeIds.IsGrantable(localTreeId) || !AppSubscriptionScopeCoverage.IsCovered(scope, exceptions))
                 {
                     (denials ??= []).Add(new(subscription.Name, observed, scope, DenialMessage(slug, subscription, observed, scope)));
                     continue;

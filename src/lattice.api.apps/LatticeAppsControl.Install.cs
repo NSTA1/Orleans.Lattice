@@ -85,8 +85,10 @@ internal sealed partial class LatticeAppsControl
         var current = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
         var upgrading = current is { State: not AppRegistryLifecycleState.Uninstalled } && current.Version != version;
 
+        // The upgrade is pinned to the version just read, so an upgrade racing this one is
+        // refused rather than silently overwritten.
         var transition = upgrading
-            ? await _registry.UpgradeAsync(installRequest, cancellationToken).ConfigureAwait(false)
+            ? await _registry.UpgradeAsync(installRequest with { ExpectedVersion = current!.Version }, cancellationToken).ConfigureAwait(false)
             : await _registry.InstallAsync(installRequest, cancellationToken).ConfigureAwait(false);
         if (!transition.Succeeded || transition.Record is not { } record)
         {
@@ -126,8 +128,8 @@ internal sealed partial class LatticeAppsControl
         }
 
         // A same-version upgrade replaces the ceiling (re-pinning it to the version) and keeps
-        // identity, bindings and state. The registry cannot compare the version atomically with
-        // this read, so a concurrent upgrade landing in between is the one residual race.
+        // identity, bindings and state. It is pinned to the version just read, so an upgrade that
+        // lands in between is refused (ConcurrencyConflict) instead of being rolled back.
         var transition = await _registry.UpgradeAsync(
             new AppRegistryInstallRequest
             {
@@ -135,6 +137,7 @@ internal sealed partial class LatticeAppsControl
                 Identity = new AppIdentity { Slug = slug, Version = current.Version, Provenance = current.Provenance },
                 Ceiling = ceiling,
                 RoleBindings = current.RoleBindings,
+                ExpectedVersion = current.Version,
             },
             cancellationToken).ConfigureAwait(false);
         if (!transition.Succeeded || transition.Record is not { } record)

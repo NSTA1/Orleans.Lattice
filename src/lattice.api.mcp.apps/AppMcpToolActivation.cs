@@ -78,7 +78,8 @@ internal sealed class AppMcpToolActivation
 
     /// <summary>
     /// Pairs <paramref name="manifest"/>'s declarations with <paramref name="providers"/>'
-    /// implementations. Hard-fails when a declared tool has no implementation, an
+    /// implementations. Hard-fails when the app's slug is reserved on the tool surface (see
+    /// <see cref="AppMcpToolName.IsReservedSlug"/>), a declared tool has no implementation, an
     /// implementation is not declared, a local name is declared or implemented twice, an
     /// implementation has no name, or a declaration names a role the manifest does not
     /// declare.
@@ -98,6 +99,9 @@ internal sealed class AppMcpToolActivation
 
         var slug = manifest.Identity.Slug;
         var version = manifest.Identity.Version;
+
+        if (AppMcpToolName.IsReservedSlug(slug))
+            return Failed(slug, version, $"The app slug '{slug}' is reserved on the tool surface: its tools would be named inside the built-in '{slug}{AppMcpToolName.Separator}' tool namespace.");
 
         var implementations = new Dictionary<string, McpServerTool>(StringComparer.Ordinal);
         foreach (var provider in providers)

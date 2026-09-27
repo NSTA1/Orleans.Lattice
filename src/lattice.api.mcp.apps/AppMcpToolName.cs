@@ -19,6 +19,29 @@ public static class AppMcpToolName
     /// <summary>The separator between the app slug and the app-local tool name.</summary>
     public const char Separator = '_';
 
+    // The leading segments of the built-in tool namespaces: every facade-group and meta tool is
+    // named lattice_* and every repository-context group tool repocontext_*.
+    private static readonly string[] ReservedSlugs = ["lattice", "repocontext"];
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="slug"/> is the leading segment of a built-in tool
+    /// namespace, so <c>{slug}_{tool}</c> would fall inside it. Such an app contributes no tools:
+    /// for a caller the built-in tool is withheld from nothing would collide, and the app's tool
+    /// would be advertised under the built-in tool's name.
+    /// </summary>
+    /// <param name="slug">The app slug.</param>
+    /// <returns><c>true</c> when the slug is reserved on the tool surface.</returns>
+    internal static bool IsReservedSlug(AppSlug slug)
+    {
+        foreach (var reserved in ReservedSlugs)
+        {
+            if (string.Equals(slug.Value, reserved, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Composes the namespaced name <c>{slug}_{toolName}</c>.</summary>
     /// <param name="slug">The app slug. Must not be the uninitialised value.</param>
     /// <param name="toolName">The app-local tool name. Must not be <c>null</c> or empty.</param>

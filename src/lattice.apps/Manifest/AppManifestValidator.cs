@@ -44,8 +44,43 @@ public static class AppManifestValidator
                 RequiredText(identity.Provenance.Publisher, "$.identity.provenance.publisher");
                 if (identity.Provenance.Reference is not null)
                     RequiredText(identity.Provenance.Reference, "$.identity.provenance.reference");
+                BoundedText(identity.Provenance.Source, "$.identity.provenance.source");
+                BoundedText(identity.Provenance.Publisher, "$.identity.provenance.publisher");
+                BoundedText(identity.Provenance.Reference, "$.identity.provenance.reference");
             }
         }
+
+        var oversized = false;
+
+        void BoundedText(string? value, string path, int maxLength = AppManifestLimits.MaxTextLength)
+        {
+            if (value is not null && value.Length > maxLength)
+                Error("limit", path, $"Text may be at most {maxLength} characters.");
+        }
+
+        void BoundedSection<T>(T[]? items, string path)
+        {
+            if (items is not null && items.Length > AppManifestLimits.MaxSectionItems)
+            {
+                Error("limit", path, $"A section may hold at most {AppManifestLimits.MaxSectionItems} entries.");
+                oversized = true;
+            }
+        }
+
+        BoundedSection(manifest.Trees, "$.trees");
+        BoundedSection(manifest.Roles, "$.roles");
+        BoundedSection(manifest.Subscriptions, "$.subscriptions");
+        BoundedSection(manifest.McpTools, "$.mcpTools");
+        BoundedSection(manifest.Replication, "$.replication");
+        BoundedSection(manifest.Schema, "$.schema");
+        if (manifest.Roles is not null && !oversized)
+            for (var i = 0; i < manifest.Roles.Length; i++)
+                BoundedSection(manifest.Roles[i]?.Scopes, $"$.roles[{i}].scopes");
+
+        // An oversized section is rejected before any per-entry (and, for upgrades, pairwise)
+        // work, so validation cost stays bounded by the limits rather than by the input.
+        if (oversized)
+            return new(manifest, errors);
 
         var trees = Names(manifest.Trees, static t => t.Name, "$.trees");
         var roles = Names(manifest.Roles, static r => r.Name, "$.roles");
@@ -93,11 +128,7 @@ public static class AppManifestValidator
                 var path = $"$.trees[{i}]";
                 if (tree.AdoptedTreeId is { } adopted)
                 {
-                    if (string.IsNullOrWhiteSpace(adopted) ||
-                        adopted.StartsWith("a/", StringComparison.Ordinal) ||
-                        adopted.StartsWith("_lattice_", StringComparison.Ordinal) ||
-                        adopted.StartsWith("sys-", StringComparison.Ordinal) ||
-                        adopted.StartsWith("t/", StringComparison.Ordinal))
+                    if (!AppTreeIds.IsAdoptable(adopted))
                         Error("adoption", path + ".adoptedTreeId", "Expected a non-empty pre-app physical tree id outside structural and reserved namespaces.");
                     else if (!(adoptedTrees ??= new(StringComparer.Ordinal)).Add(adopted))
                         Error("duplicate", path + ".adoptedTreeId", "A physical tree may be adopted only once per manifest.");
@@ -141,6 +172,7 @@ public static class AppManifestValidator
                             Error("scope", scopePath + ".kind", "Unknown scope kind.");
                         else if (scope.Kind == LatticeScopeKind.Tree ? scope.KeyOrPrefix is not null : string.IsNullOrEmpty(scope.KeyOrPrefix))
                             Error("scope", scopePath + ".keyOrPrefix", "Only key and prefix scopes require a non-empty keyOrPrefix.");
+                        BoundedText(scope.KeyOrPrefix, scopePath + ".keyOrPrefix");
                     }
             }
 
@@ -178,6 +210,7 @@ public static class AppManifestValidator
                 if (schema.Tree is not null && !bound.Add(schema.Tree))
                     Error("duplicate", path + ".tree", "A tree may have only one schema binding.");
                 RequiredText(schema.Family, path + ".family");
+                BoundedText(schema.Family, path + ".family");
                 if (schema.Version < 1)
                     Error("version", path + ".version", "Schema envelope versions must be positive.");
             }
@@ -191,6 +224,7 @@ public static class AppManifestValidator
                 TreeReference(subscription.Tree, subscription.App, path);
                 if (subscription.KeyPrefix is { Length: 0 })
                     Error("scope", path + ".keyPrefix", "Omit the key prefix to observe the whole tree.");
+                BoundedText(subscription.KeyPrefix, path + ".keyPrefix");
             }
 
         if (manifest.McpTools is not null)
@@ -199,6 +233,7 @@ public static class AppManifestValidator
                 if (manifest.McpTools[i] is not { } tool) continue;
                 var path = $"$.mcpTools[{i}]";
                 RequiredText(tool.Description, path + ".description");
+                BoundedText(tool.Description, path + ".description", AppManifestLimits.MaxDescriptionLength);
                 if (tool.Role is null || !roles.Contains(tool.Role))
                     Error("reference", path + ".role", "The tool's role must be declared by this app.");
             }

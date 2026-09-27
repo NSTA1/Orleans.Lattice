@@ -44,7 +44,7 @@ before `AddLatticeApps` fails fast.
 | `ListAsync()` | Summaries of the installs in the caller's tenant, including uninstalled records. |
 | `DescribeAsync(slug, version?)` | The manifest's requested capabilities (trees, roles with operations and scopes, subscriptions, MCP tools, replication and schema declarations) plus the install's state, provenance, bindings and ceiling. Works before installation, without loading app code; returns `null` for an unknown app or version. |
 | `GetConsentAsync(slug)` | The ceiling pinned to the installed version, or `null` when the app is not installed. |
-| `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. Never enables a disabled app. |
+| `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
 
 Lifecycle results report the slug, version, resulting `AppLifecycleState` and whether
@@ -98,7 +98,9 @@ Responses echo app slugs and **app-local** tree names only. Composed physical id
 (`a/{app}/{tree}`, `t/{tenant}/a/{app}/{tree}`) never appear in a response, and
 exception messages are sanitised before they cross the facade: a composed id is
 rewritten to its app-local name (or `{app}:{tree}` for another app), the tenant
-segment is stripped, and inner exceptions are dropped. Exception categories are
+segment is stripped, and inner exceptions are dropped. The whole inner and aggregated
+exception graph is inspected, and a graph too large to inspect fully is treated as
+carrying a composed id and replaced. Exception categories are
 preserved for transports: invalid input is an `ArgumentException`, an unknown app or
 version is a `KeyNotFoundException`, a denied call is a
 `LatticeAuthorizationDeniedException`, and any other failure is an
