@@ -113,8 +113,8 @@ public sealed class LatticeBootstrapTransientFaultClassifierTests
     /// stream through a cross-grain <c>IAsyncEnumerable</c>; a heavy
     /// producer-side workload can cause the Orleans-managed
     /// enumerator session to expire mid-drain, and the receiver's
-    /// retry path reopens the stream from <c>LastAppliedHlc</c> so
-    /// resuming after such an expiry is correctness-preserving.
+    /// retry path re-opens the full stream so resuming after such an
+    /// expiry is correctness-preserving.
     /// </summary>
     [Test]
     public void IsTransient_returns_true_for_orleans_enumeration_aborted()

@@ -532,11 +532,11 @@ public class LatticeReplicationOptions
     /// A failed export or apply call is matched against
     /// <see cref="BoundedExponentialRetryPolicyOptions.RetryableExceptionClassifier"/>;
     /// transient faults consume one retry budget slot and re-open the
-    /// snapshot from the persisted
-    /// <c>BootstrapCoordinatorState.LastAppliedHlc</c> cursor (so
-    /// replay is bounded by the cursor-persist interval; entries that fall below
-    /// the receiver's snapshot-pinned floor or recent exact-identity cache are
-    /// dropped, and other repeats re-apply idempotently under LWW). Non-transient
+    /// full snapshot with no upper bound (the persisted
+    /// <c>BootstrapCoordinatorState.LastAppliedHlc</c> cursor is never used
+    /// to narrow the export, because the export treats it as a strict upper
+    /// bound and would drop every unapplied entry stamped above it; entries
+    /// the failed attempt already applied re-apply idempotently under LWW). Non-transient
     /// faults pivot the bootstrap to
     /// <c>LatticeBootstrapState.Failed</c> on the first failure, as
     /// they did before the retry seam landed; budget exhaustion

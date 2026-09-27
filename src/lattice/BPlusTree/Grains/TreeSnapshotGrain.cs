@@ -47,13 +47,23 @@ internal sealed class TreeSnapshotGrain(
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null)
     {
-        await SnapshotWithOperationIdAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren,
-            Guid.NewGuid().ToString("N"), SourceTreeId);
+        // A standalone snapshot owns the shadow-forward an online copy installs
+        // on the source shards, so it releases it on completion; nothing else
+        // would, and the source would keep mirroring every write into the
+        // (by then independent) destination tree forever.
+        await StartSnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren,
+            Guid.NewGuid().ToString("N"), SourceTreeId, releasesShadowForwardOnCompletion: true);
     }
 
     /// <inheritdoc />
-    public async Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
-        int? maxLeafKeys, int? maxInternalChildren, string operationId, string logicalTreeId)
+    public Task SnapshotWithOperationIdAsync(string destinationTreeId, SnapshotMode mode,
+        int? maxLeafKeys, int? maxInternalChildren, string operationId, string logicalTreeId) =>
+        StartSnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren,
+            operationId, logicalTreeId, releasesShadowForwardOnCompletion: false);
+
+    private async Task StartSnapshotAsync(string destinationTreeId, SnapshotMode mode,
+        int? maxLeafKeys, int? maxInternalChildren, string operationId, string logicalTreeId,
+        bool releasesShadowForwardOnCompletion)
     {
         ArgumentNullException.ThrowIfNull(destinationTreeId);
         ArgumentException.ThrowIfNullOrEmpty(operationId);
@@ -105,7 +115,8 @@ internal sealed class TreeSnapshotGrain(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
 
         await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceResolved.ShardCount,
-            maxLeafKeys, maxInternalChildren, operationId, logicalTreeId);
+            maxLeafKeys, maxInternalChildren, operationId, logicalTreeId,
+            releasesShadowForwardOnCompletion);
         await StartCoordinatorAsync();
     }
 
@@ -115,9 +126,16 @@ internal sealed class TreeSnapshotGrain(
     /// is deferred to <see cref="LockSourceShardsAsync"/>. Exposed as <c>internal</c>
     /// for unit testing.
     /// </summary>
+    /// <param name="releasesShadowForwardOnCompletion">
+    /// Whether <see cref="CompleteSnapshotAsync"/> releases the online copy's
+    /// shadow-forward on the source shards. <see langword="true"/> for a
+    /// standalone snapshot; <see langword="false"/> for a coordinator that
+    /// manages the shadow-forward itself.
+    /// </param>
     internal async Task InitiateSnapshotStateAsync(string destinationTreeId, SnapshotMode mode,
         int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null,
-        string? operationId = null, string? logicalTreeId = null)
+        string? operationId = null, string? logicalTreeId = null,
+        bool releasesShadowForwardOnCompletion = false)
     {
         // Register the destination tree in the registry before any data is written.
         // Always seed the ShardCount pin from the source so the registry
@@ -158,6 +176,7 @@ internal sealed class TreeSnapshotGrain(
         var prevMaxInternalChildren = state.State.MaxInternalChildren;
         var prevComplete = state.State.Complete;
         var prevLogicalTreeId = state.State.LogicalTreeId;
+        var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
@@ -178,6 +197,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.MaxInternalChildren = maxInternalChildren;
         state.State.Complete = false;
         state.State.LogicalTreeId = logicalTreeId ?? "";
+        state.State.ReleasesShadowForwardOnCompletion = releasesShadowForwardOnCompletion;
         try
         {
             await state.WriteStateAsync();
@@ -197,6 +217,7 @@ internal sealed class TreeSnapshotGrain(
             state.State.MaxInternalChildren = prevMaxInternalChildren;
             state.State.Complete = prevComplete;
             state.State.LogicalTreeId = prevLogicalTreeId;
+            state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
             throw;
         }
     }
@@ -745,6 +766,22 @@ internal sealed class TreeSnapshotGrain(
 
     internal async Task CompleteSnapshotAsync()
     {
+        // A standalone online snapshot releases the shadow-forward it put on
+        // the source shards BEFORE the completion flip is persisted. The order
+        // is what makes it crash-safe: a crash after the release but before
+        // the persist re-enters here on reactivation, and the release is
+        // idempotent (ClearShadowForwardAsync on an already-cleared shard is a
+        // no-op), whereas persisting first would lose the obligation. Leaving
+        // it in place kept every later source write mirroring into the
+        // destination, refused every later online snapshot or resize of the
+        // source (a shard takes part in one shadow-forward operation at a
+        // time), and failed source writes outright once the destination tree
+        // was deleted.
+        if (state.State.Mode == SnapshotMode.Online && state.State.ReleasesShadowForwardOnCompletion)
+        {
+            await ReleaseSourceShadowForwardAsync();
+        }
+
         // Snapshot every field the completion flip mutates. Without this,
         // a failing WriteStateAsync would leave InProgress=false /
         // Complete=true / Phase=Lock in memory while disk still says the
@@ -758,12 +795,14 @@ internal sealed class TreeSnapshotGrain(
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
         var prevPhase = state.State.Phase;
+        var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
 
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.Phase = SnapshotPhase.Lock;
+        state.State.ReleasesShadowForwardOnCompletion = false;
         try
         {
             await state.WriteStateAsync();
@@ -775,6 +814,7 @@ internal sealed class TreeSnapshotGrain(
             state.State.NextShardIndex = prevNextShardIndex;
             state.State.ShardRetries = prevShardRetries;
             state.State.Phase = prevPhase;
+            state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
             throw;
         }
 
@@ -798,6 +838,28 @@ internal sealed class TreeSnapshotGrain(
         if (!await _eventsGate.IsEnabledAsync(grainFactory, SourceTreeId, opts)) return;
         var evt = LatticeEventPublisher.CreateEvent(LatticeTreeEventKind.SnapshotCompleted, SourceTreeId);
         await LatticeEventPublisher.PublishAsync(Context.ActivationServices, opts, evt, Logger);
+    }
+
+    /// <summary>
+    /// Clears the shadow-forward this snapshot installed on every source shard
+    /// (<see cref="BeginShadowForwardAllShardsAsync"/> covers the same
+    /// <c>0..ShardCount-1</c> range under the same operation id), so writes to
+    /// the source stop reaching the destination once the copy is complete.
+    /// Idempotent per shard.
+    /// </summary>
+    private async Task ReleaseSourceShadowForwardAsync()
+    {
+        var opId = state.State.OperationId;
+        if (string.IsNullOrEmpty(opId)) return;
+
+        var shardCount = state.State.ShardCount;
+        var tasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
+            tasks[i] = shard.ClearShadowForwardAsync(opId);
+        }
+        await Task.WhenAll(tasks);
     }
 
     private readonly PublishEventsGate _eventsGate = new();
@@ -842,6 +904,7 @@ internal sealed class TreeSnapshotGrain(
         var prevMaxLeafKeys = state.State.MaxLeafKeys;
         var prevMaxInternalChildren = state.State.MaxInternalChildren;
         var prevLogicalTreeId = state.State.LogicalTreeId;
+        var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
 
         state.State.InProgress = false;
         state.State.Complete = false;
@@ -853,6 +916,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.MaxLeafKeys = null;
         state.State.MaxInternalChildren = null;
         state.State.LogicalTreeId = "";
+        state.State.ReleasesShadowForwardOnCompletion = false;
         try
         {
             await state.WriteStateAsync();
@@ -869,6 +933,7 @@ internal sealed class TreeSnapshotGrain(
             state.State.MaxLeafKeys = prevMaxLeafKeys;
             state.State.MaxInternalChildren = prevMaxInternalChildren;
             state.State.LogicalTreeId = prevLogicalTreeId;
+            state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
             throw;
         }
 
