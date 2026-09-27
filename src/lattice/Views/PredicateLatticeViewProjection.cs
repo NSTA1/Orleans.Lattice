@@ -53,6 +53,12 @@ namespace Orleans.Lattice;
 public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
 {
     private readonly LatticePredicateNode? _filter;
+
+    // Fast-path eligibility is a pure function of the filter tree, and the
+    // filter is fixed for the projection's lifetime, so the answer cannot
+    // change between mutations. Resolving it once here removes a whole
+    // predicate-tree walk from every mutation the projection folds.
+    private readonly bool _filterFastPath;
     private readonly Func<byte[]?, byte[]?>? _valueSelector;
     private readonly Func<string, string>? _keySelector;
     private readonly string _projectionVersion;
@@ -107,6 +113,7 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
         }
 
         _filter = filter;
+        _filterFastPath = filter is { } f && LatticePredicateEvaluator.IsFastPathEligible(f);
         _valueSelector = valueSelector;
         _keySelector = keySelector;
         _projectionVersion = ComputeVersion(filter, valueSelectorVersion, keySelectorVersion);
@@ -181,7 +188,7 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
         switch (mutation.Kind)
         {
             case MutationKind.Set:
-                if (_filter is { } filter && !LatticePredicateEvaluator.Matches(mutation.Value, filter))
+                if (_filter is { } filter && !LatticePredicateEvaluator.Matches(mutation.Value, filter, _filterFastPath))
                 {
                     // Retraction: a key whose value no longer satisfies the filter
                     // must be removed from the view, otherwise an update that moves

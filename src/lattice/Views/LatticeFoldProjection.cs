@@ -27,6 +27,12 @@ public sealed class LatticeFoldProjection : ILatticeFoldProjection
     private readonly Func<byte[]> _initial;
     private readonly Func<byte[], string, byte[], HybridLogicalClock, byte[]> _apply;
     private readonly LatticePredicateNode? _filter;
+
+    // Fast-path eligibility is a pure function of the filter tree, and the
+    // filter is fixed for the projection's lifetime, so the answer cannot
+    // change between mutations. Resolving it once here removes a whole
+    // predicate-tree walk from every mutation the projection folds.
+    private readonly bool _filterFastPath;
     private readonly string _projectionVersion;
 
     /// <summary>
@@ -75,6 +81,7 @@ public sealed class LatticeFoldProjection : ILatticeFoldProjection
         _initial = initial;
         _apply = apply;
         _filter = filter;
+        _filterFastPath = filter is { } f && LatticePredicateEvaluator.IsFastPathEligible(f);
         _projectionVersion = ComputeVersion(foldVersion, filter);
     }
 
@@ -149,7 +156,7 @@ public sealed class LatticeFoldProjection : ILatticeFoldProjection
                     yield break;
                 }
 
-                if (_filter is { } filter && !LatticePredicateEvaluator.Matches(mutation.Value, filter))
+                if (_filter is { } filter && !LatticePredicateEvaluator.Matches(mutation.Value, filter, _filterFastPath))
                 {
                     // The entry fell out of the filter: retract whatever it last
                     // contributed (the maintainer recovers the prior group).
