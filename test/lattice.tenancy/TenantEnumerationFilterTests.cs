@@ -118,4 +118,43 @@ public sealed class TenantEnumerationFilterTests
     {
         Assert.That(() => new TenantEnumerationFilter().Filter(Acme, null!), Throws.ArgumentNullException);
     }
+
+    [Test]
+    public void Filter_skips_a_null_element_rather_than_throwing()
+    {
+        // The choke points hand this filter an IReadOnlyList<string> whose element
+        // type is non-nullable, but nullability is not enforced at runtime and the
+        // list arrives from a catalog read. A NullReferenceException here would
+        // fail the whole enumeration open at the caller's error handler rather
+        // than closed, so the element is skipped instead.
+        string[] withNull = ["t/acme/orders", null!, "t/beta/orders"];
+
+        var filtered = new TenantEnumerationFilter().Filter(Acme, withNull);
+
+        Assert.That(filtered, Is.EqualTo(new[] { "t/acme/orders" }));
+    }
+
+    [Test]
+    public void Filter_skipping_a_null_element_does_not_admit_another_tenants_tree()
+    {
+        // The skip must be a 'continue', not a fall-through that leaves the
+        // previous iteration's ownership decision standing for the next element.
+        string[] withNull = [null!, "t/beta/secrets", null!, "t/acme/orders"];
+
+        var filtered = new TenantEnumerationFilter().Filter(Acme, withNull);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(filtered, Is.EqualTo(new[] { "t/acme/orders" }));
+            Assert.That(filtered, Does.Not.Contain(null));
+        });
+    }
+
+    [Test]
+    public void Filter_of_an_all_null_enumeration_yields_nothing()
+    {
+        string[] allNull = [null!, null!];
+
+        Assert.That(new TenantEnumerationFilter().Filter(Acme, allNull), Is.Empty);
+    }
 }
