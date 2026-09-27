@@ -201,6 +201,7 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             // Sort this element's slice in place - no per-element temp list.
             result.Sort(start, result.Count - start, CausalOrderComparer.Instance);
         }
+
         return result;
     }
 
@@ -236,6 +237,32 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             var addDots = adds[key];
             tombstones.TryGetValue(key, out var tomb);
 
+            // A churned element accumulates tombstones, and testing each of its
+            // add dots by linear scan over that list is O(adds x tombstones) per
+            // element. Cancellation here is coverage-based, not exact-match: a
+            // dot is cancelled when the same replica tombstoned any counter at
+            // or above it. So when an element's tombstones all carry one replica
+            // id - which is what they overwhelmingly do - the whole list
+            // collapses to that replica's highest counter, and the test becomes
+            // a single comparison. That reduces the element to O(T + A) with no
+            // allocation at all: unlike the exact-containment index in
+            // DecodeState, coverage needs no sorted set of counters, only their
+            // maximum. An element whose tombstones span several replicas, or
+            // whose list is short, keeps the scan.
+            string? sharedReplica = null;
+            var coverCounter = long.MinValue;
+            if (tomb is not null && tomb.Count > DotIndexThreshold && addDots.Count > 1)
+            {
+                sharedReplica = SingleReplica(tomb);
+                if (sharedReplica is not null)
+                {
+                    for (var i = 0; i < tomb.Count; i++)
+                    {
+                        if (tomb[i].Counter > coverCounter) coverCounter = tomb[i].Counter;
+                    }
+                }
+            }
+
             // Pick the surviving (un-tombstoned) dot with the highest causal
             // ordinal, tie-broken by replica id, as the element's representative
             // provenance. No surviving dot means the element has been fully
@@ -246,7 +273,11 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             for (var i = 0; i < addDots.Count; i++)
             {
                 var dot = addDots[i];
-                if (IsTombstoned(tomb, dot)) continue;
+                var tombstoned = sharedReplica is not null
+                    ? dot.Counter <= coverCounter
+                        && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
+                    : IsTombstoned(tomb, dot);
+                if (tombstoned) continue;
                 if (!hasLive
                     || dot.Counter > bestCounter
                     || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
@@ -267,6 +298,42 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         }
 
         return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
+    }
+
+    /// <summary>
+    /// Dot-list length above which an element's membership test switches from a
+    /// linear scan to a replica-plus-counter index. Below it the scan wins: the
+    /// precondition pass has a fixed cost that a handful of counter-first
+    /// comparisons does not repay.
+    /// </summary>
+    private const int DotIndexThreshold = 8;
+
+    /// <summary>
+    /// The single replica id every dot in <paramref name="dots"/> carries, or
+    /// <see langword="null"/> when the list spans more than one replica (or is
+    /// empty). One pass, comparing ordinally and short-circuiting on the
+    /// reference the list overwhelmingly repeats.
+    /// <para>
+    /// This is a <b>precondition</b>, not an optimisation: a counter-only
+    /// membership test would wrongly cancel a live dot on replica B whose
+    /// counter happens to equal a tombstoned counter on replica A.
+    /// </para>
+    /// </summary>
+    private static string? SingleReplica(List<OrSetDot> dots)
+    {
+        if (dots.Count == 0) return null;
+        var first = dots[0].ReplicaId;
+        for (var i = 1; i < dots.Count; i++)
+        {
+            var candidate = dots[i].ReplicaId;
+            if (!ReferenceEquals(candidate, first)
+                && !string.Equals(candidate, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return first;
     }
 
     private static bool IsTombstoned(List<OrSetDot>? tombstones, OrSetDot dot)

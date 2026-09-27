@@ -205,4 +205,119 @@ public class RwSetProvenanceDecoderTests
 
         Assert.That(members, Is.Empty);
     }
+    // ---- coverage-index path (above the threshold that replaces the scan) ----
+    //
+    // Above the threshold the remove-wins test collapses a single-replica
+    // tombstone list to its highest counter instead of scanning it per remove
+    // dot. These pin the shared-replica precondition and the coverage (rather
+    // than exact-match) semantics the collapse relies on.
+
+    private const int AboveIndexThreshold = 12;
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_is_live_when_every_remove_is_covered()
+    {
+        var set = new RwSet();
+        set.Add(E("x"), "r1", 1);
+        var removes = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            removes.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+        }
+
+        set.Removes["eA=="] = removes;
+        set.Tombstones["eA=="] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_is_excluded_when_one_remove_survives()
+    {
+        var set = new RwSet();
+        set.Add(E("x"), "r1", 1);
+        var removes = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            removes.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+        }
+
+        // One remove above every tombstone: not covered, so remove-wins.
+        removes.Add(new OrSetDot { ReplicaId = "r2", Counter = AboveIndexThreshold + 1 });
+        set.Removes["eA=="] = removes;
+        set.Tombstones["eA=="] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_does_not_cover_a_remove_across_replicas()
+    {
+        // Every tombstone is on r2, so the collapse IS taken. The r3 remove
+        // shares a tombstoned counter, and a counter-only test without the
+        // replica guard would wrongly cancel it and resurrect the element.
+        var set = new RwSet();
+        set.Add(E("x"), "r1", 1);
+        var removes = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            removes.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+        }
+
+        removes.Add(new OrSetDot { ReplicaId = "r3", Counter = 1 });
+        set.Removes["eA=="] = removes;
+        set.Tombstones["eA=="] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_multi_replica_tombstones_keep_the_scan_semantics()
+    {
+        // The precondition fails, so the coverage scan is kept; every remove is
+        // still covered on its own replica, so the element stays live.
+        var set = new RwSet();
+        set.Add(E("x"), "r1", 1);
+        var removes = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            var replica = (i % 2) == 0 ? "r2" : "r3";
+            removes.Add(new OrSetDot { ReplicaId = replica, Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = replica, Counter = i });
+        }
+
+        set.Removes["eA=="] = removes;
+        set.Tombstones["eA=="] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_covers_a_remove_below_a_higher_tombstone()
+    {
+        // Cancellation is coverage-based, not exact-match: the collapsed
+        // highest tombstone counter cancels every remove dot at or below it on
+        // the same replica, even though none of them matches exactly.
+        var set = new RwSet();
+        set.Add(E("x"), "r1", 1);
+        var removes = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            removes.Add(new OrSetDot { ReplicaId = "r2", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r2", Counter = AboveIndexThreshold + i });
+        }
+
+        set.Removes["eA=="] = removes;
+        set.Tombstones["eA=="] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Has.Count.EqualTo(1));
+    }
 }

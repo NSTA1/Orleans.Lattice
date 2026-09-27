@@ -266,6 +266,26 @@ internal static class OrSetDotCompaction
             return dots.Count;
         }
 
+        if (cover.Count > CoverCollapseThreshold && dots.Count > 1)
+        {
+            var sharedReplica = CollapseCover(cover, out var collapseCounter);
+            if (sharedReplica is not null)
+            {
+                var collapsed = 0;
+                for (var i = 0; i < dots.Count; i++)
+                {
+                    var dot = dots[i];
+                    if (dot.Counter > collapseCounter
+                        || !string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal))
+                    {
+                        collapsed++;
+                    }
+                }
+
+                return collapsed;
+            }
+        }
+
         var live = 0;
         for (var i = 0; i < dots.Count; i++)
         {
@@ -300,6 +320,25 @@ internal static class OrSetDotCompaction
             return true;
         }
 
+        if (cover.Count > CoverCollapseThreshold && dots.Count > 1)
+        {
+            var sharedReplica = CollapseCover(cover, out var collapseCounter);
+            if (sharedReplica is not null)
+            {
+                for (var i = 0; i < dots.Count; i++)
+                {
+                    var dot = dots[i];
+                    if (dot.Counter > collapseCounter
+                        || !string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
         for (var i = 0; i < dots.Count; i++)
         {
             var dot = dots[i];
@@ -311,4 +350,62 @@ internal static class OrSetDotCompaction
 
         return false;
     }
+
+    /// <summary>
+    /// Collapses <paramref name="cover"/> to the single replica id every one of
+    /// its dots carries plus that replica's highest counter, or returns
+    /// <see langword="null"/> when the collapse does not apply.
+    /// <para>
+    /// Cancellation is coverage-based, not exact-match (see <see cref="Covers"/>),
+    /// so a cancelling list confined to one replica is fully characterised by
+    /// its maximum counter: a dot is cancelled exactly when it carries that
+    /// replica id and a counter at or below the maximum. Substituting that
+    /// single comparison for the inner scan reduces a liveness read from
+    /// O(dots x cover) to O(dots + cover) with no allocation and no hashing -
+    /// the latter deliberately, because an index keyed on <see cref="OrSetDot"/>
+    /// hashes its replica id, which costs far more than the counter comparison
+    /// the scan already leads with.
+    /// </para>
+    /// <para>
+    /// The shared-replica test is a <b>precondition, not an optimisation</b>: a
+    /// counter-only comparison would wrongly cancel a dot on replica B whose
+    /// counter sits at or below a cancelling counter minted by replica A.
+    /// </para>
+    /// <para>
+    /// The caller gates the call on <see cref="CoverCollapseThreshold"/> rather
+    /// than the gate living here, so a below-threshold read pays two inline
+    /// integer comparisons instead of a call it would immediately abandon.
+    /// </para>
+    /// </summary>
+    /// <param name="cover">The cancelling dots.</param>
+    /// <param name="coverCounter">The collapsed replica's highest counter.</param>
+    /// <returns>The shared replica id, or <see langword="null"/> to keep the scan.</returns>
+    private static string? CollapseCover(List<OrSetDot> cover, out long coverCounter)
+    {
+        coverCounter = long.MinValue;
+        var first = cover[0].ReplicaId;
+        var highest = cover[0].Counter;
+        for (var i = 1; i < cover.Count; i++)
+        {
+            var candidate = cover[i];
+            if (!ReferenceEquals(candidate.ReplicaId, first)
+                && !string.Equals(candidate.ReplicaId, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (candidate.Counter > highest) highest = candidate.Counter;
+        }
+
+        coverCounter = highest;
+        return first;
+    }
+
+    /// <summary>
+    /// Cover-list length above which a liveness read switches from the inner
+    /// linear scan to the collapsed replica-plus-highest-counter test. Below it
+    /// the scan wins: the collapse pass has a fixed cost that a handful of
+    /// counter-first comparisons does not repay.
+    /// </summary>
+    private const int CoverCollapseThreshold = 8;
 }

@@ -50,6 +50,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - View-projection filter eligibility.** The predicate, aggregation and fold view projections and the atomic-write guard loop now settle fast-path eligibility once, instead of re-walking the filter tree for every row they test. ([#3701](https://github.com/NSTA1/Orleans.Lattice/pull/3701)) (`Orleans.Lattice`)
 
+- **Performance - CRDT dot-coverage liveness reads.** A churned observed-remove slot whose cancelling dots all carry one replica now collapses that list to its highest counter instead of rescanning it per dot, across the shared liveness primitives and the OR-Set and RW-Set live-member projections. (PRPLACEHOLDER) (`Orleans.Lattice`)
+
 - **Performance - OR-map provenance decoding.** An OR-map delta now encodes a key's surrogate once per dot group rather than per dot, and a churned key's live-dot test uses a sorted counter index instead of scanning its whole tombstone list. ([#3701](https://github.com/NSTA1/Orleans.Lattice/pull/3701)) (`Orleans.Lattice`)
 
 - **Docs - Multi-silo guide scope.** The multi-silo scaling guide now states that its figures come from one tree on one storage account and links multi-account fan-out, the Operate track lists it, and the internal `benchmark/` notes are no longer published on the docs site. ([#3617](https://github.com/NSTA1/Orleans.Lattice/pull/3617)) (`repository-wide`)
