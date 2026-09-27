@@ -22,6 +22,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Membership.Entra.Graph` | `src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj` |
 | `Orleans.Lattice.Membership.Oidc` | `src/lattice.membership.oidc/Orleans.Lattice.Membership.Oidc.csproj` |
 | `Orleans.Lattice.Auth` | `src/lattice.auth/Orleans.Lattice.Auth.csproj` |
+| `Orleans.Lattice.Apps` | `src/lattice.apps/Orleans.Lattice.Apps.csproj` |
 | `Orleans.Lattice.Api.Auth` | `src/lattice.api.auth/Orleans.Lattice.Api.Auth.csproj` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj` |
 | `Orleans.Lattice.Api.Data` | `src/lattice.api.data/Orleans.Lattice.Api.Data.csproj` |
@@ -93,6 +94,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Membership.Entra.Graph` | `lattice.membership.entra.graph-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership.Oidc` | `lattice.membership.oidc-v<X.Y.Z>` |
 | `Orleans.Lattice.Auth` | `lattice.auth-v<X.Y.Z>` |
+| `Orleans.Lattice.Apps` | `lattice.apps-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth` | `lattice.api.auth-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `lattice.api.auth.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Data` | `lattice.api.data-v<X.Y.Z>` |

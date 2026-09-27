@@ -19,6 +19,7 @@ on:
       #   lattice.membership.entra.graph-v7.8.0
       #   lattice.membership.oidc-v7.8.0
       #   lattice.auth-v7.8.0
+      #   lattice.apps-v<X.Y.Z>
       #   lattice.api.auth-v7.8.0
       #   lattice.api.auth.grpc-v7.8.0
       #   lattice.api.data-v7.8.0
@@ -88,6 +89,7 @@ on:
       - 'lattice.membership.entra.graph-v*'
       - 'lattice.membership.oidc-v*'
       - 'lattice.auth-v*'
+      - 'lattice.apps-v*'
       - 'lattice.api.auth-v*'
       - 'lattice.api.auth.grpc-v*'
       - 'lattice.api.data-v*'
