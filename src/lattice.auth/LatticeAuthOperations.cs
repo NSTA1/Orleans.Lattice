@@ -25,6 +25,11 @@ public static class LatticeAuthOperations
     /// lifecycle bit authorizes irreversible / structural whole-tree operations
     /// (drop, reshard, resize, WAL move), so neither is ever silently conferred by
     /// a whole-data-plane grant. Each must be granted explicitly and on its own.
+    /// <see cref="LatticeOperation.AppInstall"/> is excluded for the same reason as
+    /// telemetry: it is a cluster-wide, scopeless capability that changes the
+    /// cluster's installed app set, so a whole-data-plane grant never silently
+    /// confers the authority to install, upgrade, or uninstall an app. It must be
+    /// granted explicitly over <see cref="LatticeScope.ClusterWide()"/>.
     /// </remarks>
     public const LatticeOperation All =
         LatticeOperation.Read

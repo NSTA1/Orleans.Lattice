@@ -232,4 +232,12 @@ public class LatticeAuthorizationRuleModelTests
             Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.TreeLifecycle), Is.False);
         });
     }
+
+    [Test]
+    public void Operation_All_excludes_the_scopeless_app_install_capability()
+    {
+        // AppInstall is cluster-wide and scopeless like Telemetry, so a
+        // whole-data-plane grant must never silently confer app installation.
+        Assert.That(LatticeAuthOperations.All & LatticeOperation.AppInstall, Is.EqualTo(LatticeOperation.None));
+    }
 }
