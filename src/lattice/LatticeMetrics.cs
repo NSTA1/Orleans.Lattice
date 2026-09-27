@@ -7675,27 +7675,26 @@ public static class LatticeMetrics
     /// by <c>BPlusLeafGrain.EnsureUnresolvedPrepareRecorded</c> (issue #2183).
     /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
     /// <para>
-    /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
-    /// repository runs. A resident prepare must never be dropped (dropping it
+    /// A resident prepare must never be dropped (dropping it
     /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
     /// is recorded unconditionally and the row is allowed to grow for as long
     /// as a saga leaves a prepare unresolved (registry status InFlight: the
     /// residual population after issue #2190's self-terminalisation, whose
-    /// orphan source is tracked as issue #2304). On the default <c>local</c>
-    /// durability profile that row is backed by SQLite (~1GB BLOB), so the
-    /// growth is a write-amplification cost, not a correctness one. On an
-    /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap
-    /// makes an unbounded row a genuine persist hazard, and that operator has
-    /// no other signal before the write fails. This counter (and the paired
-    /// one-shot warning) is that signal. It is observability ONLY: nothing here
+    /// orphan source is tracked as issue #2304). Persist risk: Azure Table
+    /// rejects writes above its 1MB entity cap, bounding persisted row growth.
+    /// Read risk: the larger SQLite limit on the default <c>local</c> profile
+    /// permits growth that can exhaust memory or the read budget during
+    /// activation, before grain-level repair can run. A successful persist
+    /// is not proof of a safe activation read; write amplification is not the
+    /// only cost. Alert on every profile using this counter and the paired
+    /// one-shot warning. It is observability ONLY: nothing here
     /// caps or drops a prepare - a behavioural cap would reintroduce the exact
-    /// drop-and-freeze defect issue #2183 removes. Do not delete it because it
-    /// reads as dead weight on SQLite; it is dead weight on SQLite by design.
+    /// drop-and-freeze defect issue #2183 removes.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafUnresolvedPrepareLedgerBeyondCap =
         Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
-            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
+            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Persist risk: Azure Table rejects writes above its 1MB entity cap, bounding persisted row growth. Read risk: the larger SQLite local-profile limit permits growth that can exhaust memory or the read budget during activation, before grain-level repair can run. Alert on every profile.");
 
     /// <summary>
     /// Durable ledger records refused for deferred terminals (<c>TxCommit</c>,
