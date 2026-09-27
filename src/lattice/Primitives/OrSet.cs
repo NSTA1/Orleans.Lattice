@@ -25,7 +25,7 @@ public sealed class OrSet : ICrdt<OrSet>
     // checks. An OR-Set element carries one dot per concurrent add, which
     // is overwhelmingly 1-2 in practice, so the linear path is the common
     // case; the set is only built once a key genuinely accumulates many
-    // concurrent dots. Matches the LiveDotCount fast-path threshold.
+    // concurrent dots. Matches the HasLiveDot fast-path threshold.
     private const int DotLinearScanThreshold = 4;
 
     // Elements whose base64 encoding fits in this many chars are keyed
@@ -87,7 +87,7 @@ public sealed class OrSet : ICrdt<OrSet>
             foreach (var (key, dots) in Adds)
             {
                 Tombstones.TryGetValue(key, out var tomb);
-                if (LiveDotCount(dots, tomb) > 0) return false;
+                if (HasLiveDot(dots, tomb)) return false;
             }
             return true;
         }
@@ -202,7 +202,7 @@ public sealed class OrSet : ICrdt<OrSet>
             // common case for append-only membership sets and secondary indexes.
             if (Tombstones.Count == 0) return dots.Count > 0;
             Tombstones.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(key, out var tomb);
-            return LiveDotCount(dots, tomb) > 0;
+            return HasLiveDot(dots, tomb);
         }
         finally
         {
@@ -221,7 +221,7 @@ public sealed class OrSet : ICrdt<OrSet>
         if (Adds.Count == 0) yield break;
 
         // Collect the live keys first (single dictionary walk, one
-        // LiveDotCount per key) then sort only the survivors, avoiding
+        // HasLiveDot per key) then sort only the survivors, avoiding
         // both the OrderBy allocation over dead keys and the former
         // redundant second Adds[key] lookup in the yield loop.
         var noTombstones = Tombstones.Count == 0;
@@ -236,7 +236,7 @@ public sealed class OrSet : ICrdt<OrSet>
                 continue;
             }
             Tombstones.TryGetValue(key, out var tomb);
-            if (LiveDotCount(dots, tomb) > 0) live.Add(key);
+            if (HasLiveDot(dots, tomb)) live.Add(key);
         }
         live.Sort(StringComparer.Ordinal);
         foreach (var key in live)
@@ -278,7 +278,7 @@ public sealed class OrSet : ICrdt<OrSet>
                 continue;
             }
             Tombstones.TryGetValue(key, out var tomb);
-            if (LiveDotCount(dots, tomb) > 0) live.Add(key);
+            if (HasLiveDot(dots, tomb)) live.Add(key);
         }
         if (live.Count == 0) return Array.Empty<byte[]>();
 
@@ -310,7 +310,7 @@ public sealed class OrSet : ICrdt<OrSet>
             foreach (var (key, dots) in Adds)
             {
                 Tombstones.TryGetValue(key, out var tomb);
-                if (LiveDotCount(dots, tomb) > 0) n++;
+                if (HasLiveDot(dots, tomb)) n++;
             }
             return n;
         }
@@ -459,13 +459,21 @@ public sealed class OrSet : ICrdt<OrSet>
     /// on every mutation and merge makes the fix self-healing: a set written by
     /// an older build collapses the first time any state or delta merges into it.
     /// </para>
+    /// <para>
+    /// Each map is swept independently. Compaction of one element's dot list
+    /// depends on nothing but that list, so pairing an add list with its
+    /// tombstone list bought nothing: it cost a hash probe of the tombstone map
+    /// for every add key - over a base64 element key, so a full string hash -
+    /// and then compacted a tombstone list that the tombstone sweep below
+    /// compacts anyway. This runs on every mutation and merge, so that probe was
+    /// paid per element on the replication fold path.
+    /// </para>
     /// </summary>
-    private void Compact()
+    internal void Compact()
     {
-        foreach (var (key, dots) in Adds)
+        foreach (var dots in Adds.Values)
         {
-            Tombstones.TryGetValue(key, out var tomb);
-            CompactSlot(dots, tomb);
+            OrSetDotCompaction.CompactMaxPerReplica(dots);
         }
 
         foreach (var dots in Tombstones.Values)
@@ -480,8 +488,20 @@ public sealed class OrSet : ICrdt<OrSet>
         if (tomb is not null) OrSetDotCompaction.CompactMaxPerReplica(tomb);
     }
 
-    private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
-        => tomb is null ? dots.Count : OrSetDotCompaction.CountLive(dots, tomb);
+    /// <summary>
+    /// Whether <paramref name="dots"/> holds at least one dot that
+    /// <paramref name="tomb"/> does not cancel.
+    /// <para>
+    /// Every caller of this consumes a boolean, never a magnitude, so asking
+    /// "any" rather than "how many" is a free early exit: the walk stops at the
+    /// first survivor instead of testing every remaining dot against the whole
+    /// cancelling list. On a churned element - where the survivor is the newest
+    /// dot and the cancelled ones precede it - that is the difference between
+    /// O(dots x tombstones) and stopping as soon as the answer is known.
+    /// </para>
+    /// </summary>
+    private static bool HasLiveDot(List<OrSetDot> dots, List<OrSetDot>? tomb)
+        => tomb is null ? dots.Count > 0 : OrSetDotCompaction.AnyLive(dots, tomb);
 
     private static void MergeMap(Dictionary<string, List<OrSetDot>> target, Dictionary<string, List<OrSetDot>> source)
     {
