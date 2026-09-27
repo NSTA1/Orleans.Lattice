@@ -153,6 +153,10 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
     {
         var map = (OrMap<TKey, TValue>)boxed;
 
+        // At most one member per key, so the add-map's free O(1) count is an
+        // exact upper bound - taking it up front means the sink never grows.
+        sink.EnsureCapacity(sink.Count + map.Adds.Count);
+
         foreach (var (key, entries) in map.Adds)
         {
             if (entries.Count == 0) continue;
@@ -281,6 +285,14 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         where TValue : ICrdt<TValue>, new()
     {
         var map = (OrMap<TKey, TValue>)boxed;
+
+        // The two dictionary counts are free (an O(1) field read, not a re-scan
+        // of their contents) and every non-empty key contributes at least one
+        // event, so they are a sound lower bound on the event count. Taking it
+        // up front removes the doubling chain the sink would otherwise climb
+        // from capacity zero, which for a map of any size is several array
+        // allocations and copies before the first useful append.
+        sink.EnsureCapacity(sink.Count + map.Adds.Count + map.Tombstones.Count);
 
         foreach (var (key, entries) in map.Adds)
         {
