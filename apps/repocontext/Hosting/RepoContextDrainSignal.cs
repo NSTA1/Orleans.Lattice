@@ -116,6 +116,7 @@ public sealed class RepoContextDrainSignal : IDisposable
     private bool _overran;
     private bool _recordedTerminal;
     private int? _residentAtStart;
+    private int? _strandedAtAbandon;
     private TimeSpan? _elapsed;
 
     /// <summary>Initializes the drain signal.</summary>
@@ -363,6 +364,7 @@ public sealed class RepoContextDrainSignal : IDisposable
             _overran = true;
             measured = Stopwatch.GetElapsedTime(_startedAt, _timestamp());
             residentAtStart = _residentAtStart;
+            _strandedAtAbandon = strandedNow;
         }
 
         ReportAbandonedExitCode();
@@ -371,7 +373,7 @@ public sealed class RepoContextDrainSignal : IDisposable
         // killed moments after this line would otherwise leave only a start marker
         // and the next start would report the weaker killed-mid-drain finding when
         // the stronger measured one was already available.
-        RecordTerminal(RepoContextDrainOutcome.Abandoned, measured, residentAtStart, final: false);
+        RecordTerminal(RepoContextDrainOutcome.Abandoned, measured, residentAtStart, strandedNow, final: false);
 
         _logger.LogError(
             "RepoContext drain ABANDONED after {ShutdownBudgetSeconds:F0}s: the host shutdown budget expired "
@@ -455,11 +457,19 @@ public sealed class RepoContextDrainSignal : IDisposable
     /// completion path reports what the drain actually took. Only a final record
     /// latches, so an alarm that fires after completion cannot overwrite a completed
     /// drain with an abandoned one.
+    /// <para>
+    /// The stranded count travels with an abandoned record so the loss survives the
+    /// process (issue #3628): the abandonment log line also reports it, but that line
+    /// goes with the container when it is recreated, and the count is what lets the
+    /// next process separate the part of the drain that was measured from the part
+    /// that was cut.
+    /// </para>
     /// </remarks>
     private void RecordTerminal(
         RepoContextDrainOutcome outcome,
         TimeSpan measured,
         int? residentAtStart,
+        int? stranded,
         bool final)
     {
         lock (_gate)
@@ -477,7 +487,8 @@ public sealed class RepoContextDrainSignal : IDisposable
             outcome,
             _shutdownBudget,
             measured,
-            residentAtStart));
+            residentAtStart,
+            outcome == RepoContextDrainOutcome.Abandoned ? stranded : null));
     }
 
     /// <summary>
@@ -550,6 +561,7 @@ public sealed class RepoContextDrainSignal : IDisposable
         bool overran;
         bool latchedHere = false;
         int? residentAtStart;
+        int? strandedAtAbandon;
         CancellationTokenSource? alarmCancellation;
 
         lock (_gate)
@@ -575,6 +587,7 @@ public sealed class RepoContextDrainSignal : IDisposable
 
             overran = _overran;
             residentAtStart = _residentAtStart;
+            strandedAtAbandon = _strandedAtAbandon;
             alarmCancellation = _alarmCancellation;
             _alarmCancellation = null;
         }
@@ -597,6 +610,7 @@ public sealed class RepoContextDrainSignal : IDisposable
             overran ? RepoContextDrainOutcome.Abandoned : RepoContextDrainOutcome.Completed,
             measured,
             residentAtStart,
+            strandedAtAbandon,
             final: true);
 
         if (overran)

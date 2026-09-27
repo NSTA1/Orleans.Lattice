@@ -32,6 +32,9 @@ public sealed class RepoContextDrainForecastServiceTests
     private static RepoContextShutdownBudgetResolution Resolution(bool declared = false)
         => new(RepoContextShutdownBudget.DefaultStopGracePeriod, Budget, declared);
 
+    private static long TicksFor(TimeSpan elapsed)
+        => (long)(elapsed.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+
     private static RepoContextDrainObservation Drain(
         RepoContextDrainOutcome outcome,
         double? seconds,
@@ -313,15 +316,22 @@ public sealed class RepoContextDrainForecastServiceTests
     [Test]
     public void A_projection_that_returns_within_the_budget_is_reported_once_as_recovered()
     {
+        // Recovery is judged on the windowed peak (issue #3628), so it is reported
+        // only once the over-budget sample has aged out of the window.
         var logger = new LevelLogger();
         var resident = 40_000;
-        using var service = Service(
+        var now = 0L;
+        using var service = new RepoContextDrainForecastService(
             logger,
+            Resolution(),
             Drain(RepoContextDrainOutcome.Completed, 30, resident: 10_000),
-            resident: () => resident);
+            () => resident,
+            peakWindow: TimeSpan.FromMinutes(10),
+            timestamp: () => now);
 
         service.PollOnce();
         resident = 5_000;
+        now += TicksFor(TimeSpan.FromMinutes(11));
         service.PollOnce();
 
         Assert.That(logger.Lines, Has.Count.EqualTo(2));
@@ -330,6 +340,143 @@ public sealed class RepoContextDrainForecastServiceTests
             Assert.That(logger.Lines[1].Level, Is.EqualTo(LogLevel.Information));
             Assert.That(logger.Lines[1].Message, Does.Contain("which fits"));
         });
+    }
+
+    [Test]
+    public void A_residency_dip_inside_the_window_does_not_clear_an_over_budget_peak()
+    {
+        // The D10 stop of issue #3628: a "fits" reading of 786 resident cleared the
+        // stop, and fifteen seconds later the drain began with 1,791 and was
+        // abandoned. A dip between two waves must not read as the wave having passed.
+        var logger = new LevelLogger();
+        var resident = 40_000;
+        var now = 0L;
+        using var service = new RepoContextDrainForecastService(
+            logger,
+            Resolution(),
+            Drain(RepoContextDrainOutcome.Completed, 30, resident: 10_000),
+            () => resident,
+            peakWindow: TimeSpan.FromMinutes(10),
+            timestamp: () => now);
+
+        service.PollOnce();
+        resident = 1_000;
+        now += TicksFor(TimeSpan.FromMinutes(2));
+        var instant = service.PollOnce();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Lines, Has.Count.EqualTo(1), "no recovery line while the peak is still in the window");
+            Assert.That(instant!.Value.ExceedsBudget, Is.False, "the instant reading fits");
+            Assert.That(service.PeakResidentActivations, Is.EqualTo(40_000));
+            Assert.That(service.PeakProjection!.Value.ExceedsBudget, Is.True, "the windowed peak does not");
+            Assert.That(service.ResidentActivations, Is.EqualTo(1_000));
+        });
+    }
+
+    [Test]
+    public void A_rise_inside_the_window_is_reported_against_the_peak_with_the_instant_beside_it()
+    {
+        var logger = new LevelLogger();
+        var resident = 1_000;
+        var now = 0L;
+        using var service = new RepoContextDrainForecastService(
+            logger,
+            Resolution(),
+            Drain(RepoContextDrainOutcome.Completed, 30, resident: 10_000),
+            () => resident,
+            timestamp: () => now);
+
+        service.PollOnce();
+        resident = 40_000;
+        now += TicksFor(TimeSpan.FromSeconds(10));
+        service.PollOnce();
+        resident = 2_000;
+        now += TicksFor(TimeSpan.FromSeconds(10));
+        service.PollOnce();
+
+        Assert.That(logger.Lines, Has.Count.EqualTo(2));
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Lines[1].Level, Is.EqualTo(LogLevel.Error));
+            Assert.That(logger.Lines[1].Message, Does.Contain("peak of 40000"));
+            Assert.That(logger.Lines[1].Message, Does.Contain("will NOT deactivate in time"));
+        });
+    }
+
+    [Test]
+    public void The_default_poll_samples_well_inside_a_minute_and_the_peak_spans_a_residency_wave()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RepoContextDrainForecastService.DefaultPollInterval, Is.LessThan(TimeSpan.FromMinutes(1)));
+            Assert.That(
+                RepoContextDrainForecastService.DefaultPeakWindow,
+                Is.GreaterThan(RepoContextDrainForecastService.DefaultPollInterval));
+        });
+    }
+
+    [Test]
+    public void A_projection_from_an_abandoned_drains_cost_is_reported_as_at_least_and_a_fit_as_unproven()
+    {
+        // Issue #3628 item 3: the cost of an abandoned drain is a floor, so a
+        // projection from it is a floor too. A floor that fits proves nothing and must
+        // not be reported as the plain "which fits" line.
+        var logger = new LevelLogger();
+        var resident = 500;
+        using var service = new RepoContextDrainForecastService(
+            logger,
+            new RepoContextShutdownBudgetResolution(
+                TimeSpan.FromSeconds(240), TimeSpan.FromSeconds(180), GrantWasDeclared: true),
+            new RepoContextDrainObservation(
+                Observed, RepoContextDrainOutcome.Abandoned, TimeSpan.FromSeconds(180), TimeSpan.FromSeconds(180), 1_791),
+            () => resident);
+
+        var projection = service.PollOnce();
+
+        Assert.That(projection!.Value.IsLowerBound, Is.True);
+        Assert.That(logger.Lines, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Lines[0].Level, Is.EqualTo(LogLevel.Warning));
+            Assert.That(logger.Lines[0].Message, Does.Contain("AT LEAST"));
+            Assert.That(logger.Lines[0].Message, Does.Not.Contain("which fits"));
+        });
+
+        resident = 8_383;
+        service.PollOnce();
+
+        Assert.That(logger.Lines, Has.Count.EqualTo(2));
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Lines[1].Level, Is.EqualTo(LogLevel.Error));
+            Assert.That(logger.Lines[1].Message, Does.Contain("AT LEAST"));
+            Assert.That(logger.Lines[1].Message, Does.Contain("FLOOR"));
+        });
+
+        var readings = Collect(service);
+        Assert.That(
+            readings[RepoContextDrainForecastService.ProjectionLowerBoundGaugeName],
+            Is.EqualTo(1).Within(1e-6));
+    }
+
+    [Test]
+    public void The_startup_line_for_an_abandoned_drain_names_the_activations_it_stranded()
+    {
+        var logger = new LevelLogger();
+        using var service = Service(
+            logger,
+            new RepoContextDrainObservation(
+                Observed,
+                RepoContextDrainOutcome.Abandoned,
+                Budget,
+                TimeSpan.FromSeconds(102.1),
+                ResidentActivations: 10_000,
+                StrandedActivations: 3_210));
+
+        service.ReportForecast();
+
+        Assert.That(logger.Lines[0].Message, Does.Contain("3210 of the 10000"));
     }
 
     [Test]
@@ -431,6 +578,9 @@ public sealed class RepoContextDrainForecastServiceTests
             Assert.That(readings.ContainsKey(RepoContextDrainForecastService.RequiredGrantGaugeName), Is.False);
             Assert.That(readings.ContainsKey(RepoContextDrainForecastService.ResidentGaugeName), Is.False);
             Assert.That(readings.ContainsKey(RepoContextDrainForecastService.LastDrainGaugeName), Is.False);
+            Assert.That(readings.ContainsKey(RepoContextDrainForecastService.PeakResidentGaugeName), Is.False);
+            Assert.That(readings.ContainsKey(RepoContextDrainForecastService.PeakProjectedDrainGaugeName), Is.False);
+            Assert.That(readings.ContainsKey(RepoContextDrainForecastService.ProjectionLowerBoundGaugeName), Is.False);
         });
     }
 
@@ -455,6 +605,13 @@ public sealed class RepoContextDrainForecastServiceTests
             Assert.That(
                 readings[RepoContextDrainForecastService.RequiredGrantGaugeName],
                 Is.EqualTo(160).Within(1e-6));
+            Assert.That(readings[RepoContextDrainForecastService.PeakResidentGaugeName], Is.EqualTo(40_000).Within(1e-6));
+            Assert.That(
+                readings[RepoContextDrainForecastService.PeakProjectedDrainGaugeName],
+                Is.EqualTo(120).Within(1e-6));
+            Assert.That(
+                readings[RepoContextDrainForecastService.ProjectionLowerBoundGaugeName],
+                Is.EqualTo(0).Within(1e-6));
         });
     }
 

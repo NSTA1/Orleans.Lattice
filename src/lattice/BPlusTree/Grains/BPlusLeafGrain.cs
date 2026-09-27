@@ -91,10 +91,22 @@ internal sealed partial class BPlusLeafGrain(
         // exports no series, so a reader must not read absence as a proven
         // zero. What it buys is the converse - a NON-zero reading names the
         // barrier, which is what no signal previously did.
+        //
+        // Every barrier is also TIMED (issue #3628). The failure counter says
+        // which barrier did not complete, but nothing said which one a drain
+        // spends its time in, so a per-activation drain cost that rose about
+        // 4x could not be decomposed. The tags are resolved once here, while
+        // the activation is still valid, so a barrier that tears the
+        // activation down cannot cost the measurement of its own duration.
+        var durationTreeTag = TryResolveDeactivationBarrierTag(LeafTreeTag, LatticeMetrics.TagTree);
+        var durationTenantTag = TryResolveDeactivationBarrierTag(
+            LeafTenantTag, LatticeTenantLabel.ForTree(null).Key);
+
         async Task RunBarrierAsync(
             KeyValuePair<string, object?> barrier,
             Func<CancellationToken, Task> barrierAction)
         {
+            var barrierStartedAt = Stopwatch.GetTimestamp();
             try
             {
                 await barrierAction(cancellationToken);
@@ -138,6 +150,10 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     // Observability must never fail a deactivation.
                 }
+            }
+            finally
+            {
+                RecordDeactivationBarrierDuration(barrier, barrierStartedAt, durationTreeTag, durationTenantTag);
             }
         }
 
@@ -213,8 +229,22 @@ internal sealed partial class BPlusLeafGrain(
                 // the same dirty digest, and a slow parent must not be hit twice
                 // inside one deadline. When a coalesced publish was pending at
                 // entry this publish IS its drain, and is recorded as the
-                // deactivation_flush it was before the reorder.
-                await PublishDeferredDeactivationDigestAsync(coalescedDigestPendingAtEntry, cancellationToken);
+                // deactivation_flush it was before the reorder. Timed under the
+                // digest_publish barrier (issue #3628): it is the same upward
+                // publish that barrier runs, merely driven from the tail.
+                var deferredDigestStartedAt = Stopwatch.GetTimestamp();
+                try
+                {
+                    await PublishDeferredDeactivationDigestAsync(coalescedDigestPendingAtEntry, cancellationToken);
+                }
+                finally
+                {
+                    RecordDeactivationBarrierDuration(
+                        LatticeMetrics.DeactivationBarrierDigestPublish,
+                        deferredDigestStartedAt,
+                        durationTreeTag,
+                        durationTenantTag);
+                }
             }
             else if (_digestCoalescingWindowMs > 0)
             {
@@ -333,6 +363,36 @@ internal sealed partial class BPlusLeafGrain(
                 barrier.Value,
                 context.GrainId.ToString(),
                 treeTag.Value);
+        }
+        catch (Exception)
+        {
+            // Observability must never fail a deactivation.
+        }
+    }
+
+    /// <summary>
+    /// Records how long one graceful-deactivation barrier took, and never
+    /// throws (issue #3628).
+    /// </summary>
+    /// <remarks>
+    /// Recorded for every outcome - completed, faulted or skipped - because
+    /// the question the instrument answers is where a drain spends its time,
+    /// and a barrier that faulted after consuming the deadline spent it just
+    /// the same.
+    /// </remarks>
+    private static void RecordDeactivationBarrierDuration(
+        KeyValuePair<string, object?> barrier,
+        long startedAtTimestamp,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag)
+    {
+        try
+        {
+            LatticeMetrics.LeafDeactivationBarrierDuration.Record(
+                Stopwatch.GetElapsedTime(startedAtTimestamp).TotalMilliseconds,
+                treeTag,
+                barrier,
+                tenantTag);
         }
         catch (Exception)
         {

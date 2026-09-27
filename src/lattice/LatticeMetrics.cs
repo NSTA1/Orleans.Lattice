@@ -5518,6 +5518,44 @@ public static class LatticeMetrics
     public const string LeafDeactivationBarrierFailuresName = "orleans.lattice.leaf.deactivation.barrier.failures";
 
     /// <summary>
+    /// Histogram of wall-clock graceful-deactivation barrier duration in
+    /// milliseconds, tagged with <see cref="TagTree"/>, <see cref="TagReason"/>
+    /// (which barrier, the same values as
+    /// <see cref="LeafDeactivationBarrierFailures"/>) and the tenant dimension.
+    /// <para>
+    /// <b>Why this exists (issue #3628).</b> The repocontext container's
+    /// per-activation drain cost rose about 4x in three days, from 26 ms to at
+    /// least 100 ms, and nothing on the deactivation path could say where the
+    /// time went: <see cref="LeafDeactivationBarrierFailures"/> counts barriers
+    /// that did not complete, not how long any barrier took. This decomposes a
+    /// drain by barrier, so a rise in drain cost can be attributed to the
+    /// checkpoint flush, the snapshot capture, the frontier pin or the digest
+    /// publish instead of guessed at.
+    /// </para>
+    /// <para>
+    /// One sample per barrier that ran, whatever its outcome: a barrier that
+    /// faulted or skipped after consuming the deadline spent that time all the
+    /// same. The deferred inline digest publish of the teardown persist is
+    /// recorded under <c>digest_publish</c>, because it is the same upward
+    /// publish that barrier performs. Crash deactivations bypass the hook and
+    /// contribute nothing.
+    /// </para>
+    /// <para>
+    /// Read it as an interval mean, <c>(sum2-sum1)/(count2-count1)</c> across
+    /// two scrapes, per <c>reason</c>. The per-barrier means summed approximate
+    /// the per-activation cost of a serial drain; Orleans deactivates
+    /// concurrently, so a drain's wall-clock is less than the sum over its
+    /// activations.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> LeafDeactivationBarrierDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.deactivation.barrier.duration", unit: "ms",
+            description: "Wall-clock duration of each graceful-deactivation barrier, tagged by tree and barrier (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Recorded whether the barrier completed, faulted or skipped, so a drain's cost can be decomposed by barrier.");
+
+    /// <summary>Canonical name of <see cref="LeafDeactivationBarrierDuration"/>.</summary>
+    public const string LeafDeactivationBarrierDurationName = "orleans.lattice.leaf.deactivation.barrier.duration";
+
+    /// <summary>
     /// <see cref="TagReason"/> value for the coalesced projection-digest publish
     /// barrier. Benign in isolation - the digest is staleness-tolerant and the
     /// next mutation republishes it.
