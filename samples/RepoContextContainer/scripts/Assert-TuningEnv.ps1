@@ -145,7 +145,7 @@ function Read-TuningEnvFile {
 }
 
 if ($PSCmdlet.ParameterSetName -eq 'Reading') {
-	$reading = $Reading
+	$tuningReading = $Reading
 	$source = 'the supplied reading'
 }
 else {
@@ -163,7 +163,7 @@ else {
 	}
 
 	try {
-		$reading = Read-TuningEnvFile -Path $path
+		$tuningReading = Read-TuningEnvFile -Path $path
 	}
 	catch {
 		Write-Host "TUNING ENV UNREADABLE: $path could not be read. $($_.Exception.Message)"
@@ -179,7 +179,7 @@ else {
 # as a one-element array, and the script then reports one blank violation for a
 # perfectly good .env. That is the passing direction failing silently, which is
 # the exact shape of defect this file exists to catch, so it is worth the note.
-$violations = Get-TuningEnvViolation -Reading $reading
+$violations = Get-TuningEnvViolation -Reading $tuningReading
 
 # The token-ancestry check is ADDITIVE and opt-in. It answers a different
 # question from everything above - not "is this value meaningful?" but "will the
@@ -213,7 +213,7 @@ if (-not [string]::IsNullOrWhiteSpace($BuildCommit)) {
 	# is then a no-op. This is the passing direction failing silently, so the
 	# two-step is deliberate and not redundant.
 	$ancestryViolations = Get-TokenAncestryViolation `
-		-Reading $reading `
+		-Reading $tuningReading `
 		-AncestryResult $ancestry `
 		-BuildCommit $BuildCommit
 
