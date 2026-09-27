@@ -355,8 +355,11 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 Title = "Lattice regions",
                 Description =
                     "Lists the regions this server can route a tool call to: the current cluster plus "
-                    + "any reachable, credentialed peer region, each with per-group endpoint availability. "
-                    + "A region with no route or credentials is omitted (fail-closed), and a group a region "
+                    + "every configured peer region, each with per-group endpoint availability. When "
+                    + "region-identity verification is enabled, a peer whose endpoint is unreachable or "
+                    + "answers as a different cluster is omitted (fail-closed); with tenancy active, a call asserting a non-default tenant sees "
+                    + "the current region plus that tenant's allowed or resident peers (the current region "
+                    + "alone when the assertion cannot be validated). A group a region "
                     + "does not serve - telemetry included - is reported unavailable for it and rejected "
                     + "fail-closed when targeted there. Pass a listed "
                     + "region id as the optional 'region' argument of any tool to target that region; "

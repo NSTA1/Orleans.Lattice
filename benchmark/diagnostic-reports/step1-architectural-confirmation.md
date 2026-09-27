@@ -20,6 +20,14 @@ Read end-to-end (or every section relevant to the commit hot path):
 | Phase-0 candidate row contends with worker | `EliminateCandidateRowOnHotPath = false` (default) | `AzureTableWalStorageOptions.cs:170` | Phase-0 `UpsertEntityAsync` against the same manifest partition the per-shard worker writes to. Azure Tables serialises writes within a partition server-side; phase-0 contends with the draining worker on every batch. v5.1.0 single-transaction equivalent ran ~180x faster on the same Azurite per the option's own XML doc. |
 | Serial per-key saga fan-out | `while (state.State.NextIndex < state.State.Entries.Count) { await lattice.SetAsync(...); state.State.NextIndex++; }` | `AtomicWriteGrain.cs:1390-1425` | One round-trip per key inside a saga; even when keys land on distinct leaves / WAL partitions the saga does not exploit it. |
 
+> **SUPERSEDED.** Every choke point in this table has since been changed:
+> `DefaultWalPartitions` is now 8 and `DefaultWalMaxPendingBatches` 16, the Azure
+> Table WAL provider defaults both `PipelinePhaseTwoCommits` and
+> `EliminateCandidateRowOnHotPath` to `true`, and the saga's execute phase writes
+> its unwritten entries as one batched `SetManyAsync` dispatch rather than one
+> `SetAsync` per key. The file and line citations are to the code as it stood when
+> this step ran; the table is left as recorded.
+
 ## Already-validated parallelism (not a choke point)
 
 | Element | Evidence |

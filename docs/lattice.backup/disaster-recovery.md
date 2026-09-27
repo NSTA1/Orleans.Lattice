@@ -35,9 +35,10 @@ shape and merge-mode map, per-origin provenance, content descriptors (with
 SHA-256 digests), and - for an increment - its `BaseBackupId`. Nothing the catalog
 holds is unique to the catalog; every row can be re-derived from the sink.
 
-Four capabilities follow from that model, each a fail-closed administrative
-operation on the `Orleans.Lattice.Api.Backup` control facade
-(`ILatticeBackupControl`):
+Four capabilities follow from that model, each exposed through the
+`Orleans.Lattice.Api.Backup` control facade (`ILatticeBackupControl`); every
+operation below authorizes fail-closed except the advisory
+`IsHealthMonitoringAvailableAsync` flag:
 
 | Capability | Operation | What it does |
 |---|---|---|
@@ -121,10 +122,11 @@ same durable sink:
 2. **Cold-restore each tree** you need with `ColdRestoreAsync`, targeting the tree
    id you want and the backup id (or the tip of an incremental chain). Each call
    bootstraps the `sys-` trees on first use and re-projects the catalog as it goes.
-3. **Verify the catalog** by listing backups through the control facade; after the
-   cold restores the catalog reflects everything the sink holds. If you restored
-   only some trees, run `RebuildCatalogFromSinkAsync` to re-project the full
-   catalog for discovery without restoring the remaining payload.
+3. **Verify the catalog** by listing backups through the control facade; every
+   cold restore re-projects every manifest the sink holds, so after the first one
+   the catalog reflects the whole sink, including backups of trees you have not
+   restored. To re-project the catalog for discovery before, or without, any cold
+   restore, run `RebuildCatalogFromSinkAsync`.
 4. **Scrub** with `ScrubCatalogAgainstSinkAsync` if you suspect the sink itself
    lost some payload, so the catalog only advertises resolvable restore points.
 
@@ -180,7 +182,8 @@ and each cluster resolves the manifest chain from **its own** configured sink. P
 each region at an isolated sink and every capture succeeds, every local health check
 passes, and the restore aborts - at the worst possible moment.
 
-That failure mode is now caught at capture time instead. When at least one tree is
+That failure mode is now caught well before any restore - at silo start and on
+every backup-health sweep. When at least one tree is
 replicated and the deployment has at least one peer, each cluster writes a tiny
 self-naming marker into its own sink at start and reads every peer's marker back out
 of that same sink. A marker that is missing while its peer is reachable proves the

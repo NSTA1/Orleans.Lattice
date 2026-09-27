@@ -18,8 +18,10 @@ dotnet run --project samples/Metrics
 
 ## Expected output
 
-Counter totals (for example `orleans.lattice.shard.writes`) are exact and reflect
-the operations this sample performs. Histogram and gauge `total` sums are timing- and
+Counter totals (for example `orleans.lattice.shard.writes`) are whole-number counts,
+but the listener sums every tree on the meter - the library's own system trees (the
+tree registry among them) as well as the sample's `telemetry` tree - so they exceed
+the sample's own call counts. Histogram and gauge `total` sums are timing- and
 scheduler-dependent, so their values vary from run to run. The exact set of
 instruments can also shift slightly as background maintenance fires. The capture
 below also predates instruments added since - for example

@@ -80,8 +80,11 @@ to the wrong properties. It read as a confident result.
 
 Deliberately dull. `KEY: value` metadata, then one or more
 `--- FIND` / `--- REPLACE` / `--- END` blocks holding verbatim TLA+ text.
-Anything cleverer would make a mutation harder to review than the specification
-it mutates, and a mutation nobody can review is not evidence.
+Before the first block, a line starting with `#` is a comment and a blank line
+is skipped; every mutation here opens with such a comment, naming the property
+it pairs with and the defect it stands for. Anything cleverer would make a
+mutation harder to review than the specification it mutates, and a mutation
+nobody can review is not evidence.
 
 ```
 MODULE: TerminationNoFairness

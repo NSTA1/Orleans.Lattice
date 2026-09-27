@@ -2,10 +2,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The role a piece of text plays when it is embedded, so an
-/// <see cref="IEmbeddingProvider"/> can apply the correct query/passage prefix
-/// and produce vectors in the matching sub-space. Asymmetric embedding models
-/// (the shipped Onyx default among them) encode a stored document differently
-/// from a search query, so mixing the two roles silently degrades recall.
+/// <see cref="IEmbeddingProvider"/> backed by an asymmetric embedding model can
+/// apply the matching query/passage prefix and produce vectors in the matching
+/// sub-space; for such a model, mixing the two roles silently degrades recall.
+/// The shipped Onyx provider forwards the role on the wire, but neither the Onyx
+/// model server nor the bundled ONNX embedding server applies a prefix for it, so
+/// its passage and query vectors share one encoding.
 /// </summary>
 public enum EmbeddingTextType
 {

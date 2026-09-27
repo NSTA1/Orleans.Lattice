@@ -71,9 +71,11 @@ the state for a capability the cluster does serve and this caller may not use. B
 default a denied area is not hidden and is not merely greyed: it stays visible,
 grouped below a divider at lower visual weight, and states the permission it needs
 and who to ask. Ticking the rail's **Hide areas I cannot open** preference
-withholds it instead. Signing out changes Access from active to an invitation to
-sign in, because an anonymous caller is never told a surface is unavailable for
-their account.
+withholds it instead. An anonymous caller sees Access as an invitation to sign in
+rather than a denial, because nobody who has not signed in is told a surface is
+unavailable for their account. In this sample signing out does not stick: the
+environment credential seed signs any circuit whose credential store is empty
+straight back in, so the page that loads after **Sign out** is signed in again.
 
 The gating is advisory throughout: the server is the sole enforcement point, so
 showing a denied entry costs nothing and hiding it would buy nothing. See

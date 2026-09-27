@@ -48,14 +48,16 @@ either the full effect of a saga or none of it, never a partial view.
 | `GetAsync` | **Linearizable** under default `CacheTtl = TimeSpan.Zero`; **eventually consistent** when `CacheTtl > 0` | The default cache configuration refreshes on every read, so the call observes the latest committed value. Raising `CacheTtl` trades freshness for fewer round-trips; staleness is then bounded by `CacheTtl + one cache refresh`. |
 | `GetWithVersionAsync` | **Linearizable** | Returns the value along with its authoritative HLC version for use in CAS loops. Bypasses the read cache. |
 | `ExistsAsync` | **Linearizable** under default `CacheTtl = TimeSpan.Zero`; **eventually consistent** when `CacheTtl > 0` | Same dual classification as `GetAsync`. |
-| `SetAsync` (with or without TTL) | **Linearizable** | The write is durably persisted before the call returns. Continues to hold across shard splits, resize, and reshard - callers never see topology-change exceptions. |
+| `SetAsync` (with or without TTL) | **Linearizable** | The write is durably persisted before the call returns. Continues to hold across shard splits, resize, and reshard - topology changes are retried transparently (see below). |
 | `SetIfVersionAsync` | **Linearizable CAS** | Atomic compare-and-set against the HLC version returned by `GetWithVersionAsync`. |
 | `GetOrSetAsync` | **Linearizable** | No read-then-write race. |
 | `DeleteAsync` | **Linearizable** | The deletion is visible to subsequent reads under the same guarantee as any other write. |
 
 Single-key operations transparently retry on any topology-change
-exception. Callers never see `StaleShardRoutingException` or
-`StaleTreeRoutingException`.
+exception, within a 60-second wall-clock budget per call. A caller sees a
+topology-change fault only when the topology keeps changing for that
+whole budget, in which case the library's internal stale-routing
+exception surfaces rather than a silently wrong result.
 
 ---
 
@@ -140,7 +142,7 @@ across multiple grain calls:
 
 | Read path | Atomic visibility |
 |-----------|-------------------|
-| `GetAsync`, `ExistsAsync`, `GetWithVersionAsync`, `GetOrSetAsync`, `SetIfVersionAsync` | Per-key linearizable; an in-flight saga's keys are hidden until the saga commits, at which point all of its keys flip atomically. |
+| `GetAsync`, `ExistsAsync`, `GetWithVersionAsync`, `GetOrSetAsync`, `SetIfVersionAsync` | Per-key linearizable; an in-flight saga's writes stay invisible until the saga commits, at which point all of its keys flip atomically. Until then a read sees each key's pre-saga value, while `GetOrSetAsync` and `SetIfVersionAsync` treat a key carrying a pending saga write as absent. |
 | `GetManyAsync`, `CountAsync`, `CountPerShardAsync` | Tree-wide for the call. |
 | `ScanKeysAsync`, `ScanEntriesAsync` | Tree-wide for each uninterrupted underlying enumeration; a transparent reconnect after an enumeration abort resumes under a freshly captured saga-decision view. |
 | Durable key/entry cursor (point-in-time mode) | Tree-wide for the lifetime of the cursor. |
@@ -160,7 +162,7 @@ spanning two or more distinct `ILattice` trees: either every targeted
 key across every participating tree becomes visible, or none of them do.
 A two-level saga drives this - a coordinator grain keyed by the
 `operationId` writes a **single** global commit/abort decision, and each
-participating tree's `ITxRegistryGrain` *delegates* the status of its
+participating tree's saga decision registry *delegates* the status of its
 prepared txid to that coordinator until the decision lands. Before the
 decision, every tree returns `InFlight` for the saga (prepared keys are
 invisible, indistinguishable from pre-saga); after it, every tree
@@ -215,11 +217,13 @@ of trees it hosts. See
 ### Shard splits and reshards
 
 Every guarantee in this document holds **during an active shard split
-or reshard**. Callers do not observe topology-change exceptions: point
-operations transparently retry; scans use bounded reconciliation; in
-the rare case of retry exhaustion, the affected call throws
-`InvalidOperationException` rather than returning silently incomplete
-results. See [Shard Splitting](shard-splitting.md).
+or reshard**. Callers do not normally observe topology-change
+exceptions: point operations transparently retry within their
+wall-clock budget, and scans use bounded reconciliation. In the rare
+case of retry exhaustion, a point operation surfaces the original
+stale-routing exception and a scan or count throws
+`InvalidOperationException`, rather than returning a silently
+incomplete result. See [Shard Splitting](shard-splitting.md).
 
 Linearizability of point reads is also preserved across a leaf
 reactivation that happens *after* a split. A post-split write routed to
@@ -241,14 +245,26 @@ reactivation](shard-splitting.md).
 is bounded by `LatticeOptions.CacheTtl` (default `TimeSpan.Zero` -
 refresh on every read). Raising `CacheTtl` trades freshness for fewer
 round-trips. `GetWithVersionAsync` bypasses the cache for CAS safety.
+With `LatticeOptions.OptimisticShardRootPointReads` on (the default), a
+`GetAsync` whose optimistic read validates is answered by the owning
+leaf itself, not the cache; only a read that falls back to the serial
+path can be served from the cache, so `CacheTtl` still bounds the
+staleness a `GetAsync` can observe.
 **Cache staleness never weakens atomic visibility**: keys covered by
 an in-flight saga always observe the registry-coordinated outcome
 regardless of `CacheTtl`.
 
 ### Operations that hold a shard for their whole duration
 
-Shard reads are deliberately non-reentrant, so while one call runs on a
-shard every other request to that shard queues behind it. Most leaf-chain
+A shard's serial calls - its non-optimistic reads, scan pages and
+maintenance walks - are deliberately non-reentrant, so while one runs on
+a shard every other serial request to that shard queues behind it, and
+point writes are held back until it finishes (a serial call also waits
+for the point writes already in flight before it starts). Only
+always-interleaved calls overlap it: batch writes, a few diagnostic
+probes, and optimistic point reads, which fall back to the queued
+serial path whenever the running call could change the shard's
+routing. Most leaf-chain
 walks are bounded by
 [`MaxLeavesPerScanPage`](configuration.md#maxleavesperscanpage) and return a
 partial page rather than holding the shard indefinitely.

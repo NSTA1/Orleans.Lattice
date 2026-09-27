@@ -28,10 +28,12 @@ public enum LeafReReplaySkipReason
 
     /// <summary>
     /// The local write-ahead-log has been garbage-collected past the divergence
-    /// point, so the repair cannot source the missing entries. This is the
-    /// operator-only alert signal - the feature does not attempt repair and a
-    /// bootstrap-snapshot remediation (tracked as a separate follow-up) is
-    /// required.
+    /// point, so the re-replay cannot source the missing entries and attempts no
+    /// repair. The digest probe escalates this outcome to the scoped
+    /// bootstrap-snapshot fallback, which re-derives the divergent ranges from the
+    /// live tree when <see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/>
+    /// is <see langword="true"/>; with the fallback off it remains an operator
+    /// alert signal.
     /// </summary>
     WalTrimmed = 3,
 }

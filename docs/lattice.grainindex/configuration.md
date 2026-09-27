@@ -91,8 +91,9 @@ Deriving from `IndexedGrain<TState>` is the convenience route: it exposes
 which re-projects the grain's entries as part of the operation.
 
 A grain with `[Indexed]` but no matching declaration is not indexed, and a
-declaration with no annotated grain only ever populates through
-[backfill](backfill.md). Both halves are required.
+declaration whose grain is not annotated is never populated at all - not even by
+[backfill](backfill.md), which onboards a dormant grain only by activating it so
+that its `[Indexed]` state enrols it. Both halves are required.
 
 ## Tuning an index after declaration
 

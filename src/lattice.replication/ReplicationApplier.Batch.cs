@@ -984,8 +984,8 @@ internal sealed partial class ReplicationApplier
                 }
 
                 // Shadow-forward dedupe cache: suppress the duplicate-emit
-                // pair that structural rewrites (split / merge / saga
-                // compensate) generate when they shadow-forward a user
+                // pair that structural rewrites (split / merge) generate
+                // when they shadow-forward a user
                 // write into a different shard. See ApplyAsync for the
                 // detailed race scenario. The check sits after the
                 // pinned-floor dedupe so floor-deduped entries do not

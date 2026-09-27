@@ -258,8 +258,9 @@ param(
 
 	# Routes a one-entry bulk WAL append through the interleaving batched grain
 	# method instead of the exclusive-turn singular overload (#3408). -1 leaves
-	# the silo on its shipping default (off); 0 and 1 pin the control and fix
-	# arms explicitly so a cohort's arm is never implicit.
+	# the silo on its shipping default (on - the batched path,
+	# LatticeOptions.DefaultWalBatchedSingleEntryAppends); 0 and 1 pin the
+	# control and fix arms explicitly so a cohort's arm is never implicit.
 	[int] $WalBatchedSingleEntryAppends = -1,
 	# Floor on the durable WAL materialiser pin buckets per pin shard (#3576).
 	# -1 leaves the silo on the library default, which is what published

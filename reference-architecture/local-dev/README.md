@@ -61,12 +61,15 @@ flowchart LR
   siloB <-->|"net-backup"| bkp
 ```
 
-Region A's storage, telemetry, and heads are unreachable from region B and vice
+Region A's storage, telemetry, and MCP head are unreachable from region B and vice
 versa. Two dedicated cross-region seams carry the only inter-region traffic:
 `net-replication` attaches **only** the two silos, so the replication shipper can dial
 its peer; `net-backup` attaches **only** the two silos and the one shared backup sink,
 so every cluster can read the same backup for a coordinated restore. Everything else
-stays region-local.
+stays region-local. The one qualification is the Explorer: it has no network of its
+own but runs in its silo's network namespace (`network_mode: service:silo-a` /
+`service:silo-b`), so it shares that silo's attachments, and the peer silo can
+reach the console's port over `net-replication`.
 
 Telemetry is deliberately **not** one of those seams, and it flows both ways inside
 a region. Each silo exports the whole `orleans.lattice` meter family at `/metrics`
@@ -86,9 +89,9 @@ explorer); the sibling region reuses them.
 
 | Action | Command | Notes |
 | --- | --- | --- |
-| Stand up (build + run) | `docker compose up --build -d` | Builds the images and starts both regions detached; wait for both silos to report healthy. Uses the tracked public `nuget.config` for the restore step. |
+| Stand up (build + run) | `docker compose up --build -d` | Builds the images and starts both regions detached; wait for both silos to finish starting (they carry no Docker healthcheck, so follow `docker compose logs -f silo-a silo-b`). Uses the tracked public `nuget.config` for the restore step. |
 | Stand up with a private / offline NuGet feed | PowerShell: `$env:NUGET_CONFIG_FILE = "$env:APPDATA\NuGet\NuGet.Config"; docker compose up --build -d` <br> bash: `NUGET_CONFIG_FILE=/path/to/NuGet.Config docker compose up --build -d` | Points the build-time `nugetcfg` secret at your own `NuGet.Config` (a private, proxy, or offline feed) instead of `./nuget.config`, for when public nuget.org is unreachable. The secret is never baked into an image layer. |
-| Rebuild after editing `src/**` | `docker compose up --build -d` | Project references pick up the change. Append service names (e.g. `... silo-a silo-b`) to rebuild one region only. |
+| Rebuild after editing `src/**` | `docker compose up --build -d` | Project references pick up the change. Append service names (e.g. `... silo-a silo-b`) to rebuild and recreate only those services. |
 | Reseed the identity model | `docker compose restart silo-a silo-b` | Applies edits to `identities.json` with no rebuild. |
 | Stop (keep data) | `docker compose stop` | Halts the containers; volumes and networks remain. `docker compose start` resumes. |
 | Tear down (keep data) | `docker compose down` | Removes containers and networks; the per-region Azurite volumes survive, so grain state, clustering, reminders, and the WAL persist to the next standup. |
@@ -222,7 +225,8 @@ and, once tenancy is enabled, the tenant you act as - per call:
 
 ## Demo 1 - differentiated access (deny-by-default)
 
-1. `docker compose up --build` and wait for both silos to report healthy.
+1. `docker compose up --build` and wait for both silos to finish starting (see the
+   Quickstart table).
 2. `tools/list` on region A's MCP (port 9090) as `platform-admin` - full tool set.
 3. Repeat as `data-reader` - the state and data tools (the data group's write tools
    are listed too; step 4 shows them refused). As `auditor` - only telemetry. As

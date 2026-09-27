@@ -23,7 +23,7 @@ that age differently:
 
 2. **"Throughput uplift over today's path proportional to
    partition-server count."** "Today's path" referred to the
-   pre-redesign single-partition layout that this branch has already
+   pre-redesign single-partition layout that the redesign
    removed. A literal A/B between old and new on the same binary is
    therefore no longer available. The probe addresses this half via a
    concurrency sweep on the redesigned provider (the operational proxy

@@ -91,14 +91,14 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 | [ChangeHistory](../../samples/ChangeHistory/README.md) | Reading a key's revision timeline with `ScanEntryHistoryAsync`. |
 | [TagIndexes](../../samples/TagIndexes/README.md) | Tagging keys and querying them back with `WithAllTags` (intersection) and `WithAnyTags` (union). |
 | [GrainIndex](../../samples/GrainIndex/README.md) | Indexing a grain's typed state and running typed predicate queries over it, including a two-property conjunction and a de-duplicated disjunction. |
-| [VectorSearch](../../samples/VectorSearch/README.md) | Approximate nearest-neighbour search with `Orleans.Lattice.Vector`: sub-linear query cost, honest per-query reporting of the path that answered, and first-class deletes. |
+| [VectorSearch](../../samples/VectorSearch/README.md) | Approximate nearest-neighbour search with the in-memory index core of `Orleans.Lattice.Vector`, run with no silo: sub-linear query cost, honest per-query reporting of the path that answered, recall measured against an exact oracle, and first-class deletes. |
 
 ### Reliability and Formal Verification
 
 | Sample | What it shows |
 |---|---|
 | [VerifiedAtomicCommit](../../samples/VerifiedAtomicCommit/README.md) | A concurrent snapshot reader (`GetManyAsync`) races a flipping atomic saga and never observes a torn view - the all-or-nothing property the atomic-commit cores, Coyote models, and TLA+ spec machine-check. |
-| [VerifiedWalDurability](../../samples/VerifiedWalDurability/README.md) | The WAL garbage collector trimming only entries every consumer has durably acked - the durability property the WAL cores and their Coyote models machine-check. |
+| [VerifiedWalDurability](../../samples/VerifiedWalDurability/README.md) | The two WAL cursor-registry properties that stop the garbage collector trimming an entry a consumer has not acked - per-consumer monotonicity and the min-cursor trim floor - driven on the production registry with no silo. These are the properties the WAL cores and their Coyote models machine-check. |
 
 ## HelloWorld
 

@@ -54,6 +54,7 @@ The core alone supports:
 - Online resize, online reshard, and online snapshots (offline mode also available).
 - Soft delete with a configurable retention window, and undo of resize within the window.
 - Per-tree event stream, diagnostics, and `System.Diagnostics.Metrics` instruments.
+- Server-side predicate filtering, materialised and per-key history views, tag indexes, typed queues, a distributed lock, and an atomic-action saga coordinator.
 
 The name comes from its use of **lattice-based state primitives** - mathematical
 structures where merges are commutative, associative, and idempotent - which is
@@ -297,7 +298,8 @@ RepoContext is an MCP server that gives an AI agent durable, conflict-free
 memory about a codebase: a structural record and content digest per file, symbol
 outlines and a reverse cross-reference graph, agent-authored notes and decisions
 with optional TTL, semantic search over embeddings, and a budgeted context
-bundle with reuse accounting. It runs as a single local container.
+bundle with reuse accounting. It runs as a single local container alongside its
+embedding companion.
 
 It is worth reading as a worked example because it composes most of the platform
 at once, and does so without a line of bespoke storage code:
@@ -362,7 +364,7 @@ Use these documents for day-to-day use and operations:
 - [Change History](docs/lattice/change-history.md) - reading a key's revision timeline from `ScanEntryHistoryAsync`, the State API, or the Explorer.
 - [Diagnostics](docs/lattice/diagnostics.md) - `DiagnoseAsync`: a point-in-time health snapshot of a tree for dashboards, health probes, and post-mortem investigation.
 - [Metrics](docs/lattice/metrics.md) - the `System.Diagnostics.Metrics` instrument catalogue, its tag conventions, OpenTelemetry registration, and the bundled Grafana dashboards.
-- [Samples](docs/lattice/samples.md) - runnable sample projects exercising `ILattice`.
+- [Samples](docs/lattice/samples.md) - runnable samples exercising the platform, grouped by concern.
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
 - [Performance: single-silo guide](docs/lattice/performance-single-silo.md) - approximate single-silo throughput and latency, measured against real Azure Tables.
 - [Performance: multi-silo scaling guide](docs/lattice/performance-multi-silo.md) - how that throughput responds as silos are added.
@@ -395,7 +397,7 @@ For the complete catalogues:
 - [FEATURES.md](FEATURES.md) - every capability, grouped by concern, with its docs and sample.
 - [PACKAGES.md](PACKAGES.md) - every package, grouped by the seam it fills.
 - [reference-architecture.md](reference-architecture.md) - the active-active, cross-region deployment blueprint and its parameterised deployment kit.
-- [llms.txt](llms.txt) - the documentation index for AI agents and LLM tooling. The documentation site generates the complete index from its documentation map, and publishes every page as markdown too, at the same address ending in `.md`.
+- [llms.txt](llms.txt) - the entry point for AI agents and LLM tooling. The documentation site generates the complete index from its documentation map, and publishes every page as markdown too, at the same address ending in `.md`.
 
 ## Performance Characteristics
 
@@ -407,10 +409,10 @@ Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wik
 | Insert / update (`SetAsync`) | O(log<sub>b</sub> n) |
 | Delete (`DeleteAsync`) | O(log<sub>b</sub> n) |
 | Ordered scan (`ScanKeysAsync`) | O(n) |
-| Count (`CountAsync`) | O(n / b) |
+| Count (`CountAsync`) | O(n), across O(n / b) leaf calls |
 | Space | O(n) |
 
-With the default branching factor (~128 children per node), a shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Sharding (default 64) reduces per-shard *n* further; cross-shard operations scatter-gather across all shards.
+With the default branching factor (~128 children per node), a shard with two million keys is only three levels deep. Depth adds no grain calls on the steady-state path: the shard root caches each internal node's routing table, so a single-key lookup crosses just three grains - the tree's router, the shard root, and the owning leaf or its per-silo read cache. Sharding (default 64) reduces per-shard *n* further; cross-shard operations scatter-gather across all shards.
 
 Measured single-silo throughput and latency against real Azure Tables are in the [single-silo performance guide](docs/lattice/performance-single-silo.md), and how throughput responds as silos are added is in the [multi-silo scaling guide](docs/lattice/performance-multi-silo.md).
 

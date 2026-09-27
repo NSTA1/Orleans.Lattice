@@ -66,8 +66,9 @@ latency; the before/after values and the converged result are stable.)
 - Receiver-side shared-secret authentication is turned off
   (`RequireAuthentication = false`) because this is a loopback demo with no
   secret material. Production must supply a secret and leave authentication on.
-- The gRPC ports default to `17001` / `17002`; change them in `Program.cs` if
-  those are taken on your machine.
+- The gRPC ports default to `17001` / `17002`, and the two clusters also bind
+  Orleans silo ports `11111` / `11112` and gateway ports `30000` / `30001`;
+  change them in `Program.cs` if those are taken on your machine.
 
 ## Feature docs
 

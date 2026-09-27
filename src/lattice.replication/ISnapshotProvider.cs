@@ -136,8 +136,9 @@ public interface ISnapshotProvider
     /// union of zero ranges and therefore yields no entries.
     /// <para>
     /// This is the snapshot seam the bootstrap-snapshot fallback uses when a
-    /// localised divergence cannot be repaired from the write-ahead log
-    /// because the log has been trimmed past the divergence point: it
+    /// localised divergence cannot be repaired from the write-ahead log -
+    /// because the log has been trimmed past the divergence point, or because no
+    /// retained entry above the peer's cursor falls in the divergent range: it
     /// re-derives the missing committed state of just the divergent leaf
     /// range from the live tree (which is immune to WAL trimming), keeping
     /// the repair cost proportional to the drift rather than the whole tree.

@@ -196,8 +196,10 @@ internal sealed class ShardRootState
     /// Written by a coalescing timer (and once more on clean deactivation)
     /// rather than per read, so the read path never pays a storage write for it.
     /// <para>
-    /// <see langword="null"/> is the steady state when leaf-cache pre-warm is
-    /// disabled (the default) or nothing has been observed yet. Adding this slot
+    /// <see langword="null"/> until the pre-warm model has observed traffic,
+    /// and never written while leaf-cache pre-warm is disabled
+    /// (<see cref="LatticeOptions.LeafCachePreWarmCount"/> is <c>0</c>; it is
+    /// on by default). Adding this slot
     /// is backward-compatible: state persisted before the field existed
     /// deserializes with <c>LeafAccessModel = null</c>, which restores an empty
     /// model and simply pre-warms nothing until traffic re-populates it.

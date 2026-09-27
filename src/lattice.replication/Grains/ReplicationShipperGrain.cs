@@ -1493,9 +1493,10 @@ internal sealed class ReplicationShipperGrain(
         // rule registered, (b) pollute the per-origin HWM with marks
         // that never advance user-visible state, and (c) inflate every
         // peer's apply traffic with envelopes that produce no semantic
-        // change. Skip them at the shipper boundary. The category
-        // signal is not preserved through `WalRecord` (no Category
-        // slot), so the filter keys on `Op` directly.
+        // change. Skip them at the shipper boundary. `WalRecord` does
+        // carry the mutation category (`Category`), but `Op` alone
+        // identifies a tombstone-reap envelope, so the filter keys on
+        // `Op` directly.
         if (entry.Op == MutationKind.Tombstone)
         {
             return false;

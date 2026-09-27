@@ -15,7 +15,7 @@ internal enum AtomicWritePhase
     /// <summary>Reading pre-saga values and staging prepare metadata for each key.</summary>
     Prepare = 1,
 
-    /// <summary>Applying writes sequentially. <c>NextIndex</c> advances after each commit.</summary>
+    /// <summary>Applying writes: every unwritten entry is dispatched as one batched prepare write, retried as a whole on failure; <c>NextIndex</c> jumps to the entry count once the whole batch has committed.</summary>
     Execute = 2,
 
     /// <summary>The saga is aborting; it records the abort and broadcasts terminal cleanup.</summary>

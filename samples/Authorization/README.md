@@ -59,9 +59,11 @@ Every subject's operations run under an ambient credential
 (`LatticeCredentialContext.Use`) that flows to the grains on the Orleans request
 context; a small custom `ILatticeCredentialAuthenticator` maps a demo token to a
 subject id, and the membership directory expands the subject's group memberships
-transitively (walking nested groups). Administrative seeding runs as the
-configured bootstrap administrator so the policy and directory can be
-provisioned before any rule exists.
+transitively (walking nested groups). The groups, memberships, and rules are
+written through the silo-side membership directory and policy store, which run
+under system origin and never consult the gate, so they need no prior grant;
+the tree's data keys are seeded as the configured bootstrap administrator,
+which the gate allows before any rule exists.
 
 ## Run it
 
@@ -126,9 +128,11 @@ Silo starting... ready.
 
 ## Notes on this sample
 
-- The bootstrap administrator (`root-admin`) is declared before initialization so
-  it can provision the reserved system trees. Production should keep the
-  bootstrap set as small as possible and grant everything else through rules.
+- The bootstrap administrator (`root-admin`) seeds the demo data before any rule
+  grants access; the reserved membership and policy trees are written by the
+  silo-side directory and policy store under system origin, not through it.
+  Production should keep the bootstrap set as small as possible and grant
+  everything else through rules.
 - Enforcement reads a compiled policy snapshot that rebuilds off the policy-tree
   change feed, and group membership is resolved from the directory, so the
   sample polls briefly after authoring rules and after the runtime membership

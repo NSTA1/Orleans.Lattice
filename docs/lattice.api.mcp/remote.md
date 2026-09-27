@@ -19,7 +19,7 @@ builder.Services.AddLatticeMcpRemote(o =>
     o.Data = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster-a.internal:5001" };
     o.EnableDataWrites = false;
 
-    // Required for non-administrator callers' tools to be discovered remotely.
+    // Required for any caller's tools to be discovered remotely (see below).
     o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster-a.internal:5001" };
 
     // Runtime per-tree replication control (inspect always; enable/disable gated).
@@ -32,6 +32,8 @@ app.MapLatticeMcp();
 ```
 
 Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbatim in the `lattice_capabilities` report) and optionally supplies a pre-built `CallInvoker` so a host that already owns a tuned gRPC channel (custom TLS, retries, deadlines) can reuse it instead of the address-derived default.
+
+The remote binding keeps the same coarse authorizer seam as the in-silo one: the default authorizer denies every group tool, so register a permissive or custom `ILatticeApiMcpAuthorizer` before serving (see [Security](security.md#2-the-coarse-authorizer-seam)).
 
 ## Options
 
@@ -90,7 +92,7 @@ On a cluster running the tenancy add-on, the configured topology above is the **
 
 - **A region a tenant is not online in refuses the call.** Targeting it with a `region` argument reaches the peer, and the peer's residency gate refuses it. Configuration reachability and tenant reachability are different questions, and only the data owner can answer the second.
 - **`lattice_list_regions` scopes what it advertises** to the calling tenant's actionable set (`allowed` union `resident`) plus the current region, annotating each with the tenant's standing, so an agent is not pointed at destinations it would be refused at. An `isResident: false` entry is a valid `lattice_tenant_set_residency` destination but not yet a valid routing destination. See [Tools](tools.md#tenant-scoped-region-discovery).
-- **A remote head needs the tenant-admin endpoint to scope discovery.** Set `LatticeApiMcpRemoteOptions.TenantAdmin` and the composition registers an `ITenantRegionVisibilityResolver` (replacing any core default) that resolves the caller's standing over the region-residency RPC; when that lookup cannot establish the tenant's standing, a tenant-asserted `lattice_list_regions` fails closed to the current region alone. Without the endpoint the head has no way to resolve standing, so it answers every call unscoped, exactly as a non-tenancy head does: a tenant-asserted `lattice_list_regions` returns the full configured topology. On a tenancy estate, configure `TenantAdmin` on every remote head tenant callers reach. The lookup is made only when a call asserts a non-default tenant, so an operator call and a tenancy-off head never pay the round trip.
+- **A remote head needs the tenant-admin endpoint to scope discovery.** Set `LatticeApiMcpRemoteOptions.TenantAdmin` and the composition registers an `ITenantRegionVisibilityResolver` (replacing any core default) that resolves the caller's standing over the region-residency RPC; when that lookup cannot establish the tenant's standing, a tenant-asserted `lattice_list_regions` fails closed to the current region alone. The lookup is never made for an assertion the head cannot validate: a non-default tenant is honoured only when the head's `ITenantContextResolver` resolves it as the caller's own, and a refused assertion - or one made to a head with no validating resolver - is answered with the current region alone and no `tenantScope` annotation. Without the endpoint the head has no way to resolve standing, so it answers every call unscoped, exactly as a non-tenancy head does: a tenant-asserted `lattice_list_regions` returns the full configured topology. On a tenancy estate, configure `TenantAdmin` on every remote head tenant callers reach. The lookup is made only when a call asserts a non-default tenant, so an operator call and a tenancy-off head never pay the round trip.
 
 ## Region targeting behind a global load balancer
 
@@ -111,11 +113,11 @@ The same interceptor also forwards the caller's ambient active tenant. When the 
 
 ## Discovery requires the auth endpoint
 
-The in-silo permission-scoped discovery relies on a **system-origin bypass** to introspect a caller's effective permissions. That bypass does not cross the wire. Remotely, the discovery core must authenticate as an administrator to introspect a non-administrator caller, so serving any group's tools to non-administrator callers requires both the `Auth` endpoint and an administrator credential to be configured - the static `AdministratorCredential`, or the self-refreshing managed-identity source described [below](#refreshing-the-administrator-token). Without them, only an administrator caller can enumerate tools remotely.
+The in-silo permission-scoped discovery relies on a **system-origin bypass** to introspect a caller's effective permissions. That bypass does not cross the wire. Remotely, the discovery core must authenticate as an administrator to introspect a non-administrator caller, so serving any group's tools to non-administrator callers requires both the `Auth` endpoint and an administrator credential to be configured - the static `AdministratorCredential`, or the self-refreshing managed-identity source described [below](#refreshing-the-administrator-token). Without the `Auth` endpoint no caller - administrator or not - is offered any group's tools; with it but without an administrator credential, only an administrator caller can enumerate tools remotely.
 
 ## Refreshing the administrator token
 
-`AdministratorCredential` is a **static** token. When acquired from Entra it typically carries a ~1h lifetime, so a long-lived remote MCP head silently loses its introspection capability once it expires (discovery then advertises no tools to non-administrator callers until the process is restarted or the value is rotated by hand). For an always-on server, register the managed-identity administrator source instead: it acquires the silo-audience token from an `Azure.Core` `TokenCredential`, caches it, and refreshes it a configurable skew before expiry.
+`AdministratorCredential` is a **static** token. When acquired from Entra it typically carries a ~1h lifetime, so a long-lived remote MCP head silently loses its introspection capability once it expires (discovery then advertises no group tools to any caller - administrators included, since every introspection still forwards the expired token - until the process is restarted or the value is rotated by hand). For an always-on server, register the managed-identity administrator source instead: it acquires the silo-audience token from an `Azure.Core` `TokenCredential`, caches it, and refreshes it a configurable skew before expiry.
 
 ```csharp
 using Azure.Identity;

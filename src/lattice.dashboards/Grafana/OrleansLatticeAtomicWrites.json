@@ -487,7 +487,7 @@
     {
       "id": 104,
       "title": "Tx registry writes (rate) by outcome",
-      "description": "tx_registry.writes: whole-state writes issued by the per-tree saga decision registry (TxRegistryGrain). Every atomic saga records its participants, decision and cleanup through this one activation per tree, and the registry group-commits (issue #3475): at most one write is in flight and mutations that arrive meanwhile join the next write. A write rate that stays flat while saga throughput climbs is coalescing at work. Any sustained outcome=fault rate is alert-worthy: a faulted write fails every mutation it carried back to its caller. Emitted only when the registry writes, so an empty result means no atomic sagas ran.",
+      "description": "tx_registry.writes: whole-state writes issued by the saga decision registry (TxRegistryGrain). Every atomic saga records its participants, decision and cleanup through the registry activation its transaction id routes to - one per tree by default, one per shard when LatticeOptions.TxRegistryShardCount is above 1, and this panel sums them all - and each activation group-commits (issue #3475): at most one write is in flight and mutations that arrive meanwhile join the next write. A write rate that stays flat while saga throughput climbs is coalescing at work. Any sustained outcome=fault rate is alert-worthy: a faulted write fails every mutation it carried back to its caller. Emitted only when the registry writes, so an empty result means no atomic sagas ran.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 72 },
@@ -511,7 +511,7 @@
     {
       "id": 106,
       "title": "Tx registry write duration (mean ms) by outcome",
-      "description": "tx_registry.write.duration: mean duration of one TxRegistryGrain whole-state write, derived as rate(sum) / rate(count). The registry serialises its writes, so the reciprocal of this duration bounds how many writes per second one tree's registry can issue. It grows with the registry row, which carries a tombstone per completed saga for TxDecisionRetention; see the TxRegistryAdmissionBudgetBytes option. Emitted only when the registry writes.",
+      "description": "tx_registry.write.duration: mean duration of one TxRegistryGrain whole-state write, derived as rate(sum) / rate(count). The registry serialises its writes, so the reciprocal of this duration bounds how many writes per second one registry activation can issue (a tree has one by default, and one per shard when LatticeOptions.TxRegistryShardCount is above 1). It grows with the registry row, which carries a tombstone per completed saga for TxDecisionRetention; see the TxRegistryAdmissionBudgetBytes option. Emitted only when the registry writes.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 80 },

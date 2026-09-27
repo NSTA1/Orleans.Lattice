@@ -9,11 +9,14 @@ namespace Orleans.Lattice.Backup;
 /// the sink alone.
 /// <para>
 /// The cold path differs from <see cref="ILatticeBackupRestoreService"/> only in
-/// its <i>resolution</i> and <i>orchestration</i>: it resolves the target backup
-/// (and walks its <see cref="BackupManifest.BaseBackupId"/> chain) directly from
-/// the sink rather than the catalog, bootstraps the reserved <c>sys-</c> trees if
-/// they are absent, delegates the actual causal-preserving replay to the existing
-/// restore engine, and re-projects the catalog from the sink afterwards so the
+/// its <i>resolution</i> and <i>orchestration</i>: it resolves the target
+/// backup's manifest from the sink (so a backup the catalog does not know is
+/// still found), bootstraps the reserved <c>sys-</c> trees if they are absent,
+/// delegates the actual causal-preserving replay to the existing restore engine -
+/// which re-reads the target and walks its
+/// <see cref="BackupManifest.BaseBackupId"/> chain catalog-first with a sink
+/// fallback, so on a cluster whose catalog starts empty the whole chain resolves
+/// from the sink - and re-projects the catalog from the sink afterwards so the
 /// recovered cluster ends up with a correct, populated catalog. The replay itself
 /// preserves every entry's hybrid-logical-clock, version vector, origin cluster
 /// id, expiry, and tombstone flag verbatim, exactly as an ordinary restore does.
@@ -25,12 +28,14 @@ public interface ILatticeBackupColdRestoreService
     /// Restores the backup identified by
     /// <see cref="LatticeRestoreRequest.BackupId"/> into a fresh cluster from the
     /// sink alone. Bootstraps the reserved <c>sys-</c> trees if they do not yet
-    /// exist, resolves the target manifest and its base chain directly from the
-    /// sink, verifies every referenced artifact is present and intact, replays the
-    /// chain through the HLC-preserving restore engine, and re-projects the catalog
-    /// from the sink so the recovered cluster is left with a correct catalog. Never
-    /// reads the catalog to resolve the backup, so it works when the catalog starts
-    /// empty. Idempotent: re-running the same request converges to the same state.
+    /// exist, resolves the target manifest from the sink (failing when the sink
+    /// does not hold it), then delegates to the restore engine, which walks the
+    /// base chain catalog-first with a sink fallback, verifies every referenced
+    /// artifact is present and intact, and replays the chain through the
+    /// HLC-preserving restore path; finally re-projects the catalog from the sink
+    /// so the recovered cluster is left with a correct catalog. Works when the
+    /// catalog starts empty, because every catalog miss falls back to the sink.
+    /// Idempotent: re-running the same request converges to the same state.
     /// </summary>
     /// <param name="request">The restore request. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the cold restore.</param>

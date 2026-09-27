@@ -4,7 +4,7 @@ Lattice maintains an internal **tree registry** - a Lattice tree (`_lattice_tree
 
 ## How It Works
 
-The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, and bookkeeping - the pinned WAL partition count and WAL placement, the next physical shard index adaptive splits allocate, the projection-digest permanent-disable latch, and, on a restore's shadow tree, the tree it was restored for.
+The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, and bookkeeping - the pinned WAL partition count and WAL placement, the highest physical shard index adaptive splits have allocated, the projection-digest permanent-disable latch, and, on a restore's shadow tree, the tree it was restored for.
 
 ### Automatic registration
 
@@ -72,7 +72,7 @@ bool exists = await tree.TreeExistsAsync();
 |---|---|
 | First use of a new tree (anything that resolves its options, or any operation that reaches a shard root) | Tree registered (key added), with its structural pins seeded |
 | `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`) |
-| `ResizeAsync` swap phase | Registry entry updated with new sizing + `PhysicalTreeId` alias set |
+| `ResizeAsync` swap phase | Registry entry replaced by one carrying the new sizing and the pinned `ShardCount` (other fields are not carried over), then the `PhysicalTreeId` alias set |
 | `ResizeAsync` cleanup phase | Old physical tree soft-deleted; removed from registry on purge |
 | `UndoResizeAsync` | After the swap: alias removed, original entry restored, and the old tree recovered if the resize had already soft-deleted it. Either side of the swap, the new tree is deleted (removed from registry on purge) |
 | `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides) |

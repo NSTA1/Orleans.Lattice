@@ -7,9 +7,9 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// <summary>
 /// Per-shard phase-two commit worker for the two-phase append protocol
 /// (the strict offset-ordered phase-2 stage of the two-phase WAL
-/// commit). Phase 1 of an append commits the entry
-/// rows + per-batch HEAD row atomically inside a distinct batch
-/// partition - that step gets true cross-batch parallelism because
+/// commit). Phase 1 of an append commits the batch's entry rows
+/// atomically inside a distinct batch partition (there is no per-batch
+/// HEAD row) - that step gets true cross-batch parallelism because
 /// each batch hits its own Azure Tables partition server. Phase 2
 /// commits one manifest row (<c>M{startOffset:D19}</c>) plus the
 /// shard's tail-pointer upsert (<c>TAIL</c>) atomically inside the
@@ -73,8 +73,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// <c>endOffsetInclusive</c> as the value.
     /// <para>
     /// An entry here is <b>durable</b>: phase 1 committed its entry
-    /// rows and its per-batch <c>HEAD</c> row atomically, in the
-    /// batch's own partition, before the provider dispatched phase 2.
+    /// rows atomically, in the batch's own partition, before the
+    /// provider dispatched phase 2.
     /// What it is missing is only the manifest row and the <c>TAIL</c>
     /// upsert - precisely the state
     /// <see cref="AzureTableWalStorageProvider.ReconcileAsync"/> rolls

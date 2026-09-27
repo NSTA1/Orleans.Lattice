@@ -141,8 +141,8 @@ not by which type is holding it:
 | **A peer or a delta is folded in** (`MergeFrom`, `MergeDelta`) | The incoming array is copied | A replica never ends up sharing a buffer with the peer it merged from. |
 | **A value comes back out** (`Clone`, `OrMap.Get`, materialised projections) | The array is copied | A value you read is yours to mutate; doing so can never reach back into stored state. |
 
-The first rule is why writes stay allocation-free on the hot path, and the last
-two are why a read or a merge can never corrupt somebody else's state. If you are
+The first rule is why a write never pays to copy the payload it is handed, and the
+last two are why a read or a merge can never corrupt somebody else's state. If you are
 implementing a CRDT against `ICrdt<TSelf>`, all three legs are part of the
 contract.
 
@@ -151,6 +151,11 @@ shared `Array.Empty<byte>()` singleton, so copying it never allocates. And the s
 primitives (`GSet`, `OrSet`, `RwSet`) never retain a caller's array at all: an
 element is encoded to a string key on the way in and decoded fresh on the way out,
 so they satisfy all three legs by construction.
+
+One ingress copies instead of taking over: `OrMap.Set`. Its value is itself a
+CRDT rather than a byte array, and the map snapshots it with `Clone` on the way in,
+so you may keep mutating your own instance after the call without reaching into
+the map.
 
 The rule is enforced structurally rather than by review. A contract test walks
 every registered CRDT's object graph and compares `byte[]` instances by reference

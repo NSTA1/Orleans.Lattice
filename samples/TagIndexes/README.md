@@ -7,6 +7,12 @@ keys back by tag. This sample tags four catalogue items and runs the two query
 shapes: `WithAllTags(...)` (intersection / AND - a key must carry every tag) and
 `WithAnyTags(...)` (union / OR - a key matches if it carries any tag).
 
+The sample opens the index through the `ILatticeTagIndexFactory` that
+`AddLattice` registers, and writes each item's value before tagging it:
+tagging a key throws `InvalidOperationException` while its tree is still
+unregistered, so write to the subject tree (or use `SetValueWithTags`) before
+tagging its keys.
+
 ## Run it
 
 ```

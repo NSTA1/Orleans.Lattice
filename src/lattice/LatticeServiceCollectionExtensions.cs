@@ -284,10 +284,11 @@ public static class LatticeServiceCollectionExtensions
         // package replaces it with the resolver that pins a tenant's trees to the
         // dedicated WAL provider named on the tenant's placement binding.
         builder.Services.TryAddSingleton<ITreePlacementResolver, NullTreePlacementResolver>();
-        // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
-        // VersionVector / MvRegister) are pre-populated on construction
-        // so no host registration is required for them. Generic OrMap
-        // descriptors are installed per tree via AddOrMapShape.
+        // CRDT shape registry: every closed-shape mode (the twelve merge
+        // modes other than OrMap, see the CrdtShapeRegistry constructor) is
+        // pre-populated on construction so no host registration is required
+        // for them. Generic OrMap descriptors are installed per tree via
+        // AddOrMapShape.
         builder.Services.TryAddSingleton<CrdtShapeRegistry>();
         // Single-cluster default for the per-tree origin-cluster-id resolver.
         // Returns string.Empty for every tree so the WAL writer stamps an
@@ -703,11 +704,15 @@ public static class LatticeServiceCollectionExtensions
     /// <see cref="OrMapDelta{TKey, TValue}"/> wire payload, and fold the
     /// delta in via
     /// <see cref="OrMap{TKey, TValue}.MergeDelta(OrMapDelta{TKey, TValue})"/>
-    /// through a single type-erased seam. The closed-shape CRDT modes
+    /// through a single type-erased seam. Every other CRDT merge mode
     /// (<see cref="LatticeMergeMode.OrSet"/>, <see cref="LatticeMergeMode.PnCounter"/>,
-    /// <see cref="LatticeMergeMode.VersionVector"/>, <see cref="LatticeMergeMode.MvRegister"/>)
-    /// do not require host registration because their descriptors are
-    /// unambiguous; the <see cref="CrdtShapeRegistry"/> pre-populates the
+    /// <see cref="LatticeMergeMode.VersionVector"/>, <see cref="LatticeMergeMode.MvRegister"/>,
+    /// <see cref="LatticeMergeMode.Sequence"/>, <see cref="LatticeMergeMode.OrFlag"/>,
+    /// <see cref="LatticeMergeMode.RwFlag"/>, <see cref="LatticeMergeMode.GCounter"/>,
+    /// <see cref="LatticeMergeMode.GSet"/>, <see cref="LatticeMergeMode.RwSet"/>,
+    /// <see cref="LatticeMergeMode.MaxRegister"/> and <see cref="LatticeMergeMode.MinRegister"/>)
+    /// does not require host registration because its descriptor is
+    /// unambiguous; the <see cref="CrdtShapeRegistry"/> pre-populates those
     /// per-mode global defaults on construction. Registering a different
     /// <c>(TKey, TValue)</c> pair for the same tree is a configuration
     /// error and throws at registration time.

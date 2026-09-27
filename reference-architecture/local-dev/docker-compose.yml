@@ -123,8 +123,9 @@ x-silo-dev-toggles: &silo-dev-toggles
   # tenant isolation gate, the tenant registry, and the tenant-admin control API
   # (co-hosted on the silo gRPC endpoint), and TenantSeeder seeds the demo tenants
   # declared in identities.json. Leaving it "false" is byte-for-byte the
-  # single-tenant cluster. Flip BOTH this and the MCP head's Mcp__EnableTenancy to
-  # exercise the tenancy tools. Override per run: `Tenancy__Enabled=true docker compose up`.
+  # single-tenant cluster. The same TENANCY_ENABLED variable also drives the MCP
+  # head's Mcp__EnableTenancy, so one override flips both and exercises the
+  # tenancy tools. Override per run: `TENANCY_ENABLED=true docker compose up`.
   Tenancy__Enabled: "${TENANCY_ENABLED:-false}"
 
 x-mcp-dev-toggles: &mcp-dev-toggles
@@ -139,8 +140,8 @@ x-mcp-dev-toggles: &mcp-dev-toggles
   # over gRPC, and the in-silo system-origin admin bypass does NOT cross the wire: the
   # silo re-runs its own administrator gate on the introspection call. Without an
   # administrator service credential only an administrator caller could enumerate tools
-  # remotely (every non-admin identity would fail the remote admin gate and see just the
-  # two ungated baseline tools). platform-admin is a bootstrap administrator (see
+  # remotely (every non-admin identity would fail the remote admin gate and see only the
+  # lattice_capabilities meta-tool). platform-admin is a bootstrap administrator (see
   # Auth__BootstrapAdministrators), so forwarding it for the introspection lets every
   # caller's own grants light up their tools; the caller's own credential still
   # authorizes their actual tool calls (fail-closed, per-identity enforcement).

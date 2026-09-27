@@ -15,7 +15,8 @@ public sealed class TenantUsageAccountingOptions
     /// <summary>
     /// The scope a tenant's quota is enforced against on the write-admission path.
     /// Defaults to <see cref="TenantEnforcementScope.GlobalConverged"/>, which
-    /// bounds the tenant's total footprint across the online resident clusters.
+    /// bounds the tenant's total footprint summed over every cluster usage slot
+    /// published into its usage record.
     /// </summary>
     public TenantEnforcementScope DefaultEnforcementScope { get; set; } = TenantEnforcementScope.GlobalConverged;
 

@@ -44,18 +44,21 @@ On a cluster running the optional tenancy add-on, per-tenant capacity governance
 
 Like the credential, the header carries only an *assertion*: the tenancy add-on's resolver re-validates it against the caller's authenticated subject membership downstream, and the access gate authorizes the operation before any per-tenant accounting is consulted, so a caller cannot escalate by asserting a tenant it is not a member of. The per-tenant admission controller is deliberately **not** part of that check - it runs strictly after authorization and is an accounting step, not an authorization one. The bridge performs no authorization of its own and is fail-closed - an absent, blank, or syntactically invalid header asserts no tenant. It is the public `ILatticeApiMcpActiveTenantBridge` seam, `TryAdd`-registered, so a host can substitute its own; setting `ActiveTenantHeaderName` empty disables header-based tenant selection. On a non-tenancy cluster the whole path is inert and allocation-free.
 
-The stamp is applied at every facade tool invocation, beside the credential stamp, and additionally at the `lattice_list_regions` discovery tool, which stamps the tenant but no credential (it is a meta-tool that reads only routing configuration, never a facade). Both stamps run through the same `IHttpContextAccessor` and bridge, so the tenant a facade tool acts as is the same tenant discovery is scoped to.
+The stamp is applied at every facade tool invocation, beside the credential stamp, and additionally at the `lattice_list_regions` discovery tool, which stamps the tenant but no credential (it is a discovery meta-tool, not a facade tool, so it does not run under the caller's stamped credential). Both stamps run through the same `IHttpContextAccessor` and bridge, so the tenant a facade tool acts as is the same tenant discovery is scoped to.
 
 ## 3b. Tenant-scoped region discovery
 
 `lattice_list_regions` projects the host's routing topology: each entry carries a region id, a cluster id, and the per-group gRPC endpoint of that region. On a cluster running the tenancy add-on that is operator information, so the tool answers differently depending on whether the call asserts a tenant.
 
+A non-default tenant assertion is validated before it scopes anything: the head re-resolves it through `ITenantContextResolver` - the seam the tenancy add-on registers, which checks the assertion against the caller's own membership - and honours it only when the resolved tenant is the asserted one.
+
 | Caller | What `lattice_list_regions` returns |
 |--------|-------------------------------------|
 | No tenant asserted (an operator, or any caller on a non-tenancy cluster), or any call to a head that cannot resolve tenant standing (a remote head without the `TenantAdmin` endpoint) | The full routing topology, unannotated and byte-for-byte as before tenant scoping existed. |
 | The reserved default tenant | The same full topology - the default tenant *is* the pre-tenancy behaviour by definition. |
-| A non-default tenant, standing resolved | The current region, plus only those peers in the tenant's **actionable set** (`allowed` union `resident`). Every entry is annotated with a `tenantScope` object. |
-| A non-default tenant whose standing the head's tenancy resolver cannot establish | The current region alone. Never a fallback to the full topology. |
+| A non-default tenant the caller may not act as: the head's `ITenantContextResolver` refuses the assertion or resolves it to a different tenant, or the head registers no validating resolver | The current region alone, with no `tenantScope` annotation, so the asserted tenant id is never echoed back. The tenant's standing is never looked up, so the answer does not reveal whether that tenant exists. |
+| A validated non-default tenant, standing resolved | The current region, plus only those peers in the tenant's **actionable set** (`allowed` union `resident`). Every entry is annotated with a `tenantScope` object. |
+| A validated non-default tenant whose standing the head's tenancy resolver cannot establish | The current region alone. Never a fallback to the full topology. |
 
 The **actionable set** is the union of the tenant-facing region sets described in [the tenancy guide](../lattice.tenancy/README.md#the-region-sets): the regions the operator has authorized the tenant into, and the regions the tenant is currently resident in. A region outside it is neither usable by that caller (routing a call there is refused by the residency gate) nor modifiable by it (`lattice_tenant_set_residency` refuses anything outside the allowed set), so omitting it removes disclosure without removing capability.
 
@@ -85,7 +88,9 @@ Scoping is keyed on the **asserted active tenant**, not on the caller's role. An
 
 ## Permission-scoped discovery
 
-Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned: a facade group's tools are listed only when the caller holds an Allow grant for at least one operation the group covers, so a caller is never shown - and then denied - a group it holds no grant for. The filter is coarse by design: discovery reads grant presence, not every scope and Deny rule, so within a listed group the facade's access gate remains the authority and refuses at call time a tree or a verb the caller's grants do not cover. The `lattice_capabilities` meta-tool reports the same group-level view.
+Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned: a facade group's tools are listed only when the caller holds an Allow grant for at least one operation the group covers, so a caller is never shown - and then denied - a group it holds no grant for. The filter is coarse by design: discovery reads grant presence, not Deny rules, and ignores a grant's scope with one exception - the scopeless `Telemetry` capability counts only from a rule written at cluster-wide scope (`LatticeScope.ClusterWide()`), so a tree-scoped rule carrying the `Telemetry` bit neither lists the telemetry group nor unlocks its tools. Within a listed group the facade's access gate therefore remains the authority and refuses at call time a tree or a verb the caller's grants do not cover. The `lattice_capabilities` meta-tool reports the same group-level view.
+
+Discovery reads the caller's grants through the auth facade (`ILatticeAuthAdmin`, registered on the silo by `AddLatticeAuthApi()`) as a trusted system-origin read; with no auth facade registered it grants no group, so an authenticated caller is offered only `lattice_capabilities`. A remote head reaches that facade over its `Auth` endpoint instead - see [Remote hosting](remote.md#discovery-requires-the-auth-endpoint).
 
 ## Least privilege by default
 

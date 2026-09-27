@@ -147,10 +147,12 @@ internal sealed partial class LatticeGrain
     /// </description></item>
     /// <item><description>
     /// Fan out <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>
-    /// across every physical shard to freeze a durable, per-cursor frozen
-    /// baseline (each shard's leaf-chain projection at a uniform
-    /// per-partition captured WAL head) concurrently. The captured heads
-    /// double as the per-shard WAL-retention pin offsets.
+    /// across every physical shard to freeze a per-cursor frozen baseline
+    /// (each shard's leaf-chain projection at a uniform per-partition captured
+    /// WAL head) concurrently, seeded in memory into transient per-shard
+    /// snapshot leaves (persisted only once the cursor pages past its first
+    /// page). The cursor serves those rows with no WAL replay, so it does not
+    /// depend on WAL retention.
     /// </description></item>
     /// <item><description>
     /// Take a registry-decision snapshot via the per-tree
@@ -285,12 +287,13 @@ internal sealed partial class LatticeGrain
         // than failing the open.
         var registrySnapshot = (await FetchRegistrySnapshotAsync()).Snap;
         cancellationToken.ThrowIfCancellationRequested();
-        // The HLC stamped on the snapshot is the maximum HLC observed
-        // across every captured decision; HybridLogicalClock.Zero when
-        // the registry was empty. The cursor uses it only as a
-        // diagnostic anchor - the registry snapshot dictionary itself
-        // (transferred to LatticeRegistrySnapshotContext via the cursor
-        // grain) is what gates visibility.
+        // ComputeRegistrySnapshotHlc currently always returns
+        // HybridLogicalClock.Zero: the registry snapshot DTO carries no
+        // per-decision HLCs to take a maximum over. The cursor uses the
+        // value only as a diagnostic anchor (and as its WAL cursor-registry
+        // position, where Zero holds back nothing) - the registry snapshot
+        // dictionary itself (transferred to LatticeRegistrySnapshotContext
+        // via the cursor grain) is what gates visibility.
         var registryHlc = ComputeRegistrySnapshotHlc(registrySnapshot);
 
         var coordinate = new LatticeSnapshotCoordinate(
@@ -369,11 +372,13 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
-    /// Computes the HLC anchor for a captured registry snapshot. Used
-    /// only as a diagnostic field on
-    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>;
-    /// visibility gating is driven by the snapshot dictionary itself,
-    /// not by this anchor.
+    /// Computes the HLC anchor for a captured registry snapshot, stamped on
+    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>. It
+    /// currently always returns <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/>,
+    /// so every consumer of that field observes Zero - including the snapshot
+    /// cursor's WAL cursor-registry position (which therefore holds back no
+    /// trimming) and the backup capture's consistency-cut HLC. Visibility
+    /// gating is driven by the snapshot dictionary itself, not by this anchor.
     /// </summary>
     private static Orleans.Lattice.HybridLogicalClock ComputeRegistrySnapshotHlc(
         Dictionary<Guid, TxStatus>? snapshot)

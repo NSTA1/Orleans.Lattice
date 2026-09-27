@@ -110,7 +110,7 @@ from the core write-ahead log) and `Orleans.Lattice.Replication.Grpc`
 |---|---|
 | **Azurite** | The local Azure Storage emulator. The sample runs three instances under Docker Compose: one per cluster plus the shared `azurite-backup` account both clusters reach. |
 | **`msmfgGrainState`** | Grain-storage provider name (not a table) for the sample's own grains - chaos config, seed flag, baseline part grains. Like every Azure Table grain-storage provider in the sample it writes Orleans' default `OrleansGrainState` table. |
-| **`OrleansLatticeWal`** | Azure Table holding the core write-ahead log of every Lattice tree - `mfg-facts`, `mfg-site-activity`, `tag-mfg-site`, `mfg-part-labels`, `mfg-part-operator` (the `Orleans.Lattice.Storage.AzureTable` default table name). The trees' node state lives in `OrleansGrainState` through the `lattice` grain-storage provider, as do the replication shipper's cursors. |
+| **`OrleansLatticeWal`** | Azure Table holding the core write-ahead log of every Lattice tree - `mfg-facts`, `mfg-site-activity`, `tag-mfg-site`, `mfg-part-labels`, `mfg-part-operator`, and the view trees behind the library-maintained views (the `Orleans.Lattice.Storage.AzureTable` default table name). The trees' node state lives in `OrleansGrainState` through the `lattice` grain-storage provider, as do the replication shipper's cursors. |
 
 ---
 

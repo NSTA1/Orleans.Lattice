@@ -1,5 +1,5 @@
 ---
-applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**"
+applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.auth/**,src/lattice.api.replication/**,src/lattice.api.replication.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**"
 ---
 
 # Security Boundaries and Invariants
@@ -71,6 +71,17 @@ gate will tell you if you forget.
   allow fallback.
 - The `lattice_capabilities` meta-tool is the only ungated advertisement; do not
   widen the ungated set.
+- Discovery must not advertise a capability the caller does not hold. An
+  operation that names no tree (`LatticeOperation.Telemetry`) is carried only
+  from an Allow rule written at cluster-wide scope (`LatticeScope.ClusterWideTreeId`),
+  never from a rule scoped to one tree, which can never confer the scopeless
+  capability (#3645).
+- An asserted active tenant is validated, never trusted. The region catalog
+  re-resolves the caller-supplied assertion (the `lattice-active-tenant` header by
+  default) through `ITenantContextResolver` - the validating seam the data plane
+  uses - and honours it only when the resolved tenant matches; a refused or
+  unresolvable assertion degrades to the current region alone and is never
+  echoed back (#3645).
 
 ### Telemetry metric-name allow-list (`src/lattice.api.telemetry`, consumed by `src/lattice.api.mcp.telemetry`)
 - The PromQL `__name__` / metric-name allow-list fails closed: an unparseable,
@@ -83,6 +94,14 @@ gate will tell you if you forget.
   (`PromQlMetricExtractor`) live in the telemetry facade and are applied through
   `TelemetryQueryAuthorizer`. The MCP telemetry tools and the facade's query catalogue
   both authorize through that one authorizer, so harden it there, not in a binding.
+- The allow-list narrows; it never authorizes. Its default `ReadAll` posture admits
+  every metric name, so every MCP telemetry tool first checks the cluster-wide
+  `LatticeOperation.Telemetry` capability through
+  `TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync` - the seam the
+  transport-neutral `ILatticeTelemetry` facade also consults - before any backend
+  call or range-guardrail evaluation, and applies the allow-list only after it
+  (#3645). Discovery decides only which tools are offered; a tool gated only there
+  is not gated at all, because a tool name is guessable.
 
 ### Replication receiver enrollment gate (`src/lattice.replication`)
 - The receiver gate lives at the **applier seam** (`ReplicationApplier.ApplyAsync` /

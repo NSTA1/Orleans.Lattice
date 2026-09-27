@@ -91,7 +91,7 @@ the CLI cannot find that interpreter).
 | `npm run check:episodes` | `check` on every episode; one not narrated on this machine is checked against silence of its stamped length |
 | `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4` | render an episode; naming the output also writes the render's receipt, a digest of what it was rendered from, which `publish` checks |
 | `npm run render -- --docker ...` | render in Docker (pinned Chromium, fonts and FFmpeg) when output must be byte-reproducible |
-| `npm run narrate -- <slug>` | speak `episodes/<slug>/SCRIPT.md` in the series voice, one cached clip per cue, each heard back by two local recognisers and made again until it matches the script; then master the joined track to the series loudness, and write the cue timeline and WebVTT captions |
+| `npm run narrate -- <slug>` | speak `episodes/<slug>/SCRIPT.md` in the series voice, one cached clip per cue, each heard back by two local recognisers and made again with the next seed when it does not match the script; then master the joined track to the series loudness, and write the cue timeline and WebVTT captions |
 | `npm run review -- <slug> --audio` | a page with the narration alone, every cue listed to play from, highlighting what changed and what the checks could not settle: approve the voice by ear before rendering |
 | `npm run audition -- <slug> <cue>... [--takes N]` | several takes of a line (4 by default), each checked, on a page to listen and pick from; `--pick <cue>=<take>` uses a take in the narration. Takes and picks stay on this machine, under `renders/`; only the published cut is committed |
 | `npm run phonemes -- <slug>` | for the Kokoro engine: how its phonemizer will read each cue, with words that have two readings flagged (`--flagged` for only those cues) |
@@ -106,12 +106,15 @@ the CLI cannot find that interpreter).
 | `npm run ascii` | fail on any non-ASCII character in this folder |
 | `npm test` | unit tests for the tools and the browser runtime |
 
-Every command runs the pinned CLI from `node_modules` with HyperFrames
-telemetry, update checks and skill installation switched off: the project
-commands through [tools/hf.js](tools/hf.js), and narration through the runner
-it shares, [tools/lib/hyperframes.js](tools/lib/hyperframes.js). `snapshot`
-never sends frames to a hosted vision model unless you pass `--describe`
-yourself.
+Every command that runs the HyperFrames CLI runs the pinned one from
+`node_modules`, with HyperFrames telemetry, update checks and skill installation
+switched off: the project commands through [tools/hf.js](tools/hf.js), and the
+Kokoro engine's speech through the runner it shares,
+[tools/lib/hyperframes.js](tools/lib/hyperframes.js). Chatterbox narration and
+auditions do not use the CLI: they run
+[tools/voice_worker.py](tools/voice_worker.py) in the series voice's Python
+environment. `snapshot` never sends frames to a hosted vision model unless you
+pass `--describe` yourself.
 
 The CLI's project commands open only `<project>/index.html`, and its lint finds
 other compositions only under a folder named `compositions/`. `--episode`

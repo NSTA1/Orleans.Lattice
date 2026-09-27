@@ -1006,10 +1006,10 @@ public class LatticeReplicationOptions
     /// <para>
     /// Defaults to <see cref="DefaultBootstrapFallbackEnabled"/>
     /// (<see langword="false"/>). The fallback ships dark and opt-in - it runs
-    /// only when targeted leaf re-replay is also enabled, the re-replay hits a
-    /// trimmed WAL, and this flag is set - so an un-opted host pays nothing and
-    /// observes no behaviour change. When the WAL-trimmed signal fires while
-    /// this flag is off, a single
+    /// only when targeted leaf re-replay is also enabled, the re-replay reports a
+    /// trimmed WAL or an empty below-cursor selection, and this flag is set - so an
+    /// un-opted host pays nothing and observes no behaviour change. When either
+    /// signal fires while this flag is off, a single
     /// <see cref="LatticeReplicationMetrics.BootstrapFallbackSkipped"/> count
     /// with reason <see cref="LatticeReplicationMetrics.BootstrapFallbackSkipDisabled"/>
     /// is emitted so operators can see the fallback was available but not taken.

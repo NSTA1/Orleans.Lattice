@@ -8,17 +8,17 @@ Configures the durable per-key history retained on the reserved `sys-backup-cata
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| `HistoryRetentionMode` | `HistoryRetentionMode` | `MetadataOnly` | The retention mode for the durable per-key history captured on the catalog tree. History is never disabled by default. |
+| `HistoryRetentionMode` | `HistoryRetentionMode` | `MetadataOnly` | The retention mode for the durable per-key history captured on the catalog tree. History is never disabled by default. Must be a defined `HistoryRetentionMode` value. |
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | The age after which a catalog history revision row expires, or `null` for no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable per-key history materialised view over the catalog tree so catalog changes remain auditable beyond the source write-ahead-log window. |
 | `EnableBackupCatalogIndexView` | `bool` | `true` | Whether to create the backup-catalog index materialised view over the catalog tree. The index re-keys each catalogued backup so the catalog listing can be filtered, ordered newest-first, and paged efficiently by scanning the index rather than the whole catalog. When disabled, the listing falls back to a full catalog scan. |
 | `CrossTreeFenceDrainTimeout` | `TimeSpan` | `30s` | The maximum wall-clock time one fence attempt's drain waits for in-flight cross-tree atomic sagas to drain before it gives up and fails the capture. The budget restarts on each of the `MaxCrossTreeFenceAttempts` attempts, so it bounds a single drain rather than the whole capture. Must be strictly positive. Single-tree and non-flagged backups never consult it. |
 | `CrossTreeFencePollInterval` | `TimeSpan` | `25ms` | The poll interval between successive in-flight observations while the fence waits for sagas to drain. Must be strictly positive. |
 | `MaxCrossTreeFenceAttempts` | `int` | `5` | The maximum number of fence attempts a cross-tree-consistent capture makes before failing. Each attempt drains, captures, and re-observes; an attempt is retried when a cross-tree saga registers on the set during the capture window. Must be at least 1. |
-| `SinkSharingEnforcement` | `BackupSinkSharingEnforcement` | `Warn` | How a positively refuted cross-cluster backup sink is enforced at silo start. See [Cross-cluster sink sharing](#cross-cluster-sink-sharing). |
+| `SinkSharingEnforcement` | `BackupSinkSharingEnforcement` | `Warn` | How a positively refuted cross-cluster backup sink is enforced at silo start. Must be a defined `BackupSinkSharingEnforcement` value. See [Cross-cluster sink sharing](#cross-cluster-sink-sharing). |
 | `SinkSharingProbeTimeout` | `TimeSpan` | `15s` | The maximum wall-clock time the cross-cluster sink-sharing probe may spend before giving up and reporting `Unverified`. Bounds silo start, which blocks on the probe, and each health-sweep refresh of the verdict. Must be strictly positive. |
 
-`HistoryRetentionMode` is the core Lattice history-retention enum; `MetadataOnly` retains the per-key revision metadata without retaining every historical value.
+`HistoryRetentionMode` is the core Lattice history-retention enum; under `MetadataOnly` each last-writer-wins revision row keeps the value's content hash and byte length but not the value bytes (CRDT revisions are always stored as their delta, whatever the mode).
 
 ## Cross-cluster sink sharing
 
@@ -40,7 +40,7 @@ Whether an external sink is genuinely shared is a deployment fact, not a locally
 | `Warn` (default) | Probe, log a loud warning, and annotate every affected backup's health report - but let the silo start. |
 | `FailFast` | A `NotShared` verdict throws at start, so the silo refuses to come up rather than capture un-restorable backups. |
 
-`Warn` is the shipped default so a transient peer outage can never brick a deployment that is actually configured correctly; a positively refuted sink is still surfaced immediately in the log, and in the Explorer Backups tab's HEALTH column as soon as each affected backup is next verified. Turn on `FailFast` in an environment where a misconfigured sink should stop the rollout. Only a **positively refuted** sink fails a start - `Unverified` never does, in either mode.
+`Warn` is the shipped default so a transient peer outage can never brick a deployment that is actually configured correctly; a positively refuted sink is still surfaced immediately in the log, and in the Health column of the Explorer Backups area's Existing backups list as soon as each affected backup is next verified. Turn on `FailFast` in an environment where a misconfigured sink should stop the rollout. Only a **positively refuted** sink fails a start - `Unverified` never does, in either mode.
 
 The guard costs nothing when it cannot apply. A deployment with no replicated tree, no peers, or no replication package performs **no** sink or network I/O at all and reports `NotApplicable`.
 
@@ -70,7 +70,7 @@ The monitor is only meaningful against a durable, external sink. With the epheme
 
 ## `LatticeBackupScheduleOptions`
 
-Per-scope configuration for scheduled backup triggering and backup-chain retention. Every knob defaults to disabled: registering the backup package never starts capturing or pruning on its own. Configure the global default with `ConfigureLatticeBackupSchedule(configure)`, or a single scope with `ConfigureLatticeBackupSchedule(scopeKey, configure)` where `scopeKey` is `BackupScopeKey.For(scope)`. The scheduler resolves the per-scope instance by named options, so a schedule configured for a scope and the coordination that runs it always resolve the same instance.
+Per-scope configuration for scheduled backup triggering and backup-chain retention. Every knob defaults to disabled: registering the backup package never starts capturing or pruning on its own. Configure the global default with `ConfigureLatticeBackupSchedule(configure)`, or a single scope with `ConfigureLatticeBackupSchedule(scopeKey, configure)` where `scopeKey` is `BackupScopeKey.For(scope)`. The global delegate applies to every scope, including one that also has a per-scope delegate; the delegates run in registration order, so register the global defaults first for a per-scope override to win. The scheduler resolves the per-scope instance by named options, so a schedule configured for a scope and the coordination that runs it always resolve the same instance.
 
 ### Constants
 

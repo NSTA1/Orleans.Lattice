@@ -38,7 +38,9 @@
          cpu      (default) portable, no accelerator, small image.
          cuda     NVIDIA. Carries the CUDA/cuDNN native libraries, so the image
                   is much larger; it still includes the CPU provider, so
-                  EMBED_PROVIDER falls back to the CPU when no GPU is present.
+                  EMBED_PROVIDER=cpu (or an unset or unrecognised value) runs
+                  it on the CPU. There is no automatic fallback: with cuda
+                  selected, a provider that cannot be bound fails startup.
          directml any DirectX 12 GPU (AMD/Intel included). WINDOWS ONLY - it
                   cannot be used in the Linux container image, and exists for
                   running this server natively on a Windows host.

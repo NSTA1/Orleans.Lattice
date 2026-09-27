@@ -17,6 +17,7 @@ internal sealed partial class MyGrain(
 ```
 
 - Grains are `internal`; the test project has `InternalsVisibleTo` access.
+- `WalMaterialiserPinGrain` is the one grain with an explicit constructor rather than a primary one: it also takes an optional keyed `IGrainStorage` handle for its bucketed pin slots.
 - Use `partial class` to split large grains across multiple files by concern (e.g. `.Lifecycle.cs`, `.Traversal.cs`, `.BulkLoad.cs`).
 
 ## Grain Key Conventions
@@ -29,7 +30,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `ShardRootGrain` | `{treeId}/{shardIndex}` | `"my-tree/0"` |
 | `BPlusLeafGrain` | Opaque grain-assigned ID | - |
 | `BPlusInternalGrain` | Opaque grain-assigned ID | - |
-| `LeafCacheGrain` | `{leafGrainId}` | `"leaf/abc"` |
+| `LeafCacheGrain` | `{leafGrainId}` (the primary leaf's full `GrainId` string) | `"bplusleaf/7b16d935..."` |
 | `LeafSnapshotStorageGrain` | Guid key matching the source leaf's grain id | - |
 | `LatticeRegistryGrain` | Singleton (`_lattice_trees`) | `"_lattice_trees"` |
 | `LatticeQueueGrain` | `{queueName}` | `"work-items"` |
@@ -48,9 +49,8 @@ Grain identity is embedded in the string key with `/` as separator:
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `LatticeLockGrain` | `{lockName}` (any non-empty string) | `"inventory/sku-42"` |
-| `AtomicActionGrain` | `{operationId}` (caller-supplied idempotency key, any non-empty string) | `"order-4711"` |
+| `AtomicActionGrain` | `{operationId}` (caller-supplied idempotency key; must be non-empty, not whitespace, and must not contain `/`) | `"order-4711"` |
 | `LatticeCrossTreeTxGrain` | `{operationId}` (caller-supplied cross-tree idempotency key; must not contain `/`) | `"op-42"` |
-| `TxRegistryGrain` | `{treeId}` | `"my-tree"` |
 | `WalShardGrain` | `{treeId}/{walPartition}` | `"my-tree/0"` |
 | `LeafReplayCoordinatorGrain` | `{treeId}/{walPartition}` | `"my-tree/0"` |
 | `HotShardMonitorGrain` | `{treeId}` | `"my-tree"` |
@@ -76,8 +76,11 @@ A grain's string key is its identity, and a **persistent** grain's identity is
 carried by keyed storage backends into places that reject certain characters:
 Azure Table grain storage puts the key into both the Partition/Row key columns
 and the request URL, which forbid the control characters `0x00-0x1F` and
-`0x7F-0x9F` and the characters `/`, `\`, `#` and `?`. A persistent grain whose
-composite key contains one of these cannot activate on that backend - an opaque
+`0x7F-0x9F` and the characters `/`, `\`, `#` and `?`. Orleans' Azure Table
+storage sanitizes the four punctuation characters (each becomes `_`), so a key
+joined with one of them can alias a distinct logical key onto the same storage
+row; it does not sanitize control characters, so a persistent grain whose
+composite key contains one cannot activate on that backend - an opaque
 HTTP 400 "Invalid URL" on `ReadStateAsync`/`WriteStateAsync` that no in-memory
 test storage reproduces, so the whole suite stays green while a real Azure
 deployment fails (issue [#1529](https://github.com/NSTA1/Orleans.Lattice/issues/1529):
@@ -119,7 +122,7 @@ So when a grain both persists via `[PersistentState]` and is addressed by a
 
 ## State Management
 
-- Each grain owns a single `IPersistentState<T>` injected via `[PersistentState]`.
+- A stateful grain owns a single `IPersistentState<T>` injected via `[PersistentState]`; `WalMaterialiserPinGrain` additionally reads and writes its bucketed pin slots through a keyed `IGrainStorage` handle. Many grains hold no grain state at all (for example `LatticeGrain` and `LeafCacheGrain`).
 - All state classes live in `BPlusTree/State/` (the exceptions are `WalMaterialiserPinState`, beside its grain in `BPlusTree/Grains/`, and the view grains' states in `Views/`) and carry `[GenerateSerializer]` + `[Alias]`.
 - Always call `state.WriteStateAsync()` after mutations - group writes when possible.
 

@@ -58,11 +58,11 @@ closes.
 - `src/lattice/` - the core `Orleans.Lattice` library. Grains are `internal`
   under `BPlusTree/Grains/`; persistent state POCOs under `BPlusTree/State/`;
   CRDT and low-level types under `Primitives/`.
-- The optional add-on packages (replication, the API facade family and their
-  gRPC bindings, auth and membership, backup, storage backends, schema, scaling,
-  caching, dashboards, and the Explorer) are **not enumerated here** to avoid
-  drift. The authoritative, maintained inventory - one row per shipped package,
-  with a one-line description and a docs link - is
+- The optional add-on packages (for example replication, the API facade family
+  and their gRPC and MCP bindings, auth and membership, backup, storage
+  backends, schema, scaling, caching, dashboards, and the Explorer) are **not
+  enumerated here** to avoid drift. The authoritative, maintained inventory -
+  one row per shipped package, with a one-line description and a docs link - is
   [PACKAGES.md](PACKAGES.md), grouped by the seam each package fills. Consult it
   to learn what a package is; it is updated whenever a package is added. The
   matching capability catalogue is [FEATURES.md](FEATURES.md).
@@ -175,8 +175,10 @@ often trip are below; the complete gate list lives in
 
 - No em-dash (U+2014) in any tracked text file - use a plain ASCII hyphen `-`.
 - No byte-level mojibake - author plain ASCII.
-- C# snippets under `docs/` use the ` ```csharp verify ` fence and must compile
-  against the real public surface.
+- C# snippets under `docs/` use the ` ```csharp verify ` fence, and every
+  `verify` snippet must compile against the real public surface. A plain
+  ` ```csharp ` fence is never compiled, so a missing `verify` does not fail the
+  gate - it silently drops the snippet from it.
 
 ## Pull requests
 
@@ -186,5 +188,7 @@ often trip are below; the complete gate list lives in
   fail-fast CI guard; the allowed branch types are enumerated in
   `.github/copilot-instructions.md`, which is the single source of truth.
 - Label the PR so release notes categorize it: `enhancement`, `bug`,
-  `documentation`, `ci`, `dependencies`, or `breaking`.
+  `documentation`, `ci`, `dependencies`, or `breaking`; also apply one package
+  label per `src/<package>/` it touches (see the **pr-labels** skill,
+  `.github/skills/pr-labels/SKILL.md`).
 - Do not commit, push, or open PRs unless explicitly asked.

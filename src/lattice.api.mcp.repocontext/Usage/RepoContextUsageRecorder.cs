@@ -65,7 +65,7 @@ internal sealed class RepoContextUsageRecorder : IRepoContextUsageRecorder, IDis
         _callsCounter = _meter.CreateCounter<long>(
             CallsInstrumentName, unit: "{call}", description: "Answered repocontext calls.");
         _responseCounter = _meter.CreateCounter<long>(
-            ResponseTokensInstrumentName, unit: "{token}", description: "Exact response tokens spent by repocontext calls.");
+            ResponseTokensInstrumentName, unit: "{token}", description: "Estimated response tokens (the wire cost of each delivered context bundle, envelope included) spent by repocontext calls; only repocontext_context records a figure.");
         _replacedCounter = _meter.CreateCounter<long>(
             ReadsReplacedInstrumentName, unit: "{token}", description: "Whole-file read tokens replaced by repocontext calls.");
     }

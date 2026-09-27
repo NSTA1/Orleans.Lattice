@@ -121,7 +121,7 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `TenantLastRegionException` | `FailedPrecondition` | The change would remove the tenant's last resident region. Region residency only. |
 | `TenantLastAdminSubjectException` | `FailedPrecondition` | The removal would leave the tenant with no admin subjects. Tenant-admin subjects only. |
 | `TenantGrantNotFoundException` | `NotFound` | No such cross-tenant grant has been offered - reported identically when the granting tenant is not registered. Cross-tenant grants only. |
-| `TenantGrantTransitionException` | `FailedPrecondition` | The grant's lifecycle forbids the requested transition (for example approving a rejected or revoked grant). Cross-tenant grants only. |
+| `TenantGrantTransitionException` | `FailedPrecondition` | The grant's lifecycle forbids the requested transition (for example approving a rejected or revoked grant), or the other party's concurrent transition won the merge. Cross-tenant grants only. |
 | `ReservedTenantOperationException` | `FailedPrecondition` | The operation targets the reserved `default` tenant (suspend, delete, set-quotas, an admin-subject add / remove, or a cross-tenant grant offer). |
 | `InvalidOperationException` | `FailedPrecondition` | A lifecycle or residency precondition the facade refuses on a well-formed request. Not mapped on the quota-usage and self-service RPCs, where it falls through to `Internal`. |
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller does not hold the required tier. |
@@ -235,11 +235,14 @@ call's ambient scope for the duration of the call.
 The header carries only an *assertion*: the tenancy add-on re-validates it against
 the caller's subject membership downstream, exactly as it validates the caller
 credential. An absent, blank, or syntactically invalid header asserts no tenant, and
-the caller resolves the reserved `default` tenant. An assertion the caller may not
-use is refused, and every verb on this service - self-service, lifecycle, and region
-residency alike - surfaces that as a `PermissionDenied` `RpcException` rather than
-reporting a tenant the caller does not hold. Set the option to an empty string to disable header-based tenant selection
-entirely. The facade itself requires the tenancy add-on, so a host serving this binding
+the caller resolves the reserved `default` tenant. The self-service RPCs resolve the
+assertion, so one the caller may not use is refused as a `PermissionDenied`
+`RpcException` rather than reported as a tenant the caller does not hold. The
+lifecycle, region-residency, admin-subject, grant, and quota-usage RPCs authorize on
+the caller's subject and the tenant the request names, not on the asserted active
+tenant; every RPC group still maps a fail-closed tenant-resolution refusal to
+`PermissionDenied`. Set the option to an empty string to disable header-based tenant
+selection entirely. The facade itself requires the tenancy add-on, so a host serving this binding
 always has the resolver that validates the assertion.
 
 ## Authorization surface
@@ -248,14 +251,14 @@ The public seams a host implements or substitutes to open this surface up:
 
 | Type | Kind | Purpose |
 |---|---|---|
-| `ILatticeTenantAdminApiAuthorizer` | interface | The transport-level gate the interceptor consults on every admin RPC. Implement it to apply a host policy. |
+| `ILatticeTenantAdminApiAuthorizer` | interface | The transport-level gate the interceptor consults on every admin RPC. Implement its single member, `Task<bool> IsAuthorizedAsync(LatticeTenantAdminApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)`, to apply a host policy. |
 | `DenyTenantAdminApiAuthorizer` | class | The **registered default**: refuses every call, so the surface is closed until a host opts in. |
 | `AllowAllTenantAdminApiAuthorizer` | class | Admits every call, deferring entirely to the facade's own gate. For a host whose endpoint is already guarded by an outer boundary. |
 | `LatticeTenantAdminApiAuthorizationContext` | readonly struct | What the authorizer is handed: the `Operation`, the `TargetId` (the tenant id the request names - for every cross-tenant grant call, including the grantee-side approve and reject, the granting tenant - or `null` when not tenant-scoped), and the raw `ServerCallContext` for header / identity / peer inspection. |
 | `LatticeTenantAdminApiOperation` | enum | The per-operation discriminator. Tenant lifecycle and quota: `CreateTenant`, `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `SetTenantQuotas`, `GetTenantQuotaUsage`. Region residency: `AuthorizeAllowedRegions`, `SetTenantResidency`, `GetTenantRegionStatus`. Tenant-admin subjects: `ListTenantAdminSubjects`, `AddTenantAdminSubject`, `RemoveTenantAdminSubject`. Cross-tenant grants: `ListCrossTenantGrants`, `OfferCrossTenantGrant`, `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant`. An unrecognised method maps to `Unknown`, never to a permissive default - so a deny-by-default policy refuses an RPC it has never heard of rather than falling through. |
-| `ILatticeTenantAdminApiCredentialBridge` | interface | Lifts the inbound credential into the ambient Lattice credential for the duration of one call. The default reads the configured header; substitute it for a bespoke identity source such as a client certificate. |
-| `ILatticeTenantAdminApiAuthSchemeSource` | interface | Supplies what the unauthenticated `GetAuthScheme` RPC advertises. The default projects `LatticeTenantAdminApiGrpcOptions.AdvertisedAuthSchemes`. |
-| `AuthSchemeDescriptor` | record | One advertised credential scheme (name and metadata). |
+| `ILatticeTenantAdminApiCredentialBridge` | interface | Lifts the inbound credential (`LatticeCredential? Resolve(ServerCallContext context)`) into the ambient Lattice credential for the duration of one call. The default reads the configured header; substitute it for a bespoke identity source such as a client certificate. |
+| `ILatticeTenantAdminApiAuthSchemeSource` | interface | Supplies what the unauthenticated `GetAuthScheme` RPC advertises (`AuthSchemeAdvertisement GetAdvertisement()`). The default projects `LatticeTenantAdminApiGrpcOptions.AdvertisedAuthSchemes`. |
+| `AuthSchemeDescriptor` | record | One advertised credential scheme: its required `SchemeId`, a friendly `DisplayName`, and the public `Parameters` a client needs to run the sign-in challenge. |
 | `AuthSchemeAdvertisement` | record | The `GetAuthScheme` response envelope carrying the descriptor list. |
 
 The interceptor itself is internal. It bridges the accepted credential into the

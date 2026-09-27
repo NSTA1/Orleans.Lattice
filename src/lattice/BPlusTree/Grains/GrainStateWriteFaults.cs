@@ -152,8 +152,8 @@ internal static class GrainStateWriteFaults
     /// the cached ETag. Returns <see langword="false"/> when the re-read itself
     /// fails, the row is absent, or <paramref name="landed"/> rejects what was
     /// read; the caller then treats the write as not landed and defers to a
-    /// fresh activation. On a successful re-read <see cref="IPersistentState{TState}.State"/>
-    /// holds the durable row either way.
+    /// fresh activation. On a successful re-read the <c>State</c> of
+    /// <paramref name="state"/> holds the durable row either way.
     /// </summary>
     /// <typeparam name="T">The grain state type.</typeparam>
     /// <param name="state">The persistent state whose write conflicted.</param>

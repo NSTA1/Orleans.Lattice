@@ -391,7 +391,7 @@ if it lacks something you need, add it there.
 
 ## Running Tests
 
-The suite has grown past the point where running everything is a reasonable inner-loop action. There are about 3,000 test files across fifty test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.
+The suite has grown past the point where running everything is a reasonable inner-loop action. There are thousands of test files across fifty test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.
 
 Counter-intuitively, "just run the integration tests" is the *slowest* possible loop. Integration tests are precisely what you want to defer.
 
@@ -601,18 +601,23 @@ migration protocol's interaction with the saga (issue #1591, reproducing the
 #1584 split-view class): its model is `ReshardMigrationModel`, driving the real
 write-side `MigrationTerminalCore` (the terminal-delivery bucket disposition,
 including the `DiscardOrphan` guard) that `BPlusLeafGrain.ApplyTxTerminalAsync`
-routes through, the real read-side `ShadowedMigrationReadGuard` /
-`AtomicVisibilityGate` orphan guard that `BPlusLeafGrain.IsShadowedReadSafeAsync`
-routes through, and the real `SplitBoundary.Owns` split-key seal that
-`ShouldApplyDuringReplay` routes through. It interleaves a migration-in-progress
-destination leaf, two concurrent saga rounds, a late shadow-forwarded orphan
-prepare, a duplicate terminal broadcast, the cross-migration LWW backstop, and a
+routes through, the real read-side `AtomicVisibilityGate` orphan guard fed the
+leaf's terminal-landed flag exactly as the leaf read path feeds it, and a real
+`TxRegistryDecisionCore` holding both sagas' decisions. It does **not** drive
+`ShadowedMigrationReadGuard` (the per-saga rule
+`BPlusLeafGrain.IsShadowedReadSafeAsync` routes through, pinned by its unit suite
+`ShadowedMigrationReadGuardTests`) or the `SplitBoundary.Owns` split-key seal
+(driven by `SplitPivotAdmissionModel`, `SpanAdmissionMigrationModel`, and
+`MovedAwaySealInheritanceModel`). Starting from a destination leaf on which two
+saga rounds have both committed through the cross-migration LWW backstop and
+landed their terminals, it interleaves a late shadow-forwarded orphan prepare of
+the earlier round, a duplicate terminal re-delivery of that round, and a
 multi-key reader fan-out, asserting (a) a reader observes zero-or-all keys (no
 split view) and (b) no orphan bucket ever shadows a later saga's value. This
 makes deterministic exactly the interleavings that
 `ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard`
 covers only probabilistically as a CI-only chaos backstop: the relative delivery
-orders of {shadow-forward prepare, terminal broadcast, backstop, reader fan-out}
+orders of {shadow-forward prepare, duplicate terminal broadcast, reader fan-out}
 against an already-terminal saga.
 
 A fourth model is the atomic-commit **liveness** model, `AtomicCommitLivenessModel`
@@ -771,17 +776,27 @@ core unit-test suite both execute):**
   read retry); model `AtomicCommitVisibilityModel`.
 - Registry decision map + revision - `TxRegistryDecisionCore` (drives
   `TxRegistryGrain`); model `AtomicCommitVisibilityModel`.
-- Reshard terminal bucket disposition - `MigrationTerminalCore`, shadowed read
-  guard `ShadowedMigrationReadGuard`, split seal `SplitBoundary` (drive
-  `BPlusLeafGrain`); model `ReshardMigrationModel`.
+- Reshard terminal bucket disposition - `MigrationTerminalCore` (drives
+  `BPlusLeafGrain.ApplyTxTerminalAsync`); model `ReshardMigrationModel`, which
+  drives it together with `AtomicVisibilityGate` and `TxRegistryDecisionCore`.
+  The group's shadowed read guard `ShadowedMigrationReadGuard` (drives
+  `BPlusLeafGrain.IsShadowedReadSafeAsync`) is covered by its core unit-test
+  suite `ShadowedMigrationReadGuardTests` rather than by a Coyote model, and its
+  split seal `SplitBoundary` (drives `ShouldApplyDuringReplay` and leaf span
+  admission) by `SplitPivotAdmissionModel`, `SpanAdmissionMigrationModel`,
+  `MovedAwaySealInheritanceModel`, and `SplitBoundaryTests`.
 - Write-once terminal-recording guard - `TerminalDecisionGuard` (collapses the
   three inline commit/abort monotonicity branches in `TxRegistryGrain`'s
   `MarkCommittedAsync`, `MarkAbortedAsync`, and `RecordTerminalArrivalAsync`);
   covered by `TerminalDecisionGuardTests`, which exhaust every terminal-delivery
   ordering over the {commit, abort} alphabet. This decision is **not** driven by
-  a Coyote model by design: the registry is a single grain activation whose turns
-  are serialized, so terminal deliveries for one saga are applied in sequence
-  rather than truly concurrently. The load-bearing property is the ordering
+  a Coyote model by design: every terminal delivery for one saga is classified by
+  the single registry activation that owns it, in the synchronous prologue of the
+  call before its first `await`. The mutating registry calls are
+  `[AlwaysInterleave]` for group commit (issue #3475), so they interleave at the
+  durable-write await, but never inside the classification, so deliveries are
+  still classified one at a time rather than truly concurrently. The
+  load-bearing property is the ordering
   invariant (write-once, never both terminals), which a permutation-complete unit
   suite pins exactly; a Coyote schedule would only re-explore the same finite
   sequence space.
@@ -813,10 +828,12 @@ is safe):**
   not a pure decision. Its correctness is the visited-set cycle guard, exercised
   by the reshard integration/chaos suites, not a schedule-sensitive branch.
 - **Arrivals-set dedup** (the `HashSet<int>` of observed source shards in
-  `RecordTerminalArrivalAsync`). The idempotent "have I already seen this source
-  shard's terminal" membership is grain-local in-memory state applied under the
-  grain's serialized turns; the count-based completeness decision it feeds is the
-  extracted `TerminalArrivalTally`.
+  `RecordTerminalArrivalAsync`, persisted as `TxRegistryState.TerminalArrivals`).
+  The idempotent "have I already seen this source shard's terminal" membership is
+  grain-local state, added to and read in the same synchronous block as the
+  arrival's own mutation - before the call's group-commit await - so interleaved
+  arrivals for one saga cannot each observe the full tally; the count-based
+  completeness decision it feeds is the extracted `TerminalArrivalTally`.
 - **Prepare-vote to participant-outcome mapping** (the inline
   `Prepared -> PreparedAck, else -> PreparedNack` shims in `AtomicWriteGrain` and
   `LatticeCrossTreeTxGrain`). The fold that the mapping feeds is
@@ -826,8 +843,8 @@ is safe):**
 **Coverage summary.** Of the enumerated atomic-commit decisions, all are now
 either executed by a verified core (7 cores: the 5 pre-existing plus
 `TerminalDecisionGuard` and `TerminalArrivalTally`) or carry a documented
-exclusion above (5 exclusions, each a wall-clock, real-RPC, grain-serialized
-in-memory, or trivial-adapter concern the models do not encode). No enumerated
+exclusion above (5 exclusions, each a wall-clock, real-RPC, grain-local
+synchronous-state, or trivial-adapter concern the models do not encode). No enumerated
 commit/abort, ordering, or orphan-guard branch remains as un-audited inline
 logic.
 
@@ -882,7 +899,7 @@ write-once forms of `NoMixedTerminals` / `DecisionDurability`
 duplicating a non-vacuous assertion an existing model already makes.
 
 **Gap analysis.** All eleven TLA+ invariants have a live model home above; none is
-recorded as out-of-scope. The wall-clock, real-RPC, grain-serialized-in-memory,
+recorded as out-of-scope. The wall-clock, real-RPC, grain-local synchronous-state,
 and trivial-adapter concerns the models deliberately do not encode remain listed
 under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
 
@@ -1048,8 +1065,10 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every ` ```csharp verify `-fenced snippet in the fixture's docs slice compiles against the real product surface its test project references. The fence is opt-in: a plain ` ```csharp ` fence is never compiled and does not fail this gate, so the documentation skill's rule that every C# snippet under `docs/` carries `verify` is not machine-checked. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records, and in a method-body snippet the `MyReplicationObserver` / `MyRebindObserver` observer stubs). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
 | `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`) in `docs/lattice/performance-single-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
 | `DuplicateXmlSummaryHygieneTests` | No member under `src/` carries two consecutive XML `summary` elements. C# does not diagnose it, documentation tooling takes the FIRST element, and XML summaries ship in the NuGet packages, so the published documentation for a public member is the stale text. | Verify a documentation rewrite by reading the resulting FILE, never the diff - the diff renders the stale block as unchanged context directly above the added one. Replace the existing block rather than adding a second. Where the first block documents a neighbouring member that was displaced, move it to that member rather than deleting it. Repo-level gate over `src/`; runs only in the core project. |
+| `AppContextSwitchHygieneTests` | No C# or Razor source under its hand-picked roots - `samples/` and `reference-architecture/` in the core project, `src/lattice.explorer/` in the Explorer's - calls `AppContext.SetSwitch` or names the unencrypted-HTTP/2 switch outside a comment (issues #1784, #1796). The switch is process-global and effectively write-once, so one per-circuit channel factory setting it decided the posture for every later channel in the process. | An `http://` address is enough for h2c on .NET 10; do not set the switch. The roots are plain directories rather than registered slices, so this gate adds to the em-dash and mojibake coverage and never partitions it. |
+| `PerturbationResidueHygieneTests` | No perturbation-driver marker (the `LATTICE` + `-PERTURBATION` token) survives in any file in the repository. | Stamp the marker beside every edit a perturbation driver makes and stage explicit paths - see "A killed perturbation run leaves residue" under "False greens" above. Repo-wide with nothing excluded; runs only in the core project. |
 
-Additional code-shape gates run in the same suite (for example `AuditHygieneRegressionTests` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). They live under `test/lattice/` and are caught by the same `FullyQualifiedName~Hygiene` filter.
+Additional code-shape gates run in the same suites (for example `AuditHygieneRegressionTests` in `test/lattice/` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). Not all of them live in `test/lattice/`: package-specific ones sit in their own package's test project (the Explorer's design-token, route-case, and class-namespace gates under `test/lattice.explorer/Hygiene/`, for example), and each is caught by a `FullyQualifiedName~Hygiene` filter run against the project that holds it.
 
 ### How these gates reach CI
 

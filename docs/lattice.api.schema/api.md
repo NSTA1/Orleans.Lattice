@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Schema API reference
 
-The public surface is the registration extension, the options type, and the control facade interface (`ILatticeSchemaControl`, published in the shared `Orleans.Lattice.Api.Abstractions` package under the `Orleans.Lattice.Api.Schema` namespace). The facade interface is the contract the gRPC binding adapts over, and is described by its operations below and in [Architecture](architecture.md).
+The public surface is the registration extension, the options type, and the control facade interface (`ILatticeSchemaControl`, published in the shared `Orleans.Lattice.Api.Abstractions` package under the `Orleans.Lattice.Api.Schema` namespace, alongside its `LatticeSchemaCapabilities` result and the `ApiSchemaTypeAliases` alias table). The facade interface is the contract the gRPC binding adapts over, and is described by its operations below and in [Architecture](architecture.md).
 
 The schema policy, versioning, dead-letter, remediation, compliance, and transform records are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md). This package adds the control facade and its capability result, not a second schema model.
 
@@ -73,5 +73,9 @@ The allowed-operation set the read-only capability probe reports for one tree. E
 - `bool CanManagePolicy` - whether the caller may set or clear the tree policy.
 - `bool CanManageVersion` - whether the caller may set, advance, migrate, or clear the version config.
 - `bool CanRemediate` - whether the caller may run remediation for the tree.
+
+### `ApiSchemaTypeAliases`
+
+A public static class (also in `Orleans.Lattice.Api.Abstractions`, namespace `Orleans.Lattice.Api.Schema`) holding the stable `ois.`-prefixed Orleans serialization aliases of the control-API contract types: `AliasPrefix` and the `LatticeSchemaCapabilities` alias.
 
 The DTO types `LatticeSchemaPolicy`, `LatticeSchemaVersionConfig`, `LatticeSchemaDeadLetterEntry`, `LatticeSchemaRemediationReport`, `LatticeSchemaComplianceReport`, and `LatticeValueTransform` are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).

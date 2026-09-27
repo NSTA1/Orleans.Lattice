@@ -64,7 +64,7 @@ Safety invariants (checked at every reachable state):
 |-----------|---------|
 | `TypeOK` | State stays well-typed. |
 | `AllOrNothing` | Atomicity: within one saga every key resolves identically for a snapshot reader - never a split view. |
-| `VisibilityMatchesDecision` | A key is post-saga-visible exactly when the tree-wide decision is committed (sharpest safety statement; implies the two below). |
+| `VisibilityMatchesDecision` | A key is post-saga-visible exactly when the tree-wide decision is committed (sharpest safety statement; implies `AllOrNothing` and `StrictIsolation`). |
 | `StrictIsolation` | An in-flight or aborted saga is never surfaced as committed. |
 | `CommitIntegrity` | Commit implies every participant acked; abort implies at least one nack. |
 | `LinearizedTerminals` | No leaf applies a commit / abort terminal before the registry recorded that decision (decision-before-broadcast). |
@@ -91,24 +91,30 @@ Liveness / temporal properties:
 - a bounded reshard orphan step per key (used-once budget).
 
 **What the `k2` overlap does and does not buy.** The two sagas do share a key,
-so the state space genuinely interleaves two concurrent lifecycles over it. What
-the overlap does *not* do is exercise any *cross-saga* claim, because every
-property above is stated per-saga - bar `TypeOK` and `RevisionMonotonic`, which
+and TLC does interleave their two lifecycles. What the overlap does *not* do is
+exercise any *cross-saga* claim, because every property above is stated
+per-saga - bar `TypeOK` and `RevisionMonotonic`, which
 constrain only the variables' domains and the shared revision counter: each
 quantifies `\A t \in Txns` and then resolves that saga's keys against that
 saga's own `decision[t]`, `terminal[t]` and `pend[t]`. No property relates
-`t1`'s state to `t2`'s. Read the overlap as
-extra schedule pressure on the per-saga properties, not as evidence that
-concurrent sagas contending for one key have been checked.
+`t1`'s state to `t2`'s, and no protocol action's guard does either: every
+variable but the shared revision counter is indexed by saga, so each saga's
+properties are checked exactly as they would be for that saga alone. Read the
+overlap as naming a shared key, not as evidence that concurrent sagas
+contending for one key have been checked.
 
 Such a property is *unexpressed here*, not inexpressible, and the price is
 worth stating rather than hand-waving. The natural one is
 `NoConcurrentPreparedWriters`: at most one saga holds a pending bucket on a key
-at a time, mirroring the admission lock the implementation takes (and which the
-Coyote tier covers separately in `LockAdmissionModel`). As an invariant alone it
-is false here, because `PrepareTx` has no cross-saga precondition and both sagas
-may hold a bucket on `k2`; making it true costs one conjunct on `PrepareTx`
-requiring no other saga's bucket on any key it writes.
+at a time. It would strengthen the design rather than mirror the code: the
+implementation takes no per-key admission lock, so two sagas writing one key
+each stage their own per-transaction pending bucket on the leaf, and
+overlapping sagas are resolved pairwise by last-writer-wins ("Ordering across
+distinct sagas" in [atomic writes](../docs/lattice/atomic-writes.md)). As an
+invariant alone it is false here for the same reason: `PrepareTx` has no
+cross-saga precondition and both sagas may hold a bucket on `k2`. Making it
+true costs one conjunct on `PrepareTx` requiring no other saga's bucket on any
+key it writes.
 
 That one conjunct is not free, and the reason is specific rather than general
 caution: `ShadowForwardOrphan` may re-install a bucket on `k2` after `t1` is
@@ -121,16 +127,18 @@ fires" guarantee that its unfairness currently buys. Two coupled changes and a
 re-run of TLC, not one conjunct.
 
 The deeper limit is that the model abstracts values away entirely: even with the
-lock in place, "which of two committed writers does a reader of `k2` observe" is
+conjunct in place, "which of two committed writers does a reader of `k2` observe" is
 not a question this instance can ask, because `ObservedPrepared` returns a
 boolean rather than a value. A cross-saga *visibility* property needs a value
-domain, which is a larger change than the lock conjunct.
+domain, which is a larger change than that conjunct.
 
 To widen the instance, declare the new model values on the `CONSTANTS` line of
 `AtomicCommit.tla`, extend `TxWrites`, `Txns`, and `Keys` there, and add the
 matching model-value assignments to `AtomicCommit.cfg`. The state space stays
-small (a few thousand states) for 2-3 sagas over 3-4 keys; larger instances grow
-quickly.
+small for the default instance (a few thousand distinct states), but no
+protocol action's guard refers to another saga, so the sagas' reachable states
+combine as a product: every saga added multiplies the count by what one saga
+alone can reach, and larger instances grow quickly.
 
 ## Claims in this directory that open issues own
 
@@ -213,14 +221,14 @@ tables and fails if any of them no longer resolves in `src/`. It is
 toolchain-free, needs no JVM, and runs in the deterministic tier in
 milliseconds.
 
-Resolution handles three forms deliberately, because the note uses all three:
-an ordinary type member, a nested type, and a **partial-class file suffix** -
-`ShardRootGrain.TxTerminal` is not a member at all but the file
+Resolution handles three forms deliberately: an ordinary type member, a nested
+type, and a **partial-class file suffix**. The mapping tables rely on the first
+and the last - `ShardRootGrain.TxTerminal` is not a member at all but the file
 `src/lattice/BPlusTree/Grains/ShardRootGrain.TxTerminal.cs`. A checker that
-assumed `Type.Member` would report that (and `BPlusLeafGrain.PendingTx`) as
-missing and be wrong. The gate reads source text rather than using reflection,
-because several mapped symbols are `private` or `internal` and the file-suffix
-form has no reflective existence at all.
+assumed `Type.Member` would report that (and `ShardRootGrain.Split` and
+`BPlusLeafGrain.PendingTx`) as missing and be wrong. The gate reads source text
+rather than using reflection, because several mapped symbols are `private` or
+`internal` and the file-suffix form has no reflective existence at all.
 
 **What a green run does and does not mean.** The gate checks that each named
 symbol **exists**. It does not check that the row's claim about that symbol is
@@ -262,7 +270,7 @@ therefore rides the existing test fan-out with no change to the matrix planner:
 the `deterministic` tier is the complement of `Chaos` and `Coyote`, so a new
 category lands in it automatically, and `test/lattice`'s last shard is a
 complement shard, so a new namespace is picked up without editing the shard
-config. The workflow provisions a Temurin 17 JRE and a digest-pinned
+config. The workflow provisions a Temurin 17 JDK and a digest-pinned
 `tla2tools.jar` before the leg runs.
 
 Every lane that runs .NET tests has to do the same, because the `Tlc` category
@@ -302,7 +310,7 @@ and it is the standing proof that the fixture is not vacuous. See
 The local invocation documented above remains supported and is still the fast
 path when iterating on the protocol design.
 
-The dev loop does **not** run this category. The Tier 1 filter in
+The dev loop does **not** run this category. The Tier 2 filter in
 [`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md)
 excludes `Tlc` alongside `AzureStorageEmulator`, for the same reason: a
 contributor without the external toolchain should not be blocked. Absence is

@@ -2,7 +2,8 @@ namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
 /// Options controlling the <c>Orleans.Lattice.Tenancy</c> registry add-on: the
-/// durable per-key history retention over the <c>sys-tenant-*</c> trees, whether
+/// durable per-key history retention over the <c>sys-tenant-registry</c>
+/// definition tree, whether
 /// the durable history materialised view is created, and whether the reserved
 /// default tenant is seeded. Resolved through the standard options system and
 /// configured via <c>AddLatticeTenancy(...)</c> or
@@ -12,7 +13,8 @@ public sealed class LatticeTenancyOptions
 {
     /// <summary>
     /// The retention mode for the durable per-key history captured on the
-    /// <c>sys-tenant-*</c> trees. Defaults to
+    /// <c>sys-tenant-registry</c> definition tree (the usage and overage trees
+    /// carry no durable history). Defaults to
     /// <see cref="HistoryRetentionMode.MetadataOnly"/>; history is never disabled
     /// by default.
     /// </summary>
@@ -26,9 +28,9 @@ public sealed class LatticeTenancyOptions
     public TimeSpan? HistoryRetentionWindow { get; set; }
 
     /// <summary>
-    /// Whether to create the durable history materialised view over the registry
-    /// trees. Defaults to <c>true</c> so tenant definition history is queryable
-    /// without a process restart.
+    /// Whether to create the durable history materialised view over the
+    /// <c>sys-tenant-registry</c> definition tree. Defaults to <c>true</c> so tenant
+    /// definition history is queryable without a process restart.
     /// </summary>
     public bool EnableDurableHistoryView { get; set; } = true;
 

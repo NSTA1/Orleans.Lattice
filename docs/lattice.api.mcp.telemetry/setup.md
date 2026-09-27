@@ -9,11 +9,11 @@ The telemetry tools plug into the `Orleans.Lattice.Api.Mcp` binding, so the host
 - Have called `AddLatticeMcp(...)` (co-hosted) or `AddLatticeMcpRemote(...)` (remote) to register the MCP front door - see [MCP setup](../lattice.api.mcp/setup.md).
 - Reach a read-only Prometheus / PromQL-compatible HTTP backend that scrapes the cluster's `orleans.lattice` metrics - see [Metrics](../lattice/metrics.md).
 
-The telemetry group needs neither an `Orleans.Lattice.Api.*` facade nor an in-silo activation: it proxies the metrics backend directly, so it works identically co-hosted or remote.
+The telemetry tools call no `Orleans.Lattice.Api.*` facade and need no in-silo activation: they proxy the metrics backend directly, so the module can run co-hosted on a silo or on a remote head. Discovery still needs the caller's effective permissions, as for every group - the auth facade (`AddLatticeAuthApi()`) when co-hosted, or the `Auth` endpoint on a remote head (see [MCP setup](../lattice.api.mcp/setup.md#prerequisites)).
 
 ## Register the tool module
 
-`AddTelemetryTools(...)` binds and validates `LatticeApiMcpTelemetryOptions`, registers the default HTTP-backed backend client and the metric-access policy (the policy is built once, with its wildcard patterns precompiled), and registers the telemetry tool group so its tools are advertised to a caller holding a `LatticeOperation.Telemetry` grant. It is idempotent: calling it twice registers exactly one tool group and one backend client.
+`AddTelemetryTools(...)` binds and validates `LatticeApiMcpTelemetryOptions`, registers the default HTTP-backed backend client (unless the host registered its own `IPrometheusQueryClient` first) and the metric-access policy (the policy is built once, with its wildcard patterns precompiled), registers the `TelemetryAccessAuthorizer` every tool consults at call time, and registers the telemetry tool group so its tools are advertised to a caller holding a cluster-wide `LatticeOperation.Telemetry` grant. It is idempotent: calling it twice registers exactly one tool group and one backend client.
 
 ```csharp verify
 using Orleans.Lattice.Api.Mcp.Telemetry;
@@ -45,7 +45,7 @@ services.AddTelemetryTools(o =>
 | `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll` exposes every backend metric; `DenyAllExceptAllowed` restricts the surface to `AllowedMetrics`. |
 | `AllowedMetrics` | `IList<string>` | empty | Exact names and/or `*`-wildcard patterns permitted under `DenyAllExceptAllowed`. Ignored under `ReadAll`. |
 
-The options are validated when they are first resolved - the binding registers no start-up validation, so a misconfiguration surfaces as an `OptionsValidationException` on first use rather than at host start: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric.
+The options are validated when they are first resolved - the binding registers no start-up validation, so a misconfiguration surfaces as an `OptionsValidationException` on first use rather than at host start: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric, with no null, empty, or whitespace entry.
 
 ## Backend authentication
 

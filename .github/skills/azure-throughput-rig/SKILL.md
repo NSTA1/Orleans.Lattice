@@ -41,7 +41,11 @@ All scripts live under `benchmark/azure-throughput/scripts/`. The single-VM scri
 (`deploy`, `update`, `run-cohort`, `ladder`, `vm`) accept `-NamePrefix` to target a named
 environment and `-ParametersFile` to point at an explicit parameters file; the Layer 3 ACA
 scripts (`deploy-aca`, `run-cohort-aca`) take a mandatory `-NamePrefix` and read no
-parameters file.
+parameters file. The folder also holds two dot-sourced helper modules (`_run-cohort-helpers.ps1`,
+`aca-common.ps1`) and four parameterless self-tests of the grading logic, run with `pwsh -File`
+(`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`, `Test-Layer3UnseededRetry.ps1`,
+`Test-ProducerBoundReport.ps1`). The Layer 3 sweep itself is driven by
+`benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 
 ---
 
@@ -181,6 +185,7 @@ offers the same load per silo.
 | `-ShardCount <N>` | `64` | Fixed across the sweep (not per silo), so the fan-out width stays constant. |
 | `-WalPartitions <N>` | `16` | Sets `BENCH_WAL_PARTITIONS`. |
 | `-ClientsPerSilo <N>` | `4` | Sets `BENCH_CLIENT_COUNT` to `min(64, ClientsPerSilo x SiloCount)`. |
+| `-GeneratorParallelism <0..1024>` | `0` | Sets `BENCH_GENERATOR_PARALLELISM` on the producer job; `0` lets the producer use its own `Environment.ProcessorCount` (see "Parallel Layer 3 producer" below). |
 | `-ResponseTimeoutSec <N>` | `420` | Sets `BENCH_RESPONSE_TIMEOUT_SEC` on silos and producer. |
 | `-InFlightTailBudgetSec <N>` | `120` | Sets `BENCH_INFLIGHT_TAIL_BUDGET_SEC`. |
 | `-WalReplayQueueDepth <N>` | `64` | Sets `BENCH_WAL_REPLAY_QUEUE_DEPTH`. |
@@ -198,6 +203,7 @@ offers the same load per silo.
 | `-WalSaturationAcuteOnly <N>` | `-1` | `-1` sets nothing (see below); `1` / `0` force it on / off. |
 | `-ExtraSiloEnv <string[]>` | `@()` | Extra silo env as `NAME=value` strings, appended last so they win (a string array, not the hashtable `run-cohort.ps1` takes). Like every silo variable, they are removed from the next cohort that does not name them (see below). |
 | `-SettleSec <N>` | `30` | Wait after scaling for cluster membership before the producer starts. |
+| `-FreezeWedgeSec <N>` | `60` | Longest tolerated mid-run freeze (cumulative ops not advancing while work is in flight) before the cell is graded `WEDGE` rather than `HEALTHY`; `0` disables the check. |
 
 **Silo env does not persist between cohorts.** Each cohort applies its silo env with one
 `az containerapp update --set-env-vars`, which merges into the app's existing environment, so
@@ -238,9 +244,9 @@ through a pinned `BENCH_TREE_ID`; otherwise the read modes read keys that do not
 cohort's fresh tree. The silo logs `[silo] preseed treeId=.. entries=..` when the seed ran. On
 Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and the Orleans-client
 producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
-`performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line `UNSEEDED`, re-runs
-it, and never publishes it, because an unseeded cohort measures only the miss path (#3474).
-Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step and the Orleans-client
+`performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line (or reports
+`entries=0`) `UNSEEDED`, re-runs it at the same rung up to twice, and never publishes it, because
+an unseeded cohort measures only the miss path (#3474).
 
 The four atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
 one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
@@ -264,9 +270,9 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_VEHICLE_COUNT` | producer 1000 (cohort sets `-Vehicles`, default 4000); silo 0 | Fleet size = number of distinct keys. On the silo it is the read-mode pre-seed size, and `run-cohort.ps1` does not set it there (see the read-mode pre-seed note under the workload table). |
+| `BENCH_VEHICLE_COUNT` | producer 1000, silo 0 (`run-cohort.ps1 -Vehicles` sets the producer's, default 4000; `run-cohort-aca.ps1` sets `VehiclesPerSilo x SiloCount` on producer and silos) | Fleet size = number of distinct keys. On the silo it is the read-mode pre-seed size, and `run-cohort.ps1` does not set it there (see the read-mode pre-seed note under the workload table). |
 | `BENCH_TICK_HZ` | 5 | Samples/sec/vehicle. **Offered rate = vehicles x tickHz.** |
-| `BENCH_DURATION_SEC` | 300 (cohort sets per `-DurationSec`) | Producer run length; `0` = run forever. |
+| `BENCH_DURATION_SEC` | 300 (cohort sets per `-DurationSec`) | Producer run length. `0` = run forever in Orleans-client mode only: the TCP producer reads it with its positive-only parser, so `0` there runs the default 300 s. |
 | `BENCH_SILO_HOST` | `127.0.0.1` | Silo host the producer connects to. |
 | `BENCH_SILO_PORT` | 7000 | Silo TCP port the producer connects to. |
 
@@ -417,8 +423,12 @@ Key lines in the silo log:
   operations.
 - `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` and `Drain tail : N trailing rate=0 sample(s) post-producer`
   - the run-cohort classification, appended to the log by `run-cohort.ps1` after the drain
-  (the silo does not emit it). A non-zero FINAL `failed` raises the verdict to at least
-  `FAILED`.
+  (the silo does not emit it). A non-zero `failed` - on the `FINAL` line or on any per-second
+  sample - raises the verdict to at least `FAILED`. `run-cohort-aca.ps1` appends the same block to
+  its Layer 3 log but grades only `HEALTHY` or `WEDGE`: `WEDGE` when the producer printed no
+  `DONE` marker, no per-second window was productive, or the cumulative `ops` count stopped
+  advancing for `-FreezeWedgeSec` seconds while work was in flight. A saturated Layer 3 cohort
+  that kept completing work stays `HEALTHY`, its failures carried as data rather than as `FAILED`.
 - `[silo] wal-placement treeId=.. accounts=N partitions=M version=.. -> 0:default,1:acct1,...` - emitted when
   `BENCH_WAL_ACCOUNTS > 1`; confirms which account each WAL partition landed on. Its
   absence (with accounts >1) or an `ERROR wal-placement-spread` means the arm ran
@@ -465,8 +475,12 @@ Periodic and `DONE` lines carry `genBlockedFrac` and `slipMaxMs`:
 - `slipMaxMs` is the run-wide maximum schedule slip across workers, including
   overrun of an unfinished tick, not just the last completed tick.
 
-`performance-report.ps1` warns and renders `>= X` only when the same `DONE` line
-reports slip above 1,000 ms AND `genBlockedFrac` below 0.2. High slip with high
+`performance-report.ps1` grades a cohort producer-bound (a warning, and its cell
+rendered as a `>= X` lower bound) only when the same `DONE` line reports slip above
+1,000 ms AND `genBlockedFrac` below 0.2, the cluster kept pace with what was generated
+(the cohort completed at least 90% of the `DONE avg` rate), AND the generator fell behind
+its offer (`DONE avg` below 90% of the offered rate); a throughput conjunct whose input is
+missing counts as met. High slip with high
 channel-wait time is consistent with a saturated cluster and is NOT marked
 producer-bound, even when achieved throughput is below offered load. Slip still
 includes lateness accumulated during channel waits; the wait fraction is what
@@ -476,11 +490,19 @@ Legacy logs without both fields, and logs without `DONE`, cannot establish a
 producer bottleneck and are not flagged. Re-run known producer-limited legacy
 cells with the new producer before making a cluster-ceiling claim.
 
+`>= X` also marks an offer-bound cell. The `performance-report.ps1` Layer 3 sweep re-runs a
+cell's first HEALTHY cohort at double the per-silo rung while it completes at least
+`-SaturationRatio` (default 0.9) of its offered load, at most `-MaxRungEscalations` (default 3)
+times, and publishes a cell whose every HEALTHY cohort still completed that fraction at the
+final rung as a lower bound; `-SaturationRatio 0` turns escalation off. A producer-bound or
+`UNSEEDED` cohort never escalates.
+
 Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
 and charts omit affected workload curves rather than plot a misleading plateau.
 An omission note appears only when a curve was actually excluded. Resume and
-dry-run aggregation re-read retained logs; paired evidence is retained in cohort
-state as `producerSlipMaxMs` and `producerGenBlockedFrac`.
+dry-run aggregation re-read retained logs; the evidence is retained in cohort state as
+`producerSlipMaxMs`, `producerGenBlockedFrac` and `producerGeneratedPerSec`, and the grade as
+`producerBound`.
 
 For a local generator-only measurement, build the Producer project in Release,
 then run its DLL with `--dry-run`. This bypasses TCP, Orleans, Azure credentials,

@@ -41,7 +41,9 @@
     security administrator). -WhatIf and -Confirm otherwise flow through to the
     underlying deployer, so
     './deployment-sample.ps1 -DeploymentName demo -WhatIf'
-    previews every mutation without touching Azure.
+    prints each mutating 'az' command up to and including the pass-1 estate
+    deployment without running it, then stops: the Entra deployment and pass 2
+    need pass 1's outputs, so they are never previewed.
 
 .EXAMPLE
     # Deploy into the current 'az' subscription (you are shown it and asked to confirm).
@@ -52,7 +54,9 @@
     ./deployment-sample.ps1 -DeploymentName demo -SubscriptionId 00000000-0000-0000-0000-000000000000 -Force
 
 .EXAMPLE
-    # Preview every action without mutating Azure.
+    # Preview without mutating Azure: prints each mutating 'az' command through
+    # the pass-1 deployment, then stops (the Entra deployment and pass 2 need
+    # pass 1's outputs).
     ./deployment-sample.ps1 -DeploymentName demo -WhatIf
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',

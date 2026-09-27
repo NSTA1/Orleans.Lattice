@@ -30,8 +30,10 @@ public static class ExplorerUiPluginServiceCollectionExtensions
     /// Explorer's selection, connection and tenant view) and the plugin
     /// preference store (over the Explorer's durable UI preference store).
     /// Scoped per Blazor circuit, so one operator's projected state never
-    /// surfaces in another's. Idempotent, and called for you by each
-    /// <c>AddExplorer*Plugin</c> method.
+    /// surfaces in another's. Idempotent. Called for you by
+    /// <c>AddExplorerSelectionPlugins</c> and <c>AddLatticeExplorerWeb</c>; a head
+    /// that registers an area plugin through its <c>AddExplorer*Plugin</c> method
+    /// without either of those calls this itself.
     /// </summary>
     /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>

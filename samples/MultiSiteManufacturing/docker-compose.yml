@@ -54,8 +54,10 @@
 # Each silo points its package-shipped gRPC push transport
 # (`PackageReplication__PeerGrpcEndpoint`) at the peer's Traefik, which
 # is resolvable on the local cluster network because the peer Traefik
-# is multi-homed there. Traefik load balancing routes around unhealthy containers.
-# silos from rotation within ~2s.
+# is multi-homed there. Traefik load balancing routes around unhealthy
+# containers: each Traefik health-checks its silos every 5s (4s timeout,
+# traefik/us.yml and traefik/eu.yml) and takes a silo that fails the check
+# out of rotation.
 #
 # Simulate a cross-cluster partition (Tier 5):
 #   # Sever us -> eu (remove peer Traefik from local cluster net):
@@ -416,10 +418,10 @@ services:
   # OpenTelemetry Prometheus exporter wired in Program.cs). Grafana sits
   # on obs-net + the prometheus-bridging nets so it can query Prometheus.
   #
-  # The three Grafana dashboards are sourced verbatim from the
-  # Orleans.Lattice.Dashboards package (src/lattice.dashboards/Grafana/)
-  # via a read-only bind mount; the package's drift-guard test ensures
-  # those JSONs stay in sync with the live meter instruments.
+  # The Grafana dashboards - every JSON in src/lattice.dashboards/Grafana/, the
+  # Orleans.Lattice.Dashboards package's own folder - are served verbatim via a
+  # read-only bind mount; the package's drift-guard test ensures those JSONs
+  # stay in sync with the live meter instruments.
   #
   # Grafana UI is published on host port 3000 with anonymous Viewer
   # access enabled - this is a sample, not a production deployment.

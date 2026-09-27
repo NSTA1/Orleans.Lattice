@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Api.Data;
 /// resolvable via <c>IOptions&lt;LatticeApiDataOptions&gt;</c>.
 /// </summary>
 /// <remarks>
-/// The type carries the read-bounding knobs the facade honours for a bounded
-/// range read: the page-size default and cap. The data API adds no
+/// The type carries the bounding knobs the facade honours: the bounded range
+/// read's page-size default and cap, and the bounded range delete's per-step
+/// batch size. The data API adds no
 /// authorization posture of its own - every operation routes through the gated
 /// <see cref="ILattice"/> surface, so the cluster's access gate is the single
 /// source of enforcement.

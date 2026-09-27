@@ -7,9 +7,11 @@ namespace Orleans.Lattice.Api.Mcp;
 /// per-key enforcement is applied afterwards by the gated <see cref="ILattice"/>
 /// surface using the caller's resolved subject. Because the MCP surface can
 /// expose write and control facades, the binding ships with a default-deny
-/// posture: unless a host opts in (either by registering
-/// <see cref="AllowAllMcpAuthorizer"/> / a custom authorizer, or by turning
-/// enforcement off), inbound requests are rejected.
+/// posture: unless a host opts in by registering
+/// <see cref="AllowAllMcpAuthorizer"/> or a custom authorizer, inbound requests
+/// are rejected. <see cref="LatticeApiMcpOptions.RequireAuthorization"/> does not
+/// bypass this gate; it only controls whether the mapped endpoint requires an
+/// authenticated caller.
 /// </summary>
 public interface ILatticeApiMcpAuthorizer
 {

@@ -216,10 +216,14 @@ public static class LatticeBackupServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Configures the global <see cref="LatticeBackupScheduleOptions"/> that apply
-    /// to every backup scope unless a per-scope override is registered. Controls
-    /// the scheduled full / incremental cadences and the chain retention policy;
-    /// all knobs are disabled by default.
+    /// Configures <see cref="LatticeBackupScheduleOptions"/> for every backup
+    /// scope. The delegate is registered with <c>ConfigureAll</c>, so it runs for
+    /// every per-scope named instance - including a scope that also has a
+    /// per-scope override - and, for any one scope, the global and per-scope
+    /// delegates run in registration order (a per-scope override takes precedence
+    /// only for the knobs it sets and only when registered after this call).
+    /// Controls the scheduled full / incremental cadences and the chain retention
+    /// policy; all knobs are disabled by default.
     /// </summary>
     /// <param name="builder">The silo builder.</param>
     /// <param name="configure">The options configuration delegate.</param>
@@ -238,8 +242,10 @@ public static class LatticeBackupServiceCollectionExtensions
     /// <summary>
     /// Configures <see cref="LatticeBackupScheduleOptions"/> for a specific backup
     /// scope identified by <paramref name="scopeKey"/> (the key returned by
-    /// <see cref="BackupScopeKey.For(BackupScopeSelector)"/>). These settings
-    /// override the global defaults for that scope only.
+    /// <see cref="BackupScopeKey.For(BackupScopeSelector)"/>). The delegate runs
+    /// only for that scope, in registration order alongside any delegate
+    /// registered with the global overload, so it overrides the global settings
+    /// for the knobs it sets when it is registered after the global call.
     /// </summary>
     /// <param name="builder">The silo builder.</param>
     /// <param name="scopeKey">The scope key the settings apply to. Must not be <c>null</c> or empty.</param>

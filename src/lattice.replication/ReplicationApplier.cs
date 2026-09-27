@@ -136,35 +136,33 @@ internal sealed partial class ReplicationApplier(
     /// Per-tree shadow-forward dedupe caches, lazily created on first
     /// non-range-delete entry per tree. Each cache holds a bounded
     /// FIFO of recently-applied
-    /// <c>(originClusterId, timestamp, key, op)</c> identity tuples
-    /// and rejects the duplicate-emit pair structural rewrites
-    /// (shard split / merge / saga compensate) generate when they
-    /// shadow-forward a user write into a different shard. The cache
-    /// is a fast-path race-killer: under concurrent inbound
-    /// delivery, both duplicate emits can otherwise observe the same
-    /// pre-advance per-origin high-water-mark and both pass the HWM
-    /// check before either advances it. Correctness is still bounded
-    /// by the HWM - cache eviction under sustained churn cannot
-    /// cause a re-merge.
+    /// <c>(originClusterId, timestamp, key, op)</c> identity tuples and is
+    /// the primary exact-identity dedup for incremental point writes: it
+    /// rejects the duplicate-emit pair a structural rewrite (shard split /
+    /// merge) generates when it shadow-forwards a user write into a
+    /// different shard, and any other recent re-delivery, without a leaf
+    /// hop. The per-origin high-water-mark is not a drop threshold for
+    /// incremental writes (only the snapshot-pinned causal floor is), so a
+    /// re-delivery evicted from the bounded cache under sustained churn falls
+    /// through to the idempotent leaf-level last-writer-wins apply, which is
+    /// a no-op for identical bytes.
     /// </summary>
     private readonly ConcurrentDictionary<string, RecentApplyCache> _dedupeCaches =
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Per-<c>(treeId, originClusterId)</c> last-applied source HLC. Used
-    /// to surface a transport-side regression that breaks the per-origin
-    /// FIFO invariant the causal-apply pipeline relies on for occupancy
-    /// bounds: under correct sender + transport behaviour every
-    /// successful apply for a given origin has an HLC strictly greater
-    /// than the previous successful apply for that origin (the producer's
-    /// partitioned change feed yields per-shard in WAL-offset order and
-    /// each shard's WAL is HLC-monotonic per origin). A violation does
-    /// not change apply behaviour - the entry is still applied and the
-    /// HWM is still advanced - it only increments the
-    /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/>
-    /// counter so an alert on <c>rate &gt; 0</c> flags the regression.
-    /// Updated on successful apply (not on park) so the invariant tracks
-    /// "what has been merged" rather than "what has been observed".
+    /// Per-<c>(treeId, originClusterId)</c> highest applied source HLC. Feeds
+    /// the observability-only
+    /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/> diagnostic:
+    /// a successful apply whose source HLC is below the recorded maximum for
+    /// its origin increments that counter. Out-of-order arrival is expected
+    /// under correct operation - source HLCs are stamped per leaf and the WAL
+    /// partitions by key hash, so one origin's HLC stream is not monotonic in
+    /// delivery order (issue #1060) - so a non-zero rate is not by itself a
+    /// fault, and a violation does not change apply behaviour: the entry is
+    /// still applied. Updated on successful apply (not on park) and keeps the
+    /// pointwise maximum, so the tracker reflects "what has been merged"
+    /// rather than "what has been observed".
     /// </summary>
     private readonly ConcurrentDictionary<(string TreeId, string Origin), HybridLogicalClock> _lastAppliedSourceHlc =
         new();
@@ -335,8 +333,9 @@ internal sealed partial class ReplicationApplier(
             // could still deliver one. Surface it as an explicit
             // dedup-shaped no-op (Applied=false, HWM unchanged) so the
             // entry is acknowledged without faulting the apply loop.
-            // The category signal is not preserved through `WalRecord`
-            // (no Category slot), so the guard keys on `Op` directly.
+            // WalRecord does carry the mutation category (Category), but Op
+            // alone identifies a tombstone-reap envelope, so the guard keys on
+            // Op directly.
             if (entry.Op == MutationKind.Tombstone)
             {
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
@@ -486,7 +485,7 @@ internal sealed partial class ReplicationApplier(
             }
 
             // Shadow-forward dedupe cache: a structural rewrite (shard
-            // split / merge / saga compensate) that shadow-forwards a
+            // split / merge) that shadow-forwards a
             // user write into a different shard generates a duplicate
             // emit pair with identical (origin, hlc, key, op). This cache
             // is the primary exact-identity dedup for incremental point
@@ -1615,16 +1614,15 @@ internal sealed partial class ReplicationApplier(
     }
 
     /// <summary>
-    /// Updates the per-<c>(treeId, originClusterId)</c> last-applied
+    /// Updates the per-<c>(treeId, originClusterId)</c> highest-applied
     /// source-HLC tracker for a successfully applied point operation
     /// and increments
     /// <see cref="LatticeReplicationMetrics.ApplyFifoViolations"/> when
-    /// the entry's HLC is strictly less than the previously recorded
-    /// value - surfacing a transport-side regression that broke the
-    /// per-origin FIFO invariant. The recorded value is the pointwise
-    /// max so a benign re-delivery (which the HWM check already filters
-    /// upstream) does not silently downgrade the tracker on the rare
-    /// path where it slipped through.
+    /// the entry's HLC is strictly less than the recorded maximum - an
+    /// observability-only signal of out-of-order arrival, which the
+    /// interleaved per-leaf HLC streams of one origin produce routinely. The
+    /// recorded value is the pointwise max so an out-of-order apply never
+    /// downgrades the tracker.
     /// </summary>
     private void RecordFifoState(WalRecord entry)
     {

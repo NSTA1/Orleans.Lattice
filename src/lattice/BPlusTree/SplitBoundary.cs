@@ -7,7 +7,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.HighKeyExclusive"/> has
 /// been narrowed to the split key must not serve or replay a key the destination
 /// sibling now owns - is one shared rule the production leaf grain
-/// (<c>BPlusLeafGrain.ShouldApplyDuringReplay</c>) and the Coyote reshard model
+/// (<c>BPlusLeafGrain.ShouldApplyDuringReplay</c>) and the Coyote split and
+/// span-admission models (<c>SplitPivotAdmissionModel</c>,
+/// <c>SpanAdmissionMigrationModel</c> and <c>MovedAwaySealInheritanceModel</c>)
 /// both execute, with no possibility of drift.
 /// <para>
 /// The core owns no <c>Task</c>/<c>await</c>, no wall-clock, and no Orleans types;

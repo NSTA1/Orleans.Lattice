@@ -57,7 +57,10 @@ phases:
    shipping and receiving stay paused until the saga completes globally, so an
    early-flipping cluster cannot re-advance the restored cut. The write fence is
    held only for the cutover, not for the whole build, so healthy clusters are
-   not write-starved while a large tree builds.
+   not write-starved while a large tree builds. The write fence also self-lifts
+   on a bounded cutover deadline (five minutes after it engages), so a stalled
+   cutover never fences local writes indefinitely; that release leaves shipping
+   and receiving paused until the saga completes globally.
 3. **Abort** - reached if any participant voted to abort. Every participant that
    prepared is compensated: its shadow is reverted and garbage collected and the
    pre-restore tree is left untouched.
@@ -67,10 +70,14 @@ Two guarantees make this safe under failure:
 - **Single global decision.** The coordinator reaches exactly one
   commit-or-abort decision after collecting every vote, and delivers that one
   decision to every participant. A participant never observes a mixed outcome.
-- **Bounded fence-timer auto-compensation.** A prepared participant holds its
-  cutover fence under a bounded timer. If the coordinator is lost before it
-  delivers a decision, the fence expires and the participant auto-compensates
-  (aborts), so a prepared restore can never leak after a coordinator loss.
+- **Bounded fence-timer auto-compensation.** A prepared participant waits for
+  the decision under a bounded cutover-fence timer (five minutes; distinct from
+  the per-tree write fence, which engages only at commit). If the coordinator is
+  lost before it delivers a decision, the timer expires and the participant
+  auto-compensates (aborts), so a prepared restore can never leak after a
+  coordinator loss. The coordinator separately bounds the prepare phase: it
+  aborts a saga whose prepare is still being retried an hour after the saga
+  started.
 
 ## Reliability under duress
 

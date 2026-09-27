@@ -11,8 +11,10 @@ namespace Orleans.Lattice.Auth;
 /// <remarks>
 /// <para>
 /// This engine is the decision surface consulted by the policy access gate once
-/// the auth add-on is registered. The gate also applies the strict tenant fence
-/// and bootstrap root-of-trust before returning an enforcement decision.
+/// the auth add-on is registered. Before consulting it the gate applies the
+/// bootstrap root-of-trust, control-plane isolation and the optional
+/// strict-consistency policy-epoch fence, and when the tenancy add-on is
+/// installed it additionally gates an engine allow through tenant isolation.
 /// </para>
 /// <para>
 /// <see cref="Evaluate"/> consumes the subject's already-transitively-expanded

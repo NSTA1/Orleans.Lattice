@@ -47,9 +47,11 @@ Goals:
   dispatch included); the MCP, Explorer, and Grafana heads scale to zero when idle.
 - **Secure by default.** Entra-backed auth on every client-facing surface,
   secrets in Key Vault reached through managed identity, least-privilege RBAC,
-  non-root distroless containers, and origins locked to the global front door.
+  non-root distroless containers, and origins locked to the global front door
+  (public option) or reachable only on internal ingress (private option).
 - **One-command reproducible.** A single parameterised PowerShell deployer builds
-  the images and deploys every region plus the global ingress idempotently.
+  the images and deploys every region, plus the global ingress on the public
+  option, idempotently.
 
 Non-goals (documented, deliberately out of the baseline for cost):
 
@@ -87,8 +89,8 @@ within a region, eventual (convergent, LWW/CRDT) consistency between regions,
 with no session affinity required** because any region can serve any user and all
 regions converge to the same state. Applications that need read-your-writes
 across regions must route a user's writes and reads to the same region for the
-duration of that requirement; the global front door's latency routing already
-keeps a user on their nearest region in steady state.
+duration of that requirement; on the public option, the global front door's
+latency routing already keeps a user on their nearest region in steady state.
 
 ## Regional topology
 
@@ -139,9 +141,10 @@ flowchart TB
     ACR -.->|"image pull via managed identity"| SB
 ```
 
-The diagram shows two regions for clarity; the Bicep is parameterised over an
-arbitrary region list, and Front Door, the blob sink, and the registry are single
-global resources shared by every region.
+The diagram shows two regions for clarity, on the default public option; the
+Bicep is parameterised over an arbitrary region list, and Front Door (public
+option only), the blob sink, and the registry are single global resources shared
+by every region.
 
 ## Container heads and scaling profile
 
@@ -151,7 +154,7 @@ always-resident metrics collector, is described under [Observability](#observabi
 
 | Head | Image | Min | Max | Rationale |
 |---|---|---|---|---|
-| Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on compute pressure. |
+| Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on compute pressure (see [Autoscaling](#autoscaling-via-the-latticescaling-keda-bridge)). |
 | MCP | built (MCP host) | 0 | N | Stateless remote MCP server; cold-starts on demand, idle at zero. |
 | Explorer | built (Explorer host) | 0 | N | Operator console (Blazor Server): per-user circuit state only, pinned by sticky sessions, nothing durable; a small admin tool, idle at zero. |
 | Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or volume. |
@@ -162,9 +165,9 @@ isolated-head design: an admin tool must not tax the data plane's scale economic
 
 ## Intra-region silo clustering
 
-The silo is a **single container app** whose **replicas** (1 to 3) form the
-Orleans cluster. Replicas discover and address each other two ways working
-together:
+The silo is a **single container app** whose **replicas** (by default a floor of
+1 and a ceiling of 3) form the Orleans cluster. Replicas discover and address
+each other two ways working together:
 
 - **Azure Table clustering** provides Orleans membership: each replica registers
   in a per-region storage table, and the membership protocol tracks the live set.
@@ -174,7 +177,10 @@ together:
 
 Scaling the silo to a single replica per region is **not** an acceptable fallback:
 the design requires genuine intra-region multi-silo clustering so a single replica
-loss does not take the region's data plane offline. The Orleans membership and
+loss does not take the region's data plane offline. The replica floor defaults to
+one, so a region at rest runs a single replica until compute pressure scales it
+out; set the deployer's `-SiloMinReplicas` to 2 or more to keep that cluster at
+all times. The Orleans membership and
 endpoint configuration on ACA (advertised address, silo port, gateway port) must
 be validated against this replica-to-replica model rather than assumed.
 
@@ -258,8 +264,9 @@ Losing a whole region is survivable because the estate is active-active and the
 backup sink is shared:
 
 - **Live peers keep serving.** The remaining regions continue to accept reads and
-  writes; the front door fails user traffic over to the next-nearest healthy
-  region automatically.
+  writes. On the public option the front door fails user traffic over to the
+  next-nearest healthy region automatically; the private option has no front
+  door, so its clients fail over through their own private connectivity.
 - **Rebuild the region.** A replacement region is redeployed from the same Bicep.
   The deployer enrols it in replication as it deploys it (pass 2), so the trees in
   `-ReplicationTrees` are replicated there from the start - which decides how a
@@ -279,11 +286,12 @@ backup sink is shared:
 
 ## Autoscaling via the lattice.scaling KEDA bridge
 
-The silo's replica count is driven by the `Orleans.Lattice.Scaling`
+The design drives the silo's replica count from the `Orleans.Lattice.Scaling`
 **compute-axis** signal (`scaleValue`, a replica-demand scalar driven by the
 dominant compute pressure - grain activations, host CPU and memory, or WAL
 dispatch), published on the silo's `/metrics` endpoint (and also served as JSON at
-`/lattice/scale`) and scraped into Prometheus.
+`/lattice/scale`), scraped into managed Prometheus, and read by a KEDA Prometheus
+scale rule on the silo container app:
 
 ```mermaid
 flowchart LR
@@ -294,15 +302,29 @@ flowchart LR
     REPL -->|"graceful scale-in"| DRAIN["Draining replica<br/>respects LatticeShuttingDownException"]
 ```
 
+The rule's default query, `max(orleans_lattice_scaling_scale_value{lattice_head="silo"})`,
+reads the series the region's collector stamps with `lattice_head="silo"`, and its
+default threshold is `0.5`. The threshold must be below 1: KEDA asks for
+`ceil(scaleValue / threshold)` replicas, and `scaleValue` is the dominant
+utilisation (at most 1) times the replicas already running, so it never exceeds
+the running count and a threshold of `1` could only hold or shrink the pool; `0.5`
+asks for twice the current count at full saturation. See
+[Scaling behaviour](reference-architecture/README.md#scaling-behaviour) in the
+kit's guide.
+
 Two properties matter:
 
-- **Min-replica quorum floor.** The scale rule's minimum is 1 (never 0) so the
-  data plane and a membership quorum survive idle periods.
-- **Graceful scale-in.** A replica chosen for scale-in drains rather than being
-  force-killed mid-transfer; the host honours `LatticeShuttingDownException` so an
-  in-flight shard transfer completes or hands off before the replica exits.
+- **Min-replica quorum floor.** The silo's minimum replica count is at least 1
+  (never 0), so the data plane and a membership quorum survive idle periods. It
+  defaults to 1; `-SiloMinReplicas` raises it.
+- **Graceful drain.** A silo replica that is stopped - by a scale-in or a revision
+  rollout - gets a 120-second termination grace period after SIGTERM
+  (`siloTerminationGracePeriodSeconds`) before the platform force-terminates it.
+  In that window Lattice refuses new writes on the replica with
+  `LatticeShuttingDownException`, typed back-pressure for a write that was never
+  committed, and releases callers already parked on the write-ahead log.
 
-The same Prometheus feed drives both KEDA and Grafana, so there is one metrics
+KEDA and Grafana read the same managed Prometheus feed, so there is one metrics
 pipeline, not two.
 
 ## Network options
@@ -389,8 +411,9 @@ The baseline exposes three client-facing surfaces per region:
 
 The read-write **Data API** (`Orleans.Lattice.Api.Data`) is **enabled by
 default**. Its write-capable gRPC binding is co-hosted on the same silo gRPC
-endpoint as the read-only State API, so writes ride the same Entra-authenticated,
-origin-locked front-door path; the MCP head advertises the matching write tools.
+endpoint as the read-only State API, so writes ride the same Entra-authenticated
+path as reads (on the public option, the same origin-locked front-door path); the
+MCP head advertises the matching write tools.
 It is safe on by default because the real enforcement is the deny-by-default
 per-tree/per-key access gate keyed on the caller's Entra-resolved subject - the
 coarse transport gate is opened but every mutation is still subject-checked. Set
@@ -474,6 +497,9 @@ assignment), so no imperative consent step runs; the deploying identity only nee
 a privileged directory role (for example Privileged Role Administrator) for that
 grant to succeed.
 
+The flow below is the public option's. On the private option the client reaches
+the head's internal ingress directly, with no Front Door hop.
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -526,7 +552,7 @@ sequenceDiagram
 - **Per-region Log Analytics** captures ACA container logs, capped at **1 GB/day
   ingestion** (`dailyQuotaGb = 1`) at the default 30-day retention to bound cost;
   metrics via managed Prometheus are unaffected by the log cap.
-- One Prometheus feed serves both Grafana and the KEDA autoscaler.
+- Grafana and the silo's KEDA scale rule read the same Prometheus feed.
 
 ## Security posture
 
@@ -559,7 +585,8 @@ Security is a first-class property of this architecture, not an afterthought:
   chiseled (shell-less) base, shrinking the attack surface and blocking
   shell-based exploitation.
 - **Locked ingress.** Client origins accept traffic only from the global front
-  door; the replication transport is server-TLS + replication-key over public
+  door (public option) or only on their internal ingress (private option); the
+  replication transport is server-TLS + replication-key over public
   ingress (public option) or the private VNet mesh **also** authenticated by the
   replication key (private option).
 - **Fail-closed authorization.** The data plane is deny-by-default where auth is
@@ -600,9 +627,9 @@ The three built images use the **most compact base that is practical**:
 The baseline is designed to be cheap at rest: only the silo (min 1) and the small
 per-region metrics collector (one resident replica) are always-on, and the MCP,
 Explorer, and Grafana heads sit at zero when idle. The dominant fixed costs are
-the always-on silo replica per region, the single AFD Standard profile,
-the container registry, and the managed Prometheus / Log Analytics (the latter
-capped at 1 GB/day). Self-hosting Grafana instead of Azure Managed Grafana removes
-a material fixed monthly cost. A concrete, validated cost note for a specific
-region count lives with the validation run in
+the always-on silo replica per region, the single AFD Standard profile (public
+option), the container registry, and the managed Prometheus / Log Analytics (the
+latter capped at 1 GB/day). Self-hosting Grafana instead of Azure Managed Grafana
+removes a material fixed monthly cost. A concrete, validated cost note for a
+specific region count lives with the validation run in
 [`reference-architecture/README.md`](reference-architecture/README.md).

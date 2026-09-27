@@ -114,6 +114,11 @@ persona's scenarios).
 | 1    | Trends across runs                   | `timeseries` × {family count}, `points` mode  | One line per `{__name__, scenario, git_sha}` in the persona's metric families.         |
 | 2    | Per-run history (commit comparator)  | `barchart` × {KPI count}, vertical            | One bar per run, hover shows `{{scenario}} {{run_id}} @ {{git_sha}}`.                  |
 
+As committed, the Replication and WAL Performance dashboards, and the Replication, WAL
+Performance and Atomic Writes rows of the Overview, show their headline KPIs as bar
+charts rather than stat tiles: those files were edited by hand after generation.
+`Generate-Dashboards.ps1` emits stat tiles, so regenerating turns them back.
+
 The dashboards are regenerated from `benchmark/history/Generate-Dashboards.ps1`.
 The script wipes `BenchmarkHistory*.json` first so deleted personas don't leak,
 then emits one JSON per persona under `grafana/dashboards/`, plus the Overview. The

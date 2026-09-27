@@ -56,7 +56,7 @@ at run time and so cannot own a literal path segment:
 ```text
 /area/backups
 /area/tenants
-/area/tenants/detail/acme/quotas
+/area/backups/trees/orders/existing
 ```
 
 An area's slug is derived from its plugin id, not from its label, so renaming an
@@ -65,8 +65,7 @@ plugin id `orleans.lattice.tenants` and therefore addresses as `/area/tenants`;
 My tenant addresses as `/area/mytenant`. A contributed area carries the same
 optional kind, id and surface tail as the home area.
 
-An area's sub-surface travels as a query parameter rather than a path segment,
-namespaced to its area:
+An area's sub-surface travels as a query parameter namespaced to its area:
 
 ```
 /area/tenants?tenant-admin-surface=quotas
@@ -76,11 +75,18 @@ namespaced to its area:
 It is namespaced because a route keeps its parameters when the area changes, so
 a shared bare `surface` key would let one area clobber the other's. The address
 wins over the remembered value, so a link opens on the surface it names even
-when you last left that area somewhere else - and the addressed surface is then
-remembered, so a later bare visit stays where the link put you.
+when you last left that area somewhere else - and the Tenant administration and
+My tenant areas then remember the addressed surface, so a later bare visit stays
+where the link put you.
 
-Two further routes exist: `/reset-view`, which clears remembered state, and
-`/not-found`.
+The Access, Backups and Schema areas use `access-surface`, `backups-surface` and
+`schema-surface` the same way when the address carries no catalog selection; when
+it does, they put the sub-surface in the route's own surface segment instead, as
+in `/area/backups/trees/orders/existing` above. The Telemetry area addresses the
+panel you are looking at with `query`.
+
+Two further routes exist: `/reset-view`, which lists what is remembered and clears
+it when you ask it to, and `/not-found`.
 
 Parsing is forgiving. Handed a bare `/tenants`, the address parser still
 resolves the area, reports the address as normalised, and lets the shell rewrite

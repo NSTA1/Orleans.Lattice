@@ -23,7 +23,10 @@ public sealed record ShardDiagnosticSnapshot
     /// <summary>Count of live (non-tombstoned) keys in the shard.</summary>
     [Id(3)] public long LiveKeys { get; init; }
 
-    /// <summary>Count of tombstoned keys awaiting compaction in the shard.</summary>
+    /// <summary>
+    /// Count of tombstoned and expired entries in the shard. Zero unless the report was
+    /// sampled with <see cref="TreeAdminDiagnosticReport.Deep"/> set.
+    /// </summary>
     [Id(4)] public long Tombstones { get; init; }
 
     /// <summary>

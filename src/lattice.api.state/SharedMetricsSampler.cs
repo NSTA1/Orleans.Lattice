@@ -253,9 +253,10 @@ internal sealed class SharedMetricsSampler(
 
             // A saturated tree's shard roots are already contended by the write
             // backlog; a fresh per-shard diagnostics walk would only pile on. Skip
-            // it and serve a degraded view: registry-sourced lifecycle + shard
-            // count, live counts paused, hotness empty. The detail returns
-            // automatically once the tree settles.
+            // it and serve a degraded view: the shard count read from the
+            // tree's routing map, a fixed Active lifecycle, live counts paused,
+            // hotness empty. The detail returns automatically once the tree
+            // settles.
             if (_saturationSignal?.GetCurrentState(treeId) == WalSaturationState.Saturated)
             {
                 var shardCount = await _query.GetPhysicalShardCountAsync(treeId, cancellationToken).ConfigureAwait(false);

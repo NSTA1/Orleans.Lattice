@@ -13,12 +13,12 @@
 	rather than a courtesy. A check only ever observed passing is
 	indistinguishable from one that cannot fail: both are consistent with the
 	mechanism working and with the mechanism being unwired, and only a case that
-	is supposed to REFUSE separates them. So each of the five checks has at least
+	is supposed to REFUSE separates them. So each of the seven checks has at least
 	one fixture it accepts and at least one it refuses, and the refusals assert
 	on the violation TEXT, since a violation that does not name the disagreeing
 	values leaves the operator to go and find them.
 
-	Three fixtures reconstruct real defects. `Compose provenance REFUSES the
+	Several fixtures reconstruct real defects. `Compose provenance REFUSES the
 	gate run 1/2 shape` and `Composite REFUSES the reconstructed gate run 2
 	readings` use the actual observed values: a container whose compose label
 	resolved to the main checkout while the operator stood in the candidate
@@ -26,7 +26,10 @@
 	environment despite being merged on the candidate branch. `Archive
 	durability REFUSES the measured issue #2627 reading` uses the mount source
 	`docker inspect` actually returned for the archive bind, VM path form and
-	all.
+	all. `Build provenance REFUSES the bucket-4 gate run 4 readings, verbatim`
+	pins the commits and timestamps of issue #2686, and the workspace
+	section's issue #2617 fixture is the linked worktree that was indexed under
+	the base repository's id.
 
 	Check 5's section carries one fixture the others do not need, and it is the
 	load-bearing one: a composite whose compose working directory IS a git
@@ -262,10 +265,12 @@ _Assert -Name 'REFUSES a config file merged in from outside the project director
 	-Condition ($refused.Count -eq 1 -and $refused[0].Contains('override'))
 
 # --- the untracked-override hazard, both directions ------------------------
-# The real stack is base + a gitignored override supplying the image pin, the
-# memory limit and the CPU caps. Every fixture below therefore uses a file git
-# has never heard of: a check that could only reason about tracked files would
-# be green throughout, which is the property that makes this class need its own
+# The real stack is base + a second file supplying the image pin, the memory
+# limit and the CPU caps - once a gitignored override, now the tracked
+# docker-compose.tuning.yml (issue #2609), with a machine-local override still
+# legitimate on top. Every fixture below uses an override, a file git has never
+# heard of: a check that could only reason about tracked files would be green
+# throughout, which is the property that makes this class need its own
 # instrument.
 $base = Join-FixturePath $candidateCheckout 'docker-compose.yml'
 $override = Join-FixturePath $candidateCheckout 'docker-compose.override.yml'

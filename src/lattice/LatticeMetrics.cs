@@ -952,23 +952,19 @@ public static class LatticeMetrics
     /// with <see cref="TagTree"/> so operators can plot leaf-side
     /// commit concurrency per tree.
     /// <para>
-    /// Under the default Orleans non-reentrant grain scheduling - the
-    /// shipping shape of <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/> /
-    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/>, neither marked
-    /// <c>[AlwaysInterleave]</c> - this histogram pins at <c>0</c>: the
-    /// next commit cannot enter until the current one has returned. A
-    /// non-zero quantile therefore signals one of two things:
-    /// (i) a future change has applied <c>[AlwaysInterleave]</c> to the
-    /// leaf-side commit entrypoint and disjoint-key sub-batches now
-    /// overlap on the same leaf activation, or
-    /// (ii) a reentrant-by-design code path (saga terminal write under
-    /// commit-log scope) routed back through the commit-set path while
-    /// an outer commit was still awaiting a WAL append.
-    /// Either reading is informative for the U9m / leaf-side-commit-concurrency
-    /// probe: a steady pin at <c>0</c> falsifies
-    /// the leaf turn-queue hypothesis and routes the next probe to
-    /// WAL-side fan-in (U9n); a steady lift above <c>0</c> identifies
-    /// the leaf grain as the binding constraint.
+    /// The leaf write entry points
+    /// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/> and the
+    /// other mutation methods) are marked <c>[AlwaysInterleave]</c> (U9p step
+    /// 8c-c-iv-c2-iii), so a new commit can enter while earlier commits on the
+    /// same activation are parked at an await, typically their WAL append.
+    /// Orleans still serialises the synchronous code between awaits, and the
+    /// split state machine is serialised separately. A non-zero value is
+    /// therefore expected under concurrent load: it counts the commits already
+    /// overlapping on the leaf activation when this one entered. Read with the
+    /// U9m / leaf-side-commit-concurrency probe: a steady pin at <c>0</c> means
+    /// commits are not overlapping on the leaf, while a sustained lift shows how
+    /// many commits each leaf activation is carrying at once.
     /// </para>
     /// </summary>
     public static readonly Histogram<int> LeafCommitInFlight =
@@ -979,10 +975,12 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of how long the tree-registry singleton took to SERVE one
-    /// <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/> read, measured
-    /// inside the grain body and tagged with <see cref="TagOperation"/>
-    /// (<c>exists</c>, <c>get_entry</c>, <c>resolve</c>, <c>get_shard_map</c>,
-    /// <c>get_all_tree_ids</c>).
+    /// <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/> call, measured
+    /// inside the grain body and tagged with <see cref="TagOperation"/>: the
+    /// reads <c>exists</c>, <c>get_entry</c>, <c>get_entries</c> (one batched
+    /// call per page of ids), <c>resolve</c>, <c>get_shard_map</c> and
+    /// <c>get_all_tree_ids</c>, and the mutators <c>register</c> and
+    /// <c>unregister</c>. The registry's other mutators are not recorded here.
     /// <para>
     /// The registry is a cluster singleton that every per-tree background
     /// service addresses, so a cold start fans a whole estate onto one
@@ -1006,7 +1004,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> RegistryCallDuration =
         Meter.CreateHistogram<double>("orleans.lattice.registry.call.duration", unit: "ms",
-            description: "Service time of one ILatticeRegistry read, measured inside the registry singleton's grain body.");
+            description: "Service time of one instrumented ILatticeRegistry call (exists, get_entry, get_entries, resolve, get_shard_map, get_all_tree_ids, register and unregister; other members are not recorded), measured inside the registry singleton's grain body.");
 
     /// <summary>
     /// Histogram of the concurrent registry-call count observed at the moment a
@@ -1025,7 +1023,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<int> RegistryCallInFlight =
         Meter.CreateHistogram<int>("orleans.lattice.registry.call.in_flight", unit: "{call}",
-            description: "Concurrent ILatticeRegistry reads in flight on the registry singleton at the moment a new read is admitted.");
+            description: "Concurrent instrumented ILatticeRegistry calls (the members orleans.lattice.registry.call.duration records) in flight on the registry singleton at the moment a new such call is admitted.");
 
     /// <summary>
     /// Histogram of how long one <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry"/>
@@ -1057,8 +1055,9 @@ public static class LatticeMetrics
     /// was never served, not one that was served slowly.
     /// </para>
     /// <para>
-    /// <b>Occupancy.</b> Tagged by every interface member rather than by the read
-    /// subset the census covers, so a non-interleaved mutator holding the
+    /// <b>Occupancy.</b> Tagged by every interface member rather than by the
+    /// subset the census covers (its six reads plus <c>RegisterAsync</c> and
+    /// <c>UnregisterAsync</c>), so a non-interleaved mutator holding the
     /// singleton's turn token (<c>UpdateAsync</c>, <c>SetShardMapAsync</c>,
     /// <c>ReassignSlotsAsync</c>, ...) shows as a long <c>completed</c> tail on
     /// its own member rather than being invisible.
@@ -1188,27 +1187,30 @@ public static class LatticeMetrics
     // --- Saga decision registry group commit (TxRegistryGrain) -------------------
 
     /// <summary>
-    /// Counter of whole-state writes issued by the per-tree saga decision
-    /// registry (<c>TxRegistryGrain</c>), tagged with <see cref="TagTree"/>,
+    /// Counter of whole-state writes issued by the saga decision registry
+    /// (<c>TxRegistryGrain</c>), tagged with <see cref="TagTree"/>,
     /// <see cref="TagOutcome"/> = <c>ok</c> (the write completed durably) or
     /// <c>fault</c> (the write threw and every mutation it carried, plus any
     /// queued behind it, was rolled back and failed to its caller), and the
     /// tenant label.
     /// <para>
-    /// The registry is one activation per tree and every atomic saga records
-    /// its participants, its decision and its cleanup through it, so its write
-    /// rate is the ceiling on saga throughput. The registry group-commits: at
-    /// most one write is in flight and mutations that arrive meanwhile join the
-    /// next one. Read this counter against
-    /// <see cref="TxRegistryWriteMutations"/>: a write rate that stays flat
-    /// while the mutation rate climbs is coalescing doing its job, and a write
-    /// rate that tracks the mutation rate one for one means there was no
+    /// A tree has one registry activation by default, or one per registry shard
+    /// when <see cref="Orleans.Lattice.LatticeOptions.TxRegistryShardCount"/> is
+    /// above one; every shard tags the logical tree id, so a tree's series sums
+    /// its shards. Every atomic saga records its participants, its decision and
+    /// its cleanup through the registry its transaction id routes to, so a
+    /// registry's write rate is the ceiling on the saga throughput it carries.
+    /// Each registry group-commits: at most one write is in flight and
+    /// mutations that arrive meanwhile join the next one. Read this counter
+    /// against <see cref="TxRegistryWriteMutations"/>: a write rate that stays
+    /// flat while the mutation rate climbs is coalescing doing its job, and a
+    /// write rate that tracks the mutation rate one for one means there was no
     /// concurrency to coalesce.
     /// </para>
     /// </summary>
     public static readonly Counter<long> TxRegistryWrites =
         Meter.CreateCounter<long>("orleans.lattice.tx_registry.writes", unit: "{write}",
-            description: "Whole-state writes issued by the per-tree saga decision registry, tagged by outcome (ok or fault).");
+            description: "Whole-state writes issued by the saga decision registry (one per tree, or one per registry shard), tagged by outcome (ok or fault).");
 
     /// <summary>
     /// Histogram of the number of registry mutations one
@@ -1227,9 +1229,10 @@ public static class LatticeMetrics
     /// Histogram of how long one <c>TxRegistryGrain</c> whole-state write took,
     /// in milliseconds, measured around the storage call. Tagged with
     /// <see cref="TagTree"/>, <see cref="TagOutcome"/> (<c>ok</c> or
-    /// <c>fault</c>) and the tenant label. Because the registry serialises its
-    /// writes, this duration bounds the registry's write rate: its reciprocal is
-    /// the most writes per second one tree's registry can issue.
+    /// <c>fault</c>) and the tenant label. Because each registry serialises its
+    /// writes, this duration bounds a registry's write rate: its reciprocal is
+    /// the most writes per second one registry activation can issue (one per
+    /// tree, or one per registry shard).
     /// </summary>
     public static readonly Histogram<double> TxRegistryWriteDuration =
         Meter.CreateHistogram<double>("orleans.lattice.tx_registry.write.duration", unit: "ms",
@@ -2571,13 +2574,14 @@ public static class LatticeMetrics
     /// leaf-materialiser <em>offset</em> floor could not be computed because the
     /// pin store was unreachable, tagged with <see cref="TagTree"/>. Emitted from
     /// <see cref="LatticeWalGc"/> whenever the offset-floor read
-    /// (<c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>) throws and the GC
-    /// falls back to no offset floor for that pass.
+    /// (<c>IWalMaterialiserPinGrain.GetPinOffsetsAsync</c>) throws. Since issue
+    /// #3576 such a pass fails closed: an unreadable census means the retention
+    /// floor is unknown, so the whole pass trims nothing (TTL trims included)
+    /// and the next pass retries.
     /// <para>
-    /// The fallback is safe for that pass (the HLC floor still constrains the
-    /// trim), but it was previously <b>completely silent</b>: a persistently
-    /// unreachable pin store removed the offset floor on <em>every</em> pass with
-    /// no signal, indistinguishable from a tree that legitimately has no offset
+    /// The unreadable case was previously <b>completely silent</b>: a
+    /// persistently unreachable pin store affected <em>every</em> pass with no
+    /// signal, indistinguishable from a tree that legitimately has no offset
     /// floor to apply. The healthy "no offset floor" outcomes - a host that never
     /// wired the durable pin store, or a store that is reachable but reports no
     /// offsets - do <b>not</b> reach the swallowing catch and so do <b>not</b>
@@ -2588,10 +2592,9 @@ public static class LatticeMetrics
     /// A <b>transient</b> tick is expected and benign - the next pass retries once
     /// the store is reachable - and this counter also ticks during a rolling
     /// upgrade where an older pin grain has no <c>GetPinOffsetsAsync</c>. A
-    /// <em>sustained</em> non-zero rate is the operational signal: the offset
-    /// floor is not being applied and the low-HLC/high-offset reap class it exists
-    /// to retain (see <see cref="WalGcPasses"/>) is protected only by the HLC
-    /// floor until the store recovers.
+    /// <em>sustained</em> non-zero rate is the operational signal: WAL GC is
+    /// trimming nothing for the tree, so its retained WAL grows until the store
+    /// recovers.
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalGcOffsetFloorUnavailable =
@@ -5481,16 +5484,16 @@ public static class LatticeMetrics
     public const string LeafSnapshotDriverDeclinesName = "orleans.lattice.leaf.snapshot.driver.declines";
 
     /// <summary>
-    /// Counter of graceful-deactivation DURABILITY BARRIERS that faulted,
-    /// tagged with <see cref="TagTree"/>, <see cref="TagReason"/> (which barrier)
-    /// and the tenant dimension.
+    /// Counter of graceful-deactivation DURABILITY BARRIERS that faulted or
+    /// skipped past the deactivation deadline, tagged with <see cref="TagTree"/>,
+    /// <see cref="TagReason"/> (which barrier) and the tenant dimension.
     /// <para>
-    /// <b>Why this exists (issue #3366).</b> The deactivation hook runs four
-    /// durability barriers in order - the digest publish, the projection
-    /// checkpoint flush, the deactivate-time snapshot capture, and the durable
-    /// materialiser frontier pin. They used to share one <c>try</c> and one
-    /// ANONYMOUS bare <c>catch</c> with no logger, so a fault in an early
-    /// barrier silently cancelled every later one and emitted nothing at all.
+    /// <b>Why this exists (issue #3366).</b> The deactivation hook's durability
+    /// barriers - the projection checkpoint flush, the deactivate-time snapshot
+    /// capture, the durable materialiser frontier pin, and the coalesced digest
+    /// publish - used to share one <c>try</c> and one ANONYMOUS bare
+    /// <c>catch</c> with no logger, so a fault in an early barrier silently
+    /// cancelled every later one and emitted nothing at all.
     /// Because the snapshot capture's own decline instrument
     /// (<see cref="LeafSnapshotDriverDeclines"/>) is raised INSIDE that capture,
     /// a fault before it produced neither a capture, nor a decline, nor a log
@@ -5498,10 +5501,23 @@ public static class LatticeMetrics
     /// three different remedies.
     /// </para>
     /// <para>
+    /// <b>Order (issue #3393).</b> The barriers run in the order checkpoint
+    /// flush (whose teardown persist publishes its own durable pin), snapshot
+    /// capture, frontier pin, and the digest publish last, because the publish
+    /// is the slow, staleness-tolerant step and running it first once consumed
+    /// the deactivation deadline. The <c>digest_publish</c> reason is recorded
+    /// only by the coalesced digest drain; when the teardown persist deferred
+    /// its own inline publish, that publish runs in the same last slot and a
+    /// fault is counted on <see cref="LeafCheckpointFlushTailFailures"/> instead.
+    /// </para>
+    /// <para>
     /// Each barrier is now contained independently, so this counter names
-    /// exactly which one faulted and the later barriers still run. Read a
-    /// non-zero value as a durability barrier that did NOT complete for that
-    /// tree: the checkpoint-flush arm in particular means an activation's
+    /// exactly which one faulted and the later barriers still run. The snapshot
+    /// capture and frontier pin barriers also count here, under their own
+    /// reason, when they SKIP because the deactivation deadline had already torn
+    /// the activation down (issue #3393). Read a non-zero value as a durability
+    /// barrier that did NOT complete for that tree, whether it threw or
+    /// skipped: the checkpoint-flush arm in particular means an activation's
     /// projection progress was not banked.
     /// </para>
     /// <para>
@@ -5512,7 +5528,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafDeactivationBarrierFailures =
         Meter.CreateCounter<long>("orleans.lattice.leaf.deactivation.barrier.failures", unit: "{failure}",
-            description: "Graceful-deactivation durability barriers that faulted, tagged by tree and barrier (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Each barrier is contained independently, so a fault in one no longer cancels the barriers after it.");
+            description: "Graceful-deactivation durability barriers that faulted, or skipped because the deactivation deadline had already torn the activation down, tagged by tree and barrier (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Each barrier is contained independently, so a fault in one no longer cancels the barriers after it.");
 
     /// <summary>Canonical name of <see cref="LeafDeactivationBarrierFailures"/>.</summary>
     public const string LeafDeactivationBarrierFailuresName = "orleans.lattice.leaf.deactivation.barrier.failures";
@@ -5594,13 +5610,20 @@ public static class LatticeMetrics
     /// <para>
     /// <b>Why this exists (issue #3393).</b> The checkpoint flush is two
     /// distinct things wearing one name. Its BODY performs the durable write;
-    /// its TAIL (<c>CompleteCheckpointFlushTailAsync</c>) runs three follow-up
+    /// its TAIL (<c>CompleteCheckpointFlushTailAsync</c>) runs follow-up
     /// notifications - the cursor report, the inline upward digest publish and
-    /// the periodic snapshot recheck. Each tail step is contained independently
-    /// and deliberately (issue #2220): the durable write has already committed,
-    /// the steps are notifications rather than part of the durability contract,
-    /// and letting one tear the activation down produced a replay loop. That
-    /// containment is correct and this counter does not change it.
+    /// the periodic snapshot recheck, plus (issue #3599) a durable pin publish
+    /// after the recheck whenever a capture the store kept restamped coverage.
+    /// The teardown persist's tail publishes the durable pin before its recheck
+    /// and again after a kept capture, and defers its inline digest publish to
+    /// the end of the deactivation hook. Every pin publish is counted under the
+    /// <c>cursor_report</c> step it previously rode on, and the deferred digest
+    /// publish under <c>inline_digest_publish</c>. Each tail step is contained
+    /// independently and deliberately (issue #2220): the durable write has
+    /// already committed, the steps are notifications rather than part of the
+    /// durability contract, and letting one tear the activation down produced a
+    /// replay loop. That containment is correct and this counter does not
+    /// change it.
     /// </para>
     /// <para>
     /// What the containment cost was OBSERVABILITY. A tail fault was written to
@@ -5635,7 +5658,11 @@ public static class LatticeMetrics
 
     /// <summary>
     /// <see cref="TagReason"/> value for the checkpoint-flush tail's cursor
-    /// report. Benign in isolation - the report re-drives on the next flush.
+    /// report, and for the tail's durable pin publishes (issues #3393, #3599),
+    /// which are counted under the step they previously rode on. Benign in
+    /// isolation - the report re-drives on the next flush and the pin on the
+    /// next flush or coverage-lag tick, and on teardown the frontier-pin
+    /// barrier retries the pin.
     /// </summary>
     public static readonly KeyValuePair<string, object?> CheckpointFlushTailCursorReport =
         new(TagReason, "cursor_report");
@@ -8029,18 +8056,20 @@ public static class LatticeMetrics
             description: "Wall-clock duration of IWalStorageProvider.AppendEncodedBatchAsync, observed by WalShardGrain.");
 
     /// <summary>
-    /// Histogram of caller-visible WAL append latency, measured from
-    /// the moment <c>AppendAsync</c> / <c>AppendBatchAsync</c> admits
-    /// an entry to the moment the corresponding ack TCS completes.
-    /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// Histogram of caller-visible WAL append latency on the per-entry
+    /// <c>AppendAsync</c> path, measured from the moment <c>AppendAsync</c>
+    /// admits an entry to the moment the corresponding ack TCS completes.
+    /// <c>AppendBatchAsync</c> does not record it. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>.
     /// Includes time spent waiting for the in-flight cap to drain,
     /// time spent in the pending batch before cutover, the
     /// provider's <see cref="WalAppendProviderDuration"/>, and any
-    /// grain-turn dispatch overhead.
+    /// grain-turn dispatch overhead - so despite its name it is the whole
+    /// admission-to-ack duration, not only a turn wait.
     /// </summary>
     public static readonly Histogram<double> WalAppendTurnWait =
         Meter.CreateHistogram<double>("orleans.lattice.wal.append.turn_wait", unit: "ms",
-            description: "Caller-visible WAL append duration (entry admission to ack), observed by WalShardGrain.");
+            description: "Caller-visible WAL append duration on the per-entry AppendAsync path (entry admission to ack), observed by WalShardGrain.");
 
     /// <summary>
     /// Histogram of the pending-segments queue depth observed at the
@@ -8068,7 +8097,8 @@ public static class LatticeMetrics
     /// <see cref="TagWalMaxPendingBatches"/>.
     /// <para>
     /// Subtracting <see cref="WalAppendTurnWait"/> (the WAL grain's
-    /// own self-clock) from this histogram isolates the Orleans
+    /// own self-clock, recorded only on the per-entry <c>AppendAsync</c>
+    /// path) from this histogram isolates the Orleans
     /// scheduling tax on the single WAL activation per partition: the
     /// time spent in the activation's turn queue plus the RPC
     /// dispatch overhead. Under <c>WalPartitions = 1</c> every leaf
@@ -8279,41 +8309,43 @@ public static class LatticeMetrics
             description: "Entry count per atomic-write saga, observed at execute-phase entry.");
 
     /// <summary>
-    /// Histogram of per-key <c>lattice.SetAsync</c> wall-clock
-    /// duration inside an atomic-write saga's execute loop. Tagged
-    /// with <see cref="TagTree"/>. One observation per successful
-    /// or failing key-level await, regardless of whether the saga
-    /// later compensates. The 99th-percentile of this histogram is
-    /// the dominant signal for whether the saga's serial fan-out
-    /// pattern is the throughput limit: it must be added across
-    /// all keys to recover the saga's end-to-end duration, so a
-    /// 10-entry saga's duration is bounded below by 10 x p50 of
-    /// this histogram.
+    /// Histogram of the average per-key cost of one atomic-write saga batch
+    /// attempt inside the execute phase: the attempt's wall-clock time - the
+    /// saturation quiesce gate plus the single batched
+    /// <c>lattice.SetManyAsync(slice)</c> dispatch of every unwritten entry,
+    /// whether it succeeds or fails - divided by the number of entries it
+    /// carried, and recorded once per entry. Each attempt therefore contributes
+    /// that many identical samples, and a retried batch contributes again.
+    /// Tagged with <see cref="TagTree"/> and the per-tree WAL partition count
+    /// tag. The batched dispatch makes individual per-key timing unrecoverable
+    /// from the saga's vantage point; summing one attempt's samples recovers
+    /// that attempt's duration.
     /// </summary>
     public static readonly Histogram<double> SagaPerKeyDuration =
         Meter.CreateHistogram<double>("orleans.lattice.saga.perkey.duration", unit: "ms",
-            description: "Per-key SetAsync duration inside an atomic-write saga execute loop.");
+            description: "Average per-key cost of one atomic-write saga batch attempt (the attempt duration divided by its entry count, recorded once per entry).");
 
     /// <summary>
-    /// Histogram of wall-clock ms spent inside the saga's prepare
-    /// phase: from the start of <c>ExecutePhaseAsync</c>'s parallel
-    /// batched <c>lattice.SetManyAsync(slice)</c> dispatch to the
-    /// moment every per-shard fan-out completes (post-D1c shape -
-    /// a single parallel call rather than a per-key loop). Excludes
-    /// the saga checkpoint persist that follows the dispatch.
-    /// Tagged with <see cref="TagTree"/> and the per-tree WAL
+    /// Histogram of wall-clock ms spent inside the saga's execute
+    /// (parallel-prepare) phase: the whole of <c>ExecutePhaseAsync</c>, from
+    /// entry until it returns or throws. That covers every batch attempt - the
+    /// saturation quiesce gate and the single parallel batched
+    /// <c>lattice.SetManyAsync(slice)</c> dispatch (post-D1c shape, rather than
+    /// a per-key loop) - together with the saga checkpoint persists that
+    /// follow each attempt (the post-batch commit, a retry, or the pivot to
+    /// compensation). Tagged with <see cref="TagTree"/> and the per-tree WAL
     /// partition count tag.
     /// <para>
     /// Sums with <see cref="SagaTerminalDecisionDuration"/> and
     /// <see cref="SagaBroadcastDuration"/> to approximate the saga's
-    /// end-to-end <c>SetManyAtomicAsync</c> p50 (the residue is
-    /// saga-checkpoint persist + grain-RPC framing on the public
+    /// end-to-end <c>SetManyAtomicAsync</c> p50 (the residue is the prepare
+    /// and terminal checkpoint persists plus grain-RPC framing on the public
     /// surface, both negligible at the c2-iii operating point).
     /// </para>
     /// </summary>
     public static readonly Histogram<double> SagaPrepareDuration =
         Meter.CreateHistogram<double>("orleans.lattice.saga.prepare.duration", unit: "ms",
-            description: "Wall-clock ms inside the saga's parallel-prepare phase (lattice.SetManyAsync(slice) dispatch through per-shard fan-out completion).");
+            description: "Wall-clock ms inside the saga's execute (parallel-prepare) phase: every batched lattice.SetManyAsync(slice) attempt plus the saga checkpoint persists that follow it.");
 
     /// <summary>
     /// Histogram of wall-clock ms spent inside the saga's terminal
@@ -8544,9 +8576,10 @@ public static class LatticeMetrics
     /// <see cref="Orleans.Lattice.LatticeOptions.MaxScanPageStallDuration"/>.
     /// Tagged with <see cref="TagTree"/>, <see cref="TagShard"/> and
     /// <see cref="TagPhase"/>, the last naming how far the page fill had got -
-    /// <c>prologue</c>, <c>descent</c>, or <c>leaf-walk</c> - which is what
-    /// distinguishes a slow shard prepare from a single leaf read that never
-    /// returned.
+    /// <c>prologue</c>, <c>descent</c>, <c>leaf-walk</c>, or
+    /// <c>baseline-fold</c> (a snapshot baseline capture folding its frozen
+    /// leaves' WAL tails) - which is what distinguishes a slow shard prepare
+    /// from a single leaf read that never returned.
     /// <para>
     /// Expected to be flat zero: the cooperative
     /// <see cref="Orleans.Lattice.LatticeOptions.MaxScanPageDuration"/> budget

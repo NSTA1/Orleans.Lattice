@@ -129,12 +129,14 @@ each needs a deliberate change before this shape goes anywhere untrusted.
   value you inject is the hash, so a leak still forces an attacker through
   PBKDF2, but treat it as a secret regardless.
 - **Unauthenticated requests can exhaust CPU.** To keep the authorizer free of a
-  user-existence timing oracle, **every** attempt - including an unknown username
-  and a locked-out account - spends a full, deliberately expensive PBKDF2
-  verification. That safety property is also an amplifier: an anonymous flood
-  forces expensive hashing per request and can saturate CPU. A public deployment
-  needs an upstream rate limiter / WAF / connection cap in front; the sample has
-  none.
+  user-existence timing oracle, **every** well-formed Basic attempt - including
+  an unknown username and a locked-out account - spends a full, deliberately
+  expensive PBKDF2 verification (only a missing or malformed header, or a
+  username that is not a valid environment-variable name, is refused before any
+  hashing). That safety property is also an amplifier: an unauthenticated flood
+  of well-formed Basic credentials forces expensive hashing per request and can
+  saturate CPU. A public deployment needs an upstream rate limiter / WAF /
+  connection cap in front; the sample has none.
 - **A known username can be locked out on purpose.** The failed-attempt lockout
   is per-username, and once locked the account is refused until the window
   expires - even with the correct password. Anyone who knows or guesses a
@@ -155,9 +157,10 @@ each needs a deliberate change before this shape goes anywhere untrusted.
 - The password hash iteration count is deliberately **not** printed. It is an
   implementation detail of `LatticePasswordHash` that tracks current guidance and
   changes over time; hard-coding it in sample output would go stale.
-- The bootstrap administrator seeds the trees and authors the reader's rule
-  before any rule exists. Production should keep the bootstrap set as small as
-  possible and grant everything else through rules.
+- The bootstrap administrator seeds the trees before any rule grants access; the
+  reader's rule is written through the silo-side policy store, which runs under
+  system origin and never consults the gate. Production should keep the
+  bootstrap set as small as possible and grant everything else through rules.
 - The authorization gate reads a compiled policy snapshot that rebuilds off the
   policy-tree change feed, so the sample polls briefly after authoring the rule
   before exercising enforcement.

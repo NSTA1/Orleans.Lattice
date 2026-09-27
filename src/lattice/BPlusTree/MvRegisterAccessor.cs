@@ -88,7 +88,7 @@ public readonly record struct MvRegisterAccessor<T>
     /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
     /// <param name="value">The value to store. May be <c>null</c> only when <typeparamref name="T"/> permits it.</param>
     /// <param name="cancellationToken">Cancels the read and write hops.</param>
-    /// <param name="maxAttempts">Maximum number of CAS retries before giving up.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
     public Task SetAsync(string replicaId, T value, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);

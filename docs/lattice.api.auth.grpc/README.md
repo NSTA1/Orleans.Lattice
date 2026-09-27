@@ -101,6 +101,17 @@ Every admin call passes through two independent gates, both fail-closed:
 
 A denial from the facade check is mapped to `PermissionDenied` with response trailers carrying only non-sensitive fields (`lattice-denied-tree`, `lattice-denied-operation`, `lattice-denied-subject`, `lattice-denied-reason`) - never a policy value.
 
+The transport authorizer receives a `LatticeAuthApiAuthorizationContext` naming the call's `LatticeAuthApiOperation` and a `TargetId`: the group id for `UpsertGroup`, `GetGroup`, `RemoveGroup`, `ListGroupMembers`, `AddMember`, and `RemoveMember`; the member id for `ListSubjectGroups`; the governed tree id for `PutRule` (the rule's scope tree), `GetRule`, `RemoveRule`, and `ListRulesForTree`; the subject id for `Explain` and `EffectivePermissions`; the principal id for `ResolveDirectoryPrincipal`; and `null` for `ListGroups`, `ListRules`, `SearchDirectory`, and `GetAccessModel`.
+
+### Error mapping
+
+| Status | When |
+|---|---|
+| `PermissionDenied` | The transport authorizer refused the call (no trailers), or the facade administrator check denied the caller (with the trailers above). |
+| `InvalidArgument` | The facade threw an `ArgumentException` - for example the policy store rejecting a rule shape it will not persist, or a `LatticeDirectoryValidationException` from identity-directory validation. The status detail is the exception message. |
+| `Cancelled` | The call was cancelled, including while the transport authorizer was deciding. |
+| `Internal` | Any other failure. The server logs it and returns a generic message. |
+
 ## Quick Start
 
 Register the binding on a silo that already has `AddLatticeAuthApi`, then map its routes:
@@ -151,6 +162,6 @@ var explanation = await authClient.ExplainAsync(new AuthExplainQuery
 });
 ```
 
-The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. Transport concerns (address, TLS, deadlines, retries, call credentials) are configured on the channel the caller supplies. A call the server rejects arrives as a `PermissionDenied` `RpcException`.
+The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. Transport concerns (address, TLS, deadlines, retries, call credentials) are configured on the channel the caller supplies. An authorization refusal arrives as a `PermissionDenied` `RpcException`; see [Error mapping](#error-mapping) for the other status codes.
 
 `AuthExplainQuery.SubjectKind` (and `AuthSubjectRef.SubjectKind`) select whether `SubjectId` names a user or a group; both default to `LatticeSubjectSelectorKind.User`, so existing messages deserialize unchanged. Set it to `LatticeSubjectSelectorKind.Group` to explain (or resolve the effective permissions of) a group subject - the decision is then evaluated for a principal that is a member of that group and its ancestors, so `group`-scoped rules match exactly as they would for a real member.

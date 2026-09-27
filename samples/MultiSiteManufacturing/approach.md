@@ -90,8 +90,9 @@ cleaner seam without coupling tests to the Azure SDK.
 
 ## 4. Fault-injection tiers
 
-Each tier models a distinct real-world failure class and can be
-exercised independently from the UI and from tests:
+Each tier models a distinct real-world failure class. Tiers 1 to 4b
+can be exercised independently from the UI and from tests; tier 5 is a
+manual Docker network operation:
 
 | Tier | Seam | Models | Toggle |
 |---:|---|---|---|
@@ -159,8 +160,8 @@ push to the peer cluster, idempotent receiver-side apply with CRDT
 semantics chosen per tree, and dead-letter handling for entries that
 fail to apply. See
 [`docs/lattice.replication/`](../../docs/lattice.replication/) for
-the gRPC wire format, bootstrap protocol, replog key shape, and
-back-pressure / dead-letter design.
+the gRPC wire format, bootstrap protocol, and back-pressure /
+dead-letter design.
 
 The sample's contribution is the per-tree opt-in:
 

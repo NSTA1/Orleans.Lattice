@@ -20,9 +20,10 @@ share one code path and cannot drift:
 
 - **`AddLatticeExplorerWeb(...)`** on the service collection registers the Razor
   interactive-server components, the shared explorer UI, the state-API connection
-  seam, the configuration backing store, and the Backups, Access, Tenants, My
-  Tenant, and Telemetry areas (and the Schema area, hidden by default) with their
-  capability probes and auth plumbing.
+  seam, the configuration backing store, and the Backups, Access, Tenant
+  administration, My tenant, and Telemetry areas (plus the Schema area's services;
+  the Schema tab itself is withheld by default) with their capability probes and
+  auth plumbing.
 - **`MapLatticeExplorer(...)`** on the endpoint route builder maps the Razor
   components, the UI static assets, and the sign-in/sign-out endpoints, under the
   configured base path.
@@ -39,8 +40,11 @@ and make the same two calls in your own host.
 shared explorer libraries it builds on restore transitively:
 
 - `Orleans.Lattice.Explorer.UI` - the shared Razor component class library. Its
-  static web assets are served automatically at
-  `_content/Orleans.Lattice.Explorer.UI/`, with no extra wiring.
+  static web assets are served at `_content/Orleans.Lattice.Explorer.UI/` with
+  no extra wiring by a published host or under the Development environment; a
+  host run from its build output (for example with `dotnet run`) under any other
+  environment calls `builder.WebHost.UseStaticWebAssets()` so they are mapped, as
+  the Explorer sample does.
 - `Orleans.Lattice.Explorer.Core` - the head-agnostic connection, configuration,
   session, authentication, tenant-scoping, and navigation services, and the
   catalog, data, dead-letter, history, metrics, and topology readers.

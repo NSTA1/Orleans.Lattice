@@ -35,7 +35,10 @@ internal sealed record OnyxEmbedRequest
 
     /// <summary>
     /// The text role - <c>passage</c> for stored chunks, <c>query</c> for search
-    /// vectors - so the server applies the correct asymmetric prefix.
+    /// vectors. Sent for wire compatibility only: no asymmetric prefix results,
+    /// because the bundled ONNX embedding server ignores the field and the Onyx
+    /// model server takes its prefixes from the <c>manual_query_prefix</c> /
+    /// <c>manual_passage_prefix</c> fields, which this request never carries.
     /// </summary>
     [JsonPropertyName("text_type")]
     public required string TextType { get; init; }

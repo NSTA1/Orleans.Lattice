@@ -133,8 +133,10 @@ Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` packa
   registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`,
   `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, and the read-only
   `ILatticeTenantSelfService` and `ILatticeTenantQuotaUsage`, together with the
-  fail-closed authorizers they consult and the system-driven region backfill/drain
-  promotion driver.
+  fail-closed authorizers they consult and the internal single-step region
+  promotion driver, which no shipped component invokes - so a region set through
+  `SetResidencyAsync` stays at `Provisioning` or `Draining` (see
+  [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)).
 - `AddLatticeTenantScopedTreeAdminApi(this ISiloBuilder builder)` - registers
   `ILatticeTenantScopedTreeAdmin`.
 
@@ -341,7 +343,9 @@ either side. A grant that was never offered - or whose granting tenant is not
 registered - is reported identically as `TenantGrantNotFoundException`; asking for
 the state a grant is already in is an idempotent no-op, and a transition the
 lifecycle forbids (for example approving a rejected or revoked grant) raises
-`TenantGrantTransitionException` before any write.
+`TenantGrantTransitionException` before any write. A step that races the other
+party's concurrent transition and loses the merge is refused with the same exception,
+carrying the state that won.
 
 ### `ILatticeTenantQuotaUsage`
 
@@ -354,7 +358,9 @@ The read-only usage-against-quota surface.
 The report carries, per dimension (`Bytes`, `Keys`, `MemoryBytes`, `TreeCount`,
 `OpsPerSecond`), the consumption, the steady-state ceiling, the burst-adjusted
 ceiling, the live overage, and the accrued metered overage, together with the
-`EnforcementScope` the figures were read under. A platform operator may read any
+`EnforcementScope` the figures were read under. `OpsPerSecond` carries only its two
+ceilings: the engine never samples a sustained operation rate, so its usage is always
+`null` (not measured). A platform operator may read any
 tenant and a live tenant admin only its own; an unauthorized tenant and an absent one
 are unified into a single `TenantNotFoundException`, so the call cannot probe for
 tenant existence. Authoring quotas remains the operator-only `SetTenantQuotasAsync`.
@@ -395,7 +401,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantQuotasUpdateResult` | result | The tenant id and the quotas now in effect after authoring. |
 | `TenantLifecycleStatus` | enum | `Active` / `Suspended`. |
 | `TenantRegionAuthorizationResult` | result | The resulting allowed region set. |
-| `TenantResidencyChangeResult` | result | The added, removed, and resulting resident regions. |
+| `TenantResidencyChangeResult` | result | The regions this call began adding (now `Provisioning`) and removing (now `Draining`), and the resulting per-region status rows. |
 | `TenantRegionStatusReport` | result | Per-region rows (`TenantRegionStatusDescriptor`), ordered by region id. |
 | `TenantRegionStatusDescriptor` | model | One region's allowed flag and lifecycle status. |
 | `TenantRegionLifecycleStatus` | enum | `None` / `Provisioning` / `Backfilling` / `Online` / `Draining` / `Offline` / `Removed`. |
@@ -417,6 +423,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantQuotaUsageReport` | result | A tenant's usage against its quotas: one `TenantQuotaDimensionUsage` per dimension, `BurstPercent`, the authored `Quotas`, `HasUsage`, and the `EnforcementScope`. |
 | `TenantQuotaDimensionUsage` | model | One dimension's `Usage` (`null` = not measured), `Limit` (`null` = unbounded), `BurstLimit`, live `Overage`, and accrued `MeteredOverage`. |
 | `TenantQuotaEnforcementScope` | enum | `GlobalConverged` (the converged cross-cluster total) / `PerCluster` (this cluster's local share only). |
+| `ApiTenantAdminTypeAliases` | static class | The stable `oitn.`-prefixed Orleans serialization aliases of the tenant-admin contract types. |
 
 ## See also
 

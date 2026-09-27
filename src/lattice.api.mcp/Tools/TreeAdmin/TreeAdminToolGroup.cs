@@ -125,8 +125,10 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Read a tree's shard diagnostics",
                 "Reads a whole-tree diagnostic report: per-shard depth, root shape, live-key and tombstone counts, "
                 + "tombstone ratio, activity counters, and in-flight maintenance flags, plus tree-level roll-ups. "
-                + "The deep flag walks leaf state for authoritative counts (more expensive); the default reads the "
-                + "cheap shard-root projection. Requires whole-tree read authority. Read-only."),
+                + "Both modes page through every shard's leaf chain: the default counts live keys only (tombstone "
+                + "counts read zero), while the deep flag also counts tombstoned and expired entries in each leaf "
+                + "(more expensive). Each mode's report is cached briefly. Requires whole-tree read authority. "
+                + "Read-only."),
             Read(services, TreeAdminDiagnosticsToolHandlers.InspectShardMapAsync, "lattice_treeadmin_shard_map_inspect",
                 "Inspect a tree's shard-map topology",
                 "Inspects a tree's shard-map topology: the physical tree id it resolves to, the virtual routing "
@@ -447,13 +449,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ReshardTreeAsync, "lattice_treeadmin_tree_reshard",
                 "Trigger an online reshard of a tree",
                 "Triggers an online reshard that grows a tree to a target number of distinct physical shards. The "
-                + "tree keeps serving reads and writes throughout: the migration iteratively splits the busiest "
-                + "shards and atomically swaps virtual-slot routing per split, anchored by reminders so it survives "
-                + "silo restarts. Returns once the coordinator accepts the intent; poll tree_reshard_status for "
-                + "completion. Grow-only: the target must exceed the current physical shard count (an empty tree may "
-                + "be re-pinned to any count) and be at most 4096. Idempotent for a matching target. Rejected for a "
-                + "reserved system tree id, or when a resize is already in flight. Tree-lifecycle-gated and "
-                + "destructive."));
+                + "tree keeps serving reads and writes throughout: the migration iteratively splits the "
+                + "largest-slot-owning shards and atomically swaps virtual-slot routing per split, anchored by "
+                + "reminders so it survives silo restarts. Returns once the coordinator accepts the intent; poll "
+                + "tree_reshard_status for completion. Grow-only: a target below the current physical shard count is "
+                + "rejected and a target equal to it is a no-op (an empty tree may be re-pinned to any count); the "
+                + "target must be at least 2 and at most 4096. Idempotent for a matching in-flight target. Rejected "
+                + "for a reserved system tree id, when a reshard with a different target is already in flight, or "
+                + "when a resize is in flight. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ResizeTreeAsync, "lattice_treeadmin_tree_resize",
                 "Trigger an online resize of a tree",
                 "Triggers an online resize that rebuilds a tree with new B+ node capacity (maximum keys per leaf "
@@ -466,11 +469,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.UndoTreeResizeAsync, "lattice_treeadmin_tree_resize_undo",
                 "Undo a tree's most recent resize",
-                "Undoes the most recent completed resize of a tree, rebuilding it back to the prior B+ node "
-                + "capacity using the same online shadow-and-swap migration. Returns once the coordinator accepts the "
-                + "intent; poll tree_resize_status for completion. Rejected when there is no completed resize to "
-                + "undo, for a reserved system tree id, or when a different resize is already in flight. "
-                + "Tree-lifecycle-gated and destructive."));
+                "Undoes a tree's in-flight or most recent completed resize, returning it to its pre-resize "
+                + "physical tree and B+ node capacity. An undo while the snapshot is still draining aborts the copy "
+                + "and discards the draft destination; an undo after the alias swap recovers the pre-resize tree, "
+                + "removes the alias, restores the prior registry configuration, and deletes the resized tree. "
+                + "Available while a resize is in flight or while the pre-resize tree is still within its "
+                + "soft-delete recovery window. Returns the tree's resize status once the undo has been applied. "
+                + "Rejected when no resize exists to undo or the pre-resize tree has already been purged, and for a "
+                + "reserved system tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SnapshotTreeAsync, "lattice_treeadmin_tree_snapshot",
                 "Capture a point-in-time snapshot of a tree",
                 "Captures a point-in-time snapshot of a source tree into a fresh destination tree, copying every live "

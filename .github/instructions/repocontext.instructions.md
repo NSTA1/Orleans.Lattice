@@ -473,8 +473,13 @@ mid-task.
   free text.
 - Bound the walk: `relation` restricts it to one edge type (e.g. `broader`);
   `depth` is clamped to `[1, 3]` (default 1, immediate neighbors); `maxNodes` is
-  clamped to `[1, 100]` (default 50). The result's `truncated` flag reports when
-  the node cap stopped the walk.
+  clamped to `[1, 100]` (default 50). A `depth` or `maxNodes` of 0 or less takes
+  its default. The result's `truncated` flag reports when the node cap stopped
+  the walk.
+- The walk is **outbound only**: it follows the edges each entry carries, never
+  the edges that point at it. An edge is therefore reachable only from the
+  entry that authored it - a walk from the target of a `broader` edge does not
+  find its source, and no inverse relation is inferred for you.
 - A seed key with no live entry returns `exists: false`; a dangling edge whose
   target has no live value is still returned as a neighbor with its own
   `exists: false`, so you can see broken links.
@@ -619,9 +624,10 @@ removed - not a live figure you must keep above zero.
   write - may have landed. `scan` (or `search`) the topic first and look for your
   own entry by `author` before re-issuing, or retry with the same explicit `id`
   so the write merges instead of duplicating.
-- Useful fields: `title`, `body`, `kind` (`Decision` / `Note` / `Memory`),
-  `tags`, `author`, `provenance`, and `ttlSeconds`. To relate one entry to
-  another, pass `addLinks` / `removeLinks` (see
+- Useful fields: `title`, `body`, `kind` (`Decision` / `Note` / `Memory`,
+  applied only when the entry is created; default `Note`, and any other value
+  is rejected), `tags`, `author`, `provenance`, and `ttlSeconds`. To relate one
+  entry to another, pass `addLinks` / `removeLinks` (see
   [Knowledge linking](#knowledge-linking---typed-edges-between-memory-entries)).
 - **TTL - when to set it.** Default to **no `ttlSeconds`** (durable, or the repo
   default): decisions, gotchas, conventions, and glossary are meant to outlive

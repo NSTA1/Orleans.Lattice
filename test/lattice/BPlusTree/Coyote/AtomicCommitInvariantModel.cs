@@ -99,10 +99,10 @@ public enum AtomicCommitInvariantGuard
     /// This is the guard that makes the unset assertion non-vacuous. Retiring the
     /// decision <i>after</i> every participant has drained is the ordinary, sound
     /// cleanup the fixed model performs on every run: the interface contract of
-    /// <c>ForgetAsync</c> states that after the call the txid resolves to in-flight
-    /// again "by which point no leaf has the txid in its pending bucket anymore, so
-    /// that observation is consistent with the absence of any pending mutation".
-    /// Ordering is the whole guarantee, which is exactly what this guard removes.
+    /// <c>ForgetAsync</c> is that it is "Called after every touched leaf has
+    /// applied its terminal", and applying a terminal consumes the leaf's
+    /// prepared bucket. Ordering is the whole guarantee, which is exactly what
+    /// this guard removes.
     /// </para>
     /// </summary>
     ForgetWhileUndrained,

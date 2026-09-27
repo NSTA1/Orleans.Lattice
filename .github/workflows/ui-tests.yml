@@ -14,7 +14,8 @@ name: UI Tests
 #     `code` and `nonSample` filters in `ci.yml` (the same carve-out
 #     `benchmark/**` and `apps/**` get), so the core matrix never tries to run
 #     these tests without a browser present. This workflow is their only
-#     runner.
+#     per-PR runner; the scheduled coverage workflow (`coverage.yml`) also
+#     runs them, sharded from the same `ui-test-shards.json`.
 #
 # Why it is NOT a required status check: it does not run on most PRs, and a
 # required check that never reports leaves a PR pending forever. `Explorer CI`

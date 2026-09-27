@@ -15,10 +15,14 @@ namespace Orleans.Lattice.Replication;
 /// When the failure count reaches
 /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> the entry
 /// is parked on the per-tree dead-letter queue and a non-applied
-/// <see cref="ApplyResult"/> is returned to the caller. For point writes only,
-/// the per-origin high-water-mark is advanced to at least the entry timestamp so
-/// the canonical apply path can suppress later point-write re-deliveries; ranges
-/// and saga terminals rely on their own idempotency seams. A successful apply clears the counter for
+/// <see cref="ApplyResult"/> is returned to the caller. For point writes only
+/// (not range deletes or saga terminals), the per-origin high-water-mark is also
+/// advanced to at least the entry timestamp. That advance does not make a later
+/// re-delivery a no-op - the canonical applier's only point-write drop threshold
+/// is the snapshot-pinned causal floor, which parking does not move - but the
+/// transport does not normally re-deliver a parked entry, because the
+/// non-deferred not-applied result is acknowledged and the sender moves past it.
+/// A successful apply clears the counter for
 /// that tuple so later transient failures get a fresh budget.
 /// <para>
 /// The retry counter is intentionally in-memory: the decorator is
@@ -225,9 +229,11 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             throw failure;
         }
 
-        // Threshold reached: park the entry, advance the HWM past it
-        // so subsequent re-deliveries from the transport are deduped
-        // by the canonical applier, and clear the counter so a future
+        // Threshold reached: park the entry, advance the HWM past it (a
+        // progress frontier only - the canonical applier does not dedupe on
+        // it, so a re-delivered copy would be applied afresh; the non-deferred
+        // Applied=false returned below is what lets the sender move past the
+        // entry), and clear the counter so a future
         // entry against the same tuple gets a fresh budget.
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
         var reasonTag = ClassifyFailure(failure);

@@ -5,7 +5,10 @@
 The write-ahead log's garbage collector may only trim log entries that every
 consumer has acked - unless the optional `LatticeOptions.WalRetention` ceiling
 (off by default) ages old entries out regardless of cursor position - and it
-learns each consumer's progress from the WAL cursor registry. This sample makes
+learns each live consumer's progress from the WAL cursor registry (the leaf
+materialisers' durable checkpoint offsets add a floor of their own, so a
+restart that empties the in-memory registry cannot let it trim WAL a leaf has
+not yet checkpointed). This sample makes
 the two registry properties that keep the GC safe observable at runtime, by
 driving the **real production registry** (`InMemoryWalCursorRegistry`) under
 concurrency:
@@ -34,10 +37,10 @@ dotnet run --project samples/VerifiedWalDurability
 
 ## Expected output
 
-The exact sample and re-delivery counts vary run-to-run (the monitor and the
-reporters race), but the per-consumer regression count is always zero, the trim
-floor always stays pinned to the laggard, and it only advances once the laggard
-catches up.
+The registry sample count varies run-to-run (the monitor races the reporters);
+the stale re-delivery count is fixed by the sample's seeded random generator.
+The per-consumer regression count is always zero, the trim floor always stays
+pinned to the laggard, and it only advances once the laggard catches up.
 
 ```
 == VerifiedWalDurability sample ==

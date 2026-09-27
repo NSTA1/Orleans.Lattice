@@ -77,13 +77,13 @@ With the container host, the same variable is a normal container environment ent
 ```yaml
 services:
   repocontext-hub:      # cluster A: does all indexing
-    image: orleans-lattice-repocontext
+    image: repocontext-mcp:local
     environment:
       LATTICE_REPOCONTEXT_INDEXING_ROLE: hub
       # ... cluster id, replication transport/peers, etc.
 
   repocontext-spoke:    # cluster B: serves replicated reads, never indexes
-    image: orleans-lattice-repocontext
+    image: repocontext-mcp:local
     environment:
       LATTICE_REPOCONTEXT_INDEXING_ROLE: spoke
       # ... cluster id, replication transport/peers, etc.

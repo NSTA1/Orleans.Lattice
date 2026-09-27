@@ -29,7 +29,7 @@ An append blob is created before its chunks are fully written, so a crash mid-wr
 
 ## Manifest storage
 
-Manifests are stored as block blobs under the `manifests/` prefix, serialized with the same Orleans manifest serializer the rest of the engine uses (the sink resolves it from DI when it is first resolved). Writing the same manifest id twice overwrites in place, so manifest writes are idempotent. Deleting a manifest removes only its block blob and does not touch the artifacts it references, matching the seam contract - artifact lifetime is governed by retention and deletion at the engine layer, which deletes only artifacts no retained manifest still references.
+Manifests are stored as block blobs under the `manifests/` prefix, serialized with the Orleans binary serializer for `BackupManifest`, which the sink resolves from DI when it is first resolved (the default in-cluster sink and the catalog, by contrast, persist manifests as JSON rows). Writing the same manifest id twice overwrites in place, so manifest writes are idempotent. Deleting a manifest removes only its block blob and does not touch the artifacts it references, matching the seam contract - artifact lifetime is governed by retention and deletion at the engine layer, which deletes only artifacts no retained manifest still references.
 
 ## Sharing an account
 

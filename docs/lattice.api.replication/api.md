@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Replication API reference
 
-The package exposes one registration entry point and one public options type. The control contract itself, `ILatticeReplicationControl`, and the model records it returns are defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.
+The package exposes one registration entry point (an extension method on the public static `LatticeApiReplicationServiceCollectionExtensions` class) and one public options type. The control contract itself, `ILatticeReplicationControl`, and the model records it returns are defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.
 
 ## Registration
 
@@ -11,7 +11,7 @@ The package exposes one registration entry point and one public options type. Th
 ## Facade
 
 `ILatticeReplicationControl` (defined in `Orleans.Lattice.Api.Abstractions`) is the single control surface every transport binding adapts over.
-Every `treeId` these operations accept is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another. With the tenancy add-on absent - or registered, but with no active tenant asserted, which resolves the default tenant - the bare name is returned unchanged, so behaviour is byte-for-byte as before. Under an asserted active tenant an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, and an already-qualified `t/` id or a `_lattice_` system-tree name passes through unchanged (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate to adjudicate). The call fails closed with a `LatticeTenantAccessDeniedException` when the asserted tenant fails validation against the caller's own membership, or when it names a `sys-` tree or a malformed `t/` id that belongs to no tenant. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md).
+Every `treeId` these operations accept is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another. With the tenancy add-on absent - or registered, but with no active tenant asserted, which resolves the default tenant - the bare name is returned unchanged, so behaviour is byte-for-byte as before. Under an asserted active tenant an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, and an already-qualified `t/` id or a `_lattice_` system-tree name passes through unchanged (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate to adjudicate). The call fails closed with a `LatticeTenantAccessDeniedException` when the asserted tenant fails validation against the caller's own membership, or when it names a `sys-` tree or a malformed `t/` id that belongs to no tenant. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md). Results carry the effective id rather than echoing the caller's name: under an asserted non-default tenant the `TreeId` of an enable or disable result is the tenant-scoped `t/{tenant}/{name}` id, and the config report lists every tree the caller is authorized to manage by its effective id.
 
 | Operation | Signature | Notes |
 |---|---|---|
@@ -30,7 +30,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `TreeId` | `string` | The tree that was enabled. |
 | `Mode` | `LatticeMergeMode` | The merge mode now fixed for the tree. |
 | `AlreadyEnabled` | `bool` | `true` when the tree was already enabled under the same mode (idempotent enable). |
-| `BootstrapRequested` | `bool` | `true` when a snapshot bootstrap was requested for a non-empty tree. |
+| `BootstrapRequested` | `bool` | `true` when a snapshot bootstrap was requested for a non-empty tree. The request goes through the operator re-seed seam (`ILatticeReplicationAdmin.RequestSnapshotAsync`), so it is still reported `true` when that seam's `OperatorReseedMinInterval` rate limit declines to start a bootstrap because one was honoured for the same tree and source cluster within the interval. |
 
 ### `ReplicationDisableResult`
 

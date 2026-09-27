@@ -317,10 +317,10 @@ cost is copied forward into the baseline rather than expiring with the run. The
 measured stop being correct is exactly what kept that invisible.
 
 **The isolation guard now refuses a stack that is not shutdown-ready.**
-`Assert-RigComposeIsolation` checks `init: true` on every service, a
-`stop_grace_period` at least as long as the host's own 90s shutdown budget, and
-a `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` that agrees with it - so a cohort
-cannot start against a stack whose teardown would crash. It runs where
+`Assert-RigComposeIsolation` checks `init: true` on every service and, on the host
+service, a `stop_grace_period` at least as long as the host's own 90s shutdown
+budget and a `LATTICE_REPOCONTEXT_STOP_GRACE_PERIOD` that agrees with it - so a
+cohort cannot start against a stack whose teardown would crash. It runs where
 `Assert-RigDockerIsolation` already ran, on the document `docker compose config`
 resolved, which matters more than it sounds: that document is what Docker will
 really run, after interpolation and after every override file is merged. The

@@ -384,9 +384,11 @@ var walAccounts = Math.Clamp(walAccountsRequested, 1, 1 + walExtraAccountUris.Le
 // pooled-connection lifetime + idle timeout so cloud-NAT-killed sockets are
 // torn down rather than reused into a hang, paired with a bounded
 // per-attempt timeout) - they are not the wedge fix. A residual wedge with
-// the same inFlight=8 pinned signature still surfaces at the 4k-vehicle
-// saturation rung after PR #568 (see benchmark/azure-throughput/throughput.md
-// section 18); attribution of that residual is independent of this knob.
+// the same inFlight=8 pinned signature surfaced at the 4k-vehicle
+// saturation rung after PR #568 (investigated in
+// benchmark/azure-throughput/wedge-plan.md; throughput.md section 24 records
+// it no longer reproducing on the deterministic VM); attribution of that
+// residual is independent of this knob.
 var walConnectionReuse = ReadBool("BENCH_WAL_CONNECTION_REUSE", false);
 // Per-attempt network timeout for the WAL Azure Tables client. Default 0
 // leaves the SDK default (100s, effectively unbounded). A finite value
@@ -550,9 +552,10 @@ if (clusteringMode == "azuretable"
 // (see Producer/Program.cs), so the silo banner reports false there.
 var preseedWillFire = BenchPreseed.IsRequired(workloadMode, preseedKeyCount)
     && ingestMode != "cluster";
-// Banner descriptor for the phase-2 commit deadline: "default(3s)" when the
-// operator left it unset (library DefaultPhaseTwoCommitTimeout applies),
-// "off" when explicitly disabled (supplied 0), or the supplied second-count.
+// Banner descriptor for the phase-2 commit deadline: "default(Ns)" when the
+// operator left it unset (N is the library DefaultPhaseTwoCommitTimeout,
+// 12 s), "off" when explicitly disabled (supplied 0), or the supplied
+// second-count.
 var walPhase2CommitTimeoutBanner = walPhaseTwoCommitTimeoutSec switch
 {
     null => $"default({AzureTableWalStorageOptions.DefaultPhaseTwoCommitTimeout.TotalSeconds:0.##}s)",

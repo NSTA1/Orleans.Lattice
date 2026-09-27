@@ -65,14 +65,14 @@ Three positions, taken from the README's "Why it exists":
 
 ## Operating Context
 
-- The corpus: 258 markdown documents under `docs/<package>/` across 47 package
-  directories, plus `docs/RELEASING.md`, the video companion pages under
-  `docs/videos/`, root pages (README, FEATURES, PACKAGES,
-  reference-architecture, CHANGELOG) and sample, spec, and benchmark READMEs.
-  The `docs/` tree is about 4.8 MB of markdown containing roughly 750 tables, some
-  440 compiled C# snippets (` ```csharp verify ` fences checked by a Roslyn
-  harness), 44 mermaid diagrams, about 60 blockquotes and callouts, and no
-  images.
+- The corpus: every markdown document under `docs/<package>/` (one directory
+  per package, plus the `docs/crdt/` concept guide), plus `docs/RELEASING.md`,
+  the video companion pages under `docs/videos/`, root pages (README, FEATURES,
+  PACKAGES, reference-architecture, CHANGELOG), and the markdown under
+  `samples/`, `spec/`, and `reference-architecture/`. The `docs/` tree is
+  several megabytes of markdown, dense with tables and with compiled C#
+  snippets (` ```csharp verify ` fences checked by a Roslyn harness), and it
+  carries mermaid diagrams, blockquotes and callouts, but no images.
 - The pipeline: `docs-site/stage.ps1` stages the untouched repository markdown
   into a DocFX source tree, rewrites links that have no site counterpart to
   github.com, and generates the navigation from the groupings in PACKAGES.md
@@ -120,11 +120,11 @@ Three positions, taken from the README's "Why it exists":
 - A verification tier: Coyote concurrency testing over deterministic protocol
   cores, and a TLA+ specification for atomic commit (`spec/`,
   `docs/lattice/verified-*.md`).
-- Published NuGet packages (core at v9.8.x at the time of writing) and a
-  codecov coverage badge on the README.
+- Published NuGet packages and a codecov coverage badge on the README.
 - Measured single-silo throughput and latency against real Azure Tables
-  (`docs/lattice/performance-single-silo.md`) and a benchmark rig
-  (`benchmark/`).
+  (`docs/lattice/performance-single-silo.md`), multi-silo scaling on Azure
+  Container Apps (`docs/lattice/performance-multi-silo.md`), and a benchmark
+  rig (`benchmark/`).
 - Runnable samples (`samples/`) and a reference architecture for an
   active-active, cross-region estate on Azure Container Apps.
 - Absent, and not to be fabricated: customer names or logos, testimonials,

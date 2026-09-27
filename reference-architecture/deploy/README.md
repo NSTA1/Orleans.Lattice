@@ -34,17 +34,19 @@ From one parameter set, across N regions:
    every region.
 6. **MCP cross-region targeting** - each region's MCP head is given its own region
    id/cluster id plus a route to every peer region's silo (the same per-region
-   silo FQDNs replication uses), so one Front Door MCP endpoint can serve
-   `lattice_list_regions` and per-call `region`-targeted tool calls across the
-   whole estate. Threaded on pass 2 alongside the replication peers.
+   silo FQDNs replication uses), so a single MCP endpoint (on the public option,
+   the Front Door MCP hostname) can serve `lattice_list_regions` and per-call
+   `region`-targeted tool calls across the whole estate. Threaded on pass 2
+   alongside the replication peers.
 
 ## Two-pass deployment
 
 `main.bicep` cannot thread two Azure-assigned values in a single pass without
 forming a Bicep compile cycle, so the script runs them on a second pass:
 
-- **Managed Prometheus query endpoint** - activates the silo KEDA scaler and the
-  MCP cluster-telemetry tools. Each region has its own endpoint. The MCP head
+- **Managed Prometheus query endpoint** - activates the silo's KEDA scale rule
+  (see [Scaling behaviour](../README.md#scaling-behaviour)) and the MCP
+  cluster-telemetry tools. Each region has its own endpoint. The MCP head
   queries it with a rotating managed-identity Entra token (the `DynamicBearer`
   auth mode shipped by #1286); the region managed identity already holds
   Monitoring Data Reader on the workspace. When the observability lane is absent
@@ -78,9 +80,9 @@ all-at-once convenience template" pattern.
 
 ## MCP cross-region targeting
 
-The MCP head fronts its co-located silo by default, but the estate is deployed with
-one global Front Door in front of every region, so the script also wires each head
-to reach its peers directly:
+The MCP head fronts its co-located silo by default, but on the public option one
+global Front Door sits in front of every region, so the script also wires each head
+to reach its peers directly (it wires the same peers on the private option):
 
 - Each head advertises its own region (`Mcp:RegionId` = the region code,
   `Mcp:ClusterId` = `<baseName>-<regionCode>`), surfaced by `lattice_list_regions`.
@@ -92,8 +94,10 @@ to reach its peers directly:
   peer the head probes its state facade and compares the reported cluster id to the
   advertised one, rejecting fail-closed a region whose endpoint does not actually
   reach the expected cluster. The peers use direct FQDNs, so the assertion passes.
-- The head stamps the shared `X-Azure-FDID` origin-lock header on every cross-region
-  call, exactly as it does for its co-located silo, so the peer silo accepts it.
+- On the public option the head stamps the shared `X-Azure-FDID` origin-lock header
+  on every cross-region call, exactly as it does for its co-located silo, so the
+  peer silo accepts it. The private option has no Front Door id, so the head
+  stamps no header and the peer silos carry no lock.
 
 Threaded on pass 2 (the peer FQDNs are only known after pass 1), reusing the same
 `perRegion[].siloStateApiFqdn` values the replication peer list is built from.
@@ -188,14 +192,16 @@ Regions[2]:
 line (for example `-ImageTag 2025.07.29 -ReplicationKey $key`), or the run stops
 with an actionable error before it touches Azure.
 
-Add `-WhatIf` to preview every action without mutating Azure.
+Add `-WhatIf` to preview without mutating Azure: it prints each `az` command up to
+and including the pass-1 deployment, then stops, because the Entra deployment and
+pass 2 need pass 1's outputs.
 
 ### Quick start: the three-region sample
 
 For a zero-decision evaluation estate, `deployment-sample.ps1` wraps this
 deployer and needs only a deployment name. It fixes the three regions to East US
-2, West US 3, and West Europe, derives every other value from the name (base name
-= the name, resource group = `rg-<name>`), and generates the replication key and
+2, West US 3, and West Europe, derives the base name (the name itself) and the
+resource group (`rg-<name>`) from the name, and generates the replication key and
 Grafana admin password for you (the password is printed once at the end, to use
 as the `admin` user at the per-region Grafana URLs the deployer lists under its
 estate endpoints).
@@ -212,7 +218,9 @@ signed-in user, and asks you to confirm before creating anything:
 ```
 
 The deployment name must be 3 to 16 lowercase letters or digits. Pass `-Force` to
-skip the confirmation prompt, or `-WhatIf` to preview. For any other topology
+skip the confirmation prompt, or `-WhatIf` to preview. Its only other parameters
+are `-ImageTag` (default `sample`) and `-EntraTenantId` (default: the target
+subscription's tenant). For any other topology
 (private networking, a different region set, a pre-existing Entra app), drive
 `Deploy-ReferenceArchitecture.ps1` directly as above.
 
@@ -248,7 +256,7 @@ skip the confirmation prompt, or `-WhatIf` to preview. For any other topology
 | `-EnableDigestAntiEntropy` / `-DigestProbeIntervalSeconds` | no | `$false` / `0` (defaults). Cross-cluster anti-entropy applied to every region; the interval optionally shortens the probe cadence. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
 | `-SkipImageBuild` | no | Reuse images already present at `-ImageTag`. |
-| `-WhatIf` | no | Preview every action without mutating Azure. |
+| `-WhatIf` | no | Preview without mutating Azure. Prints each `az` command through the pass-1 deployment, then stops (the Entra deployment and pass 2 need pass 1's outputs). |
 
 ## Idempotency and re-runs
 

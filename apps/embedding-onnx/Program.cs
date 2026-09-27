@@ -8,9 +8,11 @@ using Orleans.Lattice.Embedding.Onnx;
 // serves (GET /api/health, POST /encoder/bi-encoder-embed on port 9000), so it
 // is a drop-in for that image behind the unchanged OnyxEmbeddingProvider client.
 //
-// The accelerator is chosen at runtime by EMBED_PROVIDER, with the CPU as the
-// always-available fallback, so one image serves both the CPU default and an
-// NVIDIA host by configuration alone.
+// The accelerator is chosen at startup by EMBED_PROVIDER, so a cuda-flavoured
+// image serves both the CPU default and an NVIDIA host by configuration alone.
+// An unset or unrecognised value resolves to the CPU, but there is no automatic
+// fallback: a selected CUDA provider that cannot be bound fails startup (the
+// OnnxEmbedder constructor rethrows and nothing here catches it).
 // ---------------------------------------------------------------------------
 
 // Exec-form container health probe. The runtime image is chiseled and has no

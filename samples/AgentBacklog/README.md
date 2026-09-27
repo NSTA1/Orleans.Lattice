@@ -35,12 +35,16 @@ consumes them unmodified, through two small binding overrides.
 
 ## Prerequisites
 
-Start the container box and set `REPO_PATH`, exactly as in the
-[RepoContextContainer](../RepoContextContainer/README.md) sample:
+Start the container box exactly as in the
+[RepoContextContainer](../RepoContextContainer/README.md) sample: copy its
+`.env.example` to `.env` and set `REPO_PATH` and
+`REPOCONTEXT_MEMORY_ARCHIVE_PATH` in it first, because compose refuses every
+command in that directory until the archive path is set.
 
 ```bash
 cd ../RepoContextContainer
-REPO_PATH=/absolute/path/to/some/parent docker compose up -d
+cp .env.example .env    # then edit REPO_PATH and REPOCONTEXT_MEMORY_ARCHIVE_PATH
+docker compose up -d
 ```
 
 The host must be running with writes enabled (`AddRepoContextTools(enableWrites: true)`),

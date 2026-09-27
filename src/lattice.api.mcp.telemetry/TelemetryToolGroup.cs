@@ -16,14 +16,16 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// The tools are built <b>once</b> in the constructor from the static
 /// <see cref="TelemetryToolHandlers"/> method groups. Each tool resolves its
 /// <see cref="IPrometheusQueryClient"/>, <see cref="TelemetryMetricAccessPolicy"/>,
-/// and options collaborators from the request service provider at call time, so
+/// <see cref="TelemetryAccessAuthorizer"/>, and options collaborators from the
+/// request service provider at call time, so
 /// the per-session discovery filter selects from this prebuilt list and never
 /// re-materialises a tool per <c>tools/list</c> or <c>tools/call</c>.
 /// </para>
 /// <para>
-/// Every tool is read-only and non-destructive. Metric-access enforcement,
-/// range guardrails, and backend-fault mapping live in the handlers, so the module
-/// itself adds no query logic.
+/// Every tool is read-only and non-destructive. The call-time telemetry
+/// capability check, metric-access enforcement, range guardrails, and
+/// backend-fault mapping live in the handlers, so the module itself adds no query
+/// logic.
 /// </para>
 /// </remarks>
 internal sealed class TelemetryToolGroup : ILatticeApiMcpToolGroup
@@ -31,13 +33,15 @@ internal sealed class TelemetryToolGroup : ILatticeApiMcpToolGroup
     /// <summary>
     /// Builds the telemetry tool list once from the supplied service provider,
     /// which the SDK consults to mark the <see cref="IPrometheusQueryClient"/>,
-    /// <see cref="TelemetryMetricAccessPolicy"/>, and options handler parameters as
-    /// DI-injected (schema-excluded); the instances themselves are resolved per
-    /// invocation from the request's service scope.
+    /// <see cref="TelemetryMetricAccessPolicy"/>, <see cref="TelemetryAccessAuthorizer"/>,
+    /// and options handler parameters as DI-injected (schema-excluded); the
+    /// instances themselves are resolved per invocation from the request's service
+    /// scope.
     /// </summary>
     /// <param name="services">
     /// The service provider whose <c>IServiceProviderIsService</c> recognises the
-    /// registered backend client, metric-access policy, and telemetry options.
+    /// registered backend client, metric-access policy, telemetry access
+    /// authorizer, and telemetry options.
     /// </param>
     public TelemetryToolGroup(IServiceProvider services)
     {

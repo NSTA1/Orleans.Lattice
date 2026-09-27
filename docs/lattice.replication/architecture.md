@@ -92,7 +92,11 @@ flowchart LR
    public applier seam, which first gates each entry against this receiver's own
    per-tree replication enrollment and locally-resolved merge mode - dropping a
    tree not enrolled here and dead-lettering an entry whose peer-supplied wire
-   merge mode disagrees - then drops entries a pinned bootstrap snapshot already
+   merge mode disagrees - and, when tenancy is on, against the tenant-isolation
+   gate, which dead-letters a write for a tenant that is unknown, not resident
+   in this region, or suspended. It defers an entry while a coordinated restore
+   holds the tree's inbound receive fence, so the sender re-ships it once the
+   fence lifts. It then drops entries a pinned bootstrap snapshot already
    covers, suppresses repeated records by exact `(origin, hlc, key, op)` identity
    (shadow-forward de-duplication), parks entries whose causal dependencies have
    not arrived, and performs CRDT-aware merges

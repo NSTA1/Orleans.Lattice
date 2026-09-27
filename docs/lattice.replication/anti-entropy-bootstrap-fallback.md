@@ -69,7 +69,7 @@ Counters on the `orleans.lattice.replication` meter:
 | `orleans.lattice.replication.bootstrap_fallback.entries` | `tree`, `peer`, `tenant` | By the number of committed entries re-shipped to the peer in a pass. |
 | `orleans.lattice.replication.bootstrap_fallback.skipped` | `tree`, `peer`, `reason`, `tenant` | Once per pass that skipped without re-shipping. |
 
-Skip reasons: `disabled` (the feature is off but a trimmed-WAL or below-cursor divergence was available), `range_empty` (the localiser produced no ranges), and `empty` (the scoped export yielded no committed entries in range).
+Skip reasons: `disabled` (the feature is off but a trimmed-WAL or below-cursor divergence was available), `range_empty` (the fallback was handed no localised ranges - a defensive guard the probe pipeline does not reach, because it runs repair only after the walk localised at least one range), and `empty` (the scoped export yielded no committed entries in range). Do not confuse `bootstrap_fallback.skipped{reason=range_empty}` with `leaf_rereplay.skipped{reason=range_empty}`, the signal that routes a pass to the fallback: an empty WAL selection inside a non-empty localised range.
 
 The metric-name constants and the skip-reason mapping are exposed for dashboards built from the public surface:
 

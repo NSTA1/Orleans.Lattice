@@ -8,8 +8,9 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Default <see cref="IChangeFeed"/> implementation. Walks every WAL
-/// partition for the requested tree, filters entries by HLC cursor and
-/// origin, and yields the merged stream in HLC ascending order.
+/// partition for the requested tree from a per-partition offset cursor,
+/// filters entries by origin, and yields the merged stream in HLC ascending
+/// order.
 /// <para>
 /// The implementation is pull-only: each call takes a snapshot of the
 /// WAL at invocation time and completes when that snapshot is
@@ -28,12 +29,12 @@ namespace Orleans.Lattice.Replication;
 /// if the change-feed consumer count grows.
 /// </para>
 /// <para>
-/// The DeleteRange caveat documented on
-/// <see cref="WalRecord.Timestamp"/> still applies: range-delete
-/// entries carry <see cref="HybridLogicalClock.Zero"/>, so a
-/// non-<c>Zero</c> cursor filters them out. This is a pre-existing
-/// property of the WalRecord shape, not a property of the change
-/// feed itself, and is fixed at the WalRecord layer in a later phase.
+/// Range-delete entries are not filtered out by either cursor shape: they
+/// carry the producer's authoring issue HLC (see
+/// <see cref="WalRecord.Timestamp"/>; only legacy entries carry
+/// <see cref="HybridLogicalClock.Zero"/>), and the HLC-cursor overload of
+/// <c>Subscribe</c> ignores its cursor and reads every partition from the
+/// start.
 /// </para>
 /// </summary>
 internal sealed class ChangeFeed(
@@ -72,9 +73,9 @@ internal sealed class ChangeFeed(
         //     consumer's resume contract degrades to "yield every
         //     locally-authored entry" and the consumer is responsible
         //     for de-duplicating against entries it has already seen
-        //     (the per-origin HWM dedup the apply pipeline runs
-        //     downstream already handles this for replication
-        //     consumers). The HLC cursor is preserved on the public
+        //     (the apply pipeline's pinned-floor and exact-identity dedup,
+        //     plus the idempotent leaf-level re-apply, already handle this
+        //     for replication consumers). The HLC cursor is preserved on the public
         //     signature for source-compat; new callers should migrate
         //     to the `ChangeFeedCursor` overload.
         // The yielded order remains HLC ascending (sorted at the end
@@ -136,17 +137,16 @@ internal sealed class ChangeFeed(
         var partitions = resolved.ReplogPartitions;
         var localClusterId = resolved.ClusterId;
 
-        // The per-tree LatticeMergeMode is not carried on the wire
-        // form of WalRecord: the property is marked
-        // [field: NonSerialized] so the canonical Orleans codec never
-        // writes it, including across the IWalShardGrain.ReadAsync
-        // grain-RPC return path. The shipper's gRPC seam reconstructs
-        // Mode from the framing header via the 3-arg
-        // IWalRecordEncoder.Decode overload; the change-feed seam has
-        // no framing header to lean on, so it re-stamps from the same
-        // per-tree resolver the silo-side WAL grain used at WAL append
-        // time. Resolving once per Subscribe call is sufficient because
-        // ReplicatedTrees is a per-tree configuration entry.
+        // WalRecord.Mode is durable (wire id 26), so an entry read back
+        // through IWalShardGrain.ReadAsync already carries the merge mode
+        // stamped at WAL append time. The change feed nevertheless re-stamps
+        // every yielded entry from the per-tree resolver (the gRPC batch
+        // marshaller likewise re-stamps each decoded entry from the batch
+        // framing header via the 3-arg IWalRecordEncoder.Decode overload), so
+        // the resolved mode below replaces the appended one; a tree the
+        // resolver does not know is yielded as LwwRegister. Resolving once
+        // per Subscribe call is sufficient because ReplicatedTrees is a
+        // per-tree configuration entry.
         var resolvedMode = _modeResolver.Resolve(treeName) ?? LatticeMergeMode.LwwRegister;
 
         var collected = new List<WalRecord>();
@@ -226,14 +226,10 @@ internal sealed class ChangeFeed(
                         continue;
                     }
 
-                    // Re-stamp Mode from the resolver: the silo-side
-                    // WAL grain stamped Mode at read time, but the
-                    // grain RPC return path re-serialises through the
-                    // canonical Orleans codec, which 
-                    // does not carry Mode (the WalRecord property is
-                    // [field: NonSerialized]). Without this stamp the
-                    // applier would dispatch every CRDT mode through
-                    // the LwwRegister branch.
+                    // Re-stamp Mode from the resolver resolved above. The
+                    // entry already carries its durable Mode (WalRecord wire
+                    // id 26), so this replaces the appended mode rather than
+                    // filling in a missing one.
                     collected.Add(entry with { Mode = resolvedMode });
                 }
 

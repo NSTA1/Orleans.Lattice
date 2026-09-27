@@ -3,14 +3,16 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Marks a <see langword="static"/> method that composes an Orleans grain
 /// <b>primary key</b> from its parts. The composed string becomes the grain
-/// identity, which keyed storage backends carry into places that reject certain
+/// identity, which keyed storage backends carry into places that restrict certain
 /// characters: Azure Table grain storage puts the key into both the
-/// Partition/Row key columns and the request URL, and those forbid the control
-/// characters <c>0x00-0x1F</c> and <c>0x7F-0x9F</c> as well as
-/// <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c>. A composer that joins its parts
-/// with such a character (for example an ASCII Unit Separator, <c>0x1F</c>)
-/// yields a grain that cannot activate on that backend - an opaque HTTP 400
-/// "Invalid URL" that no in-memory test storage reproduces.
+/// Partition/Row key columns and the request URL. The Table service forbids the
+/// control characters <c>0x00-0x1F</c> and <c>0x7F-0x9F</c> there and Orleans
+/// passes them through, so a composer that joins its parts with one (for example
+/// an ASCII Unit Separator, <c>0x1F</c>) yields a grain that cannot activate on
+/// that backend - an opaque HTTP 400 "Invalid URL" that no in-memory test storage
+/// reproduces. The service also forbids <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c>,
+/// which Orleans rewrites to <c>_</c> before the request, so a key containing one
+/// activates but can share a stored row with a key that differs only there.
 /// <para>
 /// The grain-key storage-safety guard
 /// (<c>GrainKeyStorageSafetyContractTestsBase</c> in the shared testing library)

@@ -865,11 +865,17 @@ public interface ILattice : IGrainWithStringKey
     /// it survives silo restarts. Poll completion with
     /// <see cref="IsReshardCompleteAsync"/>.
     /// <para>
-    /// <b>Grow-only.</b> <paramref name="newShardCount"/> must be strictly
-    /// greater than the current number of distinct physical shards, and
-    /// less than or equal to
+    /// <b>Grow-only on a populated tree.</b> <paramref name="newShardCount"/>
+    /// must be at least <c>2</c> and at most
     /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
-    /// (4096). Throws <see cref="ArgumentOutOfRangeException"/> otherwise.
+    /// (4096); a value outside that range throws
+    /// <see cref="ArgumentOutOfRangeException"/>. A request for the count the
+    /// tree already has is a no-op, and a smaller count than the current
+    /// number of distinct physical shards throws
+    /// <see cref="ArgumentOutOfRangeException"/> (shrinking is not supported).
+    /// An observably empty tree is instead re-pinned directly to any count in
+    /// range, smaller or larger, without running a migration. Throws
+    /// <see cref="InvalidOperationException"/> when a resize is in flight.
     /// </para>
     /// <para>
     /// Idempotent: a call with the same <paramref name="newShardCount"/>
@@ -1042,11 +1048,15 @@ public interface ILattice : IGrainWithStringKey
     /// source of truth - two silos that have applied the same
     /// prefix of the same WAL produce byte-identical digests.
     /// <para>
-    /// The shard's leaf chain is walked once and every leaf's digest is
-    /// chained through XxHash128 so divergence at any leaf surfaces in the
-    /// shard total. Reports the summed entry count and the maximum
-    /// projection-checkpoint offset across descendant leaves so a digest
-    /// mismatch can be triaged quickly.
+    /// The shard digest is read in a single grain call from the shard's root:
+    /// every internal node maintains an XOR fold of its descendant leaves'
+    /// running projection hashes, updated incrementally as each leaf publishes
+    /// its digest upward, and the shard digest is XxHash128 of that fold, the
+    /// summed entry count and the maximum projection-checkpoint offset across
+    /// descendant leaves (a single-leaf shard returns that leaf's own digest).
+    /// Divergence at any leaf therefore surfaces in the shard total, and the
+    /// reported entry count and checkpoint offset let a digest mismatch be
+    /// triaged quickly.
     /// </para>
     /// <para>
     /// Throws <see cref="InvalidOperationException"/> when the per-tree
@@ -1057,7 +1067,7 @@ public interface ILattice : IGrainWithStringKey
     /// </para>
     /// </summary>
     /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>
-    /// <param name="cancellationToken">Cancels the leaf-chain walk before the next leaf.</param>
+    /// <param name="cancellationToken">Cancels the read before the shard's digest is fetched.</param>
     Task<LeafProjectionDigest> GetLeafProjectionDigestAsync(int shardIndex, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -1154,14 +1164,19 @@ public interface ILattice : IGrainWithStringKey
     Task<bool> CompactShardAsync(int shardIndex, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the largest materialiser-lag value across every
-    /// physical shard of this tree - the gap between each shard's
-    /// per-shard write-ahead-log head offset and the minimum
-    /// projection-checkpoint offset across that shard's leaf chain.
-    /// A non-zero return value means at least one shard's projection
-    /// has not yet caught up to the durable WAL head and is the
-    /// back-pressure signal that complements the replication
-    /// receiver's apply-lag gauge.
+    /// Returns the largest materialiser-lag estimate across every physical
+    /// shard of this tree. For each shard the lag is the sum, over the tree's
+    /// WAL partitions, of the partition's WAL head minus the minimum
+    /// projection checkpoint across that shard's leaf chain, each term clamped
+    /// at zero. A WAL head is the next offset to be assigned and a checkpoint
+    /// the last offset applied, so a caught-up shard with a non-empty WAL
+    /// still reports a small positive value; the result is <c>0</c> only when
+    /// every term clamps to zero, as on an empty WAL. The per-leaf checkpoint
+    /// read is each leaf's partition-0 checkpoint, applied to every
+    /// partition's head, so on a multi-partition tree the figure is an
+    /// estimate. Read a steady value as caught up and a growing one as falling
+    /// behind; it is the back-pressure signal that complements the
+    /// replication receiver's apply-lag gauge.
     /// </summary>
     /// <param name="cancellationToken">Cancels the per-shard fan-out before the next shard.</param>
     Task<long> GetMaterialiserLagAsync(CancellationToken cancellationToken = default);

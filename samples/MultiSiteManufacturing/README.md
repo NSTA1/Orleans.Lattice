@@ -103,8 +103,10 @@ entry point and holds no saga wiring of its own: because `mfg-facts` is
 declared replicated, the package's `IRestoreSagaDispatcher` (installed by
 `AddLatticeReplication`) promotes the restore into a coordinated
 multi-cluster saga automatically, decided by the target tree's current
-replication membership. On the single-cluster quick-start the identical
-call runs as a plain local restore.
+replication membership. Where the tree is not replicated - as in the
+sample's in-process tests, which construct the facade directly - the
+identical call runs as a plain local restore; the host itself registers
+the facade only on the replicated (two-cluster) path.
 
 **What the sample test proves.** `CoordinatedRestoreSampleTests`
 (`test/MultiSiteManufacturing.Tests/Backup/`) stands up two in-memory
@@ -113,16 +115,19 @@ consistency guarantee a coordinated restore provides: a backup captured
 on one cluster restores identically onto both (all-or-nothing - every
 captured key lands, byte for byte, on every cluster), and a repeated
 restore converges to the same content without re-advancing the cut. The
-full saga transport (coordinator, participant write fence, and gRPC
-control channel that `AddLatticeReplication` activates in the host) is
+full saga transport (the coordinator and participant write fence that
+`AddLatticeReplication` activates in the host, and the gRPC control
+channel that `AddLatticeReplicationGrpc` registers) is
 covered end to end by the replication package's own coordinated-restore
 suites; the sample test focuses on the shared-sink-enabled cross-cluster
 property in process.
 
 ## Fault-injection surface
 
-The dashboard's chaos fly-out drives five tiers of fault injection,
-each modelling a distinct real-world failure class:
+The sample layers five tiers of fault injection, each modelling a
+distinct real-world failure class. The dashboard's chaos fly-out drives
+tiers 1 to 4b (tiers 4 and 4b through its *Cluster split* and
+*Replication disconnect* presets); tier 5 is driven from the Docker CLI:
 
 | Tier | Models | Toggle |
 |---:|---|---|
@@ -184,10 +189,13 @@ three this sample exercises most are:
 > `mfg-site-activity` as `LwwRegister`, its `tag-mfg-site` membership
 > tree as `OrFlag` (enable-wins flag-CRDT membership), `mfg-part-labels`
 > as `OrSet` (typed CRDT delta
-> shipping). The only sample-specific
-> seam remaining is `BaselineReplicationApplier`, a decorator on the
-> package's `IReplicationApplier` that mirrors cross-cluster
-> `mfg-facts` writes into the divergence-visualisation backend.
+> shipping). The sample-specific seams on top of it are
+> `BaselineReplicationApplier`, a decorator on the package's
+> `IReplicationApplier` that mirrors cross-cluster `mfg-facts` writes
+> into the divergence-visualisation backend; the Tier 4b chaos
+> decorators `ChaosReplicationTransport` and `ChaosReplicationApplier`;
+> and `ReplicationActivityTracker`, which bridges the replication meter
+> into the per-peer ship/recv strip (see [`approach.md`](./approach.md)).
 > See [`docs/lattice.replication/`](../../docs/lattice.replication/) for the wire format and bootstrap protocol.
 
 The JSON for these dashboards is bind-mounted read-only from
@@ -254,7 +262,21 @@ a signed-in one succeeds.
 ./run-explorer.ps1 -Client windows -Username alice -Password 'Sup3rSecret'
 ```
 
-`./run.ps1 -Down` and `./run.ps1 -Clean` delete the generated `.env`.
+`./run.ps1 -Down` deletes the generated `.env`; every run that brings the stack
+up (`-Clean` included, which deletes it first) rewrites it from the switches
+passed to that run, so a credential from an earlier run never lingers.
+
+### Backup and restore from the Explorer
+
+`./run.ps1 -Backup` also registers the backup control API and its gRPC binding
+on every silo, served through each Traefik's `/orleans.lattice.api.backup/`
+router, so the Explorer's backup UI can capture and restore against the stack.
+The binding runs with authorization off - a demo-grade posture - and the
+switch combines with `-Username` / `-Password`. On the replicated stack the
+host also tightens the backup-health monitor to re-verify every catalogued
+backup against the shared sink every 5 minutes (`ConfigureLatticeBackupHealth`;
+the default is six hours), so the Explorer's backup health column reflects
+sink faults quickly.
 
 ### Inspecting change history
 

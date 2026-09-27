@@ -8,7 +8,7 @@ Discovery, structure, and entry queries are pull-driven: they do work only when 
 
 ## Subscribers to the same request share one sampling loop
 
-When several callers subscribe to live metrics for the same request signature, they do **not** each spin up an independent sampling loop. A shared, reference-counted sampler runs **one** loop per distinct request signature and fans each sampled snapshot out to every subscriber. The cost of N subscribers to the same metrics request is the cost of one sampler plus N cheap fan-out hops, not N full samples.
+When several callers subscribe to live metrics for the same request signature, they do **not** each spin up an independent sampling loop. A shared, reference-counted sampler runs **one** loop per distinct request signature and fans each sampled snapshot out to every subscriber. The signature covers the requested trees and flags, the sample interval, and - when auth-backed read visibility is on - the caller's resolved identity, so a subscriber never receives a map sampled for a caller with different read access. The cost of N subscribers to the same metrics request is the cost of one sampler plus N cheap fan-out hops, not N full samples.
 
 The sampler is reference-counted: the loop starts when the first subscriber for a signature attaches and stops when the last one detaches. Fan-out uses a capacity-one, drop-oldest channel per subscriber, so a slow consumer can never back-pressure the shared loop or the other subscribers - it simply sees the latest snapshot, never a stalled queue.
 
@@ -18,7 +18,7 @@ A metrics subscription emits the initial full snapshot, then only the **changes*
 
 ## Reads do not stall writes
 
-The read surfaces run alongside the write path without contending with it. Entry scans use the core library's cursors (snapshot-isolated by default, or baseline-free live cursors) rather than locking the foreground, and metrics sampling reads aggregate counters rather than walking live state. A cluster under write load with many readers and subscribers attached keeps its writes prompt - this is asserted directly by the package's efficiency guardrail tests.
+The read surfaces run alongside the write path without contending with it. Entry scans use the core library's cursors (snapshot-isolated by default, or baseline-free live cursors) rather than locking the foreground, and metrics sampling runs on a timer over each tree's per-shard diagnostics report (served from the short-lived diagnostics cache, `LatticeOptions.DiagnosticsCacheTtl`) rather than tracking individual mutations. A cluster under write load with many readers and subscribers attached keeps its writes prompt - this is asserted directly by the package's efficiency guardrail tests.
 
 ## One per-shard walk backs both tiles and hotness
 
@@ -26,7 +26,7 @@ A per-tree metrics sample assembles the tile aggregates (live keys, tombstones, 
 
 ## Metrics sampling steps aside for a saturated tree
 
-Metrics sampling is best-effort and yields to write pressure. When a tree is reporting WAL saturation, the sampler skips the fresh per-shard walk entirely for that tree and serves a degraded snapshot (`DetailPaused = true`) built only from a single fan-out-free routing read: lifecycle and shard count remain, live counts and hotness are paused. This keeps the metrics surface from adding read load to shard roots that are already contended, and the detail resumes automatically on the next sample once the tree settles - see [Surfaces](surfaces.md#detail-paused-under-saturation).
+Metrics sampling is best-effort and yields to write pressure. When a tree is reporting WAL saturation, the sampler skips the fresh per-shard walk entirely for that tree and serves a degraded snapshot (`DetailPaused = true`) built only from a single fan-out-free routing read: shard count and any requested view lag remain, while live counts and hotness are paused. This keeps the metrics surface from adding read load to shard roots that are already contended, and the detail resumes automatically on the next sample once the tree settles - see [Surfaces](surfaces.md#detail-paused-under-saturation).
 
 ## What this means in practice
 

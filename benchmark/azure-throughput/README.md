@@ -63,6 +63,7 @@ journald-backed log capture with no scraper indirection.
 | `scripts/vm.ps1` | Day-to-day helper: `start` / `stop` / `status` / `ssh` / `logs` / `refresh-ip`. |
 | `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
+| `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Regression tests for `performance-report.ps1`'s Layer 3 grading: the read-mode preseed gate, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
 | `scripts/run-cohort-aca.ps1` | Layer 3: one cohort - by default empties the rig's storage first (`-ResetStorage`), pins the silos to exactly N, runs the producer job, parks the silos at zero, then harvests the producer and silo logs from Log Analytics into one cohort log. |
 | `scripts/aca-common.ps1` | Shared Layer 3 helpers, also dot-sourced by `performance-report.ps1`: resource naming, the Azure CLI convention, the run-context file, silo scaling, the per-cohort storage reset, job waits and log harvest, and teardown with its ownership guard. |
@@ -208,10 +209,13 @@ Periodic and `DONE` lines carry `genBlockedFrac` and `slipMaxMs`:
 - `slipMaxMs` is the run-wide maximum schedule slip across workers, including
   overrun of an unfinished tick, not just the last completed tick.
 
-`performance-report.ps1` warns and renders `>= X` only when the same `DONE` line
-reports slip above 1,000 ms AND `genBlockedFrac` below 0.2. High slip with high
-channel-wait time is consistent with a saturated cluster and is NOT marked
-producer-bound, even when achieved throughput is below offered load. Slip still
+`performance-report.ps1` grades a cohort producer-bound (a warning, and its cell
+rendered as a `>= X` lower bound) only when the same `DONE` line reports slip
+above 1,000 ms AND `genBlockedFrac` below 0.2, the cluster kept pace with what was
+generated (the cohort completed at least 90% of the `DONE avg` rate), AND the
+generator fell behind its offer (`DONE avg` below 90% of the offered rate). High
+slip with high channel-wait time is consistent with a saturated cluster and is NOT
+marked producer-bound, even when achieved throughput is below offered load. Slip still
 includes lateness accumulated during channel waits; the wait fraction is what
 distinguishes that case from generation falling behind without back-pressure.
 The rule uses paired full-run totals, never maxima from different windows.
@@ -222,8 +226,9 @@ cells with the new producer before making a cluster-ceiling claim.
 Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
 and charts omit affected workload curves rather than plot a misleading plateau.
 An omission note appears only when a curve was actually excluded. Resume and
-dry-run aggregation re-read retained logs; paired evidence is retained in cohort
-state as `producerSlipMaxMs` and `producerGenBlockedFrac`.
+dry-run aggregation re-read retained logs; the evidence is retained in cohort
+state as `producerSlipMaxMs`, `producerGenBlockedFrac`, `producerGeneratedPerSec`
+and the resulting `producerBound` verdict.
 
 For a local generator-only measurement, build the Producer project in Release,
 then run its DLL with `--dry-run`. This bypasses TCP, Orleans, Azure credentials,
@@ -300,7 +305,7 @@ current short version, in the order an investigator reaches for them:
 
 | Knob | Default | What it does |
 |------|---------|--------------|
-| `BENCH_VEHICLE_COUNT`, `BENCH_TICK_HZ` | 4000, 5 | Offered rate. |
+| `BENCH_VEHICLE_COUNT`, `BENCH_TICK_HZ` | 4000, 5 (`run-cohort.ps1` defaults) | Offered rate. The producer's own fallbacks, when nothing sets them, are 1000 and 5. |
 | `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Silo grain-RPC deadline. **Raise to 180 when saturating** or you'll see `[silo] grain-rpc-deadline` failures that look like wedges but aren't. The `ladder.ps1` script pins this to 180 by default for exactly this reason. |
 | `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
 | `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flushes from `TcpIngestService`. |
@@ -382,6 +387,15 @@ and deletes the resource group afterwards unless `-KeepAca` is set or the rig wa
 reused. `-Resume` continues an interrupted sweep from its saved state. Both scripts can
 also be run by hand.
 
+Layer 3 publishes completed-work throughput, not offered load. A cell whose first
+cohort completes at least `-SaturationRatio` (default 0.9) of the load it offered is
+re-run at double the per-silo rung, at most `-MaxRungEscalations` (default 3) times,
+and a cell still keeping up with its offer after that is published as a `>= X` lower
+bound; `-SaturationRatio 0` turns escalation off. A read cohort whose log has no
+`[producer] preseed ... entries=N` line read an empty keyspace: it is graded
+`UNSEEDED`, re-run at the same rung up to twice, and left out of the aggregate.
+`-Layer3ClientsPerSilo` (default 4) sets the producer's Orleans clients per silo.
+
 `scripts/deploy-aca.ps1` provisions resource group `rg-<prefix>`, tagged with the prefix
 so teardown can prove it owns the group: a container registry (images built remotely
 with `az acr build`, so no local Docker), one storage account for the WAL, Orleans
@@ -412,7 +426,9 @@ in a `finally` as well, so a failed cohort does not leave replicas billing. Last
 harvests the producer and silo logs from Log Analytics into
 `benchmark/.run/aca/<prefix>.n<N>.<workload>[.<CohortTag>].log` and appends the same
 verdict block Layer 2 writes: `HEALTHY`, or `WEDGE` when the producer printed no DONE
-marker or no window was productive.
+marker, no window was productive, or the cumulative `ops` count stopped advancing for
+`-FreezeWedgeSec` seconds while work was in flight. A saturated cohort that kept
+completing work stays `HEALTHY`, with its failures carried as data.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
@@ -423,6 +439,7 @@ marker or no window was productive.
 | `-BatchSize`, `-FlushMs`, `-FlushConcurrencyPerSilo` | `4096`, `50`, `8` | Ingest batch size, flush interval, and per-silo in-flight flushes (the cohort runs `FlushConcurrencyPerSilo x SiloCount`). |
 | `-ShardCount`, `-WalPartitions` | `64`, `16` | Tree shape, not scaled by the silo count; the producer reshards the tree to `-ShardCount` before load starts. |
 | `-ClientsPerSilo` | `4` | Orleans clients the producer opens per silo (64 at most in total). |
+| `-GeneratorParallelism` | `0` | `BENCH_GENERATOR_PARALLELISM` for the producer job (0-1024); `0` lets the producer use its own `Environment.ProcessorCount` (see [Parallel Layer 3 producer](#parallel-layer-3-producer)). |
 | `-ResponseTimeoutSec`, `-WarmUpBudgetSec`, `-InFlightTailBudgetSec` | `420`, `400`, `120` | Grain-call deadline, wall-clock ceiling on the producer's warm-up retries, and the drain allowed before `FINAL`. |
 | `-WalReplayQueueDepth` | `64` | `BENCH_WAL_REPLAY_QUEUE_DEPTH` for the silos. |
 | `-SetManyFanOutBudgetSec`, `-WalAdmissionCallBudgetSec` | `30`, `15` | The two saturation budgets from [Saturation knobs](#saturation-knobs); `0` means infinite, the library default. |
@@ -434,6 +451,7 @@ marker or no window was productive.
 | `-TreeId`, `-CohortTag` | generated, none | Tree name (default `l3-<workload>-n<N>-<stamp>`), and a tag that keeps repeated cohorts' logs apart. |
 | `-ExtraSiloEnv` | none | Extra `NAME=value` silo environment variables, applied last; a later cohort that does not name them removes them (see below). |
 | `-SettleSec` | `30` | Wait for cluster membership before starting the producer. |
+| `-FreezeWedgeSec` | `60` | Longest tolerated mid-run freeze - the cumulative `ops` count not advancing while `inFlight` stays above zero - before the cohort is graded `WEDGE`; `0` disables the check. |
 
 Silo environment variables do not persist across cohorts on one rig. Each cohort applies
 its variables with one `az containerapp update --set-env-vars`, which merges into the app's

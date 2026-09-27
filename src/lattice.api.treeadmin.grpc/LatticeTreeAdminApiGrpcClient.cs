@@ -114,12 +114,13 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
-    /// Reads a whole-tree diagnostic report for <paramref name="treeId"/>. When
-    /// <paramref name="deep"/> is <see langword="true"/> the counts are taken from a
-    /// more expensive leaf walk. Requires whole-tree read authority.
+    /// Reads a whole-tree diagnostic report for <paramref name="treeId"/>. Both modes
+    /// page through every shard's leaf chain; when <paramref name="deep"/> is
+    /// <see langword="true"/> each leaf also counts its tombstoned and expired
+    /// entries, at higher cost. Requires whole-tree read authority.
     /// </summary>
     /// <param name="treeId">The tree to diagnose. Must not be <c>null</c> or empty.</param>
-    /// <param name="deep">Walk leaf state for authoritative counts; defaults to the cheap projection.</param>
+    /// <param name="deep">Also count tombstoned and expired entries in each leaf; defaults to live-key counts only.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The whole-tree diagnostic report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>

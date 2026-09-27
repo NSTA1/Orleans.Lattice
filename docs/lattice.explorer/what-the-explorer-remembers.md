@@ -60,11 +60,12 @@ property of the person, not of the cluster they happen to be looking at.
 
 ## Storage and lifetime
 
-Preferences are held in a single browser storage entry,
+Preferences are held as a single stored document under the key
 `orleans.lattice.explorer.preferences.v1`, with a 90-day retention window: when
 the store loads, it drops any entry last written more than 90 days earlier. The
-web head encrypts the document with ASP.NET Data Protection; the desktop head uses
-the platform preference store.
+web head keeps the document in the browser's `localStorage`, encrypted with
+ASP.NET Data Protection; the desktop head keeps it in the platform preference
+store.
 
 One value is deliberately kept outside that encrypted document: a small,
 non-secret record of the last applied appearance, used to put the right palette

@@ -2,8 +2,9 @@
 
 Adaptive shard splitting allows a hot physical shard to split into two **at
 runtime, fully online** - no shard is ever taken offline. Splits happen
-automatically when an autonomic monitor detects a hot shard. Shard
-splitting is internal-only: `ITreeShardSplitGrain` is declared `internal`
+automatically when an autonomic monitor detects a hot shard, and an
+[online reshard](online-reshard.md) drives the same split to grow a tree's
+shard count. Shard splitting is internal-only: `ITreeShardSplitGrain` is declared `internal`
 and is not reachable from consumer assemblies.
 
 ## Why
@@ -374,7 +375,7 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 
 | Option | Default | Description |
 |---|---|---|
-| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, `HotShardMonitorGrain` will not trigger any splits; there is no external way to invoke a split. |
+| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, `HotShardMonitorGrain` will not trigger any splits. It does not gate an explicit `ReshardAsync`, which dispatches splits through the same coordinator to grow the shard count (see [Online Reshard](online-reshard.md)). |
 | `HotShardOpsPerSecondThreshold` | `200` | Operations/second above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
@@ -437,5 +438,7 @@ filter, starting a split asserts that the call originated inside the
 cluster, so an external client call to start one is rejected with
 `LatticeAuthorizationDeniedException` (a cluster without that filter does
 not enforce the assertion). There is no public
-API to trigger or control a split; tuning is performed exclusively through
-the `LatticeOptions` listed above.
+API to trigger or control an individual split. `ILattice.ReshardAsync` grows a
+tree's shard count by dispatching splits through the same coordinator (see
+[Online Reshard](online-reshard.md)); autonomic splitting is tuned
+exclusively through the `LatticeOptions` listed above.

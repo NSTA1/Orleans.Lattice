@@ -11,9 +11,12 @@ namespace Orleans.Lattice.BPlusTree;
 /// <b>dependency-free correctness core</b> of the cross-migration shadowed read
 /// guard. It is the exact per-saga rule the production leaf grain
 /// (<c>BPlusLeafGrain.IsShadowedReadSafeAsync</c>) executes when deciding whether
-/// it may serve a migrated value during a reshard, and it is also the artifact the
-/// Coyote reshard model drives - so the property proven by the model is a property
-/// of the shipping read path.
+/// it may serve a migrated value during a reshard. No Coyote model calls it: its
+/// cases are pinned by the <c>ShadowedMigrationReadGuardTests</c> unit tests, while
+/// the Coyote reshard model (<c>ReshardMigrationModel</c>) drives the neighbouring
+/// cores - <see cref="TxRegistryDecisionCore"/>,
+/// <see cref="MigrationTerminalCore.DecideBucketAction"/> and
+/// <see cref="AtomicVisibilityGate.ResolveKey"/>.
 /// </remarks>
 internal enum ShadowedReadDecision : byte
 {
@@ -51,10 +54,14 @@ internal enum ShadowedReadDecision : byte
 /// companion to <see cref="MigrationTerminalCore"/> (the write-side terminal
 /// disposition) and resolves the same terminal-landed signal that
 /// <see cref="AtomicVisibilityGate.ResolveKey"/> consumes as its
-/// <c>alreadyTerminal</c> input: the leaf grain
-/// (<c>BPlusLeafGrain.IsShadowedReadSafeAsync</c>) executes these rules, and the
-/// Coyote reshard model drives the same rules, so the no-torn-read property proven
-/// by the model is a property of the code that runs.
+/// <c>alreadyTerminal</c> input. The leaf grain
+/// (<c>BPlusLeafGrain.IsShadowedReadSafeAsync</c>) executes these rules through
+/// <see cref="IsSagaSafe"/>. They are pinned by the
+/// <c>ShadowedMigrationReadGuardTests</c> unit tests, not by a Coyote model: the
+/// reshard model (<c>ReshardMigrationModel</c>) proves its no-split-view and
+/// no-orphan-shadow properties over <see cref="TxRegistryDecisionCore"/>,
+/// <see cref="MigrationTerminalCore.DecideBucketAction"/> and
+/// <see cref="AtomicVisibilityGate.ResolveKey"/>, and never calls this guard.
 /// <para>
 /// The core owns no <c>Task</c>/<c>await</c> and no wall-clock; the grain resolves
 /// each saga's <see cref="TxStatus"/> (from the per-tree registry) and whether its

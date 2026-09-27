@@ -4,9 +4,10 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Per-silo census of the WAL retention pins held by zero-observable-writes
-/// snapshot cursors, and the source of the
-/// <see cref="LatticeMetrics.SnapshotPinsGaugeName"/> observable gauge.
+/// Per-silo census of the registrations zero-observable-writes snapshot
+/// cursors hold in <see cref="IWalCursorRegistry"/> (at a zero cursor with no
+/// blocked floor, so they hold back no WAL trimming today), and the source of
+/// the <see cref="LatticeMetrics.SnapshotPinsGaugeName"/> observable gauge.
 /// <para>
 /// The census holds, per tree, the <i>set of live snapshot consumer ids</i>
 /// registered against <see cref="IWalCursorRegistry"/> - not a running total.
@@ -35,9 +36,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// A pin that outlives its activation is <i>still reported</i>, and that is
-/// correct rather than a residual: the registry entry genuinely still holds the
-/// WAL GC floor down until the cursor's idle-TTL reminder reactivates the grain
-/// and unregisters it. The gauge tracks the pin, not the activation, so it
+/// correct rather than a residual: the registry entry genuinely still exists
+/// until the cursor's idle-TTL reminder reactivates the grain and unregisters
+/// it (holding back no WAL trimming meanwhile, since it sits at a zero cursor
+/// with no blocked floor). The gauge tracks the pin, not the activation, so it
 /// falls to zero exactly when the pin does.
 /// </para>
 /// <para>

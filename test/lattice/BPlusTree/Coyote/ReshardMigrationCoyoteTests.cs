@@ -26,10 +26,10 @@ public sealed class ReshardMigrationCoyoteTests
     /// <summary>
     /// The fix: with both the write-side terminal disposition guard
     /// (<see cref="Orleans.Lattice.BPlusTree.MigrationTerminalBucketAction.DiscardOrphan"/>)
-    /// and the read-side gate's terminal-landed input active, no interleaving of the
-    /// late orphan prepare, its duplicate terminal, the backstop, and the reader
-    /// fan-out lets a reader observe a split view or a stale orphan value - for a
-    /// two-key fan-out and wider.
+    /// and the read-side gate's terminal-landed input active, no explored
+    /// interleaving of the late orphan prepare, its duplicate terminal, and the
+    /// reader fan-out lets a reader observe a split view or a stale orphan value -
+    /// for a two-key fan-out and wider.
     /// </summary>
     [Test]
     public void Guarded_migration_never_shadows_a_later_saga_value([Values(2, 3, 4)] int keyCount)

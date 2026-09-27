@@ -56,7 +56,7 @@ Use shallow reports for routine health probing; reach for deep reports when you 
 
 Repeat callers within `LatticeOptions.DiagnosticsCacheTtl` (default: 5 seconds) share the same snapshot - identical `SampledAt` timestamps are returned and no fan-out is performed. Shallow and deep reports are cached independently, so a shallow-then-deep sequence will always produce two distinct samples.
 
-Recording a split commit - adaptive or reshard-driven - invalidates both cached reports, so the first `DiagnoseAsync` call after the record lands returns a fresh report rather than a stale pre-split view. The record is sent best-effort (see [Recent splits](#recent-splits)); if it is lost, the cached report simply lives out its TTL.
+Recording a split commit - adaptive or reshard-driven - invalidates both cached reports, so the first `DiagnoseAsync` call after the record lands returns a fresh report rather than a stale pre-split view. The record is sent best-effort (see [Recent splits](#recent-splits)); if it is lost, the cached report simply lives out its TTL. The tree-administration facade's `BeginBulkLoadAsync` also drops both cached reports before its deep emptiness probe, so that probe is always sampled fresh; see [Bulk Loading](bulk-loading.md#resumable-chunked-bulk-load-bulkappendchunkasync).
 
 Set `DiagnosticsCacheTtl = TimeSpan.Zero` to disable caching entirely - every call assembles a new report. See [Configuration](configuration.md#diagnosticscachettl) for details.
 

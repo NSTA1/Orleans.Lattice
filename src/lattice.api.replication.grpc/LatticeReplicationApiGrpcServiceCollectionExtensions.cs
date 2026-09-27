@@ -37,7 +37,10 @@ public static class LatticeReplicationApiGrpcServiceCollectionExtensions
     /// Registers the <c>Orleans.Lattice.Api.Replication.Grpc</c> binding: the
     /// method-definition singleton, the server-side service, the default-deny
     /// authorizer, the credential bridge, the auth-scheme source, and the
-    /// authorization interceptor. Idempotent.
+    /// authorization interceptor. Every other registration uses TryAdd, but each
+    /// call appends the authorization interceptor to the gRPC options again, so a
+    /// repeated call authorizes every call to this service once per registration;
+    /// call it once.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="configure">

@@ -51,7 +51,7 @@ A single entry has a much smaller limit. Each entry is stored as one entity whos
 
 ## Commit pipeline
 
-A normal append has three behavioural stages:
+A normal append has three behavioural stages. The first two run concurrently, and the third starts only once both have landed:
 
 1. **Prepare recovery state.** The provider records enough information to distinguish an interrupted append from a committed append during the next reconciliation pass. With `EliminateCandidateRowOnHotPath = true`, the normal path skips an extra recovery-marker write and relies on discoverable batch state plus the committed tail.
 2. **Write entries.** Entry payload rows are written in a single Azure Table transaction for that batch.
@@ -69,7 +69,7 @@ Nothing is lost. The entries are durable before the append returns, and reconcil
 
 A caller that genuinely needs read-after-write - a controlled hand-off, an operator consistency probe, or a test - awaits the provider's phase-two flush barrier, which drains the completions outstanding at the moment of the call and then rethrows any that failed. Prefer that barrier over sleeping or polling for an expected count.
 
-`PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely. The deadline abandons only the worker's wait, not the transaction: an abandoned submit stays fenced on its partition until it actually completes, and the post-failure reconcile and tail read wait for that fence, so a late-landing transaction can never be overwritten by a resync that read the partition before it landed.
+`PhaseTwoCoalescingWindow` controls how long completion waits for more pending work before sending the coalesced transaction. `PhaseTwoCommitTimeout` bounds a wedged completion transaction so later work is not blocked indefinitely. The deadline abandons only the worker's wait, not the transaction: an abandoned submit stays fenced on its partition until it actually completes - or until the provider cancels it, 60 seconds after abandoning it, so the fence cannot be held forever - and the post-failure reconcile and tail read wait for that fence, so a late-landing transaction can never be overwritten by a resync that read the partition before it landed.
 
 ### Overlap rejection
 
@@ -89,7 +89,7 @@ On activation, and again after a failed flush, the core WAL grain calls the prov
 - Reconciliation never lowers the stored tail. The tail write is conditional on the tail it read, so a concurrent commit makes the pass retry rather than overwrite.
 - Reconciliation is idempotent: a clean shard has no work to do.
 
-The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per shard and first waits for that shard's in-motion appends and queued completions on this provider instance to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
+The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per shard and first waits, on this provider instance, for that shard's in-motion appends, its queued completions, and any completion transaction abandoned on its commit deadline to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
 
 When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both the legacy recovery-marker shape and the newer discoverable-batch shape. Upgrading from the legacy setting to the default setting is safe. Before downgrading back to the legacy setting, drain pending appends and allow reconciliation to complete on a deployment that still has the default setting enabled.
 

@@ -141,9 +141,12 @@ The signal comes from the cluster's split-admission singleton, read once per
 sample tick through `ILatticeAdmin.GetSplitActivityAsync`. Each per-tree
 autonomic monitor publishes its authoritative in-flight count (derived from shard
 `IsSplitting` status) to that singleton, so the query costs one call and never
-fans out across trees or shards. Publication is edge-triggered - a tree reports
-only while it actually has splits in flight, plus one call to clear its footprint
-when they finish - so an idle cluster adds no traffic. Footprints carry a
+fans out across trees or shards. With no cluster-wide split ceiling configured
+(`MaxClusterConcurrentAutoSplits` unset, the default), publication is
+edge-triggered - a tree reports only while it actually has splits in flight, plus
+one call to clear its footprint when they finish - so an idle cluster adds no
+traffic; with a ceiling set, each monitor already reports its footprint to the
+same singleton on every pass to acquire admission slots. Footprints carry a
 time-to-live, so a silo lost mid-split has its share reclaimed on expiry rather
 than suppressing scale-in indefinitely.
 

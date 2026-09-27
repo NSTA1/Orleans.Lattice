@@ -15,8 +15,10 @@ public enum BootstrapFallbackSkipReason
     /// <summary>
     /// The fallback is disabled
     /// (<see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/> is
-    /// <see langword="false"/>) even though a targeted leaf re-replay reported
-    /// the local write-ahead-log had been trimmed past the divergence point.
+    /// <see langword="false"/>) even though a targeted leaf re-replay could not
+    /// reach the divergence: it reported the local write-ahead-log trimmed past the
+    /// divergence point, or no eligible entry above the peer's cursor in the
+    /// localised ranges.
     /// </summary>
     Disabled = 1,
 

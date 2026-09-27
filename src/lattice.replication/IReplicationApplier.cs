@@ -18,13 +18,14 @@ namespace Orleans.Lattice.Replication;
 /// <c>Orleans.Lattice</c> so the persisted
 /// <c>LwwValue&lt;byte[]&gt;</c> carries the source HLC and origin
 /// verbatim,</item>
-/// <item>advancing the per-origin HWM after a successful apply so
-/// subsequent re-delivery is suppressed.</item>
+/// <item>advancing the per-origin high-water-mark after a successful apply - a
+/// progress frontier reported on <see cref="ApplyResult.HighWaterMark"/>, not a
+/// drop threshold: re-deliveries are suppressed by the two filters above.</item>
 /// </list>
 /// <para>
 /// The applier deliberately does not subscribe to a transport - it is
-/// the seam custom transports, integration tests, and the future
-/// inbound replication pipeline plug into.
+/// the seam custom transports, integration tests, and the inbound
+/// replication pipeline plug into.
 /// </para>
 /// </summary>
 public interface IReplicationApplier

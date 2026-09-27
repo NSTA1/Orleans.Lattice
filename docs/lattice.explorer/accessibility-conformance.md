@@ -32,9 +32,11 @@ Because they are browserless they run in the required `build-and-test` check, so
 contrast regression fails the pull request rather than a nightly job.
 
 **Rendered conformance is checked in a browser lane.** An axe sweep runs the
-`wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa` rule sets across both
-themes, all three breakpoint bands, signed in and signed out, and every area the
-shell offers, plus a targeted high-contrast pass over both palettes. Alongside
+`wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa` rule sets over the home
+surface in every combination of both themes, all three breakpoint bands, and
+signed in and signed out, plus a targeted high-contrast pass over both palettes
+(both identities, at the expanded band); it also sweeps every area the shell
+offers, signed in and signed out, in the dark theme at the expanded band. Alongside
 it, explicit structural assertions cover what axe cannot see, and a journey suite
 exercises the console the way a person moves through it.
 

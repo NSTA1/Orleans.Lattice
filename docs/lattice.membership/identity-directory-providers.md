@@ -23,13 +23,11 @@ three built-in providers, and how to write your own.
 
 ## The provider seam
 
-A provider implements a small, read-only contract - `ILatticeIdentityDirectory`:
-
-The members are:
+A provider implements a small, read-only contract, `ILatticeIdentityDirectory`, whose members are:
 
 | Member | Purpose |
 |---|---|
-| `ProviderId` | A stable, short id for the active provider (`"null"`, `"static"`, `"entra"`, or your own). Surfaced to the Explorer so it can label the source. |
+| `ProviderId` | A stable, short id for the active provider (`"null"`, `"static"`, `"entra"` - the `NullIdentityDirectory.NullProviderId`, `StaticIdentityDirectory.StaticProviderId`, and `EntraGraphIdentityDirectory.EntraProviderId` constants - or your own). Surfaced to the Explorer so it can label the source. |
 | `DescribeEntry` | A short, human-readable description of what a *valid* id looks like for this source, scoped to the `DirectoryPrincipalKind?` a create form is entering (`User`, `Group`, or `null` for a combined form). The Explorer shows it under the create form so an operator knows what to type. |
 | `SearchAsync` | Returns a `DirectorySearchPage` of `DirectoryPrincipal`s matching a term, optionally filtered by `DirectoryPrincipalKind`, with an opaque continuation token for paging. |
 | `ResolveAsync` | Looks up a single principal id and returns its `DirectoryPrincipal`, or `null` when the source has no such principal. This is the fail-closed validation call. |

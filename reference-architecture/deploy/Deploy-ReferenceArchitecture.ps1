@@ -103,7 +103,9 @@
         -EntraEnabled -EntraTenantId 11111111-1111-1111-1111-111111111111
 
 .EXAMPLE
-    # Preview every action without mutating Azure.
+    # Preview without mutating Azure: prints each mutating 'az' command through
+    # the pass-1 deployment, then stops (the Entra deployment and pass 2 need
+    # pass 1's outputs).
     ./Deploy-ReferenceArchitecture.ps1 -SubscriptionId ... -ResourceGroup rg-lattice `
         -Location eastus -BaseName lattice -Regions @(@{regionCode='use';location='eastus'}) `
         -ImageTag dev -GrafanaAdminPassword $gpw -ReplicationKey $key -WhatIf

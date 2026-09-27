@@ -95,7 +95,11 @@ that scope, never the one that was asked for.
 
 The interceptor is scoped to this service's method prefix, exempts
 `GetAuthScheme`, and maps an unrecognised method to `LatticeTelemetryApiOperation.Unknown`
-so a deny-by-default policy refuses it rather than falling through.
+so a deny-by-default policy refuses it rather than falling through. The authorizer
+receives a `LatticeTelemetryApiAuthorizationContext` carrying the underlying
+`ServerCallContext` (`Call`), the `LatticeTelemetryApiOperation` (`GetCatalog`, `Query`,
+or `Unknown`), and a `TargetId` that is the requested query id for `Query` and `null`
+for `GetCatalog`.
 
 ### Server options (`LatticeTelemetryApiGrpcOptions`)
 

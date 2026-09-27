@@ -21,16 +21,21 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// shard's leaf chain and merge all entries (including tombstones) for moved
 /// virtual slots into the target via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>,
 /// preserving original HLC timestamps.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Swap"/> - atomically update
-/// the persisted <see cref="ShardMap"/> so that moved virtual slots route to
-/// the new target shard.</description></item>
-/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> - flip the source
-/// into reject mode so any stale <c>LatticeGrain</c> activations still
-/// targeting the source for moved-slot keys receive
-/// <see cref="StaleShardRoutingException"/> and refresh.</description></item>
+/// <item><description><see cref="ShardSplitPhase.Swap"/> - mark the source's
+/// leaves with the moved-slot set, put the source into reject mode (so stale
+/// <c>LatticeGrain</c> activations still targeting it for moved-slot keys
+/// receive <see cref="StaleShardRoutingException"/> and refresh), run a final
+/// authoritative drain of the now-frozen moved slots, and only then reassign
+/// those slots to the target in the persisted <see cref="ShardMap"/> in one
+/// registry call.</description></item>
+/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> - re-assert the
+/// source's reject mode (idempotent; <see cref="ShardSplitPhase.Swap"/> already
+/// entered it) and advance to <see cref="ShardSplitPhase.Complete"/>.</description></item>
 /// <item><description><see cref="ShardSplitPhase.Complete"/> - final drain
 /// pass to capture any post-shadow tombstones, clear the source's
-/// <c>SplitInProgress</c> state, and deactivate.</description></item>
+/// <c>SplitInProgress</c> state, record the committed split (the metric and,
+/// when event publishing is enabled, a split-committed event), unregister the
+/// keepalive, and deactivate.</description></item>
 /// </list>
 /// Key format: <c>{treeId}/{sourceShardIndex}</c>.
 /// </summary>

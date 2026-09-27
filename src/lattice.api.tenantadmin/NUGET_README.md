@@ -26,8 +26,8 @@ through a single seam that every transport binding (gRPC, MCP) adapts over.
 | `SetResidencyAsync` | Binds the tenant's data to a subset of its allowed regions. |
 | `GetTenantRegionStatusAsync` | Reports the tenant's allowed, resident, and in-flight region state. |
 
-`ILatticeTenantSelfService` is the read-only surface any authenticated caller may
-invoke, scoped fail-closed to that caller: `GetCurrentTenantAsync` answers "which
+`ILatticeTenantSelfService` is the read-only surface any caller may invoke, scoped
+fail-closed to that caller: `GetCurrentTenantAsync` answers "which
 tenant am I acting as", `ListAccessibleTenantsAsync` enumerates only the tenants
 the caller may see, and `GetTenantAsync` reports one such tenant's status.
 

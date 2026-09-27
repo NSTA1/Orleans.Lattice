@@ -24,8 +24,9 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// as <c>UiCategoryHygieneTests</c> does for the same reason. The category
 /// keeps it out of the Tier 2 fast dev loop, which is the point - untagged, it
 /// would be selected there and drag the browser launch in with it.
-/// <c>ui-tests.yml</c> is this assembly's only runner, and this fixture runs
-/// there with the rest.
+/// <c>ui-tests.yml</c> is this assembly's per-PR runner, and the scheduled
+/// <c>coverage.yml</c> also runs it from the same shard list; this fixture runs
+/// in both with the rest.
 /// </para>
 /// <para>
 /// <c>IntegrationCategoryGateEnrolmentTests</c> scans the whole project
