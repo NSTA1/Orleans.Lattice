@@ -157,6 +157,11 @@
   white-space: pre;
 }
 
+/* The browser gives <code> its own monospace face; the panel's is the site's. */
+.lv-code code {
+  font: inherit;
+}
+
 .lv-syn-keyword { color: var(--lt-syn-keyword); }
 .lv-syn-type { color: var(--lt-syn-type); }
 .lv-syn-string { color: var(--lt-syn-string); }
