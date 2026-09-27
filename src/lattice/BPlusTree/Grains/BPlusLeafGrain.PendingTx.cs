@@ -895,8 +895,15 @@ internal sealed partial class BPlusLeafGrain
     /// (empty txid or unknown tree id) - the strict-isolation default,
     /// which keeps the key hidden until the registry can be reached.
     /// </para>
+    /// <para>
+    /// Issue #2215: a registry call that fails in transport throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> carrying
+    /// the tree, <paramref name="key"/> and <paramref name="txid"/>, rather
+    /// than the raw transport exception and never a guessed status. There is
+    /// deliberately no retry here - the caller owns retry policy.
+    /// </para>
     /// </summary>
-    private async ValueTask<TxStatus> ResolvePendingStatusAsync(Guid txid)
+    private async ValueTask<TxStatus> ResolvePendingStatusAsync(Guid txid, string? key = null)
     {
         if (txid == Guid.Empty) return TxStatus.InFlight;
 
@@ -913,10 +920,26 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var treeId = state.State.TreeId;
+
+        // Issue #3641: the lattice-level fan-out has no single decision view,
+        // so resolving this prepare at this leaf's own moment could tear the
+        // read against a sibling leaf. Fail closed rather than resolve.
+        if (LatticeRegistrySnapshotContext.IsUnavailable)
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(treeId ?? string.Empty, key, 1, [txid], null);
+        }
+
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        return await TxRegistryRouting
-            .GetRegistry(grainFactory, treeId, txid)
-            .GetStatusAsync(txid);
+        try
+        {
+            return await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid)
+                .GetStatusAsync(txid);
+        }
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(treeId, key, 1, [txid], ex);
+        }
     }
 
     /// <summary>
@@ -1201,6 +1224,16 @@ internal sealed partial class BPlusLeafGrain
             return (filtered, pendingKeys);
         }
 
+        // Issue #3641: no single decision view exists for this fan-out, so the
+        // leaf must not resolve its prepares at its own moment. Hand back the
+        // unavailable sentinel; ResolveReadOutcome throws the typed exception
+        // only if the read actually reaches a prepared key, so a read whose
+        // range holds no prepare still completes.
+        if (LatticeRegistrySnapshotContext.IsUnavailable)
+        {
+            return (UnavailableOutcomes, pendingKeys);
+        }
+
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
         {
@@ -1216,9 +1249,49 @@ internal sealed partial class BPlusLeafGrain
             return (hidden, pendingKeys);
         }
 
-        var outcomes = await TxRegistryFanOut.GetStatusManyAsync(
-            grainFactory, treeId, txids);
+        Dictionary<Guid, TxStatus> outcomes;
+        try
+        {
+            outcomes = await TxRegistryFanOut.GetStatusManyAsync(
+                grainFactory, treeId, txids);
+        }
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
+        {
+            // Issue #2215: the scan-path registry fetch translates a transport
+            // failure into the same typed, retryable exception as the
+            // single-key path. The single-snapshot discipline is unchanged;
+            // only the error type is.
+            throw LatticeTransactionOutcomeUnavailableException.Create(
+                treeId, key: null, pendingKeys.Count, txids, ex);
+        }
+
         return (outcomes, pendingKeys);
+    }
+
+    /// <summary>
+    /// Sentinel outcome map returned by <see cref="SnapshotPendingForReadAsync"/>
+    /// under a <see cref="LatticeRegistrySnapshotContext.IsUnavailable"/>
+    /// ambient (issue #3641). Identified by reference and never mutated.
+    /// </summary>
+    private static readonly Dictionary<Guid, TxStatus> UnavailableOutcomes = new(0);
+
+    /// <summary>
+    /// Resolves the scan-path outcome of <paramref name="txid"/> from the
+    /// <paramref name="outcomes"/> map <see cref="SnapshotPendingForReadAsync"/>
+    /// returned, through the shared <see cref="TxDecisionView"/> rule. Throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> when the map is
+    /// the <see cref="UnavailableOutcomes"/> sentinel: the read reached a prepared
+    /// key it has no single decision view to resolve against.
+    /// </summary>
+    private TxStatus ResolveReadOutcome(Dictionary<Guid, TxStatus> outcomes, Guid txid, int pendingKeyCount)
+    {
+        if (ReferenceEquals(outcomes, UnavailableOutcomes))
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(
+                state.State.TreeId ?? string.Empty, key: null, pendingKeyCount, [txid], null);
+        }
+
+        return new TxDecisionView(outcomes).Resolve(txid);
     }
 
     /// <summary>
