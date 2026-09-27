@@ -11,7 +11,7 @@ deterministically to MP4. Read these before changing anything there:
 
 - `videos/README.md` - how to work in the folder: commands, layout, rules, CI.
 - `videos/series.md` - the plan: audiences, the Build / Evaluate / Operate
-  paths, the episode list, where to start, open decisions.
+  paths, the episode list, the production order, open decisions.
 - `videos/frame.md` - the camera design system: type scale, colour roles, the
   order-diagram vocabulary, motion, code, captions, audio.
 
