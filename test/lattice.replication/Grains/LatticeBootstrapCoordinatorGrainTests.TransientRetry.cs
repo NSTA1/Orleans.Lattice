@@ -208,24 +208,21 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     }
 
     [Test]
-    public async Task Drain_re_opens_snapshot_from_persisted_cursor_on_each_retry()
+    public async Task Drain_re_opens_full_snapshot_without_an_upper_bound_on_each_retry()
     {
-        // After the first attempt applies some entries and persists
-        // a non-zero LastAppliedHlc, the retry must re-call ExportAsync
-        // with that advanced cursor (not Zero), so the per-origin
-        // HWM dedupe makes overlap a no-op rather than a re-apply
-        // of the entire stream.
+        // After the first attempt applies some entries and persists a
+        // non-zero LastAppliedHlc, the retry must NOT pass that cursor to
+        // ExportAsync: the export treats asOfHlc as a strict upper bound, so
+        // a bounded retry would exclude every unapplied entry stamped above
+        // the cursor. Every attempt exports unbounded (Zero) and relies on
+        // per-key LWW to make the overlap a no-op.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake);
         var (grain, _, _, provider, reminders, _, _, _) =
             Create(fake, replicationOptions: RetryOptions(maxAttempts: 3));
 
-        // Advance the persisted cursor before the test runs so we
-        // can assert that the cursor argument observed by the
-        // second ExportAsync call matches the post-attempt cursor.
-        // The first attempt fails immediately so the cursor never
-        // advances during the test; the assertion proves the retry
-        // path reads the cursor live rather than caching it.
+        // A persisted cursor from a prior partial drain must not leak into
+        // either attempt's export bound.
         fake.State.LastAppliedHlc = Hlc(42);
 
         var attempts = 0;
@@ -251,12 +248,74 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         {
             Assert.That(attempts, Is.EqualTo(2));
             Assert.That(capturedCursors, Has.Count.EqualTo(2));
-            Assert.That(capturedCursors[0], Is.EqualTo(Hlc(42)),
-                "first attempt should use the persisted cursor");
-            Assert.That(capturedCursors[1], Is.EqualTo(Hlc(42)),
-                "retry should re-read the persisted cursor live, not Zero");
+            Assert.That(capturedCursors[0], Is.EqualTo(HybridLogicalClock.Zero),
+                "first attempt must export unbounded, not at the persisted cursor");
+            Assert.That(capturedCursors[1], Is.EqualTo(HybridLogicalClock.Zero),
+                "retry must export unbounded, not at the persisted cursor");
             Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
         });
+    }
+
+    [Test]
+    public async Task Drain_retry_after_a_mid_stream_transient_applies_entries_stamped_above_the_cursor()
+    {
+        // Regression: a transient fault part-way through the stream left
+        // LastAppliedHlc at the highest HLC applied so far, and the retry
+        // re-opened the export with that cursor as its strict upper bound.
+        // The stream is in leaf-chain order, so the entry the first attempt
+        // never reached (stamped Hlc(200)) sat above the cursor (Hlc(100))
+        // and was silently excluded from the retry. The provider below
+        // honours the documented upper-bound contract.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake);
+        var (grain, _, _, provider, reminders, apply, _, _) =
+            Create(fake, replicationOptions: RetryOptions(maxAttempts: 3));
+
+        var reached = new SnapshotEntry { Key = "reached", Value = new byte[] { 1 }, Timestamp = Hlc(100) };
+        var unreached = new SnapshotEntry { Key = "unreached", Value = new byte[] { 2 }, Timestamp = Hlc(200) };
+
+        var attempts = 0;
+        provider.ExportAsync(Tree, SourceCluster, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                attempts++;
+                var asOf = (HybridLogicalClock)call[2];
+                var visible = new[] { reached, unreached }
+                    .Where(e => asOf == HybridLogicalClock.Zero || e.Timestamp.CompareTo(asOf) <= 0)
+                    .ToArray();
+                return Task.FromResult(MakeStream(asOf, new VersionVector(),
+                    attempts == 1 ? FaultAfterFirst(visible) : Stream(visible)));
+            });
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
+            .Returns(Task.FromResult<IGrainReminder?>(null));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await apply.Received().ApplyAsync(
+            Arg.Is<WalRecord>(r => r.Key == "unreached" && r.Timestamp == Hlc(200)),
+            Arg.Any<CancellationToken>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempts, Is.EqualTo(2));
+            Assert.That(fake.State.LastAppliedHlc, Is.EqualTo(Hlc(200)));
+            Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
+        });
+    }
+
+    /// <summary>
+    /// Yields the first entry of <paramref name="entries"/> and then throws a
+    /// classified-transient fault, modelling a snapshot stream interrupted
+    /// part-way through the drain.
+    /// </summary>
+    private static async IAsyncEnumerable<SnapshotEntry> FaultAfterFirst(SnapshotEntry[] entries)
+    {
+        await Task.CompletedTask;
+        if (entries.Length > 0)
+        {
+            yield return entries[0];
+        }
+
+        throw new TransientStubException("stream interrupted mid-drain");
     }
 
     [Test]

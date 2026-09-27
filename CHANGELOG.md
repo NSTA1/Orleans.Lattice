@@ -104,6 +104,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Memory - Tool arguments honour their documented contract.** `repocontext_remember` rejects `kind: Unspecified` like any other unrecognised kind, and `repocontext_neighbors` applies its documented default of 50 to a non-positive `maxNodes` instead of the 100 ceiling. ([#3651](https://github.com/NSTA1/Orleans.Lattice/issues/3651), [#3652](https://github.com/NSTA1/Orleans.Lattice/issues/3652)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **Replication - A resumed bootstrap dropped rows above its cursor.** A crash-resume or transient retry re-opened the snapshot export bounded at the highest HLC applied so far, dropping unapplied rows stamped above it. Every attempt now exports the whole snapshot; the overlap applies as LWW no-ops. ([#3656](https://github.com/NSTA1/Orleans.Lattice/issues/3656)) (`Orleans.Lattice.Replication`)
+
+- **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice`)
+
+- **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
+
 ### Security
 
 - **Security - Telemetry tools were ungated.** The MCP telemetry tools ran caller-supplied PromQL against the metrics backend without consulting the telemetry capability, so any caller able to reach the group could read every series. Each tool now authorizes before any backend work. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp.Telemetry`)

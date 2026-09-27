@@ -54,10 +54,10 @@ internal sealed class TreeDeletionGrain(
 
         if (state.State.IsDeleted) return;
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-
-        // Mark all shards as deleted first.
-        var shardCount = resolved.ShardCount;
+        // Mark all shards as deleted first - including every shard an
+        // adaptive split allocated above the pinned ShardCount, which the
+        // routing map can send keys to (see ResolveAllocatedShardCountAsync).
+        var shardCount = await ResolveAllocatedShardCountAsync();
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
@@ -192,10 +192,10 @@ internal sealed class TreeDeletionGrain(
         if (state.State.PurgeInProgress)
             throw new InvalidOperationException("Cannot recover a tree while a purge is in progress.");
 
-        // Unmark all shards.
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var tasks = new Task[resolved.ShardCount];
-        for (int i = 0; i < resolved.ShardCount; i++)
+        // Unmark all shards, including split-allocated ones DeleteTreeAsync marked.
+        var shardCount = await ResolveAllocatedShardCountAsync();
+        var tasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             tasks[i] = shard.UnmarkDeletedAsync();
@@ -218,8 +218,8 @@ internal sealed class TreeDeletionGrain(
         // operator's retry of RecoverTreeAsync re-runs cleanly. Flipping the
         // flag first would make the retry throw "Cannot recover a tree that has
         // not been deleted" and strand the half-repaired topology.
-        var reseeds = new Task[resolved.ShardCount];
-        for (int i = 0; i < resolved.ShardCount; i++)
+        var reseeds = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             reseeds[i] = shard.ReseedNodeBindingsAsync();
@@ -269,8 +269,8 @@ internal sealed class TreeDeletionGrain(
             throw new InvalidOperationException("This tree has already been fully purged.");
 
         // Run purge synchronously shard-by-shard (no timer needed for manual purge).
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        for (int i = 0; i < resolved.ShardCount; i++)
+        var shardCount = await ResolveAllocatedShardCountAsync();
+        for (int i = 0; i < shardCount; i++)
         {
             await PurgeShardAsync(i);
         }
@@ -390,8 +390,7 @@ internal sealed class TreeDeletionGrain(
 
     internal async Task ProcessNextShardAsync()
     {
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var shardCount = resolved.ShardCount;
+        var shardCount = await ResolveAllocatedShardCountAsync();
 
         if (state.State.NextShardIndex >= shardCount)
         {
@@ -470,6 +469,42 @@ internal sealed class TreeDeletionGrain(
     }
 
     private readonly PublishEventsGate _eventsGate = new();
+
+    /// <summary>
+    /// Returns one past the highest physical shard index this tree has ever
+    /// allocated, so a lifecycle walk over <c>0..result-1</c> reaches every
+    /// shard root that can route a key or hold the tree's state. The pinned
+    /// <c>ShardCount</c> alone is not enough: an adaptive shard split allocates
+    /// its target index above the pin
+    /// (<see cref="ILatticeRegistry.AllocateNextShardIndexAsync"/>) and moves
+    /// slots there without changing the pin, and a consolidation retires a donor
+    /// from the routing map while leaving its leaves in place. Walking only
+    /// <c>0..ShardCount-1</c> left a split-added shard readable and writable
+    /// after <see cref="DeleteTreeAsync"/> and its state behind after a purge.
+    /// The walk is contiguous rather than the map's current physical set so a
+    /// retired donor, or the target of an abandoned split, is purged too.
+    /// </summary>
+    internal async Task<int> ResolveAllocatedShardCountAsync()
+    {
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var highest = resolved.ShardCount - 1;
+
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+        if (entry?.NextShardIndex is { } allocated && allocated > highest)
+        {
+            highest = allocated;
+        }
+
+        if (entry?.ShardMap is { } map)
+        {
+            foreach (var index in map.GetPhysicalShardIndices())
+            {
+                if (index > highest) highest = index;
+            }
+        }
+
+        return highest + 1;
+    }
 
     private async Task PurgeShardAsync(int shardIndex)
     {

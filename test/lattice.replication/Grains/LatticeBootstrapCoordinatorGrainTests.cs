@@ -569,25 +569,71 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     }
 
     [Test]
-    public async Task ProcessNextPhase_resumes_export_from_persisted_LastAppliedHlc_after_crash()
+    public async Task ProcessNextPhase_resume_after_crash_re_exports_without_an_upper_bound()
     {
         // Simulate post-crash state: phase=ApplyingSnapshot, cursor=Hlc(75).
+        // The export treats its asOfHlc as a strict UPPER bound, so the
+        // resume must not pass the cursor - it re-exports unbounded.
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, LatticeBootstrapState.ApplyingSnapshot, lastAppliedHlc: Hlc(75));
         var (grain, _, _, provider, _, apply, _, _) = Create(fake);
-        provider.ExportAsync(Tree, SourceCluster, Hlc(75), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(MakeStream(Hlc(150), new VersionVector(),
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(MakeStream(HybridLogicalClock.Zero, new VersionVector(),
                 Stream(new SnapshotEntry { Key = "post-crash", Value = new byte[] { 9 }, Timestamp = Hlc(120) }))));
 
         await grain.ProcessNextPhaseAsync();
 
-        await provider.Received(1).ExportAsync(Tree, SourceCluster, Hlc(75), Arg.Any<CancellationToken>());
-        await provider.DidNotReceive().ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
+        await provider.Received(1).ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
+        await provider.DidNotReceive().ExportAsync(Tree, SourceCluster, Hlc(75), Arg.Any<CancellationToken>());
         Assert.That(fake.State.LastAppliedHlc, Is.EqualTo(Hlc(120)));
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
         await apply.Received(1).ApplyAsync(
             Arg.Is<WalRecord>(r => IsBootstrapSet(r, "post-crash", Hlc(120))),
             Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhase_resume_after_crash_applies_unapplied_entries_stamped_above_the_cursor()
+    {
+        // Regression: the resume used to pass LastAppliedHlc as the export's
+        // asOfHlc, which a real provider treats as a strict upper bound. The
+        // snapshot streams in leaf-chain order, not HLC order, so an entry the
+        // crashed drain had not reached yet can carry an HLC above the cursor;
+        // the bounded re-export dropped it and the bootstrapped peer silently
+        // lost the key. The fake below honours the documented bound exactly
+        // as LatticeSnapshotProvider does.
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.ApplyingSnapshot, lastAppliedHlc: Hlc(75));
+        var (grain, _, _, provider, _, apply, _, _) = Create(fake);
+        var source = new[]
+        {
+            new SnapshotEntry { Key = "applied-before-crash", Value = new byte[] { 1 }, Timestamp = Hlc(75) },
+            new SnapshotEntry { Key = "not-yet-reached", Value = new byte[] { 2 }, Timestamp = Hlc(200) },
+        };
+        provider.ExportAsync(Tree, SourceCluster, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(BoundHonouringExport((HybridLogicalClock)call[2], source)));
+
+        await grain.ProcessNextPhaseAsync();
+
+        await apply.Received(1).ApplyAsync(
+            Arg.Is<WalRecord>(r => IsBootstrapSet(r, "not-yet-reached", Hlc(200))),
+            Arg.Any<CancellationToken>());
+        Assert.That(fake.State.LastAppliedHlc, Is.EqualTo(Hlc(200)));
+        Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
+    }
+
+    /// <summary>
+    /// Builds the stream a real <see cref="ISnapshotProvider"/> returns for
+    /// <paramref name="asOf"/>: every entry at or below the bound (all of
+    /// them when the bound is <see cref="HybridLogicalClock.Zero"/>), in the
+    /// supplied (leaf-chain, not HLC) order.
+    /// </summary>
+    private static SnapshotStream BoundHonouringExport(HybridLogicalClock asOf, SnapshotEntry[] source)
+    {
+        var visible = asOf == HybridLogicalClock.Zero
+            ? source
+            : source.Where(e => e.Timestamp.CompareTo(asOf) <= 0).ToArray();
+        return MakeStream(asOf, new VersionVector(), Stream(visible));
     }
 
     [Test]
@@ -1054,7 +1100,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var (grain, _, _, provider, reminders, _, hwm, _) = Create(fake);
         var asOf = Hlc(60);
         var frontier = new VersionVector();
-        provider.ExportAsync(Tree, SourceCluster, Hlc(50), Arg.Any<CancellationToken>())
+        provider.ExportAsync(Tree, SourceCluster, HybridLogicalClock.Zero, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(MakeStream(asOf, frontier)));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
