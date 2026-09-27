@@ -509,12 +509,27 @@ internal sealed class TreeResizeGrain(
         // Update registry entry with new structural sizing. Preserve the
         // previously-pinned ShardCount so the registry resolver does not
         // see a null pin on the logical tree after the swap.
+        //
+        // Build the entry from the logical tree's current one rather than from
+        // scratch, so the tree's own configuration - PublishEvents, projection
+        // digest maintenance and its latch, history retention, and the cache
+        // and WAL retention ceilings, all set against the logical id - survives
+        // the resize. Only the fields that describe the retired physical tree's
+        // layout are dropped, since the resized copy carries its own. The
+        // current alias is kept too, so a second resize never briefly routes the
+        // logical tree back to its long-retired first physical copy between
+        // this write and the alias flip below.
         var oldEntry = state.State.OldRegistryEntry;
-        var entry = new TreeRegistryEntry
+        var current = await registry.GetEntryAsync(TreeId) ?? oldEntry ?? new TreeRegistryEntry();
+        var entry = current with
         {
             MaxLeafKeys = state.State.NewMaxLeafKeys,
             MaxInternalChildren = state.State.NewMaxInternalChildren,
             ShardCount = oldEntry?.ShardCount ?? state.State.ShardCount,
+            ShardMap = null,
+            NextShardIndex = null,
+            WalPartitions = null,
+            WalPlacement = null,
         };
         await registry.UpdateAsync(TreeId, entry);
 
@@ -586,8 +601,22 @@ internal sealed class TreeResizeGrain(
         // old physical tree receives no further public traffic - soft-delete
         // it to reclaim storage. The SoftDeleteDuration window keeps the
         // data intact so UndoResizeAsync can still restore it.
+        //
+        // On a tree's first resize the old physical tree's id IS the logical
+        // tree id, whose registry entry now carries the alias to the resized
+        // copy and whose compaction schedule now serves it. An ordinary delete
+        // would unregister that entry when the purge completes, making the
+        // live tree unreachable, so the copy is retired instead: its shards
+        // are purged and the logical tree's entry is left alone.
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);
-        await deletion.DeleteTreeAsync();
+        if (string.Equals(oldPhysical, TreeId, StringComparison.Ordinal))
+        {
+            await deletion.DeleteRetiredPhysicalTreeAsync();
+        }
+        else
+        {
+            await deletion.DeleteTreeAsync();
+        }
     }
 
     internal async Task CompleteResizeAsync()

@@ -107,6 +107,20 @@ internal sealed class TreeSnapshotState
     /// </para>
     /// </summary>
     [Id(13)] public bool ReleasesShadowForwardOnCompletion { get; set; }
+
+    /// <summary>
+    /// The physical tree whose shards this snapshot reads, resolved from the
+    /// registry alias of <c>SourceTreeId</c> when the snapshot starts and
+    /// pinned for its whole run. A tree that has been resized keeps its
+    /// logical id but serves its data from the resized physical copy, while
+    /// the shards under its own id are the retired copy; a snapshot addressed
+    /// by the logical id must copy the live shards, and must keep addressing
+    /// them even if the alias moves before the copy finishes. Empty falls back
+    /// to <c>SourceTreeId</c>, which is also what legacy persisted state
+    /// decodes to, so an in-flight snapshot started before this slot existed
+    /// resumes against the shards it began on.
+    /// </summary>
+    [Id(14)] public string SourcePhysicalTreeId { get; set; } = "";
 }
 
 /// <summary>

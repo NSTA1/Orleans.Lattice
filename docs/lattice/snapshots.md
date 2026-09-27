@@ -143,3 +143,8 @@ reuses the entire snapshot infrastructure (crash safety, per-shard drain,
 idempotent operation IDs) and avoids duplicating drain/rebuild logic. See
 [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree)
 for details.
+
+A snapshot of a tree that has been resized copies the tree's live data. The
+coordinator resolves the source tree's alias when the snapshot starts and reads
+the physical tree it points at for the whole run, rather than the shards under
+the logical tree ID, which after a resize hold the retired copy.
