@@ -111,8 +111,14 @@ try {
     # anywhere can find them while a human reader sees nothing.
     $agentSpecRoot = Join-Path (Split-Path $PSScriptRoot) 'docs/agents'
     $agentSpecLink = $null
+    $siteUrl = [string](Get-Content (Join-Path $PSScriptRoot 'docfx.json') -Raw | ConvertFrom-Json).build.sitemap.baseUrl
+    # A project Pages site lives under a path, so /llms.txt at the host root is not
+    # ours: every page's head names the site's own llms.txt so an agent that lands
+    # on any page finds it without guessing the root. llms-txt is not a registered
+    # link relation, so browsers ignore it and a human reader sees nothing.
+    $llmsLink = "<link rel=`"llms-txt`" type=`"text/plain`" href=`"${siteUrl}llms.txt`" title=`"Every page of this documentation, for LLM tooling`">"
     if (Test-Path $agentSpecRoot) {
-        $specSiteUrl = [string](Get-Content (Join-Path $PSScriptRoot 'docfx.json') -Raw | ConvertFrom-Json).build.sitemap.baseUrl
+        $specSiteUrl = $siteUrl
         $unpublished = @(Get-ChildItem $agentSpecRoot -Recurse -File | ForEach-Object {
             $specRelative = $_.FullName.Substring($agentSpecRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
             if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $site 'docs/agents') $specRelative))) { $specRelative }
@@ -159,6 +165,9 @@ try {
         if ($agentSpecLink -and -not $updated.Contains($agentSpecLink)) {
             $updated = $updated.Insert($updated.IndexOf('</head>'), "$agentSpecLink`n  ")
         }
+        if (-not $updated.Contains($llmsLink)) {
+            $updated = $updated.Insert($updated.IndexOf('</head>'), "$llmsLink`n  ")
+        }
 
         # The note goes straight after the page's title, the first thing a reader
         # that takes the page as text keeps, or opens the article on a page
@@ -189,7 +198,6 @@ try {
     # llms.txt, the sitemap, and the footer's version line are what an agent
     # reads first; the build fails without them rather than publishing a site
     # that quietly lacks its entry point.
-    $siteUrl = [string](Get-Content (Join-Path $PSScriptRoot 'docfx.json') -Raw | ConvertFrom-Json).build.sitemap.baseUrl
     $llms = Join-Path $site 'llms.txt'
     if (-not (Test-Path $llms)) { throw 'The site has no llms.txt; stage.ps1 generates it and docfx.json publishes it as a resource.' }
     $deadLinks = @(foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($llms), '\]\((?<url>[^)\s]+)\)')) {
@@ -226,7 +234,7 @@ try {
     }
     $packageFiles = @(Get-ChildItem (Join-Path $site 'docs') -Recurse -Filter 'llms-full.txt').Count
     $specCount = if (Test-Path (Join-Path $site 'docs/agents')) { @(Get-ChildItem (Join-Path $site 'docs/agents') -Recurse -File).Count } else { 0 }
-    Write-Host "Agent entry points: llms.txt, llms-full.txt, $packageFiles package file(s), sitemap.xml ($($sitemapUrls.Count) page(s), undated), $specCount agent specification file(s) under docs/agents"
+    Write-Host "Agent entry points: llms.txt (linked from $pagesWithAlternate page head(s)), llms-full.txt, $packageFiles package file(s), sitemap.xml ($($sitemapUrls.Count) page(s), undated), $specCount agent specification file(s) under docs/agents"
 
     if ($Serve) { docfx serve $site --port $Port }
 }
