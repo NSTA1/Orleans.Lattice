@@ -134,6 +134,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A comment hid a metric from the allow-list.** The PromQL grouping-list scanner counted parentheses blind to comments and quoted strings, so an unmatched `(` in either swallowed the rest of the query and hid the aggregand's selector from the deny-all metric gate. ([#3686](https://github.com/NSTA1/Orleans.Lattice/pull/3686)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)
+
 - **Security - Telemetry tools were ungated.** The MCP telemetry tools ran caller-supplied PromQL against the metrics backend without consulting the telemetry capability, so any caller able to reach the group could read every series. Each tool now authorizes before any backend work. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp.Telemetry`)
 
 - **Security - An asserted tenant was never validated.** The MCP region catalog scoped its answer to the caller-supplied active-tenant assertion without validating it, so any caller could enumerate another tenant's routable regions. The assertion is now validated and a refusal fails closed. ([#3645](https://github.com/NSTA1/Orleans.Lattice/pull/3645)) (`Orleans.Lattice.Api.Mcp`)
