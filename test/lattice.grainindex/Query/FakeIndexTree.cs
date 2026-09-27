@@ -18,6 +18,7 @@ internal sealed class FakeIndexTree
 {
     private readonly SortedDictionary<string, byte[]> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FakeCursor> _cursors = new(StringComparer.Ordinal);
+    private readonly List<(string? Start, string? End)> _scannedRanges = [];
     private int _nextCursor;
 
     internal FakeIndexTree()
@@ -34,6 +35,18 @@ internal sealed class FakeIndexTree
 
     /// <summary>How many cursors have been opened over this tree's lifetime.</summary>
     internal int CursorsOpened => _nextCursor;
+
+    /// <summary>
+    /// The key range of every scan or cursor the executor asked for, in order.
+    /// <para>
+    /// This is what makes a routing assertion possible at all. A clause the
+    /// planner failed to narrow still returns the right rows, because the residual
+    /// predicate is evaluated server-side and filters them anyway - so asserting
+    /// only on the result set cannot tell a prefix-range plan from a whole-property
+    /// scan. The range the tree was asked for is the one observable that does.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyList<(string? Start, string? End)> ScannedRanges => _scannedRanges;
 
     /// <summary>Writes one entry.</summary>
     internal void Put(string key, byte[] value) => _entries[key] = value;
@@ -137,6 +150,8 @@ internal sealed class FakeIndexTree
 
     private List<KeyValuePair<string, byte[]>> Select(string? start, string? end, LatticePredicateNode? predicate)
     {
+        _scannedRanges.Add((start, end));
+
         var rows = new List<KeyValuePair<string, byte[]>>();
         foreach (var pair in _entries)
         {

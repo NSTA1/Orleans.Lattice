@@ -140,6 +140,59 @@ public sealed class TenantBudgetApportionmentTests
     }
 
     [Test]
+    public void DemandProportionalShare_clamps_a_reserve_that_double_rounding_lifted_above_the_cluster_rate()
+    {
+        // The reserve is computed in double: `(long)(clusterRate * reserveFraction)`.
+        // A cluster rate with more significant bits than a double's 53-bit mantissa
+        // rounds UP on conversion, so at reserveFraction 1.0 the product exceeds the
+        // rate it was derived from and the truncated reserve lands one above it.
+        // 2^62 - 1 is the smallest such rate that is easy to state exactly:
+        // (double)(2^62 - 1) == 2^62, so reserved would be 2^62 > clusterRate.
+        //
+        // Unclamped, `demandPool = clusterRate - reserved` would be -1, and the
+        // proportional slice casts that through UInt128 - so a one-ulp rounding
+        // error would not merely overshoot slightly, it would wrap. The clamp is
+        // what keeps the share bounded.
+        const long clusterRate = (1L << 62) - 1;
+
+        var share = TenantBudgetApportionment.DemandProportionalShare(
+            clusterRate,
+            liveSiloCount: 1,
+            thisSiloDemand: 1,
+            totalClusterDemand: 2,
+            reserveFraction: 1.0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(share, Is.EqualTo(clusterRate),
+                "the reserve clamps back to the cluster rate, so the sole silo's share is the whole rate");
+            Assert.That(share, Is.LessThanOrEqualTo(clusterRate),
+                "the apportionment must stay cluster-bounded whatever the double rounding did");
+            Assert.That(share, Is.GreaterThan(0), "a wrapped demand pool would show up as a nonsense share");
+        });
+    }
+
+    [Test]
+    public void DemandProportionalShare_stays_cluster_bounded_at_the_largest_representable_rate()
+    {
+        // long.MaxValue * 1.0 overflows the double->long range. .NET saturates such
+        // a conversion to long.MaxValue rather than wrapping, so the reserve lands
+        // exactly on the cluster rate and the share is still bounded.
+        var share = TenantBudgetApportionment.DemandProportionalShare(
+            long.MaxValue,
+            liveSiloCount: 3,
+            thisSiloDemand: 7,
+            totalClusterDemand: 11,
+            reserveFraction: 1.0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(share, Is.GreaterThan(0));
+            Assert.That(share, Is.LessThanOrEqualTo(long.MaxValue));
+        });
+    }
+
+    [Test]
     public void DemandProportionalShare_clamps_a_negative_cluster_rate_to_zero()
     {
         // A negative cluster rate is nonsensical; it must be clamped to zero so the
