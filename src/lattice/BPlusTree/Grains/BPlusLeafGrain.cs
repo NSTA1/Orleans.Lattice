@@ -3622,6 +3622,11 @@ internal sealed partial class BPlusLeafGrain(
         }
         keys.Sort(StringComparer.Ordinal);
         PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
+        // Issue #2823: this answer resolved prepared writes against the
+        // registry, whose decisions can change with nothing written here. See
+        // PublishLeafTransactionalRead.
+        if (pendingKeys.Count > 0)
+            PublishLeafTransactionalRead(context.GrainId);
 
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
@@ -3737,6 +3742,9 @@ internal sealed partial class BPlusLeafGrain(
         }
         entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
         PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
+        // Issue #2823: see the sibling GetKeysAsync above.
+        if (pendingKeys.Count > 0)
+            PublishLeafTransactionalRead(context.GrainId);
 
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
