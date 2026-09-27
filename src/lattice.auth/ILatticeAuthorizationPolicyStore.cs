@@ -20,6 +20,10 @@ public interface ILatticeAuthorizationPolicyStore
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="rule"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">The rule's scope targets the reserved <c>sys-auth-*</c> namespace.</exception>
+    /// <exception cref="LatticeAppOwnedRuleException">
+    /// The rule id is in the app-owned namespace (<see cref="LatticeAppRuleIds.Prefix"/>) and the
+    /// caller is not running under system origin. App-owned rules are written only by the app compiler.
+    /// </exception>
     Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -40,6 +44,11 @@ public interface ILatticeAuthorizationPolicyStore
     /// <param name="ruleId">The rule id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="ruleId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAppOwnedRuleException">
+    /// <paramref name="ruleId"/> is in the app-owned namespace (<see cref="LatticeAppRuleIds.Prefix"/>) and
+    /// the caller is not running under system origin. Raised before any lookup, so it does not disclose
+    /// whether the rule exists.
+    /// </exception>
     Task<bool> RemoveRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default);
 
     /// <summary>
