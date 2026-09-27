@@ -5752,7 +5752,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5761,7 +5761,7 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
@@ -5820,7 +5820,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5829,7 +5829,7 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
@@ -5894,7 +5894,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5903,7 +5903,7 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
@@ -5979,7 +5979,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5988,7 +5988,7 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
@@ -11710,7 +11710,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes"
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -11719,7 +11719,7 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes"
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
       },
       "sources": [
         "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes",
