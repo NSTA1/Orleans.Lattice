@@ -2,7 +2,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Orleans.Lattice.Apps;
 
-/// <summary>Service registration for the installable-app runtime.</summary>
 public static partial class LatticeAppsServiceCollectionExtensions
 {
     /// <summary>
@@ -60,11 +59,6 @@ public static partial class LatticeAppsServiceCollectionExtensions
         services.AddSingleton(new AppSubscriptionHandlerRegistration(app, subscriptionName, factory));
         return services;
     }
-
-    // TEMPORARY: the declaring half of this hook lives in W1's (#2244)
-    // LatticeAppsServiceCollectionExtensions.cs, which calls it from AddLatticeApps. Until W1 is
-    // integrated this file declares it too so it compiles; remove this declaration at integration.
-    static partial void AddSubscriptionsCore(IServiceCollection services);
 
     static partial void AddSubscriptionsCore(IServiceCollection services) => AddLatticeAppSubscriptions(services);
 
