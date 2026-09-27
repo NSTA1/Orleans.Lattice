@@ -116,6 +116,33 @@ public class CompensationContinuousReaderTests
     }
 
     /// <summary>
+    /// The distinct physical shards the supplied keys resolve to under the
+    /// very routing snapshot <see cref="CreateGrain"/> installs, computed
+    /// here from <see cref="ShardMap.Resolve(string)"/> rather than read back
+    /// out of the saga's own <c>TouchedShards</c>.
+    /// <para>
+    /// That independence is the point. Taking the expected fan-out width from
+    /// <c>state.State.TouchedShards.Count</c> makes the assertion
+    /// self-referential: a prepare phase that under-populated the touched set
+    /// would shrink the expectation and the observed call count together, so
+    /// <c>Received(touchedCount)</c> holds for precisely the regression the
+    /// fixture exists to reject. Deriving the width from the keys and the
+    /// shard map instead gives the assertion an anchor the production code
+    /// cannot move.
+    /// </para>
+    /// </summary>
+    private static int[] ExpectedTouchedShards(params string[] keys)
+    {
+        var map = ShardMap.CreateDefault(
+            LatticeConstants.DefaultVirtualShardCount,
+            LatticeConstants.DefaultShardCount);
+        var shards = new SortedSet<int>();
+        foreach (var key in keys)
+            shards.Add(map.Resolve(key));
+        return [.. shards];
+    }
+
+    /// <summary>
     /// On compensation, every distinct physical shard the saga touched
     /// must receive an <see cref="IShardRootGrain.AppendTxTerminalAsync"/>
     /// call with <c>committed: false</c>. Without this fan-out, prepared
@@ -160,13 +187,17 @@ public class CompensationContinuousReaderTests
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed),
             "Saga must run to terminal Completed even after compensation.");
 
-        var touchedCount = state.State.TouchedShards.Count;
-        Assert.That(touchedCount, Is.GreaterThan(0),
-            "Saga must have populated TouchedShards during prepare so the abort can fan out.");
+        var expectedShards = ExpectedTouchedShards("a", "b", "c");
+        Assert.That(state.State.TouchedShards, Is.EqualTo(expectedShards),
+            "Saga must have populated TouchedShards during prepare with exactly the shards the "
+            + "batch's keys route to, so the abort can fan out to all of them.");
 
         // The substitute is shared across every per-shard grain id, so
-        // one Received call lands per distinct touched shard.
-        await shard.Received(touchedCount).AppendTxTerminalAsync(
+        // one Received call lands per distinct touched shard. The expected
+        // width is derived from the keys and the routing map, never from
+        // TouchedShards, so an under-populated touched set cannot shrink
+        // the expectation to match its own fan-out.
+        await shard.Received(expectedShards.Length).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             Arg.Is<bool>(b => b == false),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
@@ -200,10 +231,11 @@ public class CompensationContinuousReaderTests
 
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
 
-        var touchedCount = state.State.TouchedShards.Count;
-        Assert.That(touchedCount, Is.GreaterThan(0));
+        var expectedShards = ExpectedTouchedShards("a", "b", "c");
+        Assert.That(state.State.TouchedShards, Is.EqualTo(expectedShards),
+            "the committed saga must have recorded exactly the shards its keys route to");
 
-        await shard.Received(touchedCount).AppendTxTerminalAsync(
+        await shard.Received(expectedShards.Length).AppendTxTerminalAsync(
             Arg.Any<Guid>(),
             Arg.Is<bool>(b => b == true),
             Arg.Any<IReadOnlyDictionary<string, byte[]>?>(),
