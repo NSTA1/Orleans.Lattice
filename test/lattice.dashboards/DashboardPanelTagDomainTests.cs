@@ -986,6 +986,16 @@ public sealed class DashboardPanelTagDomainTests
                     map.TryAdd(underscored + unit + suffix, dotted);
                 }
             }
+
+            // The exact .AddPrometheusExporter() series (issue #3260), which the
+            // unit-blind forms above do not cover for every unit - "%" in particular.
+            if (DashboardJsonTests.TryGetExporterSeriesNames(dotted, out var exact))
+            {
+                foreach (var series in exact)
+                {
+                    map.TryAdd(series, dotted);
+                }
+            }
         }
 
         foreach (var dotted in InstrumentFields().Keys) AddForms(dotted);

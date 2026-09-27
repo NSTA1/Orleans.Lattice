@@ -99,7 +99,7 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 
 | Model | Core(s) exercised | Phase |
 |-------|-------------------|-------|
-| `AtomicCommitVisibilityModel` | `AtomicVisibilityGate`, `TxDecisionView` | Level B |
+| `AtomicCommitVisibilityModel` | `AtomicVisibilityGate`, `TxDecisionView`, `ReaderStabilityGate` - including registry call failures injected on the pre-fan-out snapshot, the revision probe, and the disambiguation snapshot (#3641) | Level B |
 | `SagaCoordinatorModel` | `SagaCoordinatorCore` | Phase 1 |
 | `ReshardMigrationModel` | `MigrationTerminalCore`, `ShadowedMigrationReadGuard`, `SplitBoundary` | Phase 3 |
 | `AtomicCommitLivenessModel` | The full saga under bounded fault injection | Phase 4 |

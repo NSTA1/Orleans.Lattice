@@ -46,6 +46,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Deletion - Single reminder teardown path.** An unreachable PurgeComplete arm is removed from the tree-deletion reminder handler, leaving the early guard as the one teardown path, now pinned by reminder-dispatch tests. ([#2347](https://github.com/NSTA1/Orleans.Lattice/issues/2347)) (`Orleans.Lattice`)
 
+- **Core - Dead members removed.** The unused whole-leaf `BPlusLeafGrain.MinUnresolvedPrepareOffset` and the unreachable `rethrow` arm of the cursor's point-in-time unpin are removed, their stale docs corrected, and the live checkpoint clamp and unpin paths pinned by tests. ([#2405](https://github.com/NSTA1/Orleans.Lattice/issues/2405), [#2469](https://github.com/NSTA1/Orleans.Lattice/issues/2469)) (`Orleans.Lattice`)
+
+- **Backlog - Outcome-comment fields are named as such.** The backlog protocol now says at first use that `result=released` is a field of the outcome comment on the mirrored issue, not a `repocontext_release_claim` argument, and names the outcome comment consistently. ([#2463](https://github.com/NSTA1/Orleans.Lattice/issues/2463)) (`repository-wide`)
+
 ### Fixed
 
 - **Vector - A fully resident search still allocated an async frame.** A resident SearchAsync never suspends, yet entered an async state machine anyway - heap-allocated in a debug build, 168 bytes a call. The resident case is now answered before any async frame is entered, with probes on the stack. ([#2450](https://github.com/NSTA1/Orleans.Lattice/issues/2450)) (`Orleans.Lattice.Vector`)
@@ -113,6 +117,16 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice`)
 
 - **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
+
+- **Atomic - Reads fail closed when the transaction registry is unreachable.** A read meeting a prepare whose outcome the registry cannot supply throws the retryable `LatticeTransactionOutcomeUnavailableException`, and a multi-key or streaming read no longer accepts an unverifiable probe as stable. ([#2215](https://github.com/NSTA1/Orleans.Lattice/issues/2215), [#3641](https://github.com/NSTA1/Orleans.Lattice/issues/3641)) (`Orleans.Lattice`)
+
+- **Leaf - A faulted cache refresh hid keys the leaf holds.** A registry fault mid-refresh left a cleared or unmerged leaf-cache mirror still marked fresh, so same-silo reads answered absent for held keys until the leaf wrote again. A faulted refresh no longer marks it fresh. ([#2412](https://github.com/NSTA1/Orleans.Lattice/issues/2412)) (`Orleans.Lattice`)
+
+- **WAL - A short bank lift was graded as a healed floor.** GC arm 2 credited any bank lift as releasing the floor, even a few entries to a stale checkpoint far behind the head. A lift is now graded against the partition head, and one that falls short escalates to a checkpoint drive in the same pass. ([#3649](https://github.com/NSTA1/Orleans.Lattice/issues/3649)) (`Orleans.Lattice`)
+
+- **Dashboards - 22 panels queried series the exporter never emits.** Their tokens used the container's unit spelling where `AddPrometheusExporter` names the series differently, so the panels rendered blank. The tokens now use its names, and the naming gate resolves only the family it emits. ([#3260](https://github.com/NSTA1/Orleans.Lattice/issues/3260)) (`Orleans.Lattice.Dashboards`)
+
+- **Container - `-AcceptMultipleDeltas` could never be acknowledged.** `Assert-DeployManifest.ps1` assigned a `$reason` local, which PowerShell resolves to the `-Reason` parameter, so an acknowledged step was refused or logged the wrong reason. The local is renamed; a lint rejects the shadowing. ([#3598](https://github.com/NSTA1/Orleans.Lattice/issues/3598)) (`repository-wide`)
 
 - **Core - Queue ids could be reissued after a crash.** A queue that drained, or lost its newest entry, before its coalesced head-cursor flush cold-started below ids it had already issued. The next id is now made durable before the newest entry's row is deleted. ([#3681](https://github.com/NSTA1/Orleans.Lattice/issues/3681)) (`Orleans.Lattice`)
 

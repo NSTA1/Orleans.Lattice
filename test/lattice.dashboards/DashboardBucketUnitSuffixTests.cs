@@ -529,7 +529,7 @@ internal sealed class DashboardBucketUnitSuffixTests
                 // gate owns both of those verdicts; this gate must not restate them
                 // in its own vocabulary, because a confident wrong explanation
                 // terminates the inquiry that would have found the real cause.
-                if (DeclaredInstruments.BucketTokens.ContainsKey(token))
+                if (DeclaredBucketTokens.BucketTokens.ContainsKey(token))
                 {
                     nonHistogram++;
                 }

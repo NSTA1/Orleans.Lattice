@@ -31,7 +31,8 @@ public partial class LatticeCursorGrainTests
         FakePersistentState<LatticeCursorState>? existingState,
         LatticeOptions? options,
         IReminderRegistry? reminderRegistry,
-        ITxRegistryGrain? registry)
+        ITxRegistryGrain? registry,
+        ILoggerFactory? loggerFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice-cursor", $"{TreeId}/{CursorId}"));
@@ -73,7 +74,7 @@ public partial class LatticeCursorGrainTests
             reminders,
             optionsMonitor,
             new ServiceCollection().BuildServiceProvider(),
-            new LoggerFactory().CreateLogger<LatticeCursorGrain>(),
+            new Logger<LatticeCursorGrain>(loggerFactory ?? new LoggerFactory()),
             state);
         return (grain, state, lattice);
     }

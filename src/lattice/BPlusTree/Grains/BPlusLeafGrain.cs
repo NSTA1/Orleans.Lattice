@@ -738,7 +738,7 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<byte[]?> GetWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
     {
-        var status = await ResolvePendingStatusAsync(txid);
+        var status = await ResolvePendingStatusAsync(txid, key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Single-key visibility decision, delegated to the shared, dependency-free
         // AtomicVisibilityGate so the production read path and the Coyote
@@ -804,7 +804,7 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<VersionedValue> GetWithVersionWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
     {
-        var status = await ResolvePendingStatusAsync(txid);
+        var status = await ResolvePendingStatusAsync(txid, key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Shared atomic-visibility gate (see GetWithPendingAsync / #1585).
         switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
@@ -855,7 +855,7 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<bool> ExistsWithPendingAsync(string key, Guid txid, LwwValue<byte[]> pendingValue)
     {
-        var status = await ResolvePendingStatusAsync(txid);
+        var status = await ResolvePendingStatusAsync(txid, key);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Shared atomic-visibility gate (see GetWithPendingAsync / #1585).
         switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
@@ -960,7 +960,8 @@ internal sealed partial class BPlusLeafGrain(
         // Resolve every key of this fan-out against a single registry view, so a
         // registry InFlight->Committed transition cannot fall mid-scan and split
         // the observation across keys (see #1584 / TxRegistrySnapshot).
-        var registrySnapshot = new TxDecisionView(outcomes);
+        // ResolveReadOutcome reads that view through TxDecisionView, and fails
+        // closed when the fan-out has no view at all (issue #3641).
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
         {
@@ -977,7 +978,7 @@ internal sealed partial class BPlusLeafGrain(
 
             if (pendingKeys.TryGetValue(key, out var pending))
             {
-                var status = registrySnapshot.Resolve(pending.txid);
+                var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                 if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.FallThroughToPreSaga)
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
@@ -2402,7 +2403,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)) count++;
@@ -2430,7 +2431,7 @@ internal sealed partial class BPlusLeafGrain(
             if (startInclusive is not null &&
                 string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                 continue;
-            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             count++;
@@ -2480,7 +2481,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                     if (status == TxStatus.Committed)
                     {
                         if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
@@ -2504,7 +2505,7 @@ internal sealed partial class BPlusLeafGrain(
             if (splitInProgress && splitKey is not null &&
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 continue;
-            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
             else live++;
@@ -3550,7 +3551,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
@@ -3590,7 +3591,7 @@ internal sealed partial class BPlusLeafGrain(
             if (splitInProgress && splitKey is not null && string.Compare(key, splitKey, StringComparison.Ordinal) >= 0) continue;
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0) continue;
             if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0) continue;
-            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
@@ -3665,7 +3666,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
@@ -3700,7 +3701,7 @@ internal sealed partial class BPlusLeafGrain(
             if (splitInProgress && splitKey is not null && string.Compare(key, splitKey, StringComparison.Ordinal) >= 0) continue;
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0) continue;
             if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0) continue;
-            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
@@ -3743,7 +3744,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
@@ -3760,7 +3761,7 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
-            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             result[key] = pending.value.Value!;
@@ -3821,7 +3822,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
-                    var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+                    var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
@@ -3838,7 +3839,7 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
-            var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
+            var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
             result.Add(new LwwEntry(key, pending.value));

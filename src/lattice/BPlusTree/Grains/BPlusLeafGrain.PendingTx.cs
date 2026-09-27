@@ -895,8 +895,15 @@ internal sealed partial class BPlusLeafGrain
     /// (empty txid or unknown tree id) - the strict-isolation default,
     /// which keeps the key hidden until the registry can be reached.
     /// </para>
+    /// <para>
+    /// Issue #2215: a registry call that fails in transport throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> carrying
+    /// the tree, <paramref name="key"/> and <paramref name="txid"/>, rather
+    /// than the raw transport exception and never a guessed status. There is
+    /// deliberately no retry here - the caller owns retry policy.
+    /// </para>
     /// </summary>
-    private async ValueTask<TxStatus> ResolvePendingStatusAsync(Guid txid)
+    private async ValueTask<TxStatus> ResolvePendingStatusAsync(Guid txid, string? key = null)
     {
         if (txid == Guid.Empty) return TxStatus.InFlight;
 
@@ -913,10 +920,26 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var treeId = state.State.TreeId;
+
+        // Issue #3641: the lattice-level fan-out has no single decision view,
+        // so resolving this prepare at this leaf's own moment could tear the
+        // read against a sibling leaf. Fail closed rather than resolve.
+        if (LatticeRegistrySnapshotContext.IsUnavailable)
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(treeId ?? string.Empty, key, 1, [txid], null);
+        }
+
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        return await TxRegistryRouting
-            .GetRegistry(grainFactory, treeId, txid)
-            .GetStatusAsync(txid);
+        try
+        {
+            return await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid)
+                .GetStatusAsync(txid);
+        }
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(treeId, key, 1, [txid], ex);
+        }
     }
 
     /// <summary>
@@ -1201,6 +1224,16 @@ internal sealed partial class BPlusLeafGrain
             return (filtered, pendingKeys);
         }
 
+        // Issue #3641: no single decision view exists for this fan-out, so the
+        // leaf must not resolve its prepares at its own moment. Hand back the
+        // unavailable sentinel; ResolveReadOutcome throws the typed exception
+        // only if the read actually reaches a prepared key, so a read whose
+        // range holds no prepare still completes.
+        if (LatticeRegistrySnapshotContext.IsUnavailable)
+        {
+            return (UnavailableOutcomes, pendingKeys);
+        }
+
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
         {
@@ -1216,9 +1249,49 @@ internal sealed partial class BPlusLeafGrain
             return (hidden, pendingKeys);
         }
 
-        var outcomes = await TxRegistryFanOut.GetStatusManyAsync(
-            grainFactory, treeId, txids);
+        Dictionary<Guid, TxStatus> outcomes;
+        try
+        {
+            outcomes = await TxRegistryFanOut.GetStatusManyAsync(
+                grainFactory, treeId, txids);
+        }
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
+        {
+            // Issue #2215: the scan-path registry fetch translates a transport
+            // failure into the same typed, retryable exception as the
+            // single-key path. The single-snapshot discipline is unchanged;
+            // only the error type is.
+            throw LatticeTransactionOutcomeUnavailableException.Create(
+                treeId, key: null, pendingKeys.Count, txids, ex);
+        }
+
         return (outcomes, pendingKeys);
+    }
+
+    /// <summary>
+    /// Sentinel outcome map returned by <see cref="SnapshotPendingForReadAsync"/>
+    /// under a <see cref="LatticeRegistrySnapshotContext.IsUnavailable"/>
+    /// ambient (issue #3641). Identified by reference and never mutated.
+    /// </summary>
+    private static readonly Dictionary<Guid, TxStatus> UnavailableOutcomes = new(0);
+
+    /// <summary>
+    /// Resolves the scan-path outcome of <paramref name="txid"/> from the
+    /// <paramref name="outcomes"/> map <see cref="SnapshotPendingForReadAsync"/>
+    /// returned, through the shared <see cref="TxDecisionView"/> rule. Throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> when the map is
+    /// the <see cref="UnavailableOutcomes"/> sentinel: the read reached a prepared
+    /// key it has no single decision view to resolve against.
+    /// </summary>
+    private TxStatus ResolveReadOutcome(Dictionary<Guid, TxStatus> outcomes, Guid txid, int pendingKeyCount)
+    {
+        if (ReferenceEquals(outcomes, UnavailableOutcomes))
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(
+                state.State.TreeId ?? string.Empty, key: null, pendingKeyCount, [txid], null);
+        }
+
+        return new TxDecisionView(outcomes).Resolve(txid);
     }
 
     /// <summary>
@@ -1246,41 +1319,35 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Returns the minimum WAL offset across every unresolved
-    /// pending-tx prepare on this leaf, or <c>null</c> when no
-    /// prepare-with-offset is currently buffered. Used by
-    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> to clamp
-    /// the persisted checkpoint to <c>min(requested, value - 1)</c>
-    /// so crash recovery does not advance past an unresolved prepare.
-    /// O(pending-txs) - bounded by the small cardinality of in-flight
-    /// sagas; returns immediately when the offset map has never been
-    /// allocated (the steady state for foreground-driven leaves).
-    /// </summary>
-    internal long? MinUnresolvedPrepareOffset
-    {
-        get
-        {
-            if (_pendingTxOffsets is null || _pendingTxOffsets.Count == 0)
-                return null;
-
-            long min = long.MaxValue;
-            foreach (var offset in _pendingTxOffsets.Values)
-            {
-                if (offset < min)
-                    min = offset;
-            }
-            return min;
-        }
-    }
-
-    /// <summary>
-    /// Returns the minimum WAL offset across every unresolved
     /// pending-tx prepare on this leaf that was recorded under
-    /// <paramref name="partition"/>, or <c>null</c> when no
-    /// prepare-with-offset for the given partition is currently
-    /// buffered. Required by the per-partition projection-checkpoint
-    /// clamp so a multi-partition replay does not advance partition
-    /// <c>P</c>'s checkpoint past an unresolved prepare from a
-    /// distinct partition's offset space.
+    /// <paramref name="partition"/> and whose replay work is not durably
+    /// recorded, or <c>null</c> when there is no such prepare. This is the
+    /// single source of the prepare clamp at both checkpoint clamp sites -
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> (which clamps
+    /// the requested advance to <c>min(requested, value - 1)</c>) and the
+    /// replay flush ceiling in <c>TryFlushRecoveredCeilingAsync</c> - so
+    /// crash recovery never advances past a prepare it would need to re-read.
+    /// O(pending-txs); returns immediately when the offset map has never been
+    /// allocated (the steady state for foreground-driven leaves).
+    /// <para>
+    /// Both filters are load-bearing, and a whole-leaf minimum over every
+    /// buffered offset is NOT an equivalent substitute (issue #2469, which
+    /// removed a dead accessor of that shape):
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><b>Per partition.</b> WAL partitions have disjoint
+    /// offset spaces, so an unresolved prepare on partition <c>Q</c> says
+    /// nothing about partition <c>P</c>. A cross-partition minimum would pin
+    /// every partition's checkpoint behind one partition's in-flight saga.
+    /// </description></item>
+    /// <item><description><b>Durably recorded prepares are skipped (issue
+    /// #2165).</b> A prepare whose mutation is in the durable replay-work
+    /// ledger no longer needs a WAL re-read to rebuild the pending-tx map, so
+    /// clamping on it only produces a self-perpetuating checkpoint pin: the
+    /// checkpoint cannot advance, it pins the coverage-gated WAL GC, and the
+    /// next activation re-reads the identical prepare and banks nothing.
+    /// </description></item>
+    /// </list>
     /// </summary>
     internal long? MinUnresolvedPrepareOffsetForPartition(int partition)
     {

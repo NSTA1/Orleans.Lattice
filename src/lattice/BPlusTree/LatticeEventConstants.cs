@@ -294,6 +294,16 @@ public static class LatticeEventConstants
     internal const string RegistrySnapshotRequestContextKey = "ol.txregsnap";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key marking a multi-key read fan-out whose
+    /// registry snapshot could not be fetched or verified (issue #3641). Under
+    /// it a leaf that would have to resolve a prepared key throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> instead of
+    /// resolving the saga on its own. Internal - set through
+    /// <see cref="LatticeRegistrySnapshotContext"/>.
+    /// </summary>
+    internal const string RegistrySnapshotUnavailableRequestContextKey = "ol.txregsnapna";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the caller-
     /// supplied <see cref="LatticeIdempotencyKey"/> through the public
     /// <see cref="ILattice"/> mutating entry-points so retries of the

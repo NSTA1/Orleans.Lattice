@@ -99,9 +99,10 @@ unsuffixed family.
 An annotation unit such as `{entry}` is documentation rather than a dimension and
 contributes no suffix. `DashboardBucketUnitSuffixTests` in `test/lattice.dashboards`
 asserts every `_bucket` token a bundled panel reads against this rule, so a
-bucket panel and its instrument cannot drift apart silently. Tokens without a
-`_bucket` suffix are outside that gate, and 22 of them currently follow the
-unsuffixed spelling instead - see
+bucket panel and its instrument cannot drift apart silently. Every other token
+is held to the same rule by the dashboards drift guard, which resolves only the
+exact family `.AddPrometheusExporter()` emits for an instrument's declared unit
+and kind - see
 [How an instrument name becomes a PromQL series name](metrics-to-panel-map.md#how-an-instrument-name-becomes-a-promql-series-name).
 
 **Quantile panels need a real histogram exporter.** 87 bundled panels, carrying

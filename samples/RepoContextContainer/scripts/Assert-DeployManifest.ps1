@@ -572,13 +572,20 @@ else {
 	# would mean the manifest does not get written at all. What changes is that
 	# the failure is now RECORDED as Unreadable with its reason, instead of being
 	# indistinguishable from a clean resolution that found nothing.
-	$reason = ''
-	$declared = Get-DeclaredReading -Directory $ComposeDirectory -Reason ([ref] $reason)
+	#
+	# #3598: this out-parameter was once named `$reason`. PowerShell variable
+	# names are case-insensitive and this is script scope, so it WAS the -Reason
+	# parameter: blanking it here made `-AcceptMultipleDeltas -Reason '...'`
+	# unacknowledgeable, and a resolution failure became the acknowledgement
+	# text. Never name a script-scope local after one of this script's own
+	# parameters; Test-DeployManifest.ps1 lints for exactly that.
+	$declarationFailure = ''
+	$declared = Get-DeclaredReading -Directory $ComposeDirectory -Reason ([ref] $declarationFailure)
 
 	if ($null -eq $declared) {
 		$declared = @{}
 		$declarationStatus = 'Unreadable'
-		$declarationReason = $reason
+		$declarationReason = $declarationFailure
 	}
 	else {
 		# #2993: the file list above is a hardcoded constant. It is correct for

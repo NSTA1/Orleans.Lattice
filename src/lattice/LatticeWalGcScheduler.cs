@@ -4862,15 +4862,28 @@ internal sealed class LatticeWalGcScheduler(
             // as a bank that moved nothing does. Gated on a readable pre-offset
             // because without one no lift can be proven, and an unprovable lift
             // must not suppress the drive (fail closed, as the grading below).
+            //
+            // Issue #3649: a lift is graded against the partition head, not
+            // against zero. A dormant leaf can only bank up to its persisted
+            // checkpoint, which may be thousands of entries behind the head, so
+            // a lift of a few entries still leaves it holding the floor. Such a
+            // lift escalates to the drive on this same pass, and the drive is
+            // then graded from the banked offset, so the bank's own lift is
+            // never credited to the drive (issue #3185).
             if (preOffset is { } bankBefore)
             {
-                var banked = await TryBankDurablePinAsync(leaf, treeId, blockingConsumerId, bankBefore, stoppingToken)
+                var bank = await TryBankDurablePinAsync(leaf, treeId, blockingConsumerId, bankBefore, stoppingToken)
                     .ConfigureAwait(false);
-                if (banked)
+                if (bank.ReachedHead)
                 {
                     RecordBlockedLeafReactivation(
                         DriveOutcomeTag(LeafStarvationDriveOutcome.Lifted), treeTag, tenantTag);
                     return new ReactivationTouchResult(ReactivationOutcome.Completed, OffsetAdvanceOwed: false);
+                }
+
+                if (bank.PostOffset is { } bankedOffset && bankedOffset > bankBefore)
+                {
+                    preOffset = bankedOffset;
                 }
             }
 
@@ -5116,9 +5129,9 @@ internal sealed class LatticeWalGcScheduler(
     /// <summary>
     /// The permit-free first tier of a floor-holder touch (issue #3599): asks
     /// the leaf to bank its durable pin with
-    /// <see cref="IBPlusLeafGrain.BankDurablePinAsync"/> and reports whether
-    /// <paramref name="consumerId"/>'s own durable pin offset rose above
-    /// <paramref name="preOffset"/> as a result.
+    /// <see cref="IBPlusLeafGrain.BankDurablePinAsync"/>, then reports
+    /// <paramref name="consumerId"/>'s durable pin offset afterwards and whether
+    /// the bank carried it to the head of its WAL partition (issue #3649).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -5128,10 +5141,26 @@ internal sealed class LatticeWalGcScheduler(
     /// <c>drove_lifted</c> arm for that reason, and adds no metric instrument.
     /// </para>
     /// <para>
-    /// Fail-closed in both directions that matter. A fault from the call, or an
-    /// unreadable offset afterwards, returns <see langword="false"/>, which
-    /// escalates to the drive - the pre-#3599 behaviour - rather than suppressing
-    /// it on an unproven lift.
+    /// <b>A lift is graded against the head, not against zero (issue #3649).</b>
+    /// The bank can raise the pin only to
+    /// <c>min(persisted checkpoint, durable coverage)</c>, and a dormant leaf's
+    /// persisted checkpoint is where it stood when it went idle. Measured on a
+    /// live estate, every bank lift on the retaining tree was 50 entries or
+    /// fewer, up to a checkpoint about 2,400 entries behind the head, so the
+    /// consumer still held the floor after the lift while the pass had spent its
+    /// visit on it. "The pin moved" is therefore not the success criterion; "the
+    /// pin reached the head" is, within
+    /// <see cref="BankLiftHeadLagTolerance"/>. A lift that falls short escalates
+    /// to the drive in the same pass, which is the only thing that replays the
+    /// leaf forward.
+    /// </para>
+    /// <para>
+    /// Fail-closed in every direction that matters. A fault from the call, an
+    /// unreadable offset afterwards, or an unreadable head reports
+    /// <see cref="BankResult.ReachedHead"/> false, which escalates to the drive
+    /// - the pre-#3599 behaviour - rather than suppressing it on an unproven
+    /// release. The head is read only after a lift, so a bank that moved nothing
+    /// costs no extra call.
     /// </para>
     /// </remarks>
     /// <param name="leaf">The floor-holding leaf.</param>
@@ -5139,7 +5168,7 @@ internal sealed class LatticeWalGcScheduler(
     /// <param name="consumerId">The floor-holding consumer.</param>
     /// <param name="preOffset">The consumer's durable pin offset read before the bank.</param>
     /// <param name="stoppingToken">The service's stopping token; a cancellation it caused is rethrown.</param>
-    private async Task<bool> TryBankDurablePinAsync(
+    private async Task<BankResult> TryBankDurablePinAsync(
         IBPlusLeafGrain leaf, string treeId, string consumerId, long preOffset, CancellationToken stoppingToken)
     {
         try
@@ -5154,23 +5183,124 @@ internal sealed class LatticeWalGcScheduler(
                 consumerId,
                 treeId);
 
-            return false;
+            return default;
         }
 
         var postOffset = await TryReadDurablePinOffsetAsync(treeId, consumerId).ConfigureAwait(false);
-        var lifted = postOffset is { } after && after > preOffset;
-        logger.Log(
-            lifted ? LogLevel.Information : LogLevel.Debug,
-            "WAL GC banked the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay permit: its offset went from {PinOffsetBefore} to {PinOffsetAfter}. {Verdict} (issue #3599).",
+        if (postOffset is not { } after || after <= preOffset)
+        {
+            logger.LogDebug(
+                "WAL GC banked the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay permit: its offset went from {PinOffsetBefore} to {PinOffsetAfter}. The pin did not move, so the sweep escalates to a starvation drive (issue #3599).",
+                consumerId,
+                treeId,
+                preOffset,
+                postOffset);
+
+            return new BankResult(ReachedHead: false, postOffset);
+        }
+
+        var head = await TryReadPartitionHeadAsync(treeId, consumerId, stoppingToken).ConfigureAwait(false);
+        var reachedHead = head is { } next && IsWithinHeadLagTolerance(after, next);
+        logger.LogInformation(
+            "WAL GC banked the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay permit: its offset went from {PinOffsetBefore} to {PinOffsetAfter}, against a partition head of {PartitionHead}. {Verdict} (issues #3599, #3649).",
             consumerId,
             treeId,
             preOffset,
             postOffset,
-            lifted
-                ? "The pin moved, so no starvation drive is spent on it."
-                : "The pin did not move, so the sweep escalates to a starvation drive.");
+            head,
+            reachedHead
+                ? "The pin reached the head, so no starvation drive is spent on it."
+                : "The pin moved but is still behind the head, so the consumer still holds the floor and the sweep escalates to a starvation drive in the same pass.");
 
-        return lifted;
+        return new BankResult(reachedHead, postOffset);
+    }
+
+    /// <summary>
+    /// How far below the exclusive head of its WAL partition a banked pin may
+    /// sit and still be graded as having released the floor (issue #3649).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A pin is an inclusive offset, so a leaf that has read its whole partition
+    /// sits at <c>head - 1</c>; this is measured from there. It is a tolerance
+    /// rather than zero because the head is read after the pin, so appends that
+    /// land between the two reads would otherwise grade a converged leaf as
+    /// lagging on a written-to tree and spend a permit driving it. It is far
+    /// below the lag the defect was measured at - about 2,400 entries behind the
+    /// head after a lift of 50 or fewer - so it cannot re-admit that shape.
+    /// Erring small is the safe direction: a lift graded as short costs one
+    /// drive, where a lift graded as releasing strands the floor holder for at
+    /// least another pass.
+    /// </para>
+    /// <para>
+    /// Internal so the gate can seed a head exactly at the boundary.
+    /// </para>
+    /// </remarks>
+    internal const long BankLiftHeadLagTolerance = 64;
+
+    /// <summary>
+    /// Whether a banked pin at <paramref name="pinOffset"/> is within
+    /// <see cref="BankLiftHeadLagTolerance"/> of the exclusive partition head
+    /// <paramref name="head"/> (issue #3649).
+    /// </summary>
+    /// <param name="pinOffset">The consumer's inclusive durable pin offset after the bank.</param>
+    /// <param name="head">The next sequence the partition will assign, i.e. its exclusive head.</param>
+    internal static bool IsWithinHeadLagTolerance(long pinOffset, long head)
+        => head - 1 - pinOffset <= BankLiftHeadLagTolerance;
+
+    /// <summary>
+    /// The outcome of the permit-free bank tier (issues #3599, #3649).
+    /// </summary>
+    /// <param name="ReachedHead">
+    /// Whether the bank lifted the consumer's pin to within
+    /// <see cref="BankLiftHeadLagTolerance"/> of its partition head, so no drive
+    /// is owed. False on every unproven case.
+    /// </param>
+    /// <param name="PostOffset">
+    /// The consumer's durable pin offset read after the bank, or null when the
+    /// bank faulted or the offset was unreadable. The drive that follows a short
+    /// lift is graded from this offset, not the pre-bank one, so the bank's own
+    /// lift is never credited to the drive (issue #3185).
+    /// </param>
+    private readonly record struct BankResult(bool ReachedHead, long? PostOffset);
+
+    /// <summary>
+    /// Reads the exclusive head of the WAL partition <paramref name="consumerId"/>
+    /// is pinned on - the next sequence it will assign - or null when it cannot
+    /// be read (issue #3649).
+    /// </summary>
+    /// <remarks>
+    /// Best-effort and fail-closed, as <see cref="TryReadDurablePinOffsetAsync"/>:
+    /// null is read as "the release was not proved", which escalates to the
+    /// drive. The partition comes from the consumer id's suffix, and is 0 on a
+    /// single-partition tree, whose consumer ids carry none.
+    /// </remarks>
+    private async Task<long?> TryReadPartitionHeadAsync(
+        string treeId, string consumerId, CancellationToken stoppingToken)
+    {
+        var factory = grainFactory;
+        if (factory is null || !TryResolveLeafGrainId(treeId, consumerId, out _, out var partition))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await factory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
+                .GetNextSequenceAsync(stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not read the head of WAL partition {Partition} on tree {Tree} while grading the bank of consumer {Consumer}; the bank is graded as not having reached the head and the sweep escalates to a starvation drive (issue #3649).",
+                partition,
+                treeId,
+                consumerId);
+
+            return null;
+        }
     }
 
     /// <summary>

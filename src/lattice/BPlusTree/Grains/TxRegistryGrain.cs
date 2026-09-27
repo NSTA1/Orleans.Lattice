@@ -1030,7 +1030,7 @@ internal sealed partial class TxRegistryGrain(
         // probe deliberately does NOT wait for the pending group commit, and
         // may return a token that includes mutations not yet durable. That is
         // safe, and group commit does not make it less so, because of how the
-        // one consumer uses it: LatticeGrain.IsSnap2StableAsync compares the
+        // one consumer uses it: LatticeGrain.ClassifySnap2Async compares the
         // probe for EQUALITY with the token of a snapshot it already holds, and
         // snapshots are now read-committed, so that token always names a
         // durable state. Every un-durable decision-view mutation advances the
@@ -2009,7 +2009,7 @@ internal sealed partial class TxRegistryGrain(
     /// surface with no write anywhere to hang a bump on, so the bare counter
     /// reports "unchanged" across a real change and the reader-side fast path
     /// (which short-circuits on revision equality and never consults
-    /// <c>IsSnapshotStable</c>) accepts a stale view. Folding the live-expired
+    /// <c>ClassifySnapshot</c>) accepts a stale view. Folding the live-expired
     /// count into the token makes that transition announce itself.
     /// </para>
     /// <para>
