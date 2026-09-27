@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Options;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Serialization;
 
@@ -16,23 +19,104 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// prefix by the embedding space as well as the repository is what lets a host
 /// re-embed under a new model without the old index and the new one colliding.
 /// </para>
+/// <para>
+/// The index tree is registered with a leaf key bound sized to its records
+/// before anything touches it. Its records are durable-index chunks of up to
+/// 64 KiB, far larger than the
+/// small values the core default of 128 keys per leaf was chosen for, so at that
+/// default a leaf splits on its key count at about an eighth of the byte bound
+/// every other tree splits on (issue #2829).
+/// </para>
 /// </summary>
 internal sealed class LatticeRepoContextAnnBackingFactory : IRepoContextAnnBackingFactory
 {
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
+    private readonly IOptionsMonitor<LatticeOptions> _options;
+    private readonly Func<int, Task> _registerIndexTree;
+    private readonly Func<Task> _ensureIndexTreePinned;
+    private Task? _indexTreePinned;
 
     /// <summary>Creates the backing factory.</summary>
     /// <param name="grainFactory">The grain factory used to reach the vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
+    /// <param name="options">The per-tree Lattice options the index tree's byte bound is read from. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
-    public LatticeRepoContextAnnBackingFactory(IGrainFactory grainFactory, Serializer serializer)
+    public LatticeRepoContextAnnBackingFactory(
+        IGrainFactory grainFactory, Serializer serializer, IOptionsMonitor<LatticeOptions> options)
+        : this(grainFactory, serializer, options, registerIndexTree: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates the backing factory with a substitute for the registry call that
+    /// pins the index tree's structure, so the pin's value and its ordering can
+    /// be observed without a cluster.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory used to reach the vector trees. Must not be <see langword="null"/>.</param>
+    /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
+    /// <param name="options">The per-tree Lattice options the index tree's byte bound is read from. Must not be <see langword="null"/>.</param>
+    /// <param name="registerIndexTree">
+    /// Registers <see cref="RepoContextTrees.VectorIndex"/> with the given leaf key
+    /// bound, or <see langword="null"/> for the tree registry itself.
+    /// </param>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    internal LatticeRepoContextAnnBackingFactory(
+        IGrainFactory grainFactory,
+        Serializer serializer,
+        IOptionsMonitor<LatticeOptions> options,
+        Func<int, Task>? registerIndexTree)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(options);
         _grainFactory = grainFactory;
         _serializer = serializer;
+        _options = options;
+        _registerIndexTree = registerIndexTree ?? RegisterIndexTreeAsync;
+        _ensureIndexTreePinned = EnsureIndexTreePinnedAsync;
     }
+
+    /// <summary>
+    /// The leaf key bound the <see cref="RepoContextTrees.VectorIndex"/> tree is
+    /// registered with: derived from that tree's own byte bound and the size of
+    /// the records a durable index writes, so the two bounds cross at about the
+    /// same leaf size (issue #2829). See
+    /// <see cref="DurableVectorIndexOptions.ResolveMaxLeafKeys(long)"/>.
+    /// </summary>
+    internal int IndexTreeMaxLeafKeys =>
+        DurableVectorIndexOptions.ResolveMaxLeafKeys(_options.Get(RepoContextTrees.VectorIndex).MaxLeafBytes);
+
+    /// <summary>
+    /// Registers the <see cref="RepoContextTrees.VectorIndex"/> tree with
+    /// <see cref="IndexTreeMaxLeafKeys"/>, once per factory, and returns the task
+    /// that completes when it has.
+    /// <para>
+    /// Registration is idempotent at the registry: a tree that already exists
+    /// keeps the structure it was created with, so an existing deployment keeps
+    /// its pin and adopts the derived one only through an operator-run resize.
+    /// A registration that faulted or was cancelled is retried on the next call
+    /// rather than cached, so one transient failure does not leave every later
+    /// operation failing with it.
+    /// </para>
+    /// </summary>
+    internal Task EnsureIndexTreePinnedAsync()
+    {
+        var pin = Volatile.Read(ref _indexTreePinned);
+        if (pin is not null && !pin.IsFaulted && !pin.IsCanceled)
+        {
+            return pin;
+        }
+
+        var fresh = _registerIndexTree(IndexTreeMaxLeafKeys);
+        var raced = Interlocked.CompareExchange(ref _indexTreePinned, fresh, pin);
+        return ReferenceEquals(raced, pin) ? fresh : raced!;
+    }
+
+    private Task RegisterIndexTreeAsync(int maxLeafKeys) =>
+        _grainFactory.GetLatticeRegistry().RegisterAsync(
+            RepoContextTrees.VectorIndex,
+            new TreeRegistryEntry { MaxLeafKeys = maxLeafKeys });
 
     /// <summary>
     /// The key prefix the index for one repository and embedding space owns
@@ -64,7 +148,9 @@ internal sealed class LatticeRepoContextAnnBackingFactory : IRepoContextAnnBacki
     public IVectorIndexStore CreateStore(string repoId, EmbeddingSpaceTag space)
     {
         ArgumentNullException.ThrowIfNull(repoId);
-        return new LatticeVectorIndexStore(_grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorIndex));
+        return new RepoContextPinnedVectorIndexStore(
+            new LatticeVectorIndexStore(_grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorIndex)),
+            _ensureIndexTreePinned);
     }
 
     /// <inheritdoc />
@@ -99,6 +185,11 @@ internal sealed class LatticeRepoContextAnnBackingFactory : IRepoContextAnnBacki
         string repoId, EmbeddingSpaceTag liveSpace, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
+
+        // The walk's key scan is itself a first touch of the index tree, and a
+        // first touch of an unregistered tree registers it with the core default
+        // leaf bound, so the pin has to land before it.
+        await EnsureIndexTreePinnedAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorIndex);
         var root = RepoContextAnnIndexKeys.RepositoryRoot(repoId);
