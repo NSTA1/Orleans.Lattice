@@ -97,6 +97,34 @@ finer-grained lazy loading and smaller rewrites; larger chunks mean the opposite
 The property that matters is that **no record grows with the corpus**, which any
 positive value preserves.
 
+### Sizing the host tree's leaf key bound
+
+A Lattice leaf splits on whichever bound it crosses first: its key count
+(`MaxLeafKeys`, 128 by default) or its byte size (`LatticeOptions.MaxLeafBytes`,
+64 MiB by default). The key default is sized for small values, and a durable
+index's records are chunks of up to 64 KiB, so on a tree left at the defaults a
+leaf of full chunks splits on its key count at about 8 MiB and the byte bound
+never fires: the tree holds about eight times the leaves it needs, each with its
+own grain activation, snapshot, and write-ahead-log materialiser pin.
+
+`DurableVectorIndexOptions.ResolveMaxLeafKeys(maxLeafBytes)` returns the key
+bound that makes the two cross together: the byte bound divided by the largest
+record a durable index writes, never less than two. At the defaults it is 1024;
+it doubles when the byte bound doubles, and a disabled byte bound (zero or
+negative) is sized against the 64 MiB default because the key bound is then the
+only bound a leaf has. Pass the host tree's own byte bound,
+`IOptionsMonitor<LatticeOptions>.Get(treeName).MaxLeafBytes`.
+
+`MaxLeafKeys` is a structural pin recorded when the tree is first registered,
+and a tree's first read or write registers it with the default if nothing has
+yet. So register the tree with the derived bound **before** anything touches
+it - the treeadmin `tree_create` verb takes `maxLeafKeys` for this. A tree that
+already exists keeps the bound it was created with; adopt the derived one with an
+online resize (`ILattice.ResizeAsync`, or the treeadmin `tree_resize` verb),
+keeping the tree's current internal fan-out. The repository-context host does
+the registration for its own index tree; see
+[record-model.md](../lattice.api.mcp.repocontext/record-model.md).
+
 ## Costs worth knowing when you tune
 
 - **Training is synchronous and expensive** - about 10.7 s for 1,000,000 vectors at
