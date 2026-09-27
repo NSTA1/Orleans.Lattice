@@ -212,6 +212,29 @@ internal static class LatticeTenantResolution
             + "neither confined to the caller nor adjudicated against the owning tenant, and is refused.");
     }
 
+    /// <summary>
+    /// Reports whether <paramref name="treeName"/> is already tenant-qualified
+    /// (<c>t/</c>) or sits in a reserved namespace (<c>_lattice_</c>, <c>sys-</c>),
+    /// and so must be passed through uncomposed rather than scoped into the calling
+    /// tenant's namespace.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Invariant: the app tree prefix
+    /// <see cref="LatticeConstants.AppTreePrefix"/> (<c>a/</c>) must never be added
+    /// to this set.</b> An app tree name <c>a/{appId}/{tree}</c> is an unqualified,
+    /// tenant-local name, and relies on falling through to composition so that each
+    /// tenant gets its own <c>t/{tenant}/a/{appId}/{tree}</c> tree while the
+    /// default tenant keeps the bare name. Treating <c>a/</c> as reserved or
+    /// qualified would return every app tree uncomposed and silently collapse every
+    /// tenant's copy of an app onto a single shared keyspace - a cross-tenant data
+    /// leak, not a matter of preference. The
+    /// <c>LatticeTenantResolutionAppTreePrefixNotReservedTests</c> regression
+    /// fixture pins this.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeName">The caller-supplied tree name.</param>
+    /// <returns><c>true</c> when the name must be passed through uncomposed.</returns>
     private static bool IsReservedOrQualified(string treeName) =>
         LatticeTenantTrees.IsTenantScoped(treeName)
         || treeName.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)

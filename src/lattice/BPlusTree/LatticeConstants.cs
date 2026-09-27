@@ -121,6 +121,33 @@ internal static class LatticeConstants
     public const string TenantRegistryTreePrefix = "sys-tenant-";
 
     /// <summary>
+    /// Tree-name prefix for the trees an installed app owns, named
+    /// <c>a/{appId}/{tree}</c>. Each installed app addresses its data through
+    /// ordinary trees under its own <c>a/{appId}/</c> segment, so one app's trees
+    /// never collide with another's or with ordinary user trees.
+    /// <para>
+    /// Like <see cref="TagIndexTreePrefix"/>, this is a user-facing tree rather than
+    /// a silo-internal name: an app tree is registered in the tree registry and is
+    /// read and written through the ordinary <see cref="ILattice"/> surface. It is
+    /// exposed as a named constant so the app packages and the discovery / catalog
+    /// layer can compose and classify app trees without hardcoding the literal.
+    /// </para>
+    /// <para>
+    /// Unlike <see cref="SystemTreePrefix"/> and <see cref="SystemDataTreePrefix"/>,
+    /// this prefix is deliberately <b>not</b> reserved or treated as already
+    /// qualified by tenant resolution
+    /// (<see cref="LatticeTenantResolution.ComposeEffectiveTreeId"/>). An app tree
+    /// name is an unqualified, tenant-local name, so tenancy stays the outer axis:
+    /// with tenancy off (the default tenant) it resolves to the bare
+    /// <c>a/{appId}/{tree}</c>, and under tenant <c>T</c> it composes to
+    /// <c>t/T/a/{appId}/{tree}</c>. Adding this prefix to the reserved set would
+    /// pass every app tree through uncomposed and silently collapse every tenant's
+    /// copy of an app onto one shared keyspace.
+    /// </para>
+    /// </summary>
+    public const string AppTreePrefix = "a/";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized
