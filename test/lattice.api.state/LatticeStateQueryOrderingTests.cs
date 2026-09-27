@@ -56,6 +56,8 @@ public sealed class LatticeStateQueryOrderingTests
 
         public Task DeleteTreeAsync() => throw new NotSupportedException();
 
+        public Task DeleteRetiredPhysicalTreeAsync() => throw new NotSupportedException();
+
         public Task<TreeDeletionSnapshot> GetDeletionStatusAsync() => throw new NotSupportedException();
 
         public Task RecoverAsync() => throw new NotSupportedException();

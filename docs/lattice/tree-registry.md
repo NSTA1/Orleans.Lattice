@@ -72,10 +72,10 @@ bool exists = await tree.TreeExistsAsync();
 |---|---|
 | First use of a new tree (anything that resolves its options, or any operation that reaches a shard root) | Tree registered (key added), with its structural pins seeded |
 | `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`) |
-| `ResizeAsync` swap phase | Registry entry replaced by one carrying the new sizing and the pinned `ShardCount` (other fields are not carried over), then the `PhysicalTreeId` alias set |
-| `ResizeAsync` cleanup phase | Old physical tree soft-deleted; removed from registry on purge |
+| `ResizeAsync` swap phase | Registry entry rewritten with the new sizing and the pinned `ShardCount`, keeping the tree's configuration overrides and dropping the old physical tree's shard map, split allocation mark and WAL layout, then the `PhysicalTreeId` alias set |
+| `ResizeAsync` cleanup phase | Old physical tree soft-deleted; removed from registry on purge, except on a tree's first resize, where the old physical tree's ID is the logical tree ID and the purge keeps the logical tree's entry |
 | `UndoResizeAsync` | After the swap: alias removed, original entry restored, and the old tree recovered if the resize had already soft-deleted it. Either side of the swap, the new tree is deleted (removed from registry on purge) |
-| `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides) |
+| `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides); the source's alias is resolved and the physical tree it points at is the one copied |
 | Adaptive shard split | Shard map rewritten under a fresh `Version`; the next physical shard index to allocate advanced |
 | Shard consolidation (automatic over-split healing) | Shard map rewritten under a fresh `Version`, reassigning the donor's slots to the survivor |
 | `ReshardAsync` | Shard map grown by the splits it drives; `ShardCount` pin updated when it completes (or at once on an empty tree) |
@@ -84,7 +84,7 @@ bool exists = await tree.TreeExistsAsync();
 | `DeleteTreeAsync` + purge completion | Tree unregistered (key removed) |
 | `BulkLoadAsync` | Tree registered on first shard write |
 
-> **Note:** Physical trees created by `ResizeAsync` (e.g. `my-tree/resized/abc123`) and `SnapshotAsync` are regular registered trees and appear in `GetAllTreeIdsAsync` results. This is by design - it allows monitoring and manual intervention. When the old physical tree is purged after the `SoftDeleteDuration` window, it is automatically unregistered.
+> **Note:** Physical trees created by `ResizeAsync` (e.g. `my-tree/resized/abc123`) and `SnapshotAsync` are regular registered trees and appear in `GetAllTreeIdsAsync` results. This is by design - it allows monitoring and manual intervention. When the old physical tree is purged after the `SoftDeleteDuration` window, it is automatically unregistered - unless it is a first resize's retired copy, whose ID is the logical tree ID: only its shards are purged, and the logical tree stays registered.
 
 ## Tree Aliasing
 

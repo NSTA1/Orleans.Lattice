@@ -47,7 +47,21 @@ internal sealed class TreeDeletionGrain(
     internal IReadOnlyList<TimeSpan> ReminderRegistrationBackoff { get; set; }
         = ReminderServiceReadiness.DefaultRegistrationBackoff;
 
-    public async Task DeleteTreeAsync()
+    public Task DeleteTreeAsync() => SoftDeleteAsync(retainsRegistryEntry: false);
+
+    /// <inheritdoc />
+    public Task DeleteRetiredPhysicalTreeAsync() => SoftDeleteAsync(retainsRegistryEntry: true);
+
+    /// <summary>
+    /// The soft delete shared by <see cref="DeleteTreeAsync"/> and
+    /// <see cref="DeleteRetiredPhysicalTreeAsync"/>.
+    /// </summary>
+    /// <param name="retainsRegistryEntry">
+    /// <see langword="true"/> when this id is also a live logical tree whose
+    /// registry entry and tombstone compaction schedule must survive the
+    /// deletion and its purge; see <see cref="TreeDeletionState.RetainsRegistryEntry"/>.
+    /// </param>
+    private async Task SoftDeleteAsync(bool retainsRegistryEntry)
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
@@ -77,10 +91,12 @@ internal sealed class TreeDeletionGrain(
         // executed are idempotent on retry.
         var isDeletedSnapshot = state.State.IsDeleted;
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
+        var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
 
         // Persist the deletion state.
         state.State.IsDeleted = true;
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow;
+        state.State.RetainsRegistryEntry = retainsRegistryEntry;
         try
         {
             await state.WriteStateAsync();
@@ -89,12 +105,20 @@ internal sealed class TreeDeletionGrain(
         {
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             throw;
         }
 
-        // Unregister the tombstone compaction reminder - no longer needed.
-        var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
-        await compaction.UnregisterReminderAsync();
+        // Unregister the tombstone compaction reminder - no longer needed. A
+        // retired physical copy keeps it: the compaction grain under this id
+        // resolves the logical tree's alias and compacts the live resized
+        // copy, so unregistering it would switch compaction off for a tree
+        // nobody deleted.
+        if (!retainsRegistryEntry)
+        {
+            var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
+            await compaction.UnregisterReminderAsync();
+        }
 
         // Register the purge reminder. This reminder is the tree's ONLY purge
         // anchor and it has no natural re-attempt seam: the idempotency guard at
@@ -135,6 +159,7 @@ internal sealed class TreeDeletionGrain(
 
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             try
             {
                 await state.WriteStateAsync();
@@ -232,10 +257,12 @@ internal sealed class TreeDeletionGrain(
         // (in-memory IsDeleted=false while persisted IsDeleted=true).
         var isDeletedSnapshot = state.State.IsDeleted;
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
+        var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
 
         // Clear deletion state.
         state.State.IsDeleted = false;
         state.State.DeletedAtUtc = null;
+        state.State.RetainsRegistryEntry = false;
         try
         {
             await state.WriteStateAsync();
@@ -244,6 +271,7 @@ internal sealed class TreeDeletionGrain(
         {
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             throw;
         }
 
@@ -307,11 +335,7 @@ internal sealed class TreeDeletionGrain(
         // the same (line 250-254) - keep the synchronous PurgeNowAsync path
         // in lockstep so callers of the public PurgeTreeAsync API observe a
         // fully purged tree on return.
-        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            var registry = grainFactory.GetLatticeRegistry();
-            await registry.UnregisterAsync(TreeId);
-        }
+        await UnregisterPurgedTreeAsync();
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
@@ -434,16 +458,29 @@ internal sealed class TreeDeletionGrain(
         await state.WriteStateAsync();
 
         // Remove the tree from the registry.
-        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            var registry = grainFactory.GetLatticeRegistry();
-            await registry.UnregisterAsync(TreeId);
-        }
+        await UnregisterPurgedTreeAsync();
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         this.DeactivateOnIdle();
+    }
+
+    /// <summary>
+    /// Unregisters the purged tree from the registry, so
+    /// <c>TreeExistsAsync</c> reports it gone. Skipped for a system tree, and
+    /// for a retired physical copy whose id is also a live logical tree
+    /// (<see cref="TreeDeletionState.RetainsRegistryEntry"/>): that entry holds
+    /// the logical tree's alias to its resized copy and its structural sizing,
+    /// so removing it would make the live tree unreachable.
+    /// </summary>
+    private async Task UnregisterPurgedTreeAsync()
+    {
+        if (state.State.RetainsRegistryEntry) return;
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)) return;
+
+        var registry = grainFactory.GetLatticeRegistry();
+        await registry.UnregisterAsync(TreeId);
     }
 
     private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
