@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Internal;
+using Orleans.Lattice.Internal.Cgroups;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 

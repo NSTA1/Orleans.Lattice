@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Internal;
+namespace Orleans.Lattice.Internal.Cgroups;
 
 /// <summary>
 /// Reads the container's enforced CPU grant from the cgroup filesystem, so any
@@ -14,11 +14,14 @@ namespace Orleans.Lattice.Internal;
 /// library, because the core library's own WAL replay concurrency gate is the
 /// site where the quota/<c>DOTNET_PROCESSOR_COUNT</c> disagreement was actually
 /// measured to hurt, and a package may only reference core, never the reverse.
-/// Promotion was chosen over a third copy deliberately: two copies already exist
-/// and are kept honest only by a divergence guard, and a third would be exactly
-/// the defect that guard exists to prevent. The standalone ONNX embedding
-/// companion keeps the byte-identical mirror because its container image has no
-/// project reference into <c>src/</c> at all.
+/// Promotion was chosen over a third copy deliberately. The standalone ONNX
+/// embedding companion once kept a byte-identical mirror, held in sync only by a
+/// drift guard, because its container image has no project reference into
+/// <c>src/</c>; issue #2817 removed the mirror, and the companion now compiles
+/// this very file, linked from its csproj and delivered to its image through a
+/// BuildKit named context. There is exactly one copy, and every file in this
+/// folder must therefore depend on the base class library alone (enforced by
+/// <c>CgroupSourcesCompileStandaloneTests</c>).
 /// </para>
 /// <para>
 /// It exists because <see cref="System.Environment.ProcessorCount"/> is not a
@@ -67,8 +70,8 @@ namespace Orleans.Lattice.Internal;
 /// its own from the same figure.
 /// </para>
 /// <para>
-/// Lives in <c>Orleans.Lattice.Internal</c> rather than the <c>Runtime</c> folder
-/// this reader arrived in, and that placement is load-bearing rather than
+/// Lives in <c>Orleans.Lattice.Internal.Cgroups</c> rather than the <c>Runtime</c>
+/// folder this reader arrived in, and that placement is load-bearing rather than
 /// cosmetic. A namespace <c>Orleans.Lattice.Runtime</c> would sit as a sibling of
 /// Orleans' own heavily-used <c>Orleans.Runtime</c>, and C# resolves a namespace
 /// qualifier by walking outward through the enclosing namespaces. Every file in
