@@ -43,6 +43,8 @@ For a container or multi-tenant host, pass `workspaceMode: true` with a `workspa
 builder.Services.AddRepoContextTools(enableWrites: true, workspaceMode: true, workspaceRoot: "/workspace");
 ```
 
+Pass `registerAsApp: true` to additionally register the surface as the installable app `repo-context` (off by default, so an existing host sees no change). Once an operator installs and enables it, the always-on read-only tools are also advertised as `repo-context_{tool}` beside the unchanged `repocontext_*` tools. The app adopts the package's existing trees, so activation needs operator-approved ceiling exceptions for them.
+
 ## Run it as a container - "codebase memory in a box"
 
 The [**RepoContextContainer sample**](https://github.com/NSTA1/Orleans.Lattice/blob/main/samples/RepoContextContainer/README.md) packages all of this into a single restart-durable Docker container (with an embedding companion) that mounts a workspace read-only, registers repositories under it on demand, and serves the tools over MCP with no external services. It is the fastest way to see the whole flow end to end: start, add a mounted repo, search and recall, restart, and the context is still there.

@@ -15,6 +15,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The installable-app manifest for the opt-in app registration path. Embedded under
+         a pinned logical name so the in-image app source can read it without loading any
+         app code; RepoContextAppManifest.ResourceName must match. -->
+    <EmbeddedResource Include="App\repo-context.app.json" LogicalName="Orleans.Lattice.Api.Mcp.RepoContext.App.repo-context.app.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
@@ -47,6 +54,8 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
+    <ProjectReference Include="..\lattice.api.mcp.apps\Orleans.Lattice.Api.Mcp.Apps.csproj" />
+    <ProjectReference Include="..\lattice.apps\Orleans.Lattice.Apps.csproj" />
     <ProjectReference Include="..\lattice.vector\Orleans.Lattice.Vector.csproj" />
   </ItemGroup>
 
