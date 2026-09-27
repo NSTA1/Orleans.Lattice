@@ -79,6 +79,13 @@ internal sealed class HotShardMonitorGrain(
     private bool _running;
 
     /// <summary>
+    /// Whether this activation's keepalive reminder is known to be registered.
+    /// False after a registration attempt faulted, so the next sampling tick
+    /// retries it (#3713).
+    /// </summary>
+    private bool _keepaliveRegistered;
+
+    /// <summary>
     /// The in-flight footprint this monitor last published to the cluster gate.
     /// Tracked so the no-ceiling path can stay edge-triggered: it reports while
     /// splits are in flight and issues exactly one further call to clear the
@@ -223,15 +230,44 @@ internal sealed class HotShardMonitorGrain(
         var options = Options;
         if (!options.AutoSplitEnabled) return;
 
+        // The sampling timer is armed BEFORE any await, and nothing below
+        // disarms it (#3713, mirroring #3682). `_running` is latched above, so
+        // if the timer came last a fault in the keepalive registration -
+        // typically Orleans' reminder service still initializing, which waits
+        // ~20s and then throws - or in the activation-time write would leave
+        // this activation claiming to run with nothing sampling, and every later
+        // call would return at the guard. The keepalive only re-activates the
+        // monitor after collection; the timer is the work.
+        if (_timer is null) StartTimer();
+
+        try
+        {
+            await RegisterKeepaliveAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            // Transient by Orleans' own contract. The timer is armed, so the
+            // caller's request has been met; the next sampling tick retries the
+            // registration (see OnTimerTickAsync).
+            logger.LogDebug(
+                "Deferred the hot-shard-monitor keepalive reminder for tree {TreeId}: reminder service still initializing; the next sampling tick retries it.",
+                TreeId);
+        }
+
+        // Initialize the persisted activation time on first use. A fault here
+        // still surfaces, but the timer is armed and the sampling pass
+        // re-attempts the initialization on its next tick.
+        await GetOrSetActivationUtcAsync(TimeProvider.GetUtcNow().UtcDateTime);
+    }
+
+    private async Task RegisterKeepaliveAsync()
+    {
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,
             reminderName: KeepaliveReminderName,
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
-
-        // Initialize the persisted activation time on first use.
-        await GetOrSetActivationUtcAsync(TimeProvider.GetUtcNow().UtcDateTime);
-        StartTimer();
+        _keepaliveRegistered = true;
     }
 
     /// <inheritdoc />
@@ -240,6 +276,7 @@ internal sealed class HotShardMonitorGrain(
         _timer?.Dispose();
         _timer = null;
         _running = false;
+        _keepaliveRegistered = false;
 
         try
         {
@@ -276,6 +313,7 @@ internal sealed class HotShardMonitorGrain(
 
         if (_timer is null) StartTimer();
         _running = true;
+        _keepaliveRegistered = true;
     }
 
     private void StartTimer()
@@ -296,6 +334,24 @@ internal sealed class HotShardMonitorGrain(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Hot-shard sampling pass failed for tree {TreeId}", TreeId);
+        }
+
+        // After the pass, not before it: a registration inside the reminder
+        // service's startup window can wait ~20s, and sampling must not.
+        if (_keepaliveRegistered) return;
+        try
+        {
+            await RegisterKeepaliveAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            logger.LogDebug(
+                "Hot-shard-monitor keepalive reminder for tree {TreeId} still deferred: reminder service still initializing.",
+                TreeId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to register the hot-shard-monitor keepalive reminder for tree {TreeId}; the next sampling tick retries it.", TreeId);
         }
     }
 

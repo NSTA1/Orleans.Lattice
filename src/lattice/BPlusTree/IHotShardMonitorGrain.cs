@@ -23,6 +23,13 @@ internal interface IHotShardMonitorGrain : IGrainWithStringKey
     /// <summary>
     /// Ensures the monitor is active for this tree. Idempotent - repeated
     /// calls are no-ops once the monitor is running.
+    /// <para>
+    /// The sampling timer is armed before the keepalive is registered and stays
+    /// armed if registration fails (#3713). A registration that loses the race
+    /// with the reminder service's startup is deferred rather than thrown, and
+    /// the next sampling tick retries it; any other registration fault is still
+    /// thrown.
+    /// </para>
     /// </summary>
     /// <remarks>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> to
