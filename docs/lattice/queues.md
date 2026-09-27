@@ -25,7 +25,7 @@ Values are serialized with an injectable `ILatticeSerializer<T>`, defaulting to 
 | `CountAsync(ct)` | Number of entries currently parked (served from the in-memory cache). |
 | `ListAsync(ct)` | Ascending-id snapshot of every parked entry, for diagnostics. |
 
-`LatticeQueueEntry<T>` carries the monotonic `EntryId` assigned at enqueue time alongside the deserialized `Value`. On activation the next id is recomputed as `max(stored id) + 1`, seeded from the persisted head-cursor row when no entry rows remain, so ids stay monotonic across a restart while the queue still holds entries, and across a graceful deactivation. The head-cursor row is rewritten only every 32 head advances and on deactivation, so if a silo crashes after the queue has drained, ids assigned since the last cursor write can be issued again.
+`LatticeQueueEntry<T>` carries the monotonic `EntryId` assigned at enqueue time alongside the deserialized `Value`. On activation the next id is recomputed as `max(stored id) + 1`, and never below the next id the persisted head-cursor row records, so ids stay monotonic across a restart, a graceful deactivation, and a silo crash. The head-cursor row's floor is rewritten only every 32 head advances and on deactivation, but its next id is written before any delete of the entry holding the highest issued id - dequeueing, evicting, or removing the last entry - so a queue holding a backlog pays no extra write and one that drains to empty pays one write per drain.
 
 ## Bounded queues
 

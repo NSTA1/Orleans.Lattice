@@ -914,6 +914,23 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             throw new TreeNotEmptyException(treeId);
         }
 
+        // The diagnostics fan-out contains a faulting shard as an all-zero report
+        // rather than failing the whole report, so zero totals prove emptiness only
+        // when every shard was actually sampled. Fail closed on any shard that was
+        // not: it may hold the data that makes this tree non-empty.
+        if (!diagnostics.Shards.IsDefault)
+        {
+            foreach (var shard in diagnostics.Shards)
+            {
+                if (shard.SampleFailed)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot begin a bulk load on tree '{treeId}': shard {shard.ShardIndex} could not be sampled, " +
+                        "so the tree cannot be verified empty. Retry once the shard is reachable.");
+                }
+            }
+        }
+
         return new TreeBulkLoadSession { TreeId = treeId, OperationId = operationId };
     }
 

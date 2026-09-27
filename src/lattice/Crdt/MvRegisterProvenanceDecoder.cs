@@ -60,7 +60,23 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
         ArgumentNullException.ThrowIfNull(deltas);
         if (deltas.Count == 0) return Array.Empty<CrdtMemberChange>();
 
-        var result = new List<CrdtMemberChange>();
+        // One pre-pass to size the result exactly so the hot append loop never
+        // reallocates, matching the shape the OR-Set and RW-Set decoders already
+        // use. The bound is free: each delta's entry and context counts are
+        // already-materialised collection counts, not a re-scan of their
+        // contents. It is exact - Emit contributes at most one event per entry
+        // and one per context replica, and fewer only when a context replica
+        // still has a live entry.
+        var total = 0;
+        for (var i = 0; i < deltas.Count; i++)
+        {
+            var delta = (MvRegisterDelta)deltas[i].Delta;
+            if (delta.Entries is { Count: > 0 } entries) total += entries.Count;
+            if (delta.Context is { Count: > 0 } context) total += context.Count;
+        }
+        if (total == 0) return Array.Empty<CrdtMemberChange>();
+
+        var result = new List<CrdtMemberChange>(total);
         for (var i = 0; i < deltas.Count; i++)
         {
             var entry = deltas[i];
@@ -116,6 +132,25 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
         var entries = register.Entries;
         if (entries.Count == 0) return Array.Empty<CrdtMemberValue>();
 
+        // A multi-value register holds one value except while a concurrent write
+        // is unresolved, and a one-element sequence is already sorted. Taking
+        // that case directly skips the defensive copy the sort needs (a List and
+        // its backing array) and the sort call itself, leaving only the single
+        // result the caller asked for.
+        if (entries.Count == 1)
+        {
+            var only = entries[0];
+            return new CrdtMemberValue[]
+            {
+                new()
+                {
+                    Element = only.Value is null ? Array.Empty<byte>() : only.Value.AsSpan().ToArray(),
+                    ReplicaId = only.ReplicaId,
+                    Ordinal = only.Counter,
+                },
+            };
+        }
+
         var ordered = new List<MvRegisterEntry>(entries);
         ordered.Sort(static (a, b) =>
         {
@@ -148,14 +183,27 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
         IReadOnlyDictionary<string, long>? context,
         HybridLogicalClock? wallClock)
     {
+        // A multi-value register is single-valued in the steady state and
+        // multi-valued only transiently, so the live-replica set the context
+        // loop below tests against is almost always one element. Building a
+        // HashSet for it costs three heap allocations (the set, its bucket
+        // array, and its entry array) to answer a membership question a linear
+        // scan over the same tiny list answers without allocating at all. The
+        // set is therefore built only once the entry list is large enough for
+        // the linear scan's O(entries) probe to stop being the cheaper option.
         HashSet<string>? liveReplicas = null;
-        if (entries is { Count: > 0 })
+        var entryCount = entries is null ? 0 : entries.Count;
+        if (entryCount > 0)
         {
-            liveReplicas = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i < entries.Count; i++)
+            if (entryCount > LinearLiveReplicaScanLimit)
             {
-                var e = entries[i];
-                liveReplicas.Add(e.ReplicaId);
+                liveReplicas = new HashSet<string>(entryCount, StringComparer.Ordinal);
+            }
+
+            for (var i = 0; i < entryCount; i++)
+            {
+                var e = entries![i];
+                liveReplicas?.Add(e.ReplicaId);
                 sink.Add(new CrdtMemberChange
                 {
                     Element = e.Value ?? Array.Empty<byte>(),
@@ -171,7 +219,7 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
         {
             foreach (var (replicaId, counter) in context)
             {
-                if (liveReplicas is not null && liveReplicas.Contains(replicaId)) continue;
+                if (IsLiveReplica(liveReplicas, entries, entryCount, replicaId)) continue;
                 sink.Add(new CrdtMemberChange
                 {
                     Element = Array.Empty<byte>(),
@@ -182,5 +230,34 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
                 });
             }
         }
+    }
+
+    /// <summary>
+    /// The entry count above which <see cref="Emit"/> switches from a linear
+    /// scan of the entry list to a <see cref="HashSet{T}"/>. A register holding
+    /// more concurrent values than this is not a shape the steady state
+    /// produces, so the set is built only for the pathological case that
+    /// actually benefits from it.
+    /// </summary>
+    private const int LinearLiveReplicaScanLimit = 8;
+
+    /// <summary>
+    /// Answers whether <paramref name="replicaId"/> still has a live entry,
+    /// through <paramref name="liveReplicas"/> when <see cref="Emit"/> built one
+    /// and otherwise by an ordinal linear scan of the entry list itself.
+    /// </summary>
+    private static bool IsLiveReplica(
+        HashSet<string>? liveReplicas,
+        IReadOnlyList<MvRegisterEntry>? entries,
+        int entryCount,
+        string replicaId)
+    {
+        if (liveReplicas is not null) return liveReplicas.Contains(replicaId);
+        for (var i = 0; i < entryCount; i++)
+        {
+            if (string.Equals(entries![i].ReplicaId, replicaId, StringComparison.Ordinal)) return true;
+        }
+
+        return false;
     }
 }

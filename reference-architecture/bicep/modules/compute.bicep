@@ -115,11 +115,11 @@ param prometheusQueryEndpoint string = ''
 @description('Azure Front Door id (GUID) the client-facing heads assert on inbound X-Azure-FDID to reject traffic that bypasses the global ingress. FRONT-DOOR-SUBISSUE SEAM: empty string leaves the heads unlocked so this module deploys standalone before Front Door exists; the deployer runs a second compute pass supplying frontdoor.outputs.frontDoorId to activate the origin lock (Front Door consumes the head FQDNs this module outputs, so the value cannot be wired in one static pass without a cycle).')
 param frontDoorId string = ''
 
-@description('PromQL query returning the compute-axis replica-demand scalar (lattice.scaling scaleValue) aggregated across silo replicas.')
-param siloScaleQuery string = 'max(lattice_scaling_scale_value{app="__SILO__"})'
+@description('PromQL query returning the compute-axis replica-demand scalar (lattice.scaling scaleValue) aggregated across silo replicas. The silo exports the gauge as orleans_lattice_scaling_scale_value, and the region collector (modules/scraper/otel-collector-config.yaml) stamps it with lattice_head="silo" - the per-region Azure Monitor workspace holds only the series of the silo in that region, so no app-name label is needed (and none exists). An optional __SILO__ placeholder is replaced with the silo app name.')
+param siloScaleQuery string = 'max(orleans_lattice_scaling_scale_value{lattice_head="silo"})'
 
-@description('KEDA prometheus scaler threshold: target value of the query per replica.')
-param siloScaleThreshold string = '1'
+@description('KEDA prometheus scaler threshold: target value of the query per replica. KEDA asks for ceil(value / threshold) replicas and scaleValue never exceeds the current replica count, so the threshold must be below 1 for the silo to scale out; 1 could only hold or shrink it. 0.5 asks for twice the current count at full saturation.')
+param siloScaleThreshold string = '0.5'
 
 // --- Scale-to-zero heads ---
 

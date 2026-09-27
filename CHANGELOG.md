@@ -38,6 +38,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Data-plane CRDT collection reads.** The data API's OR-Set, RW-Set and OR-Map whole-collection reads now resolve survivors in one scan into an exactly-sized destination, instead of walking the add-map twice and materialising through hidden-count iterators. ([#3654](https://github.com/NSTA1/Orleans.Lattice/pull/3654)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Data`)
 
+- **Performance - CRDT provenance decoding.** Multi-value register decodes no longer build a live-replica hash set per delta or copy and sort a single-valued projection, and the OR-map state and key emitters size their sink from the map's free counts instead of growing from empty. ([#3675](https://github.com/NSTA1/Orleans.Lattice/pull/3675)) (`Orleans.Lattice`)
+
 - **Docs - Multi-silo guide scope.** The multi-silo scaling guide now states that its figures come from one tree on one storage account and links multi-account fan-out, the Operate track lists it, and the internal `benchmark/` notes are no longer published on the docs site. ([#3617](https://github.com/NSTA1/Orleans.Lattice/pull/3617)) (`repository-wide`)
 
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -106,7 +108,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Scan - An uncapped point-in-time cursor pin expired after 60 seconds.** Setting `MaxCursorSnapshotPinTtl` to `Timeout.InfiniteTimeSpan` floored the pin to `TxDecisionRetention`, or expired it at once with retention off; it now disables the cap as documented. ([#3631](https://github.com/NSTA1/Orleans.Lattice/issues/3631)) (`Orleans.Lattice`)
 
-- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s, so a session opened just after a chunk was grafted saw a stale empty report. The probe now drops the cached reports and samples the shards afresh. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s and counted a shard it failed to sample as empty. It now drops the cached reports, samples the shards afresh, and refuses to begin while any shard is unsampled. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650), [#3680](https://github.com/NSTA1/Orleans.Lattice/issues/3680)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Abstractions`)
 
 - **Memory - Tool arguments honour their documented contract.** `repocontext_remember` rejects `kind: Unspecified` like any other unrecognised kind, and `repocontext_neighbors` applies its documented default of 50 to a non-positive `maxNodes` instead of the 100 ceiling. ([#3651](https://github.com/NSTA1/Orleans.Lattice/issues/3651), [#3652](https://github.com/NSTA1/Orleans.Lattice/issues/3652)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -125,6 +127,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Dashboards - 22 panels queried series the exporter never emits.** Their tokens used the container's unit spelling where `AddPrometheusExporter` names the series differently, so the panels rendered blank. The tokens now use its names, and the naming gate resolves only the family it emits. ([#3260](https://github.com/NSTA1/Orleans.Lattice/issues/3260)) (`Orleans.Lattice.Dashboards`)
 
 - **Container - `-AcceptMultipleDeltas` could never be acknowledged.** `Assert-DeployManifest.ps1` assigned a `$reason` local, which PowerShell resolves to the `-Reason` parameter, so an acknowledged step was refused or logged the wrong reason. The local is renamed; a lint rejects the shadowing. ([#3598](https://github.com/NSTA1/Orleans.Lattice/issues/3598)) (`repository-wide`)
+
+- **Core - Queue ids could be reissued after a crash.** A queue that drained, or lost its newest entry, before its coalesced head-cursor flush cold-started below ids it had already issued. The next id is now made durable before the newest entry's row is deleted. ([#3681](https://github.com/NSTA1/Orleans.Lattice/issues/3681)) (`Orleans.Lattice`)
+
+- **Config - Reference autoscaler rules could never scale out.** The shipped KEDA and ACA rules set `targetValue` 1, which asks for at most the current replica count, and the reference architecture queried a series nothing exports. The rules now use 0.5 and the exported series. ([#3679](https://github.com/NSTA1/Orleans.Lattice/issues/3679)) (`Orleans.Lattice.Scaling`)
 
 ### Security
 

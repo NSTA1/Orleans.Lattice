@@ -5,7 +5,7 @@ using Orleans.Lattice.Tests.Fakes;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public class LatticeQueueCoreTests
+public partial class LatticeQueueCoreTests
 {
     private static byte[] Payload(string s) => Encoding.UTF8.GetBytes(s);
 
