@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Hello, Lattice</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      /* A code scene: the whole frame, laid out absolutely like a component. */
+      .hl-frame {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      /* A code panel, inset from the safe area so the line marker can sit in
+         the margin beside it without touching the code. */
+      .hl-panel {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 40px);
+      }
+      /* The line marker: "you are here" in the code, a bar in the marker
+         beside the lines the narration is on. Its lines are given as --from
+         (0-based) and --lines; where its panel's first line sits (--first)
+         and how tall a line is (--pitch) are measured from the panel it
+         names (data-panel) by the script below. */
+      .hl-bar {
+        position: absolute;
+        left: var(--lv-safe-x);
+        width: 10px;
+        top: calc(var(--first) + var(--from) * var(--pitch));
+        height: calc(var(--lines) * var(--pitch));
+        border-radius: 999px;
+        background: var(--lt-marker);
+      }
+      .hl-kicker {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 40px);
+        top: 214px;
+        margin: 0;
+      }
+      .hl-command {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 40px);
+        top: 262px;
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-code);
+        line-height: 1.55;
+      }
+      .hl-statement {
+        position: absolute;
+        left: calc(var(--lv-safe-x) + 40px);
+        top: 520px;
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+        line-height: 1.3;
+      }
+      .hl-statement .lv-node {
+        background: var(--lt-ink);
+      }
+      /* A scan's keys, beside the absent-key panel: in order, and only the
+         live ones. */
+      .hl-scan {
+        position: absolute;
+        left: 1530px;
+        top: 255px;
+        width: 294px;
+      }
+      .hl-scan ol {
+        margin: 24px 0 0;
+        padding: 0;
+        list-style: none;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+      }
+      .hl-scan li {
+        padding: 14px 0;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink);
+        font-size: var(--lv-type-code);
+        line-height: 1.3;
+      }
+      /* Where next: one node per place, as the site lists its paths. */
+      .hl-places {
+        position: absolute;
+        left: var(--lv-safe-x);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .hl-place {
+        position: relative;
+        padding-left: 72px;
+        margin-bottom: 52px;
+      }
+      .hl-place .lv-node {
+        position: absolute;
+        left: 0;
+        top: 10px;
+      }
+      .hl-place-next .lv-node {
+        background: var(--lt-ink);
+      }
+      .hl-place-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.1;
+        letter-spacing: -0.012em;
+      }
+      .hl-place-what {
+        margin: 12px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Hello, Lattice: the first episode on Build (episodes/hello-lattice/BRIEF.md),
+      narrated from SCRIPT.md. It opens on the shared title card; every other
+      scene is the code it talks about, laid out here, with a marker beside
+      the lines the narration is on. The code panels are copied, escaped, from
+      the companion page (docs/videos/hello-lattice.md), where the repository
+      compiles them, by `npm run snippets`.
+
+      Each clip says which script scene it shows (data-scene) and, for a clip
+      that arrives later in its scene, on which beat (data-from-beat). The
+      timing - each clip's data-start and data-duration, the title card's
+      beats, the episode's length and the narration track - is stamped from
+      the narration by `npm run timeline -- hello-lattice`. Never edit those by
+      hand: change SCRIPT.md, narrate, and stamp again.
+    -->
+    <div
+      id="root"
+      data-composition-id="hello-lattice"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="117.834"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="hello-lattice"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Build","title":"Hello, Lattice","subtitle":"Register, resolve, write and read","beats":"1.5","end":9.552}'
+        data-start="0"
+        data-duration="9.552"
+      ></div>
+
+      <div id="register" class="clip lv-scene hl-frame" data-scene="register-on-a-silo" data-track-index="0" data-start="9.552" data-duration="28.519">
+        <h2 class="lv-heading">Register on a silo</h2>
+        <p class="lv-label hl-kicker">The package, from NuGet</p>
+        <p class="lv-mono hl-command">dotnet add package Orleans.Lattice</p>
+      </div>
+      <div id="register-code" class="clip hl-panel" style="top: 360px" data-scene="register-on-a-silo" data-from-beat="1" data-track-index="2" data-start="13.576" data-duration="24.495">
+        <pre class="lv-code"><code data-snippet="hello-lattice/register">siloBuilder.AddLattice((silo, storageName) =&gt;
+    silo.AddMemoryGrainStorage(storageName));
+
+// The write-ahead log is in memory by default.
+// In production, make both storage surfaces durable.</code></pre>
+      </div>
+      <div id="register-bar-1" class="clip hl-bar" data-panel="register-code" style="--from: 0; --lines: 2" data-scene="register-on-a-silo" data-from-beat="1" data-track-index="3" data-start="13.576" data-duration="24.495"></div>
+      <div id="register-bar-2" class="clip hl-bar" data-panel="register-code" style="--from: 1; --lines: 3" data-scene="register-on-a-silo" data-from-beat="2" data-track-index="4" data-start="22.397" data-duration="15.674"></div>
+      <div id="register-bar-3" class="clip hl-bar" data-panel="register-code" style="--from: 4; --lines: 1" data-scene="register-on-a-silo" data-from-beat="3" data-track-index="5" data-start="29.437" data-duration="8.634"></div>
+
+      <div id="tree" class="clip lv-scene hl-frame" data-scene="a-tree-by-name" data-track-index="0" data-start="38.071" data-duration="14.313">
+        <h2 class="lv-heading">A tree, by name</h2>
+        <div class="hl-panel" style="top: 240px">
+          <pre class="lv-code"><code data-snippet="hello-lattice/resolve">// On a client or inside a grain:
+var lattice = grainFactory.GetGrain&lt;ILattice&gt;("my-tree");</code></pre>
+        </div>
+      </div>
+      <div id="tree-same" class="clip" data-scene="a-tree-by-name" data-from-beat="1" data-track-index="2" data-start="46.752" data-duration="5.632">
+        <p class="hl-statement"><span class="lv-node"></span>The same name, the same tree</p>
+      </div>
+
+      <div id="typed" class="clip lv-scene hl-frame" data-scene="typed-values" data-track-index="0" data-start="52.384" data-duration="20.857">
+        <h2 class="lv-heading">Typed values</h2>
+        <div id="typed-code" class="hl-panel" style="top: 220px">
+          <pre class="lv-code"><code data-snippet="hello-lattice/typed">var lattice = grainFactory.GetGrain&lt;ILattice&gt;("my-tree");
+
+// The typed overloads default to JSON:
+await lattice.SetAsync("user/42", new User("Ada", 36));
+var user = await lattice.GetAsync&lt;User&gt;("user/42");
+
+// Or own the encoding, with the raw byte[] surface:
+await lattice.SetAsync("hello", "world"u8.ToArray());</code></pre>
+        </div>
+      </div>
+      <div id="typed-bar-0" class="clip hl-bar" data-panel="typed-code" style="--from: 2; --lines: 1" data-scene="typed-values" data-from-beat="0" data-track-index="3" data-start="52.984" data-duration="20.257"></div>
+      <div id="typed-bar-1" class="clip hl-bar" data-panel="typed-code" style="--from: 3; --lines: 2" data-scene="typed-values" data-from-beat="1" data-track-index="4" data-start="62.602" data-duration="10.639"></div>
+      <div id="typed-bar-2" class="clip hl-bar" data-panel="typed-code" style="--from: 6; --lines: 2" data-scene="typed-values" data-from-beat="2" data-track-index="5" data-start="66.335" data-duration="6.906"></div>
+
+      <div id="absent" class="clip lv-scene hl-frame" data-scene="when-a-key-is-not-there" data-track-index="0" data-start="73.241" data-duration="26.602">
+        <h2 class="lv-heading">When a key is not there</h2>
+        <div id="absent-code" class="hl-panel" style="top: 220px">
+          <pre class="lv-code"><code data-snippet="hello-lattice/absent">var lattice = grainFactory.GetGrain&lt;ILattice&gt;("my-tree");
+// null when absent or deleted
+byte[]? value = await lattice.GetAsync("user/7");
+// tombstones the key; true if it was live
+bool deleted = await lattice.DeleteAsync("hello");
+// writes only when absent; null when it wrote
+byte[]? existing = await lattice.GetOrSetAsync(
+    "hello", "again"u8.ToArray());</code></pre>
+        </div>
+      </div>
+      <div id="absent-bar-0" class="clip hl-bar" data-panel="absent-code" style="--from: 1; --lines: 2" data-scene="when-a-key-is-not-there" data-from-beat="0" data-track-index="3" data-start="73.841" data-duration="26.002"></div>
+      <div id="absent-bar-1" class="clip hl-bar" data-panel="absent-code" style="--from: 3; --lines: 2" data-scene="when-a-key-is-not-there" data-from-beat="1" data-track-index="4" data-start="78.109" data-duration="21.734"></div>
+      <div id="absent-bar-2" class="clip hl-bar" data-panel="absent-code" style="--from: 5; --lines: 3" data-scene="when-a-key-is-not-there" data-from-beat="2" data-track-index="5" data-start="82.438" data-duration="17.405"></div>
+      <div id="absent-scan" class="clip hl-scan" data-scene="when-a-key-is-not-there" data-from-beat="3" data-track-index="2" data-start="92.645" data-duration="7.198">
+        <div class="lv-label">A scan, in order</div>
+        <ol class="lv-mono">
+          <li>hello</li>
+          <li>user/42</li>
+        </ol>
+      </div>
+
+      <div id="where-next" class="clip lv-scene hl-frame" data-scene="where-next" data-track-index="0" data-start="99.843" data-duration="17.991">
+        <h2 class="lv-heading">Where next</h2>
+        <ol class="hl-places" style="top: 250px">
+          <li class="hl-place hl-place-next">
+            <span class="lv-node"></span>
+            <h3 class="hl-place-name">Values that merge</h3>
+            <p class="hl-place-what">Next on Build</p>
+          </li>
+        </ol>
+      </div>
+      <div id="where-next-pages" class="clip" data-scene="where-next" data-from-beat="1" data-track-index="2" data-start="107.162" data-duration="10.672">
+        <ol class="hl-places" style="top: 470px">
+          <li class="hl-place">
+            <span class="lv-node"></span>
+            <h3 class="hl-place-name">Quick start</h3>
+            <p class="hl-place-what">The setup and the typed code</p>
+          </li>
+          <li class="hl-place">
+            <span class="lv-node"></span>
+            <h3 class="hl-place-name">API reference</h3>
+            <p class="hl-place-what">The contract for each operation</p>
+          </li>
+        </ol>
+      </div>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/hello-lattice/narration.wav" data-start="0" data-duration="117.834" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        const { duration } = window.LatticeMotion;
+        window.LatticeCode.highlightAll(document);
+
+        // Every clip's window is stamped into its attributes; its motion is
+        // read from them, so it cannot drift from the narration.
+        const byId = (id) => document.getElementById(id);
+        const start = (element) => Number(element.dataset.start);
+        const end = (element) => start(element) + Number(element.dataset.duration);
+        const tl = gsap.timeline({ paused: true });
+        const ease = "lattice-out";
+
+        // Where a marker sits: beside its lines, measured from the panel it
+        // names, so the marker follows the code however its font sets a line.
+        // Offsets, not client rectangles, so a panel's rise does not move it.
+        const root = byId("root");
+        function topWithin(element) {
+          let top = 0;
+          for (let node = element; node && node !== root; node = node.offsetParent) top += node.offsetTop;
+          return top;
+        }
+        function placeMarkers() {
+          for (const bar of document.querySelectorAll(".hl-bar")) {
+            const pre = byId(bar.dataset.panel).querySelector("pre");
+            const style = getComputedStyle(pre);
+            const padTop = parseFloat(style.paddingTop);
+            const lines = pre.textContent.split("\n").length;
+            const pitch = (pre.clientHeight - padTop - parseFloat(style.paddingBottom)) / lines;
+            bar.style.setProperty("--first", topWithin(pre) + pre.clientTop + padTop + "px");
+            bar.style.setProperty("--pitch", pitch + "px");
+          }
+        }
+        placeMarkers();
+        if (document.fonts) document.fonts.ready.then(placeMarkers);
+
+        // A clip arrives with a short rise and leaves just before its window
+        // closes, so nothing hard-cuts.
+        function arrive(element, delay, rise) {
+          tl.fromTo(element, { opacity: 0, y: rise }, { opacity: 1, y: 0, duration: duration.slow, ease }, start(element) + delay);
+          tl.to(element, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end(element) - duration.fast);
+        }
+
+        // A scene's markers: each shows while its lines are being narrated,
+        // and gives way to the next step (a marker, or the clip after them).
+        function markers(ids, until) {
+          ids.forEach((id, k) => {
+            const bar = byId(id);
+            const next = k + 1 < ids.length ? start(byId(ids[k + 1])) : until;
+            tl.fromTo(bar, { opacity: 0 }, { opacity: 1, duration: duration.base, ease }, start(bar) + 0.15);
+            tl.to(bar, { opacity: 0, duration: duration.fast, ease: "power1.in" }, next - duration.fast);
+          });
+        }
+
+        for (const id of ["register", "tree", "typed", "absent", "where-next"]) {
+          arrive(byId(id), 0, 0);
+        }
+        arrive(byId("register-code"), 0.1, 24);
+        markers(["register-bar-1", "register-bar-2", "register-bar-3"], end(byId("register")));
+        arrive(byId("tree-same"), 0.1, 16);
+        markers(["typed-bar-0", "typed-bar-1", "typed-bar-2"], end(byId("typed")));
+        markers(["absent-bar-0", "absent-bar-1", "absent-bar-2"], start(byId("absent-scan")));
+        arrive(byId("absent-scan"), 0.1, 16);
+        arrive(byId("where-next-pages"), 0.1, 16);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["hello-lattice"] = tl;
+      })();
+    </script>
+  </body>
+</html>

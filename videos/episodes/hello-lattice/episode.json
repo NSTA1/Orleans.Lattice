@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 1,
+  "items": [
+    "B1"
+  ],
+  "poster": {
+    "scene": "hello-lattice",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "01bfa4728958",
+    "bytes": 6511987
+  }
+}

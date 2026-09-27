@@ -38,6 +38,10 @@ test("a recogniser's guesses at the product's names are the names", () => {
   }
   assert.deepEqual(comparableWords("Your code resolves ILattice."), comparableWords("Your code resolves I Lattice."));
   assert.deepEqual(comparableWords("merges are idempotent"), comparableWords("merges are idem potent"));
+  assert.deepEqual(comparableWords("Your code resolves ILattice."), comparableWords("Your code resolves eyelattice."));
+  assert.deepEqual(comparableWords("the package, from NuGet"), comparableWords("the package, from new get"));
+  assert.deepEqual(comparableWords("The name routes every call"), comparableWords("The name roots every call"));
+  assert.deepEqual(comparableWords("the package, from NuGet"), comparableWords("the package, from Newget"));
 });
 
 test("a slipped, dropped or added word is a difference, and neighbouring slips read as one", () => {

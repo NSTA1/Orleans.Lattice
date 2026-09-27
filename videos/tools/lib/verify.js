@@ -28,15 +28,18 @@ const HOMOPHONES = new Map([
   ["righting", "writing"], ["tear", "tier"], ["tears", "tiers"], ["won", "one"], ["knew", "new"],
   ["four", "for"], ["their", "there"], ["theyre", "there"], ["too", "to"], ["two", "to"],
   ["whole", "hole"], ["know", "no"], ["buy", "by"], ["bye", "by"], ["weight", "wait"], ["weights", "waits"],
-]);
+    ["root", "route"], ["roots", "routes"],
+  ]);
 
-// What a recogniser writes for the product's names, joined into one token.
+// What a recogniser writes for the product's names (and NuGet, where it is
+// published), joined into one token.
 // Each rule applies to the words of both the script and the transcript.
 const NAMES = [
   [/\bor\s+(?:leans|leens|lean|leen|lines|lance)\b/g, "orleans"],
   [/\b(?:orleens|orlean|orleen|orleanz|orlins)\b/g, "orleans"],
-  [/\b(?:i|eye)\s+lattice\b/g, "ilattice"],
+  [/\b(?:i\s+|eye\s*)lattice\b/g, "ilattice"],
   [/\bidem\s+potent\b/g, "idempotent"],
+  [/\b(?:new\s+get|newget)\b/g, "nuget"],
 ];
 
 /**
