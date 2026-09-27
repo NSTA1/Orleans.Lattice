@@ -304,7 +304,9 @@ internal sealed partial class BPlusLeafGrain
         // Clamp the requested advance back behind any unresolved saga
         // prepare for this partition. See the multi-partition note in
         // RemovePendingTxOffsetsForTransaction: the clamp is partition-
-        // scoped because cross-partition offsets are disjoint.
+        // scoped because cross-partition offsets are disjoint, and it skips
+        // durably recorded prepares (issue #2165). Never substitute a
+        // whole-leaf minimum here (issue #2469).
         if (MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare)
         {
             var clampFloor = minPrepare - 1;
