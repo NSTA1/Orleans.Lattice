@@ -74,6 +74,18 @@ public partial class ReplicationShipperGrainTests
         return (grain, fakeState, feed, transport, reminders, timerRegistry);
     }
 
+    /// <summary>
+    /// The <see cref="ITimerRegistry"/> methods the substitute actually
+    /// received, in order. Naming the operation is what ties these fixtures to
+    /// the phase-timer re-arm they claim to cover: <c>ITimerRegistry</c>
+    /// carries more than one member, so a bare "received some call" check is
+    /// satisfied by any interaction at all - including the obsolete
+    /// <c>RegisterTimer</c> overload - and would stay green if the coordinator
+    /// stopped arming the phase timer.
+    /// </summary>
+    private static string[] TimerRegistryCalls(ITimerRegistry registry) =>
+        [.. registry.ReceivedCalls().Select(call => call.GetMethodInfo().Name)];
+
     [Test]
     public async Task ResumeShippingAsync_when_saga_matches_clears_pause_and_rearms_coordinator()
     {
@@ -91,8 +103,9 @@ public partial class ReplicationShipperGrainTests
         // StartCoordinatorAsync re-registers the keepalive reminder and arms the phase timer.
         await reminders.Received().RegisterOrUpdateReminder(
             Arg.Any<GrainId>(), "shipper-keepalive", Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
-        Assert.That(timerRegistry.ReceivedCalls(), Is.Not.Empty,
-            "resume must re-arm the phase timer via the coordinator");
+        Assert.That(TimerRegistryCalls(timerRegistry),
+            Is.EqualTo(new[] { nameof(ITimerRegistry.RegisterGrainTimer) }),
+            "resume must re-arm the phase timer via the coordinator, exactly once");
     }
 
     [Test]
@@ -119,7 +132,8 @@ public partial class ReplicationShipperGrainTests
         // InProgress is hard-wired true for the perpetual shipper, so the
         // keepalive reminder always re-arms the phase timer rather than
         // unregistering and deactivating.
-        Assert.That(timerRegistry.ReceivedCalls(), Is.Not.Empty,
+        Assert.That(TimerRegistryCalls(timerRegistry),
+            Is.EqualTo(new[] { nameof(ITimerRegistry.RegisterGrainTimer) }),
             "the keepalive reminder must re-arm the phase timer while InProgress is true");
     }
 

@@ -46,8 +46,8 @@ public partial class ReplicationShipperGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(state.State.ConsecutiveFailures, Is.GreaterThan(0),
-                "a mid-batch WAL read throw on the serial path must apply backoff");
+            Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1),
+                "a mid-batch WAL read throw on the serial path must apply backoff exactly once for the tick");
             Assert.That(SendAsyncCallCount(transport), Is.Zero,
                 "a drain failure must abandon the tick before any batch ships");
         });
