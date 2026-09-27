@@ -4219,37 +4219,28 @@ public static class LatticeMetrics
     /// Tagged with <see cref="TagTree"/> and <see cref="TagReason"/>:
     /// <see cref="SnapshotLoadFailureResourceExhausted"/> when an
     /// <see cref="OutOfMemoryException"/> appears anywhere in the thrown
-    /// exception's chain, and <see cref="SnapshotLoadFailureFaulted"/>
-    /// otherwise.
+    /// exception's chain, <see cref="SnapshotLoadFailureContiguityExhausted"/>
+    /// when that OOM occurs under sole-occupant hydration admission, and
+    /// <see cref="SnapshotLoadFailureFaulted"/> otherwise.
     /// <para>
-    /// The rehydrate path treats a failed load as best-effort and returns
-    /// "no snapshot", which is correct for availability but made the failure
-    /// <b>indistinguishable from a leaf that genuinely has no snapshot</b>: both
-    /// render as the same declined rehydrate, and the activation then takes the
-    /// <c>-1</c> replay-start override and replays its whole readable WAL
-    /// window. Without this counter the failure population reads as zero at
-    /// every rate of occurrence, so the two arms of "no snapshot" cannot be
-    /// separated at all.
+    /// An unclassified failure retains the best-effort "no snapshot" fallback
+    /// and cold WAL replay. An observed OOM declines activation instead, because
+    /// replay can allocate more than the load that just failed. This counter
+    /// distinguishes a failed load from genuine snapshot absence; it does not
+    /// establish whether the leaf activated successfully.
     /// </para>
     /// <para>
-    /// The <c>resource_exhausted</c> arm exists because that failure arrives
-    /// <b>wearing a storage fault's clothes</b>. Under a container memory limit
-    /// the .NET GC heap hard limit is sized from the cgroup limit, so the
-    /// runtime is not OOM-killed - it throws
-    /// <see cref="OutOfMemoryException"/> inside the provider's deserialise of
-    /// the snapshot blob, and the only line an operator sees is the provider's
-    /// own "Error reading grain state". Nothing in that presentation names
-    /// memory, which is why a deployment can run in this state for a long time
-    /// undiagnosed. It also COMPOUNDS: the failed load forces the cold
-    /// whole-window replay, which costs more memory again, so the same few
-    /// leaves go cold repeatedly. A sustained non-zero <c>resource_exhausted</c>
-    /// rate means the host's memory limit is below the deployment's true
-    /// working set, and is not a storage-provider fault.
+    /// Classification uses only the exception chain visible to the caller.
+    /// A snapshot-grain activation failure can hide the original OOM, so
+    /// <c>unclassified</c> does not rule out memory pressure. Correlate activation
+    /// and storage logs with memory headroom before choosing a remedy. Since
+    /// issue #2404 this value replaces <c>faulted</c>; reason-filtered alerts
+    /// must include both values during rollout.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafSnapshotLoadFailures =
         Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.load_failures", unit: "{load}",
-            description: "Activation-time leaf-snapshot loads that failed and were swallowed as \"no snapshot\", tagged by tree and reason (resource_exhausted/faulted). A resource_exhausted reading is memory exhaustion presenting as a storage fault, not a provider defect.");
+            description: "Activation-time leaf-snapshot load failures by tree and reason (resource_exhausted/unclassified/contiguity_exhausted). Unclassified means no OOM was observable, not that memory pressure was ruled out; snapshot-grain activation can hide the cause.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotLoadFailures"/>.</summary>
     public const string LeafSnapshotLoadFailuresName = "orleans.lattice.leaf.snapshot.load_failures";
@@ -4266,17 +4257,16 @@ public static class LatticeMetrics
         new(TagReason, "resource_exhausted");
 
     /// <summary>
-    /// <see cref="TagReason"/> = <c>faulted</c> on
+    /// <see cref="TagReason"/> = <c>unclassified</c> on
     /// <see cref="LeafSnapshotLoadFailures"/>: any load failure with no
     /// <see cref="OutOfMemoryException"/> in its chain (an unreachable store, a
-    /// rejected activation, a deserialisation defect). Kept apart from
-    /// <see cref="SnapshotLoadFailureResourceExhausted"/> because the two call
-    /// for opposite operator responses - raise the memory limit, versus
-    /// investigate the storage provider - and folding them together is exactly
-    /// the conflation this counter exists to undo.
+    /// rejected activation, a deserialisation defect, or an OOM hidden by
+    /// snapshot-grain activation). This does not establish a storage-provider
+    /// fault or exclude memory pressure. The field name is retained for source
+    /// compatibility; the exported value replaces <c>faulted</c> in issue #2404.
     /// </summary>
     public static readonly KeyValuePair<string, object?> SnapshotLoadFailureFaulted =
-        new(TagReason, "faulted");
+        new(TagReason, "unclassified");
 
     /// <summary>
     /// Counter of activation-time leaf-snapshot hydrations that passed through
