@@ -1626,10 +1626,13 @@ internal sealed partial class LatticeGrain(
                             // retry below are all identical to the multi-shard path, so
                             // atomic visibility is unchanged.
                             var shard = GetShardGrainByIndex(physicalTreeId, fastShardIdx);
+                            // Capture both arguments in this scope, not fastBucket's
+                            // enclosing attempt scope (an extra display-class allocation).
+                            var shardKeys = fastBucket;
                             using (BeginRegistryScope(snap1Pair, strictPass))
                             {
                                 singleShardFetched = await ShardActivationRetry.RunAsync(
-                                    () => shard.GetManyAsync(fastBucket));
+                                    () => shard.GetManyAsync(shardKeys));
                             }
                         }
                         else
@@ -2703,32 +2706,48 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
-        await EnsureCompactionReminderAsync();
-        await EnsureMonitorAsync();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (entries.Count == 0) return Array.Empty<string>();
-
-        var written = await RetryOnStaleRoutingAsync(
-            (self: this, entries, predicate),
-            static args => args.self.SetManyWhereAsyncCore(args.entries, args.predicate),
-            cancellationToken);
-
-        // Publish one Set event per actually-written key, after all shard
-        // writes have committed, mirroring SetManyAsync's post-commit
-        // publication but scoped to the guarded-in subset.
-        if (written.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+        // Caller-visible envelope of the conditional batched write, the
+        // counterpart of SetManyDuration: it spans the same gate / route /
+        // fan-out / events work, so the operation=set_many_where_predicate
+        // arm of the shard-side instruments has an envelope to compare with.
+        var stageTagTree = StageTagTree;
+        var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
         {
-            // See ApplyCrdtDeltaManyAsync: batch-invariant publication state is
-            // resolved once rather than once per written key.
-            var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
-            for (int i = 0; i < written.Count; i++)
-            {
-                await batch.PublishAsync(LatticeTreeEventKind.Set, written[i]);
-            }
-        }
+            await EnsureCompactionReminderAsync();
+            await EnsureMonitorAsync();
+            cancellationToken.ThrowIfCancellationRequested();
 
-        return written;
+            if (entries.Count == 0) return Array.Empty<string>();
+
+            var written = await RetryOnStaleRoutingAsync(
+                (self: this, entries, predicate),
+                static args => args.self.SetManyWhereAsyncCore(args.entries, args.predicate),
+                cancellationToken);
+
+            // Publish one Set event per actually-written key, after all shard
+            // writes have committed, mirroring SetManyAsync's post-commit
+            // publication but scoped to the guarded-in subset.
+            if (written.Count > 0 && await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+            {
+                // See ApplyCrdtDeltaManyAsync: batch-invariant publication state is
+                // resolved once rather than once per written key.
+                var batch = LatticeEventPublisher.CreateBatch(services, Options, TreeId, logger);
+                for (int i = 0; i < written.Count; i++)
+                {
+                    await batch.PublishAsync(LatticeTreeEventKind.Set, written[i]);
+                }
+            }
+
+            return written;
+        }
+        finally
+        {
+            LatticeMetrics.SetManyWherePredicateDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
+                stageTagTree,
+                StageTagTenant);
+        }
     }
 
     private async Task<IReadOnlyList<string>> SetManyWhereAsyncCore(

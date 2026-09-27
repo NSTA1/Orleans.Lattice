@@ -213,6 +213,66 @@ public sealed class DurableVectorIndexOptions
     }
 
     /// <summary>
+    /// The smallest leaf key bound <see cref="ResolveMaxLeafKeys(long)"/> returns:
+    /// a leaf holding one key has nothing to split, so a bound below two could
+    /// never be honoured.
+    /// </summary>
+    internal const int MinMaxLeafKeys = 2;
+
+    /// <summary>
+    /// The leaf key bound (<c>MaxLeafKeys</c>) to register a Lattice tree that
+    /// holds durable vector-index records with, so that the tree's key bound and
+    /// its byte bound (<see cref="LatticeOptions.MaxLeafBytes"/>) cross at about
+    /// the same leaf size and neither of them is dead.
+    /// <para>
+    /// A leaf splits on whichever bound it crosses first: more keys than
+    /// <c>MaxLeafKeys</c>, or more bytes than <see cref="LatticeOptions.MaxLeafBytes"/>.
+    /// The core default key bound of 128 is sized for ordinary trees, whose
+    /// records are small. A vector-index record is a byte-bounded chunk of up to
+    /// 64 KiB, so 128 of them fill only about 8 MiB of a 64 MiB byte bound: the
+    /// key bound fires at an eighth of the leaf size the byte bound admits and the
+    /// byte bound never fires at all. The tree then holds several times the leaves
+    /// it needs, and every leaf carries its own grain activation, snapshot and
+    /// durable-materialiser pin.
+    /// </para>
+    /// <para>
+    /// The bound returned here is the byte budget divided by the largest record a
+    /// durable index writes, so a leaf of full-size records reaches both bounds
+    /// together, and a leaf of smaller records (a partial chunk, a commit record)
+    /// is still capped by the key bound rather than growing without limit. At the
+    /// defaults (a 64 MiB byte bound) it is 1024.
+    /// </para>
+    /// <para>
+    /// It is a structural pin, so it takes effect only when the tree is first
+    /// registered. A tree that already exists keeps the bound it was created
+    /// with; resize it to adopt this one.
+    /// </para>
+    /// </summary>
+    /// <param name="maxLeafBytes">
+    /// The tree's <see cref="LatticeOptions.MaxLeafBytes"/>. A non-positive value
+    /// (the byte bound disabled) is sized against
+    /// <see cref="LatticeOptions.DefaultMaxLeafBytes"/> instead, because the key
+    /// bound is then the only bound a leaf has.
+    /// </param>
+    /// <returns>The key bound, never less than two.</returns>
+    public static int ResolveMaxLeafKeys(long maxLeafBytes) => ResolveMaxLeafKeys(maxLeafBytes, MaxChunkBytes);
+
+    /// <summary>
+    /// The leaf key bound for a byte budget and a largest-record size: the seam
+    /// behind <see cref="ResolveMaxLeafKeys(long)"/>, parameterised on the record
+    /// size so the derivation can be exercised away from the shipped chunk ceiling.
+    /// </summary>
+    /// <param name="maxLeafBytes">The tree's byte bound; non-positive means disabled.</param>
+    /// <param name="maxRecordBytes">The largest record the tree holds. Must be positive.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxRecordBytes"/> is not positive.</exception>
+    internal static int ResolveMaxLeafKeys(long maxLeafBytes, int maxRecordBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRecordBytes);
+        var budget = maxLeafBytes > 0 ? maxLeafBytes : LatticeOptions.DefaultMaxLeafBytes;
+        return (int)Math.Clamp(budget / maxRecordBytes, MinMaxLeafKeys, int.MaxValue);
+    }
+
+    /// <summary>
     /// How many source vectors one background build step consumes before it
     /// checkpoints and returns. Defaults to 4096. Smaller steps hand the host
     /// back control sooner; larger ones checkpoint less often.

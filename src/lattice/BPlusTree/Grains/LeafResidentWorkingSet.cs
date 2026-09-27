@@ -1,3 +1,5 @@
+using Orleans.Lattice.Internal.Cgroups;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -100,30 +102,6 @@ internal sealed class LeafResidentWorkingSet
     /// </summary>
     internal const long UnknownHeapLimitBudgetBytes = 1024L * 1024 * 1024;
 
-    /// <summary>
-    /// At or above this, a cgroup memory limit is read as "unlimited" rather
-    /// than as a ceiling. cgroup v1 spells unlimited as a page-aligned
-    /// saturation of the page counter near <see cref="long.MaxValue"/>, which is
-    /// a well-formed positive number and would otherwise be believed.
-    /// <para>
-    /// 4 EiB is not a boundary any real deployment sits near, so this does not
-    /// trade a false positive for a false negative: no container is granted
-    /// exabytes, and a limit that large is unlimited in every sense that matters
-    /// to a bound denominated in leaf bytes.
-    /// </para>
-    /// </summary>
-    internal const long CgroupUnlimitedSentinelFloor = 1L << 62;
-
-    /// <summary>
-    /// Canonical cgroup memory limit paths, v2 first. Probed in order; the first
-    /// that yields a real limit wins.
-    /// </summary>
-    private static readonly string[] CgroupMemoryLimitPaths =
-    [
-        "/sys/fs/cgroup/memory.max",
-        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
-    ];
-
     private static readonly Lazy<LeafResidentWorkingSet> SharedInstance =
         new(
             () => new LeafResidentWorkingSet(
@@ -207,106 +185,20 @@ internal sealed class LeafResidentWorkingSet
     }
 
     /// <summary>
-    /// Reads the container's memory limit from the cgroup filesystem, returning
-    /// a non-positive value when there is no limit, the platform has no cgroups,
-    /// or the value cannot be read or parsed.
+    /// Reads the container's memory limit, returning a non-positive value when
+    /// there is no limit, the platform has no cgroups, or the value cannot be
+    /// read or parsed.
     /// </summary>
     /// <remarks>
-    /// Every failure degrades to "unknown", which
+    /// A thin adapter over <see cref="ContainerMemoryLimit.Read"/>, which owns the
+    /// cgroup probe and parse (issue #2828); this type and
+    /// <see cref="ReplayHeapPressure"/> both size from it, and both spell
+    /// "unknown" as a non-positive ceiling, so the adapter maps the reader's
+    /// <see langword="null"/> onto zero. Every failure degrades to unknown, which
     /// <see cref="ResolveBudgetBytes"/> maps to the heap hard limit alone - the
-    /// behaviour before this method existed. Detection failing is therefore
-    /// never worse than not detecting, which is what licenses the deliberately
-    /// narrow probe: the two canonical mount paths and nothing else. A silo in
-    /// an exotic cgroup layout gets today's budget rather than a wrong one.
-    /// <para>
-    /// The <see cref="OperatingSystem.IsLinux"/> short-circuit is a cost guard
-    /// and is deliberately <b>not</b> claimed as tested behaviour. Removing it
-    /// reddens nothing and cannot: on a non-Linux host the two paths resolve
-    /// against the current drive root and do not exist, so the loop returns the
-    /// same zero by a slower route. It is kept because it is free and states the
-    /// intent, not because a test pins it.
-    /// </para>
+    /// behaviour before cgroup detection existed.
     /// </remarks>
-    internal static long ReadContainerMemoryLimitBytes()
-    {
-        if (!OperatingSystem.IsLinux())
-        {
-            return 0L;
-        }
-
-        foreach (var path in CgroupMemoryLimitPaths)
-        {
-            try
-            {
-                if (!File.Exists(path))
-                {
-                    continue;
-                }
-
-                var parsed = ParseCgroupMemoryLimit(File.ReadAllText(path));
-                if (parsed > 0)
-                {
-                    return parsed;
-                }
-            }
-            catch (IOException)
-            {
-                // Unreadable cgroup file. Fall through to the next candidate and
-                // ultimately to unknown.
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-
-        return 0L;
-    }
-
-    /// <summary>
-    /// Parses a cgroup memory limit file body, returning <b>zero</b> for every
-    /// form that means "no limit" and for every form that cannot be read as one.
-    /// </summary>
-    /// <remarks>
-    /// Three distinct spellings of unlimited have to be recognised, and missing
-    /// any one of them yields a budget derived from a nonsense ceiling rather
-    /// than a safe fallback:
-    /// <list type="bullet">
-    /// <item>cgroup v2 writes the literal string <c>max</c>;</item>
-    /// <item>cgroup v1 writes a page-aligned saturation of the counter, which is
-    /// a positive <see cref="long"/> near <see cref="long.MaxValue"/> and so
-    /// parses perfectly well as a number - this is the one that does damage
-    /// quietly, because it divides by four into a budget of about two exabytes
-    /// that no bound can ever reach;</item>
-    /// <item>some kernels write that same saturation as an <b>unsigned</b>
-    /// 64-bit value that overflows <see cref="long"/> entirely.</item>
-    /// </list>
-    /// <para>
-    /// Only two clauses are needed to cover all three, and the shape is the
-    /// result of a perturbation arm rather than of taste. An earlier revision
-    /// had four: an explicit <c>max</c>/empty branch, a zero check, a
-    /// <c>value &gt; (ulong)long.MaxValue</c> overflow guard, and the sentinel
-    /// comparison. Reverting each in isolation showed the first three reddened
-    /// <b>nothing</b> - the <c>max</c> and empty cases are already rejected by
-    /// the parse, zero already returns zero, and an unsigned value above
-    /// <see cref="long.MaxValue"/> already wraps to a negative that the caller
-    /// reads as unknown. They were dead clauses that read as careful handling,
-    /// which is worse than no handling because it invites trust. Comparing the
-    /// sentinel in <see cref="ulong"/> space instead lets the one live clause
-    /// cover both saturation spellings, so the guard that remains is the guard
-    /// that is tested.
-    /// </para>
-    /// </remarks>
-    internal static long ParseCgroupMemoryLimit(string? contents)
-    {
-        var text = contents?.Trim();
-
-        if (!ulong.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value))
-        {
-            return 0L;
-        }
-
-        return value >= (ulong)CgroupUnlimitedSentinelFloor ? 0L : (long)value;
-    }
+    internal static long ReadContainerMemoryLimitBytes() => ContainerMemoryLimit.Read() ?? 0L;
 
     /// <summary>
     /// Accounts <paramref name="residentBytes"/> against the working set for an

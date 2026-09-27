@@ -158,16 +158,26 @@ be inferred from a file.
 ## Build
 
 ```bash
-# CPU (default flavour)
-docker build -t orleans-lattice-embedding-onnx:local apps/embedding-onnx
+# CPU (default flavour), run from the repository root
+docker build --build-context cgroups=src/lattice/Internal/Cgroups \
+  -t orleans-lattice-embedding-onnx:local apps/embedding-onnx
 
 # NVIDIA
 docker build --build-arg ONNX_FLAVOR=cuda \
+  --build-context cgroups=src/lattice/Internal/Cgroups \
   -t orleans-lattice-embedding-onnx:cuda apps/embedding-onnx
 ```
 
 The build context is this directory (the server has no `ProjectReference` into
-`src/`), so the context stays small. Behind a private NuGet feed, pass
+`src/`), so the context stays small. The one piece of source the server shares
+with the core library - the container cgroup readers in
+`src/lattice/Internal/Cgroups`, which depend on the base class library alone -
+arrives as a second BuildKit named context, `cgroups`, and the csproj compiles
+those files directly. There is no copy of them in this directory, so there is
+nothing to keep in sync; a build without the named context fails at publish
+with an error naming the missing context, rather than producing an image
+without the reader. The sample's compose files declare the context as `additional_contexts`,
+so `docker compose build` needs no extra flag. Behind a private NuGet feed, pass
 `--secret id=nugetcfg,src=<path to NuGet.Config>` as the other images do.
 
 The `cuda` flavour carries the CUDA native libraries and is much larger, but it

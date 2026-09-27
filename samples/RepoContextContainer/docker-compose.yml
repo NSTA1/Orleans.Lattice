@@ -58,6 +58,11 @@ services:
     build:
       context: ../../apps/embedding-onnx
       dockerfile: Dockerfile
+      # The container cgroup readers are compiled from their one canonical copy
+      # in the core library rather than mirrored into the app (issue #2817). The
+      # Dockerfile copies them from this BuildKit named context.
+      additional_contexts:
+        cgroups: ../../src/lattice/Internal/Cgroups
       args:
         # cpu (default) or cuda. The cuda flavour also serves CPU hosts, so one
         # image covers both and EMBED_PROVIDER alone selects the accelerator.

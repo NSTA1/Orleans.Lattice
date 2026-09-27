@@ -115,7 +115,7 @@ public sealed class BPlusLeafGrainReplayGateObservabilityTests
         // without that contract changing first. A Math.Max(1, ...) in the
         // resolver would be unreachable, and an unreachable safety net is worse
         // than none because it reads as protection.
-        var grant = Orleans.Lattice.Internal.ContainerCpuGrant.ParseCpuQuota("1000", "100000");
+        var grant = Orleans.Lattice.Internal.Cgroups.ContainerCpuGrant.ParseCpuQuota("1000", "100000");
 
         Assert.Multiple(() =>
         {

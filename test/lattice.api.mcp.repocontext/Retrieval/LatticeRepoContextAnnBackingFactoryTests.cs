@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Vector;
 using Orleans.Serialization;
@@ -19,7 +20,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class LatticeRepoContextAnnBackingFactoryTests
+public sealed partial class LatticeRepoContextAnnBackingFactoryTests
 {
     private const string RepoId = "acme";
 
@@ -131,17 +132,30 @@ public sealed class LatticeRepoContextAnnBackingFactoryTests
     }
 
     private LatticeRepoContextAnnBackingFactory Factory(IndexTree tree)
-        => new(tree.GrainFactory, _serializer);
+        => new(tree.GrainFactory, _serializer, Options(), registerIndexTree: _ => Task.CompletedTask);
+
+    /// <summary>Per-tree options whose index tree carries the given byte bound.</summary>
+    private static IOptionsMonitor<LatticeOptions> Options(long maxLeafBytes = LatticeOptions.DefaultMaxLeafBytes)
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string?>()).Returns(new LatticeOptions { MaxLeafBytes = maxLeafBytes });
+        return monitor;
+    }
 
     [Test]
     public void A_null_grain_factory_is_rejected()
         => Assert.Throws<ArgumentNullException>(
-            () => new LatticeRepoContextAnnBackingFactory(null!, _serializer));
+            () => new LatticeRepoContextAnnBackingFactory(null!, _serializer, Options()));
 
     [Test]
     public void A_null_serializer_is_rejected()
         => Assert.Throws<ArgumentNullException>(
-            () => new LatticeRepoContextAnnBackingFactory(Substitute.For<IGrainFactory>(), null!));
+            () => new LatticeRepoContextAnnBackingFactory(Substitute.For<IGrainFactory>(), null!, Options()));
+
+    [Test]
+    public void A_null_options_monitor_is_rejected()
+        => Assert.Throws<ArgumentNullException>(
+            () => new LatticeRepoContextAnnBackingFactory(Substitute.For<IGrainFactory>(), _serializer, null!));
 
     [Test]
     public void The_key_prefix_is_unique_per_repository_and_space()

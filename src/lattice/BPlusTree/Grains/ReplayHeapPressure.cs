@@ -1,3 +1,5 @@
+using Orleans.Lattice.Internal.Cgroups;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -114,13 +116,16 @@ internal static class ReplayHeapPressure
 
     /// <summary>
     /// At or above this, a reported ceiling is read as "unlimited" rather than as
-    /// a bound. cgroup v1 spells unlimited as a page-aligned saturation of the
-    /// page counter near <see cref="long.MaxValue"/>, which is a well-formed
+    /// a bound. It is the floor <see cref="ContainerMemoryLimit"/> applies when it
+    /// parses the cgroup file, reused rather than restated (issue #2828), and is
+    /// applied again here because the runtime's figure goes through the same
+    /// normalisation. cgroup v1 spells unlimited as a page-aligned saturation of
+    /// the page counter near <see cref="long.MaxValue"/>, which is a well-formed
     /// positive number and would otherwise be believed. 4 EiB is not a boundary
     /// any real deployment sits near, so this does not trade a false positive for
     /// a false negative.
     /// </summary>
-    internal const long UnlimitedSentinelFloor = 1L << 62;
+    internal const long UnlimitedSentinelFloor = ContainerMemoryLimit.UnlimitedSentinelFloor;
 
     private static readonly Lazy<long> ResolvedCeilingBytes =
         new(

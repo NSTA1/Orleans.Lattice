@@ -196,6 +196,115 @@ internal sealed partial class BPlusLeafGrain
         }
 
         LeafExpiryHorizonRegistry.TryRemove(leafId, out _);
+        LeafTransactionalReadRegistry.TryRemove(leafId, out _);
+    }
+
+    /// <summary>
+    /// The highest revision cookie at which a range read of this leaf resolved
+    /// uncommitted transactional writes while answering. Absent when no read of
+    /// this activation has done so. Issue #2823.
+    /// <para>
+    /// <b>Why the cookie and the expiry horizon together still cannot cover
+    /// this.</b> A leaf holding prepared saga writes (<c>_pendingTx</c>)
+    /// resolves each one against the transaction registry while answering, so
+    /// the answer is a function of registry decision state as well as of the
+    /// leaf's own rows. That state can change with nothing written to the leaf:
+    /// a decision tombstone expiring by the clock flips a resolved outcome, and
+    /// a registry decision recorded elsewhere changes it outright. No writer
+    /// runs, so the cookie holds; and a pending row the read hid or fell
+    /// through contributed nothing to the expiry horizon. A settled read that
+    /// consulted the registry is therefore not provably current for any later
+    /// instant, and nothing this leaf publishes can make it so.
+    /// </para>
+    /// <para>
+    /// <b>Why a cookie value rather than a flag.</b> Every add or removal of a
+    /// pending bucket advances the cookie, so the pending set is constant
+    /// across any interval over which the cookie is unchanged. A reader holding
+    /// cookie <c>c</c> therefore needs to know only whether a read <em>at</em>
+    /// <c>c</c> saw pending writes. Publishing the cookie value answers exactly
+    /// that, and it lapses on its own once the pending set drains: the drain
+    /// advances the cookie, and a later read over an empty pending set
+    /// publishes nothing, so reuse resumes without any reset. A flag would
+    /// have needed clearing at every drain site and would have been wrong the
+    /// moment one was missed.
+    /// </para>
+    /// <para>
+    /// <b>Sampled at the end of the read, not before it.</b> The value is the
+    /// cookie current when the read finished walking its rows. Were a mutation
+    /// to run between the reader's issue-time cookie and this sample, the
+    /// cookie would already differ from the reader's and refuse on its own, so
+    /// a late sample can only coincide with the reader's cookie when nothing
+    /// ran across the whole read. Merged by maximum, because cookies rise
+    /// within an activation and a lower value from a slower concurrent read
+    /// must not overwrite the evidence a later one left. Removed with the
+    /// revision cookie on deactivation.
+    /// </para>
+    /// <para>
+    /// Absence here means "no read at this activation's cookies consulted the
+    /// registry", which is a positive fact rather than "unknown", unlike an
+    /// absent cookie or horizon. That is sound only because the gate that
+    /// reads it also requires the cookie to be unchanged since the reused
+    /// read was issued: the reused read itself ran at that cookie, so if it had
+    /// consulted the registry it would have published this value before
+    /// completing, and a gate only ever inspects completed reads.
+    /// </para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<GrainId, StrongBox<long>> LeafTransactionalReadRegistry = new();
+
+    /// <summary>
+    /// Records that a range read of this leaf resolved uncommitted
+    /// transactional writes at the leaf's current revision cookie. Called at the
+    /// end of a range read only when its pending snapshot was non-empty, so the
+    /// steady-state path pays nothing beyond one count check at the call site.
+    /// </summary>
+    /// <param name="leafId">The leaf whose read consulted the registry.</param>
+    private static void PublishLeafTransactionalRead(GrainId leafId)
+    {
+        if (!TryGetLeafRevision(leafId, out var revision))
+        {
+            // No cookie means every reuse gate already refuses this leaf; there
+            // is no cookie value to name.
+            return;
+        }
+
+        var box = LeafTransactionalReadRegistry.GetOrAdd(leafId, static _ => new StrongBox<long>(long.MinValue));
+
+        // Max-merge under CAS: only ever raise the recorded cookie.
+        while (true)
+        {
+            var current = Interlocked.Read(ref box.Value);
+            if (revision <= current)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref box.Value, revision, current) == current)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the highest revision cookie at which a range read of
+    /// <paramref name="leafId"/> resolved uncommitted transactional writes on
+    /// this silo. Returns <c>false</c> when no read of the current activation
+    /// has done so. A caller that holds cookie <c>c</c> and finds
+    /// <paramref name="revision"/> equal to <c>c</c> must treat a settled read
+    /// issued at <c>c</c> as not reusable. Issue #2823.
+    /// </summary>
+    /// <param name="leafId">The leaf to read the signal for.</param>
+    /// <param name="revision">The recorded cookie, when present.</param>
+    internal static bool TryGetLeafTransactionalReadRevision(GrainId leafId, out long revision)
+    {
+        if (LeafTransactionalReadRegistry.TryGetValue(leafId, out var box))
+        {
+            revision = Interlocked.Read(ref box.Value);
+            return true;
+        }
+
+        revision = 0;
+        return false;
     }
 
     /// <summary>

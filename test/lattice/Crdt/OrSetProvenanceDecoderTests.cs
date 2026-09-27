@@ -373,4 +373,169 @@ public class OrSetProvenanceDecoderTests
         Assert.That(members[0].Ordinal, Is.EqualTo(3L));
         Assert.That(members[0].ReplicaId, Is.EqualTo("r1"));
     }
+    // ---- dot-index path (above the threshold that replaces the linear scan) ----
+    //
+    // Above the threshold the membership tests take a replica-plus-counter
+    // index instead of scanning the whole dot list. These pin the two
+    // preconditions the index rests on: that it is only taken when the list
+    // carries a single replica, and that a counter match on a different replica
+    // is never mistaken for a hit.
+
+    private const int AboveIndexThreshold = 12;
+
+    private static string Key(byte[] element) => Convert.ToBase64String(element);
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_excludes_covered_dots_and_keeps_the_survivor()
+    {
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        adds.Add(new OrSetDot { ReplicaId = "r1", Counter = AboveIndexThreshold + 1 });
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        var members = Decoder.DecodeCurrentValue(set);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].Ordinal, Is.EqualTo((long)AboveIndexThreshold + 1));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_keeps_a_live_dot_whose_counter_collides_across_replicas()
+    {
+        // Every tombstone is on r1, so the index IS taken. The r2 dot shares a
+        // tombstoned counter, and a counter-only test without the replica guard
+        // would wrongly cancel it.
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        adds.Add(new OrSetDot { ReplicaId = "r2", Counter = 1 });
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        var members = Decoder.DecodeCurrentValue(set);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].ReplicaId, Is.EqualTo("r2"));
+        Assert.That(members[0].Ordinal, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_multi_replica_tombstones_keep_the_scan_semantics()
+    {
+        // The precondition fails, so the coverage scan is kept. Every add is
+        // covered by a tombstone on its own replica, so nothing survives.
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            var replica = (i % 2) == 0 ? "r1" : "r2";
+            adds.Add(new OrSetDot { ReplicaId = replica, Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = replica, Counter = i });
+        }
+
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_element_cancels_a_dot_below_a_higher_tombstone()
+    {
+        // Cancellation is coverage-based: a tombstone at counter N cancels every
+        // dot from the same replica at or below N, not only its exact equal.
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        for (var i = 1; i < AboveIndexThreshold; i++)
+        {
+            tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = AboveIndexThreshold + 5 });
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        Assert.That(Decoder.DecodeCurrentValue(set), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeState_churned_element_synthesizes_only_the_compacted_away_adds()
+    {
+        // The add list is above the threshold and single-replica, so the exact
+        // containment test takes the sorted counter index. A tombstone whose dot
+        // is still in the add list must not be synthesized; one whose dot was
+        // compacted away must be.
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        var tombs = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+            tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        // Compacted away from the add list, so its Added half must be synthesized.
+        tombs.Add(new OrSetDot { ReplicaId = "r1", Counter = 500 });
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = tombs;
+
+        var events = Decoder.DecodeState(set);
+
+        Assert.That(
+            events.Count(e => e.Kind == CrdtMemberChangeKind.Added),
+            Is.EqualTo(AboveIndexThreshold + 1),
+            "the compacted-away tombstone contributes one synthesized Added event");
+        Assert.That(
+            events.Count(e => e.Kind == CrdtMemberChangeKind.Removed),
+            Is.EqualTo(AboveIndexThreshold + 1));
+    }
+
+    [Test]
+    public void DecodeState_churned_element_does_not_match_a_tombstone_across_replicas()
+    {
+        // The add list is single-replica (r1), so the index is taken. The r2
+        // tombstone shares a counter with an r1 add; a counter-only test would
+        // call it present and skip the synthesized Added event it is owed.
+        var set = new OrSet();
+        var adds = new List<OrSetDot>();
+        for (var i = 1; i <= AboveIndexThreshold; i++)
+        {
+            adds.Add(new OrSetDot { ReplicaId = "r1", Counter = i });
+        }
+
+        set.Adds[Key(Apple)] = adds;
+        set.Tombstones[Key(Apple)] = new List<OrSetDot>
+        {
+            new() { ReplicaId = "r2", Counter = 1 },
+            new() { ReplicaId = "r2", Counter = 2 },
+        };
+
+        var events = Decoder.DecodeState(set);
+
+        Assert.That(
+            events.Count(e => e.Kind == CrdtMemberChangeKind.Added),
+            Is.EqualTo(AboveIndexThreshold + 2),
+            "neither r2 tombstone is present in the r1 add list, so both synthesize an Added event");
+    }
 }
