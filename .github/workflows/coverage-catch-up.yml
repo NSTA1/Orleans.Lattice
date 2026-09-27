@@ -1,0 +1,78 @@
+name: Coverage catch-up
+
+# Stands in for the nightly coverage.yml run when GitHub's scheduler misses it.
+#
+# GitHub documents the `schedule` trigger as best-effort: an event can be
+# delayed or dropped. Since the Actions incidents of 2026-08-26 that has been
+# the norm (see https://github.com/orgs/community/discussions/207346): the
+# 03:17 UTC coverage slot was created at 08:49 UTC on 25 September, 08:36 UTC
+# on 26 September and 09:16 UTC on 27 September, up to six hours late. The
+# lane was not broken; the event that starts it was late or never came.
+# `workflow_dispatch` is unaffected, so this workflow uses it.
+#
+# On every push to main it asks one question - has coverage.yml run on main
+# since tonight's slot opened? - and, once the slot is more than two hours past
+# with no such run, dispatches coverage.yml with `catch_up: true`. The grace
+# period leaves an on-time schedule to do the work. Every other push costs one
+# API call and no measurement: a run in progress, a failed run and a skipped run
+# all count as the night being covered, so a genuine failure is never retried
+# on every merge. If the schedule does arrive later, coverage.yml's own
+# `measured` job sees the earlier run and skips, so the night is measured once.
+#
+# Deliberately a separate workflow rather than a `push` trigger on
+# coverage.yml: that lane's concurrency group queues its runs, and a push-
+# triggered run waiting behind an hour-long measurement would be replaced, and
+# so cancelled, by the next push - the red cross on main that coverage.yml was
+# rescheduled to remove. This job takes seconds and cancels nothing.
+# CiCoverageLaneScheduleTests holds this shape in place.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  catch-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # To read coverage.yml's run history and dispatch it.
+      actions: write
+    steps:
+      - name: Dispatch tonight's coverage run if the schedule missed it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # Must match the cron in coverage.yml ('17 3 * * *').
+          slot="03:17"
+          grace_hours=2
+          now="$(date -u +%s)"
+          opened="$(date -u -d "$(date -u +%F) ${slot}" +%s)"
+          if [ "$now" -lt "$opened" ]; then
+            opened=$((opened - 86400))
+          fi
+          since="$(date -u -d "@${opened}" +%Y-%m-%dT%H:%M:%SZ)"
+
+          if [ "$now" -lt $((opened + grace_hours * 3600)) ]; then
+            echo "Tonight's slot opened at ${since}, under ${grace_hours}h ago; leaving it to the schedule."
+            exit 0
+          fi
+
+          # An API error leaves the decision to the next push rather than
+          # dispatching blind or turning this commit red.
+          if ! runs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/coverage.yml/runs" \
+            -f branch="${GITHUB_REF_NAME}" -f created=">=${since}" -f per_page=100 \
+            --jq '[.workflow_runs[] | select(.conclusion != "cancelled")] | length')"; then
+            echo "::warning title=Coverage catch-up::Could not read coverage.yml's run history; the next push to ${GITHUB_REF_NAME} will check again."
+            exit 0
+          fi
+
+          if [ "${runs:-0}" -gt 0 ]; then
+            echo "coverage.yml has run on ${GITHUB_REF_NAME} since the ${since} slot; nothing to catch up."
+            exit 0
+          fi
+
+          echo "::notice title=Coverage catch-up::No coverage.yml run on ${GITHUB_REF_NAME} since the ${since} slot; dispatching it now."
+          gh workflow run coverage.yml --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" -f catch_up=true
