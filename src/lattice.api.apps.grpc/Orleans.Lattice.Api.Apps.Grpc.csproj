@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Apps.Grpc</PackageId>
+    <Version>9.6.0</Version>
+    <Description>Code-first gRPC transport and strongly typed client for app lifecycle and consent management, with default-deny authorization, credential bridging, and public auth-scheme discovery.</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Apps.Grpc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.83.0" />
+  </ItemGroup>
+</Project>

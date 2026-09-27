@@ -39,6 +39,7 @@ on:
       #   lattice.api.schema.grpc-v7.9.1
       #   lattice.api.treeadmin-v8.0.0
       #   lattice.api.treeadmin.grpc-v8.0.0
+      #   lattice.api.apps.grpc-v9.6.0
       #   lattice.api.tenantadmin-v8.0.0
       #   lattice.api.tenantadmin.grpc-v8.0.0
       #   lattice.api.telemetry-v9.4.0
@@ -109,6 +110,7 @@ on:
       - 'lattice.api.schema.grpc-v*'
       - 'lattice.api.treeadmin-v*'
       - 'lattice.api.treeadmin.grpc-v*'
+      - 'lattice.api.apps.grpc-v*'
       - 'lattice.api.tenantadmin-v*'
       - 'lattice.api.tenantadmin.grpc-v*'
       - 'lattice.api.telemetry-v*'
