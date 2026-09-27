@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Lattice.Testing;
 using Orleans.Streams;
 
 namespace Orleans.Lattice.Tenancy.Tests;
@@ -296,10 +297,23 @@ public sealed class TenantPlacementSnapshotMaintainerTests
             CancellationToken.None);
 
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        // Let the catch block finish executing before asserting the epoch.
-        await Task.Delay(50);
 
-        Assert.That(maintainer.CurrentEpoch, Is.EqualTo(epochBefore),
-            "the background exception must not advance the epoch; the previous snapshot remains in effect");
+        // Restore a succeeding registry and trigger a second rebuild. Waiting for that
+        // rebuild to land is what proves the loop caught the exception and kept running,
+        // and it replaces a fixed sleep with a deterministic barrier. SwapSnapshot is the
+        // sole writer of the epoch, so exactly one increment across the failing and the
+        // succeeding rebuild proves the failing one swapped nothing.
+        registry.ListAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Stream(new[] { RecordWith(acme, TenantPlacement.Shared) }));
+        await maintainer.OnMutationAsync(
+            new LatticeMutation { TreeId = TenantTreeNames.RegistryTree, Kind = MutationKind.Set, Key = "acme" },
+            CancellationToken.None);
+
+        await TestPoll.UntilAsync(
+            () => maintainer.CurrentEpoch > epochBefore,
+            "the background loop to survive the faulting rebuild and complete a later one");
+
+        Assert.That(maintainer.CurrentEpoch, Is.EqualTo(epochBefore + 1),
+            "the background exception must not advance the epoch; only the later succeeding rebuild does");
     }
 }

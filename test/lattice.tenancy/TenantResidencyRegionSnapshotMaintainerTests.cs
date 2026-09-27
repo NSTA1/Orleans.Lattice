@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Configuration;
+using Orleans.Lattice.Testing;
 using Orleans.Streams;
 
 namespace Orleans.Lattice.Tenancy.Tests;
@@ -386,11 +387,25 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
 
         // Wait for the background loop to have entered the scan (and thrown).
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        // Small settle so the catch block has a chance to complete before we assert.
-        await Task.Delay(50);
 
-        // The previous snapshot must still be intact; the epoch must not have advanced.
-        Assert.That(maintainer.CurrentEpoch, Is.EqualTo(1), "the background exception must not advance the epoch");
+        // A bare settle-and-sample cannot distinguish "the loop caught the
+        // exception and kept the snapshot" from "the loop has not got there
+        // yet" or "the loop died", because the epoch is unmoved in all three.
+        // Drive a SUCCEEDING rebuild: only a surviving loop completes it, and
+        // since SwapSnapshot alone advances the epoch, landing on exactly
+        // epoch 2 proves the faulting rebuild swapped nothing.
+        registry.ListAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Stream(new[] { Configured(acme, "region-a", TenantRegionStatus.Online) }));
+        await maintainer.OnMutationAsync(
+            new LatticeMutation { TreeId = TenantTreeNames.RegistryTree, Kind = MutationKind.Set, Key = "acme" },
+            CancellationToken.None);
+
+        await TestPoll.UntilAsync(
+            () => maintainer.CurrentEpoch > 1,
+            "the background loop to survive the faulting rebuild and complete a later one");
+
+        Assert.That(maintainer.CurrentEpoch, Is.EqualTo(2),
+            "only the succeeding rebuild may advance the epoch; the background exception must contribute none");
     }
 
     [Test]
