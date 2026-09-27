@@ -73,8 +73,8 @@ internal sealed partial class ShardRootGrain
             await internalNode.AreChildrenLeavesAsync();
         }
 
-        // Opt-in leaf-cache pre-warm (issue #332). Off unless
-        // LatticeOptions.LeafCachePreWarmCount is positive. Ranks this shard's
+        // Leaf-cache pre-warm (issue #332). On by default; off when
+        // LatticeOptions.LeafCachePreWarmCount is 0. Ranks this shard's
         // persisted leaf-access Markov chain by long-run read probability and
         // primes that many LeafCacheGrain activations on this silo - the same
         // silo that will serve the reads, because this grain is the only caller

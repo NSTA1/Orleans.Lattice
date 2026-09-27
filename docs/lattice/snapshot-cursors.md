@@ -184,6 +184,13 @@ touch are throttled (no more than once per `SnapshotBaselineTtl / 2`,
 floored at one minute) so the reminder table is not rewritten on every
 page.
 
+A reclaimed baseline is gone for good. A cursor left idle past
+`SnapshotBaselineTtl` keeps serving pages only while its snapshot leaves
+stay activated; once a leaf has to reload its baseline (after idle eviction
+or a failover) and finds the row reclaimed, the page throws
+`LatticeSnapshotExpiredException`, exactly as for a baseline that was never
+persisted, and the caller reopens the snapshot.
+
 ## Bounding the cost
 
 Open-time cost is gated by

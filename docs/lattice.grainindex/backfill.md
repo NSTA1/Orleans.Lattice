@@ -121,7 +121,9 @@ heartbeat - Orleans floors a reminder period at a minute, which is too coarse to
 pace a crawl - that re-establishes a grain timer on whichever silo hosts the
 crawl, and the timer runs the passes:
 
-- Each pass visits `BackfillBatchSize` grains (default `256`).
+- Each pass takes up to `BackfillBatchSize` keys (default `256`) from the key
+  source and activates the ones the index does not already record, so they enrol
+  themselves; a restarted or rebuilt crawl activates the recorded ones too.
 - Passes are separated by `BackfillInterval` (default 1 second), which is what
   paces the crawl against foreground traffic.
 - After each pass the resume key is checkpointed durably, so an interrupted
@@ -180,7 +182,12 @@ the index's fingerprint changed restarts the crawl over the whole key range on
 its own (on a host that drives the crawl and has a key source registered),
 re-visiting grains the index already records, so `RebuildAsync` is for forcing a
 restart - for example on a host whose driver is off (`BackfillEnabled = false`),
-which then also drives the passes.
+where silo start never begins the crawl at all and the host then drives the
+passes itself with `RunBackfillPassAsync`.
+
+A crawl re-projects a grain by activating it, so it cannot refresh a grain that
+is already active: a rebuild leaves such a grain's entries to be rewritten by its
+next state write.
 
 See [Observability](observability.md) for the gauges that report progress and
 state.

@@ -20,7 +20,8 @@ public enum TenantQuotaEnforcementScope
 {
     /// <summary>
     /// The reading is the converged cross-cluster fold: the tenant's total
-    /// footprint summed over the online resident clusters. Converged best-effort
+    /// footprint summed over every cluster usage slot published into its usage
+    /// record, with residency and online status not consulted. Converged best-effort
     /// with bounded overshoot, so a concurrent write elsewhere can momentarily
     /// leave the true total slightly above the reported one.
     /// </summary>

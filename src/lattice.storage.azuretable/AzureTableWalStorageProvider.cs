@@ -110,9 +110,10 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     internal const string EntryRowKeyPrefix = "E";
 
     /// <summary>
-    /// Row-key for the per-partition head-pointer sentinel. Sorts after
-    /// every entry row (because <c>'H' &gt; 'E'</c>) so the entry-range
-    /// query can use a tight upper bound.
+    /// Row-key reserved for a per-partition head-pointer sentinel. Phase 1
+    /// writes entry rows only, so no row with this key is written; the
+    /// key sorts after every entry row (because <c>'H' &gt; 'E'</c>), which
+    /// keeps the entry-range query's upper bound tight either way.
     /// </summary>
     internal const string HeadRowKey = "HEAD";
 
@@ -229,8 +230,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     // Compression column - including a host-defined tag in [0x80, 0xFF] -
     // can be decompressed on read. _activeCompressor is the single
     // compressor selected by AzureTableWalStorageOptions.Compression and
-    // is the only one consulted on the encode hot path; it is null when
-    // compression is disabled (the default). Mirrors the
+    // is the only one consulted on the encode hot path; it is null only when
+    // Compression is None (the default is Zstd). Mirrors the
     // FrozenDictionary-at-construction pattern in
     // OrleansBinaryReplicationBatchEncoder.
     private readonly FrozenDictionary<byte, ILatticeCompressor> _compressors;
@@ -326,9 +327,13 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// Compression-aware constructor overload. Resolves the registered
     /// <see cref="ILatticeCompressor"/> sequence from DI and builds the
     /// per-tag dispatch dictionary used by the per-row payload
-    /// compression path. The parameterless-compressors overload above
-    /// preserves the historical constructor shape for callers (and
-    /// tests) that never enable compression.
+    /// compression path. The overload above, which takes no compressors,
+    /// preserves the historical constructor shape; because
+    /// <see cref="AzureTableWalStorageOptions.Compression"/> defaults to
+    /// <see cref="LatticeCompression.Zstd"/>, a caller using it (or passing
+    /// no matching compressor here) must set that option to
+    /// <see cref="LatticeCompression.None"/>, or construction throws
+    /// <see cref="InvalidOperationException"/>.
     /// </summary>
     public AzureTableWalStorageProvider(
         IOptions<AzureTableWalStorageOptions> options,
@@ -1846,8 +1851,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// (on by default) an append returns once its own phase 1 has
     /// committed and only the <i>predecessor's</i> phase 2 has
     /// landed, so <c>TAIL</c> alone lags by one batch per shard. The
-    /// entries are nonetheless durable - phase 1 wrote their rows and
-    /// the per-batch HEAD row atomically - and activation-time
+    /// entries are nonetheless durable - phase 1 wrote their entry rows
+    /// atomically - and activation-time
     /// reconciliation rolls exactly such contiguous batches forward,
     /// so folding in the worker's accepted ranges reports what
     /// recovery would keep rather than what the manifest happens to

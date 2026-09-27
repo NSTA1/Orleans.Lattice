@@ -22,13 +22,18 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// lifecycle operation needs to reach.
 /// </para>
 /// <para>
-/// The facade now carries the capability probe plus the whole-tree lifecycle and
-/// administration verbs that shipped on this surface: shard hotness, storage
-/// usage, tree creation/deletion/recovery/purge/snapshot/restore, bulk load,
-/// resize, reshard, WAL placement/move, views, tag-index repair, retention, and
-/// schema-control delegation. Whole-tree operations use the whole-tree operation
-/// gates (<see cref="LatticeOperation.Admin"/> / <see cref="LatticeOperation.BulkLoad"/>),
-/// default-denied for anonymous callers.
+/// The facade carries the capability probe plus the whole-tree lifecycle,
+/// administration and diagnostics verbs that shipped on this surface: shard
+/// hotness and diagnostics, shard-map and projection-digest inspection, tree
+/// statistics, storage usage, tree creation/configuration/alias/deletion/recovery/
+/// purge/snapshot/restore, bulk load, resize, reshard, WAL placement/move, views,
+/// tag indexes, retention, compaction, the orphaned-leaf audit/survey/repair, and
+/// schema-capability delegation. Each verb is authorized over the whole tree through
+/// the operation gate it needs (<see cref="LatticeOperation.Read"/>,
+/// <see cref="LatticeOperation.Admin"/>, <see cref="LatticeOperation.TreeLifecycle"/>,
+/// <see cref="LatticeOperation.BulkLoad"/> or <see cref="LatticeOperation.Restore"/>),
+/// or, for the cluster-wide storage summary and the view and tag-index listings,
+/// through the cluster-wide <see cref="LatticeOperation.Telemetry"/> capability.
 /// </para>
 /// <para>
 /// <b>Fail-closed authorization is inherited</b> from the facade access-gate seams;
@@ -71,14 +76,15 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Reads a whole-tree diagnostic report for <paramref name="treeId"/>: per-shard
-    /// depth, live/tombstone counts, activity, and in-flight maintenance flags. When
-    /// <paramref name="deep"/> is <see langword="false"/> (the default) the report
-    /// comes from the cheap shard-root projection; when <see langword="true"/> it
-    /// walks leaf state for authoritative counts at higher cost. Read-only, but still
+    /// depth, live/tombstone counts, activity, and in-flight maintenance flags. Both
+    /// modes page through every shard's leaf chain: when <paramref name="deep"/> is
+    /// <see langword="false"/> (the default) each leaf reports its live-key count only
+    /// and the tombstone counts are zero; when <see langword="true"/> each leaf also
+    /// counts its tombstoned and expired entries, at higher cost. Read-only, but still
     /// gated on <see cref="LatticeOperation.Read"/> over the whole tree.
     /// </summary>
     /// <param name="treeId">The tree to diagnose. Must not be <c>null</c> or empty.</param>
-    /// <param name="deep">Walk leaf state for authoritative counts; defaults to the cheap projection.</param>
+    /// <param name="deep">Also count tombstoned and expired entries in each leaf; defaults to live-key counts only.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The whole-tree diagnostic report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
@@ -477,11 +483,11 @@ public interface ILatticeTreeAdmin
     /// iteratively splits the largest-slot-owning shards and atomically swaps
     /// virtual-slot routing per split, anchored by reminders so it survives silo
     /// restarts. Returns once the coordinator has accepted the intent; poll completion
-    /// with <see cref="GetReshardStatusAsync"/>. <b>Grow-only</b>: the target must be
-    /// strictly greater than the current physical shard count (an empty tree may be
-    /// re-pinned to any count) and at most the virtual shard space (4096). Idempotent:
-    /// a request for the count the tree is already at, or a matching in-flight target,
-    /// is a no-op. Reserved system tree ids are rejected.
+    /// with <see cref="GetReshardStatusAsync"/>. <b>Grow-only</b>: a target below the
+    /// current physical shard count is rejected (an empty tree may be re-pinned to any
+    /// count), and the target must be at least 2 and at most the virtual shard space
+    /// (4096). Idempotent: a request for the count the tree is already at, or a
+    /// matching in-flight target, is a no-op. Reserved system tree ids are rejected.
     /// </summary>
     /// <param name="treeId">The tree to reshard. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="targetShardCount">The desired number of distinct physical shards. Must be at least 2 and at most the virtual shard space.</param>

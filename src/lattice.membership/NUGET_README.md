@@ -14,9 +14,9 @@ the ambient `LatticeCredential`, maps the resulting principal against an
 introspectable `ILatticeMembershipDirectory`, and **expands group membership to
 its full transitive closure with cycle detection**, so downstream policy always
 evaluates a flat, uniform group set. Nested (group-in-group) membership is
-supported, and token-asserted groups are themselves expanded through the
-directory closure (unless the merge mode is `TokenOnly`, which bypasses the
-directory).
+supported, and under the default `Union` merge mode token-asserted groups are
+themselves expanded through the directory closure (`TokenOnly` bypasses the
+directory, and `DirectoryOnly` ignores token-asserted groups).
 
 The directory dogfoods reserved `sys-membership-*` `ILattice` trees (a groups
 tree, and an edges tree that stores each membership edge in both directions for

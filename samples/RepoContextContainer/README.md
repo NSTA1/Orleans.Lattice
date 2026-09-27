@@ -70,6 +70,11 @@ claims, and why you must not enable it in the middle of a measurement.
 ## Prerequisites
 
 - Docker with Compose v2.
+- An `.env` file in this directory: copy `.env.example` to `.env` and set its
+  two paths for this machine before running any compose command below.
+  `REPOCONTEXT_MEMORY_ARCHIVE_PATH` has no default, so compose refuses every
+  command - `up`, `build`, `ps`, `logs` - until it is set (see
+  [What actually protects it](#what-actually-protects-it)).
 - Memory: derive the grant with
   [`scripts/New-TuningEnv.ps1`](scripts/New-TuningEnv.ps1) (issue #2779) rather
   than copying a figure from here. This is much more than a default Docker VM
@@ -212,8 +217,9 @@ traversal and symlink escape are both defeated - and must resolve under
 The sample brings up the ONNX Runtime companion
 ([`apps/embedding-onnx`](../../apps/embedding-onnx/README.md)) by default. It
 bakes its weights into an image layer, so a cold start needs no model download,
-and it selects its accelerator - CPU or NVIDIA - from one build via
-`EMBED_PROVIDER`.
+and a `cuda`-flavoured build selects its accelerator - CPU or NVIDIA - at
+runtime via `EMBED_PROVIDER` (the default `cpu` build is CPU-only; see
+[Running the embedder on an NVIDIA GPU](#running-the-embedder-on-an-nvidia-gpu)).
 
 The original Onyx companion
 ([`apps/embedding`](../../apps/embedding/README.md)) remains available as a
@@ -281,9 +287,15 @@ docker run --rm --network "container:$(docker compose ps -q embedder)" \
 # {"status":"ok","provider":"Cuda","model":"model.onnx","dimension":768}
 ```
 
-A `provider` of `Cpu` here means the GPU was not picked up - check the toolkit
-and the device reservation. The Onyx fallback companion takes a different route
-to the same place (clear `CUDA_VISIBLE_DEVICES` and add the reservation); see
+The `provider` field is the provider `EMBED_PROVIDER` resolved to, reported once
+a session has been created on it. So a `provider` of `Cpu` here means
+`EMBED_PROVIDER` did not resolve to `cuda` - it is unset, or a value other than
+`cuda`, `gpu` or `nvidia` - and the fix is the service's `environment`. A missing
+toolkit or device reservation cannot produce `Cpu`: with `cuda` selected the
+server has no CPU fallback of its own, and a session it cannot create stops the
+process at startup, so check `docker compose logs embedder` instead. The Onyx
+fallback companion takes a different route to the same place (clear
+`CUDA_VISIBLE_DEVICES` and add the reservation); see
 [`apps/embedding`](../../apps/embedding/README.md).
 
 ## Walkthrough
@@ -527,6 +539,20 @@ no shell-exec healthcheck:
   So it is not-ready during startup replay and during drain, but those are not the
   only causes, and a sustained 503 is far more likely to be the vector-plane
   component than either of them.
+- `GET /health/silo` - grain liveness. It re-checks silo membership and makes a
+  trivial grain call on every request, so it goes red for a silo that died after
+  reaching readiness while the process kept listening (issue #2666) - which
+  neither `/health/live` (always green) nor `/health/ready` (which never
+  re-checks the silo once it has flipped) can do. It answers `200` only when
+  healthy and `503` while the silo is still starting or once it is unhealthy,
+  with the three-way verdict in the body. It is what the container's Docker
+  healthcheck targets, through the exec-form `--healthcheck` self-probe the
+  shell-less image needs, and it feeds neither of the two probes above.
+- `GET /health/backup` - whether the durable agent-memory tree is actually being
+  captured to the `azurite-backup-sink` service. It is tagged as neither liveness
+  nor readiness, so a failing backup never restarts the container or pulls it
+  from rotation; the body names the tree in scope, what the sink holds and the
+  last failure text, and it answers `503` only for an unhealthy verdict.
 
 ### Interpreting a persistent 503
 
@@ -864,8 +890,10 @@ adjudicate where the archive landed and which tree is bound, not what state
 either is in. That the workspace root or the indexed repository is the one you
 meant, unless you named them with `-ExpectedWorkspaceRoot` and
 `-ExpectedRepositoryRoot` (the report prints `NOT ESTABLISHED` for each arm you
-did not ask for), or that every registered repository is correctly rooted - the
-indexed-root arm passes when one matches. Or anything whatever about a container
+did not ask for; `-ExpectedRepositoryRoot` also needs `-IndexedRoot`, the
+`indexedRoot` values `repocontext_list_repos` reports, and refuses without it
+rather than passing), or that every registered repository is correctly rooted -
+the indexed-root arm passes when one matches. Or anything whatever about a container
 you did not name. What a green run **does** establish, since check 6 (issue
 #2686), is that the image the container is executing was built from the expected
 commit, on the evidence of its own revision label or `candidate-<sha>` tag
@@ -895,7 +923,8 @@ pwsh -File ./scripts/Test-ContainerProvenance.ps1
 ```
 
 Every one of the seven checks has fixtures it accepts and fixtures it refuses,
-two of them reconstructed from the real gate run readings. A check only ever
+and several refusal fixtures are reconstructed from real gate-run and incident
+readings rather than invented. A check only ever
 observed passing is indistinguishable from one that cannot fail, which is the
 same reason the suite itself is worth measuring rather than trusting: commit
 first, then make one check return no violations unconditionally, re-run, and
@@ -931,7 +960,9 @@ because they have different owners:
   and is worth diagnosing.
 
 Collapsing those two into one "no data" would discard exactly the bit that says
-whose problem it is.
+whose problem it is. Neither is the environment failure that stops the probe
+before it can query at all - a container that does not answer `/health/live`, a
+failed MCP handshake, or a failed `repocontext_list_repos` - which exits `3`.
 
 **`retrievalPath` on a search result is not evidence about the approximate arm.**
 `AnnRepoContextSemanticIndex.RetrievalPath` is a property of the index, not of a

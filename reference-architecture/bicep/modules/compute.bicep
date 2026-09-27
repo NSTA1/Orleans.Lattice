@@ -136,7 +136,7 @@ param headHttpConcurrency int = 20
 
 // --- Graceful scale-in tuning (respecting LatticeShuttingDownException) ---
 
-@description('Seconds a draining silo replica is given to complete or hand off in-flight shard transfers before the platform force-terminates it. Must exceed the host activation-cooldown so LatticeShuttingDownException drains cleanly.')
+@description('Seconds a scaled-in silo replica is given after SIGTERM before the platform force-terminates it. The host drain this covers does not complete or hand off shard transfers: it refuses new writes with LatticeShuttingDownException, releases WAL callers parked on admission, and gives each WAL shard grain up to LatticeOptions.WalDrainBudget (75 s by default) to settle its in-flight flushes, plus a second budget for a follow-on flush when entries were still pending, so a single grain can take up to twice the budget; keep this above what the drain needs. An interrupted shard split or reshard resumes from its persisted phase when its reminder-anchored coordinator reactivates on another silo.')
 @minValue(30)
 @maxValue(600)
 param siloTerminationGracePeriodSeconds int = 120
@@ -513,9 +513,14 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
     template: {
       // Platform-enforced graceful drain: ACA waits this many seconds after
       // SIGTERM before force-terminating a scaled-in replica (default is 30s).
-      // Set to the shard-transfer drain budget so the host's
-      // LatticeShuttingDownException path completes or hands off in-flight
-      // transfers before the platform SIGKILLs the replica.
+      // Set above the host's own shutdown drain, which does not complete or
+      // hand off shard transfers: it refuses new writes with
+      // LatticeShuttingDownException, releases WAL callers parked on
+      // admission, and gives each WAL shard grain up to
+      // LatticeOptions.WalDrainBudget (75 s by default) to settle its
+      // in-flight flushes before force-faulting the rest, plus a second
+      // budget for a follow-on flush when entries were still pending (so up
+      // to twice the budget per grain).
       terminationGracePeriodSeconds: siloTerminationGracePeriodSeconds
       containers: [
         {
@@ -635,16 +640,21 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: {
         minReplicas: siloMinReplicas
         maxReplicas: siloMaxReplicas
-        // KEDA prometheus scaler bridging the lattice.scaling WAL-pressure
-        // signal to the silo replica count. Authenticated to managed Prometheus
-        // with the region's workload identity (no scaler secret). When the
-        // observability sub-issue has not yet supplied a Prometheus endpoint the
-        // rule is omitted and the silo holds at its min-replica floor.
+        // KEDA prometheus scaler bridging the lattice.scaling compute-pressure
+        // signal (the dominant of activation working set, host resource load
+        // and WAL dispatch admission) to the silo replica count. Authenticated
+        // to managed Prometheus with the region's workload identity (no scaler
+        // secret). When the observability sub-issue has not yet supplied a
+        // Prometheus endpoint the rule is omitted and the silo holds at its
+        // min-replica floor.
         //
         // Graceful scale-in: KEDA/ACA select a replica to drain; the platform
-        // sends SIGTERM and waits terminationGracePeriodSeconds. The host's
-        // LatticeShuttingDownException path completes or hands off in-flight
-        // shard transfers inside that window so scale-in never severs a transfer.
+        // sends SIGTERM and waits terminationGracePeriodSeconds, inside which
+        // the host drains its writes (see the template comment above). The
+        // drain does not complete or hand off shard transfers: a split or
+        // reshard coordinator persists its phase and holds a keepalive
+        // reminder (every minute), so an interrupted transfer resumes when
+        // that coordinator reactivates on a remaining silo.
         rules: enableSiloScaleRule ? [
           {
             name: 'lattice-scaling-wal-pressure'

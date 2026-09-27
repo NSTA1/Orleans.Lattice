@@ -152,8 +152,12 @@ shard that already holds a root node rejects the load with
 `InvalidOperationException`.
 
 `BeginBulkLoadAsync` probes the tree first with a deep diagnostic and rejects a
-non-empty one with `TreeNotEmptyException`. The probe counts both live keys and
-tombstones, so a tree you emptied by deleting every key - which leaves tombstoned
+non-empty one with `TreeNotEmptyException`. It drops the tree's cached
+diagnostic reports before probing, so the answer is always sampled fresh from
+the shards rather than served from a report cached for
+`LatticeOptions.DiagnosticsCacheTtl` while the tree was still empty - a second
+session opened just after chunks were grafted is still refused. The probe counts
+both live keys and tombstones, so a tree you emptied by deleting every key - which leaves tombstoned
 rows in the leaves even though no live keys remain - is correctly rejected rather
 than grafted onto. Creating a fresh tree is still the cleanest restart story, but
 emptying an existing one no longer slips past the guard.

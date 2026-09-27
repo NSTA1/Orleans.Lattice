@@ -25,8 +25,12 @@ namespace Orleans.Lattice;
 ///   retry re-offers the same work into the regime that refused it and the
 ///   feedback is positive.</description></item>
 ///   <item><description><see cref="TxRegistryCapacity"/> also refuses before
-///   any work, but its capacity returns only as the retention window elapses,
-///   so an immediate retry is safe and pointless.</description></item>
+///   any work. The refusing registry's capacity returns only as its retention
+///   window elapses, so with one registry shard (the default) an immediate
+///   retry is safe but pointless; with
+///   <see cref="LatticeOptions.TxRegistryShardCount"/> above one the retry
+///   mints a fresh transaction id routed to a uniformly chosen shard, which
+///   may have capacity.</description></item>
 /// </list>
 /// <para>
 /// Retrying the wrong member is therefore not merely wasteful, it amplifies:
@@ -154,18 +158,21 @@ public enum LatticeSaturationSource
 
     /// <summary>
     /// The transaction-registry capacity refusal from
-    /// <c>TxRegistryGrain.EnsureSagaAdmissionAsync</c>, raised when the per-tree
-    /// registry's estimated persisted row size is at or above
+    /// <c>TxRegistryGrain.EnsureSagaAdmissionAsync</c>, raised when the
+    /// estimated persisted row size of the registry the new saga's transaction
+    /// id routes to - the tree's single registry, or one of its
+    /// <see cref="LatticeOptions.TxRegistryShardCount"/> shards - is at or above
     /// <see cref="LatticeOptions.TxRegistryAdmissionBudgetBytes"/> and reclaiming
     /// expired tombstones did not bring it back under the budget.
     /// <para>
-    /// This seam exists because the registry persists its whole state as one
+    /// This seam exists because each registry persists its whole state as one
     /// grain-state row, and the row carries one tombstone per saga completed
     /// within <see cref="LatticeOptions.TxDecisionRetention"/>. Admitting sagas
     /// past the budget would grow the row towards the storage provider's
     /// per-row limit (about 1 MB on Azure Table storage), past which every
-    /// registry write fails and every saga on the tree stalls. Issue #3501
-    /// tracks lifting the ceiling itself.
+    /// registry write fails and every saga routed to it stalls. Since issue
+    /// #3501 the registry can be split across shards, each with its own row and
+    /// budget, which multiplies the tree's ceiling.
     /// </para>
     /// <para>
     /// <b>Refused before any work.</b> The refusal is raised before the saga
@@ -174,10 +181,12 @@ public enum LatticeSaturationSource
     /// cleanly. Sagas already admitted are never refused.
     /// </para>
     /// <para>
-    /// <b>Not retried inside the library.</b> A retry is safe but is not useful
-    /// immediately: capacity returns only as tombstones age out of the
-    /// retention window, which takes seconds, not milliseconds. Back off, then
-    /// retry.
+    /// <b>Not retried inside the library.</b> A retry is safe. With one
+    /// registry shard it is not useful immediately: capacity returns only as
+    /// tombstones age out of the retention window, which takes seconds, not
+    /// milliseconds. With more than one shard the refused saga discards its
+    /// minted transaction id, so a retry draws a fresh, uniformly chosen shard
+    /// that may admit it. Either way, back off, then retry.
     /// </para>
     /// </summary>
     TxRegistryCapacity = 6,

@@ -53,7 +53,7 @@ transport binding layered on top neither repeats nor reconfigures it.
 |---|---|---|---|
 | `BackendAddress` | `Uri?` | `null` | The Prometheus-compatible endpoint. Must be absolute. Unset means no backend is configured, and every query reports as unoffered. |
 | `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer` (a token resolved per request through `ITelemetryBackendTokenProvider`). |
-| `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer`, `Basic`, or `MutualTls`. Required for those three modes; not consulted under `None` or `DynamicBearer`. |
+| `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer` (`BearerToken`), `Basic` (`BasicUsername` / `BasicPassword`), or `MutualTls` (`ClientCertificate`). Required for those three modes; not consulted under `None` or `DynamicBearer`. |
 | `RequestTimeout` | `TimeSpan` | 30 seconds | Per-request timeout against the backend. |
 | `MaxRange` | `TimeSpan` | 24 hours | The widest window a range query may evaluate. |
 | `MaxStep` | `TimeSpan` | 1 hour | The coarsest step a range query may request. |
@@ -113,12 +113,31 @@ about what will be evaluated:
 
 ## Facade surface
 
-`ILatticeTelemetry` has two methods:
+`ILatticeTelemetry` (implemented by the public `LatticeTelemetry`, which `AddLatticeTelemetryApi()` registers) has two methods:
 
 | Method | Signature |
 |---|---|
 | `GetCatalogAsync` | `Task<TelemetryQueryCatalog> GetCatalogAsync(CancellationToken cancellationToken = default)` |
 | `QueryAsync` | `Task<TelemetryQueryResponse> QueryAsync(TelemetryQueryRequest request, CancellationToken cancellationToken = default)` |
+
+## The backend proxy beneath the facade
+
+`AddLatticeTelemetryApi()` builds on the public `AddLatticeTelemetryBackend()`, which a binding that needs the
+backend without the curated facade - the MCP telemetry tool group - calls directly. It is idempotent and
+registers:
+
+- `TelemetryMetricAccessPolicy` - the `MetricAccess` / `AllowedMetrics` posture, compiled once from the bound
+  options (`IsReadAll`, and `IsAdmitted(metric)` for one exposition name).
+- `IPrometheusQueryClient` - the read-only backend client: instant query, range query, metric-name listing, and
+  metric metadata. The default `PrometheusQueryClient` runs over an `HttpClient` bound to `BackendAddress` and
+  `RequestTimeout` and stamps the configured backend credential; it is registered only when the host has not
+  registered its own `IPrometheusQueryClient` first.
+
+Two public helpers let such a binding enforce the same rules the facade applies:
+`TelemetryQueryAuthorizer.TryAuthorizeQuery(policy, query, out denialMessage)` gates a PromQL expression against
+the allow-list with the extractor rules above (admitting without scanning under `ReadAll`), and
+`TelemetryRangeGuardrails.TryValidateRange(options, start, end, step, out violationMessage)` applies the
+deployment-wide `MaxRange` / `MaxStep` guardrails.
 
 ## The curated catalogue
 
@@ -205,12 +224,13 @@ transport binding can name them without referencing this package:
 | `TelemetryQueryBoundsException` | A well-formed request whose window or step exceeds the guardrails. |
 | `TelemetryBackendException` | The backend was unreachable, timed out, or answered unusably. Not the caller's fault. |
 
-`QueryAsync` can also refuse the caller before any of these: it throws
+`QueryAsync` can also refuse the caller. Before anything else it throws
 `LatticeAuthorizationDeniedException` when a real access gate is registered and
-the caller lacks the cluster-wide `Telemetry` capability (discovery instead
-degrades to the empty catalogue), `LatticeTenantAccessDeniedException` when the
-caller cannot be attributed to any tenant, and `ArgumentException` when the tree
-filter contains a control character. Both refusals are core `Orleans.Lattice`
+the caller lacks the cluster-wide `Telemetry` capability, checked by the public
+`TelemetryAccessAuthorizer` (discovery instead degrades to the empty catalogue);
+once the query id and the entry's bounds pass, it throws `LatticeTenantAccessDeniedException`
+when the caller cannot be attributed to any tenant, and `ArgumentException` when
+the tree filter of an entry that accepts one contains a control character. Both refusals are core `Orleans.Lattice`
 types, so a binding can name them too.
 
 **A binding must not forward `TelemetryBackendException.Message` to a remote

@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <summary>
 /// Fast, dependency-free unit tests for <see cref="ShadowedMigrationReadGuard"/> -
 /// the shared read-side orphan guard the production leaf
-/// <c>IsShadowedReadSafeAsync</c> path and the Coyote reshard model both execute.
+/// <c>IsShadowedReadSafeAsync</c> path executes. No Coyote model drives it, so
+/// these unit tests are what pin its cases.
 /// These pin the exact three-outcome per-saga rule so a change is caught here
 /// rather than only by a slow reshard chaos run.
 /// </summary>

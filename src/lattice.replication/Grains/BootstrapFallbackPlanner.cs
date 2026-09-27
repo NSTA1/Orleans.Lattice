@@ -4,16 +4,18 @@ namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
 /// The scoped bootstrap-snapshot fallback engine. When a targeted leaf re-replay
-/// reports the local write-ahead-log has been garbage-collected past the
-/// divergence point, this engine re-derives the committed projection of just the
+/// could not reach the divergence - the local write-ahead-log has been
+/// garbage-collected past the divergence point, or no retained entry above the
+/// peer's cursor fell in the localised ranges (the below-cursor blind spot) - this
+/// engine re-derives the committed projection of just the
 /// divergent leaf ranges from the live tree (via the range-scoped
 /// <see cref="ISnapshotProvider"/> export, which is immune to WAL trimming) and
 /// re-ships those committed entries to the diverged peer through the supplied
 /// sink so the repair travels the ordinary causal-stable apply pipeline.
 /// <para>
 /// Re-shipped entries carry their committed-projection clock verbatim and are
-/// deduplicated at the receiver on <c>(originClusterId, hlc)</c>, so re-sending
-/// is idempotent. The pass re-ships committed projection rows only: prepared
+/// deduplicated at the receiver on <c>(originClusterId, hlc, key, op)</c>, so
+/// re-sending is idempotent. The pass re-ships committed projection rows only: prepared
 /// (not-yet-decided) saga rows and tombstoned keys are skipped, since the
 /// committed projection already reflects every decided value.
 /// </para>

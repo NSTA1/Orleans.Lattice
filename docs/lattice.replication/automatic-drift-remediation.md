@@ -30,7 +30,7 @@ One case is not left to operator discretion: enabling a WAL retention ceiling (`
 
 ## The pipeline, stage by stage
 
-1. **Detect.** The digest probe is a low-frequency, read-only background pass that compares each shard's local content digest against every peer's digest. A sustained `Mismatch` for a `(tree, shard, peer)` triple is the signal that those clusters have genuinely diverged. The probe never mutates data and never advances a replication cursor.
+1. **Detect.** The digest probe is a low-frequency, read-only background pass that compares each shard's local content digest against every peer's digest. A sustained `Mismatch` for a `(tree, shard, peer)` triple is the signal to localise that shard; because the digest also folds each cluster's own checkpoint offset, it is a conservative trigger rather than proof of divergence. The probe never mutates data and never advances a replication cursor.
 2. **Localise.** On a mismatch, the Merkle walk descends the local B+ tree top-down and narrows the divergence to a single leaf or a small set of leaves, using the clusters' one shared coordinate - separator-key ranges. It is strictly read-only.
 3. **Repair from the WAL.** Targeted leaf re-replay re-ships the retained WAL entries covering the localised ranges to the diverged peer. The repair travels the same TX-aware, causal-stable apply path as ordinary replication and is idempotent at the receiver: a recently applied `(originClusterId, hlc, key, op)` identity is suppressed, and anything else re-applies to the same state.
 4. **Repair when re-replay cannot reach the divergence.** When re-replay cannot supply the missing writes, the bootstrap-snapshot fallback re-derives the committed projection of only the divergent leaf range from the live tree and re-ships those committed rows. See [the bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) for the conditions that trigger it and the bounds it respects.
@@ -90,7 +90,7 @@ Every stage emits on the single `orleans.lattice.replication` meter. The table b
 | Stage | Metric | Read it as |
 |---|---|---|
 | Detection | `digest_probe.compared` | Every shard/peer comparison, tagged with its `outcome`. |
-| Detection | `digest_probe.mismatch` | Genuine divergence for a `(tree, shard, peer)` triple. |
+| Detection | `digest_probe.mismatch` | A digest mismatch for a `(tree, shard, peer)` triple - divergent content, or checkpoint offsets that differ between the clusters. |
 | Localisation | `merkle_walk.localised` | A pass narrowed the mismatch to one or more leaves. |
 | Localisation | `merkle_walk.aborted` | A pass stopped before localising, tagged with its `reason`. |
 | Repair (WAL) | `leaf_rereplay.entries` | WAL entries re-shipped to the peer. |
@@ -113,11 +113,11 @@ The stack is designed to fail safe and to make *why* it is not repairing legible
 | **Re-replay cannot reach the divergence** | `leaf_rereplay.skipped{reason=wal_trimmed}` or `{reason=range_empty}`, then either `bootstrap_fallback.triggered` (fallback on) or `bootstrap_fallback.skipped{reason=disabled}` (fallback off) | Re-replay could not supply the missing writes for the localised range (a trimmed WAL or a below-cursor gap). | Enable `BootstrapFallbackEnabled` so the snapshot fallback can re-derive the committed projection of the divergent range. While it is off, the divergence is detected and localised but not repaired. |
 | **Circuit-breaker tripped** | `digest_remediation.disabled{reason=circuit_open}` for a `(tree, peer)`, with `digest_remediation.skipped{reason=circuit_open}` per skipped pass | Repair failed `RemediationFailureThreshold` times in a row for that pair, so the breaker opened and is fencing further repair for `RemediationCircuitResetInterval`. | Investigate the underlying repair failures (transport, peer health). The breaker half-opens after the cooldown and closes itself on a successful trial pass; no manual reset is required. |
 
-Two further skip reasons are normal background noise rather than failures: `digest_probe.compared{outcome=remote_unavailable}` (the peer has digesting turned off for that tree) and `digest_remediation.skipped{reason=opt_out}` / `digest_remediation.disabled{reason=opt_out}` (you have not set `AutoRemediateOnDigestMismatch`, so detection runs but repair is intentionally off). A spent rate cap surfaces as `digest_remediation.skipped{reason=budget_exhausted}` and clears when the `RemediationTrafficWindow` rolls over.
+Two further skip reasons are normal background noise rather than failures: `digest_probe.compared{outcome=remote_unavailable}` (the peer has digesting turned off for that tree, or no real probe transport is registered) and `digest_remediation.skipped{reason=opt_out}` / `digest_remediation.disabled{reason=opt_out}` (you have not set `AutoRemediateOnDigestMismatch`, so detection runs but repair is intentionally off). A spent rate cap surfaces as `digest_remediation.skipped{reason=budget_exhausted}`; the skips stop once the `RemediationTrafficWindow` rolls over, while the matching `digest_remediation.disabled{reason=budget_exhausted}` series clears only on the pair's next remediation pass that completes without failing.
 
 ## Recommended rollout
 
-1. Enable detection alone (`DigestProbeEnabled`) on a representative tree and watch `digest_probe.mismatch`. Confirm the baseline is zero in the steady state.
+1. Enable detection alone (`DigestProbeEnabled`) on a representative tree and watch `digest_probe.mismatch` to learn its steady-state baseline. Because the digest folds each cluster's own checkpoint offset, a non-zero baseline alone does not prove divergence.
 2. Add localisation (`MerkleWalkEnabled`) and confirm walks complete or abort with an understood reason.
 3. Wire a real transport and enable the repair stages (`LeafReReplayEnabled`, then `BootstrapFallbackEnabled`) with the guards in place, but leave `AutoRemediateOnDigestMismatch` off so you can rehearse the telemetry.
 4. Flip `AutoRemediateOnDigestMismatch` last, starting with conservative `RemediationTrafficBudgetFraction` and `RemediationFailureThreshold` values, and watch `digest_remediation.disabled` to confirm the guards behave as expected under load.

@@ -78,7 +78,7 @@ siloBuilder.AddLatticeJwtAuthenticator(options =>
 });
 ```
 
-The JWT authenticator reads a credential's token issuer only when the credential carries no scheme. The credential bridges in the gRPC and MCP facade bindings stamp one (`Bearer` by default), so an authenticator that must serve those calls also sets `SchemeHint` to that scheme; see [`JwtAuthenticatorOptions`](configuration.md#jwtauthenticatoroptions).
+The JWT authenticator reads a credential's token issuer only when the credential carries no scheme. The credential bridges in the gRPC and MCP facade bindings stamp one (`Bearer` by default), so a JWT authenticator that must serve those calls also sets `SchemeHint` to that scheme; see [`JwtAuthenticatorOptions`](configuration.md#jwtauthenticatoroptions). The Entra and OIDC authenticators do not need the hint for this: a scheme that does not match theirs still falls through to their tenant / issuer match.
 
 A host that authenticates its own way registers a custom `ILatticeCredentialAuthenticator`:
 

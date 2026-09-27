@@ -61,10 +61,13 @@ public enum ReshardGuardMode
 /// shadow-forwarded (or split-sweep-replayed) prepare of the earlier <c>S1</c> then
 /// re-buckets a scheduler-chosen subset of keys with <c>S1</c>'s stale prepare-time
 /// value, and the model interleaves the delivery orders of {orphan shadow-forward
-/// prepare, duplicate <c>S1</c> terminal broadcast, cross-migration backstop,
-/// reader fan-out}. This is exactly where the <c>alreadyTerminal</c> input to
+/// prepare, duplicate <c>S1</c> terminal broadcast, reader fan-out}. This is
+/// exactly where the <c>alreadyTerminal</c> input to
 /// <see cref="AtomicVisibilityGate"/> comes from: the orphan bucket is for a saga
-/// whose terminal has already landed.
+/// whose terminal has already landed. The cross-migration backstop - a terminal
+/// writing its committed value straight into a key that holds no bucket - runs
+/// only while the two rounds are established, never in the interleave: a
+/// duplicate terminal is re-delivered only to keys that hold the orphan bucket.
 /// </para>
 /// <para>
 /// The safety properties are (a) <b>no split view</b> - the reader observes every
@@ -73,20 +76,23 @@ public enum ReshardGuardMode
 /// <c>V2</c> is the authoritative projected value. The concurrent-commit torn read
 /// (a reader straddling a single saga's mid-fan-out commit/drain) is covered
 /// deterministically by <see cref="AtomicCommitVisibilityModel"/>; this model
-/// isolates the orphan-guard and cross-migration-backstop interleavings that only
-/// arise once a migration has moved a saga's keys to a destination leaf.
+/// isolates the orphan-guard interleavings that only arise once a migration has
+/// moved a saga's keys to a destination leaf.
 /// </para>
 /// <para>
-/// <b>Relation to the chaos backstop.</b> These same interleavings are covered
-/// today only probabilistically by the CI-only chaos test
+/// <b>Relation to the chaos backstop.</b> Outside this model these interleavings
+/// are exercised only probabilistically, by the CI-only chaos test
 /// <c>ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard</c>
 /// (issue #1584). This model makes them <b>deterministic</b>: the relative
 /// delivery orders of {late shadow-forward prepare, duplicate terminal broadcast,
-/// cross-migration LWW backstop, multi-key reader fan-out} against a saga whose
-/// terminal has already landed are exhaustively interleaved by the Coyote
-/// scheduler rather than sampled by chance, so the orphan-guard regression is
-/// caught in seconds by a systematic model instead of eventually by a slow
-/// probabilistic reshard run.
+/// multi-key reader fan-out} against a saga whose terminal has already landed are
+/// chosen by the Coyote scheduler, which controls every choice point and reports a
+/// replayable trace of the first failing run, rather than left to a real
+/// reshard's timing, so the orphan-guard regression is caught in seconds by a
+/// systematic model instead of eventually by a slow probabilistic reshard run.
+/// Exploration is bounded by the harness's run budget (1000 runs per case by
+/// default), which is smaller than the three- and four-key choice spaces, so
+/// those cases are explored systematically but not exhaustively.
 /// </para>
 /// </summary>
 public sealed class ReshardMigrationModel : ICoyoteModel
@@ -134,10 +140,12 @@ public sealed class ReshardMigrationModel : ICoyoteModel
         core.Apply(s2, TxStatus.Committed);
         ApplyTerminalToAll(s2, V2, projected, bucket, terminalApplied);
 
-        // The late S1 orphan prepare, its duplicate terminal, the backstop, and the
-        // reader fan-out interleave. The reader resolves each key exactly once; the
-        // orphan re-bucketing and the duplicate S1 terminal are delivered between
-        // key resolutions in an order the runtime explores.
+        // The late S1 orphan prepare, its duplicate terminal, and the reader fan-out
+        // interleave; the backstop ran only in the setup above, because the
+        // duplicate terminal is re-delivered only to keys holding the orphan bucket.
+        // The reader resolves each key exactly once; the orphan re-bucketing and the
+        // duplicate S1 terminal are delivered between key resolutions in an order
+        // the runtime explores.
         var observed = new int[_keyCount];
         for (var i = 0; i < _keyCount; i++)
         {

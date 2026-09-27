@@ -350,7 +350,10 @@ the source's current *physical* tree id - the effective id its registry alias
 resolves to. A restore or failover can repoint that alias at a new physical tree
 underneath a live view. When it does, the maintainer rebuilds the view from the
 new physical source and rebinds its tail: a WAL tail alone can never retract a key
-the restored source never had, so a rebuild is required for correctness.
+the restored source never had, so a rebuild is required for correctness. A view
+that first activates over a source whose alias already resolves to a different
+physical tree likewise builds from that tree's current state rather than
+replaying its log.
 
 The rebind is **event-driven**. The tree registry pushes the alias change to every
 view maintainer sourcing that tree the moment the swap commits, and the next drain

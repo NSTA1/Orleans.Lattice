@@ -7,12 +7,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Group commit for the per-tree saga decision registry (issue #3475).
 /// <para>
-/// The registry is one activation per tree, and every atomic saga records its
-/// participants, its decision and its cleanup through it. Before group commit
-/// each of those calls awaited its own whole-state <c>WriteStateAsync</c>, and
-/// the grain was non-reentrant, so the registry's write latency capped the
-/// whole tree's saga rate and every read queued behind the writes in the
-/// mailbox.
+/// A tree's registry is one activation (or, since issue #3501, one per
+/// registry shard), and every atomic saga records its participants, its
+/// decision and its cleanup through the registry its transaction id routes to.
+/// Before group commit each of those calls awaited its own whole-state
+/// <c>WriteStateAsync</c>, and the grain was non-reentrant, so the registry's
+/// write latency capped the whole tree's saga rate and every read queued behind
+/// the writes in the mailbox.
 /// </para>
 /// <para>
 /// Now a mutating call performs its existing synchronous validate-and-mutate

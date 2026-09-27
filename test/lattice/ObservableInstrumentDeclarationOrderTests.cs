@@ -233,7 +233,8 @@ public class ObservableInstrumentDeclarationOrderTests
     /// Reconciles the observable instrument names the analysis recognises
     /// against those the runtime actually offers, so the guard cannot silently
     /// stop covering an observable kind the BCL later adds.
-    /// </summary>    [Test]
+    /// </summary>
+    [Test]
     public void Analysis_recognises_every_observable_instrument_type_the_runtime_offers()
     {
         var runtimeObservables = DiscoverObservableInstrumentTypeNames();

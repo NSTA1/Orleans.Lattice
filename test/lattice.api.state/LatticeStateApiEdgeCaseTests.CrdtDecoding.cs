@@ -129,6 +129,50 @@ public sealed partial class LatticeStateApiEdgeCaseTests
     }
 
     [Test]
+    public void Decode_member_changes_reuses_a_caller_supplied_delta_buffer_across_revisions()
+    {
+        var shape = CrdtShape.ForOrSet();
+        var registry = new CrdtShapeRegistry();
+        registry.Register("tree", shape);
+
+        static EntryRevision Revision(CrdtShape shape, string element, long counter) => new()
+        {
+            Hlc = new HybridLogicalClock { WallClockTicks = counter, Counter = 0 },
+            Mode = LatticeMergeMode.OrSet,
+            Kind = HistoryRowKind.CrdtDelta,
+            SourceKey = "key",
+            Delta = shape.SerializeDelta!(new OrSetDelta
+            {
+                Adds =
+                [
+                    new OrSetDeltaDot
+                    {
+                        Element = System.Text.Encoding.UTF8.GetBytes(element),
+                        ReplicaId = "replica-a",
+                        Counter = counter,
+                    },
+                ],
+                Removes = Array.Empty<OrSetDeltaDot>(),
+            }),
+        };
+
+        var buffer = new CrdtProvenanceDelta[1];
+        var first = DecodeMemberChanges(Revision(shape, "alpha", 1), registry, deltaBuffer: buffer);
+        var second = DecodeMemberChanges(Revision(shape, "beta", 2), registry, deltaBuffer: buffer);
+        var unbuffered = DecodeMemberChanges(Revision(shape, "beta", 2), registry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Select(m => System.Text.Encoding.UTF8.GetString(m.Element)), Is.EqualTo(new[] { "alpha" }));
+            Assert.That(second.Select(m => System.Text.Encoding.UTF8.GetString(m.Element)), Is.EqualTo(new[] { "beta" }));
+            Assert.That(
+                second.Select(m => m.Kind),
+                Is.EqualTo(unbuffered.Select(m => m.Kind)),
+                "reusing the buffer must not change the decoded result");
+        });
+    }
+
+    [Test]
     public void Current_member_decode_with_null_shape_reports_opaque_bytes()
     {
         var query = CreateQuery();

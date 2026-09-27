@@ -90,8 +90,11 @@ catch (LatticeReplicationModeChangeRejectedException ex)
 }
 Console.WriteLine();
 
-// 4. Disable replication for the tree. This stops shipping without purging any
-//    data already replicated to peers.
+// 4. Disable replication for the tree. This removes the tree's resolved runtime
+//    mode (its fixed merge mode is kept) and never purges data already
+//    replicated to peers. It does not tear down a shipper that is already
+//    running: one that keeps shipping has its entries dropped (and the batch
+//    acknowledged) by peers that resolve no mode.
 Console.WriteLine($"Disabling replication for tree '{TreeName}'...");
 var disabled = await control.DisableReplicationAsync(TreeName);
 Console.WriteLine($"  disabled: tree={disabled.TreeId} alreadyDisabled={disabled.AlreadyDisabled}");

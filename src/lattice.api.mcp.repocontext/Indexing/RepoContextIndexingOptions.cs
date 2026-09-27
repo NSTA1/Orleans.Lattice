@@ -172,7 +172,9 @@ internal sealed class RepoContextIndexingOptions
     /// Spacing still does not delay healing: the self-index grain runs a continuous,
     /// bounded, paged gap sweep out of band and forces an immediate in-pass scan the moment
     /// it finds a gap, and a repository that has not yet been observed clean is re-probed
-    /// on every pass until it is.
+    /// on every pass until it is - except one whose last pass could not measure coverage at
+    /// all, which is left to this periodic cadence rather than escalated (issue #3340),
+    /// because a pass that could not measure has observed no gap.
     /// </para>
     /// </summary>
     public TimeSpan EmbeddingGapScanInterval { get; init; } = TimeSpan.FromMinutes(20);
@@ -223,9 +225,11 @@ internal sealed class RepoContextIndexingOptions
     public int PassesPerEmbeddingGapScan => PassesPerInterval(EmbeddingGapScanInterval);
 
     /// <summary>
-    /// <see cref="CoverageDigestAuditInterval"/> expressed as a number of reconciles, which
-    /// is the cadence the reconcile actually enforces for the exhaustive coverage-digest
-    /// re-derivation. Never less than one.
+    /// <see cref="CoverageDigestAuditInterval"/> expressed as a number of reconciles at
+    /// <see cref="MaximumReconcileSpacing"/>, rounded up and never less than one. This is
+    /// not the cadence in force: the self-index sweep counts no passes for the exhaustive
+    /// coverage-digest re-derivation and instead schedules it on the wall clock,
+    /// <see cref="CoverageDigestAuditInterval"/> plus a jitter after the previous audit.
     /// </summary>
     public int PassesPerCoverageDigestAudit => PassesPerInterval(CoverageDigestAuditInterval);
 
@@ -245,10 +249,12 @@ internal sealed class RepoContextIndexingOptions
         => EnforcedCadence(PassesPerEmbeddingGapScan, EmbeddingGapScanInterval);
 
     /// <summary>
-    /// <see cref="CoverageDigestAuditInterval"/> as the reconcile actually enforces it:
-    /// <see cref="PassesPerCoverageDigestAudit"/> passes at
-    /// <see cref="MaximumReconcileSpacing"/>. Rounded exactly as
-    /// <see cref="EffectiveEmbeddingGapScanInterval"/> is, and reported for the same reason.
+    /// <see cref="CoverageDigestAuditInterval"/> rounded to whole passes at
+    /// <see cref="MaximumReconcileSpacing"/> (<see cref="PassesPerCoverageDigestAudit"/>
+    /// passes), exactly as <see cref="EffectiveEmbeddingGapScanInterval"/> is. Unlike the
+    /// gap scan, the audit is not pass-counted - the self-index sweep schedules it on the
+    /// wall clock from <see cref="CoverageDigestAuditInterval"/> plus a jitter - so this
+    /// rounded figure is not the cadence actually applied.
     /// </summary>
     public TimeSpan EffectiveCoverageDigestAuditInterval
         => EnforcedCadence(PassesPerCoverageDigestAudit, CoverageDigestAuditInterval);

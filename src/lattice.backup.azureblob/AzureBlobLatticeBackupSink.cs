@@ -29,8 +29,9 @@ namespace Orleans.Lattice.Backup.AzureBlob;
 /// (committed) artifact blob already holds identical bytes and a retried write is
 /// a no-op. A partially written append blob (created but not yet marked committed
 /// via blob metadata) is overwritten on retry, so a crash mid-append never leaves
-/// a duplicated or truncated chain. Manifests round-trip through the Orleans
-/// serializer so the wire format matches the in-cluster sink.
+/// a duplicated or truncated chain. Manifests are stored in the Orleans binary
+/// serialization format; the in-cluster sink stores them as JSON, so the two
+/// sinks' stored manifest formats differ.
 /// </para>
 /// </summary>
 internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
@@ -78,8 +79,9 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
 
         var blob = _container.GetAppendBlobClient(BackupBlobNaming.ArtifactBlobName(artifactId));
 
-        // Idempotent fast path: a committed blob already holds identical
-        // (content-addressed) bytes, so a retried write is a no-op.
+        // Idempotent fast path: an artifact id names one capture's artifact (it
+        // is minted per capture, not derived from the bytes), so a committed blob
+        // under this id already holds that artifact and a retried write is a no-op.
         if (await IsCommittedAsync(blob, cancellationToken).ConfigureAwait(false))
         {
             return;

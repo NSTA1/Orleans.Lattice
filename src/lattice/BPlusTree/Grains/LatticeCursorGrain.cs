@@ -70,7 +70,7 @@ internal sealed partial class LatticeCursorGrain(
         Math.Min(pageSize, MaxPageBufferPreallocation);
 
     /// <summary>
-    /// Stable consumer-id prefix for snapshot WAL pins. Pairs with the
+    /// Stable consumer-id prefix for snapshot cursor registry entries. Pairs with the
     /// per-cursor id so a snapshot consumer is uniquely identifiable in
     /// <see cref="IWalCursorRegistry"/> snapshots and so a tree-wide
     /// unregister can target only this cursor's pin.
@@ -82,11 +82,12 @@ internal sealed partial class LatticeCursorGrain(
 
     /// <summary>
     /// Optional WAL cursor registry. <see langword="null"/> when the host
-    /// did not opt into <c>AddWalCursorRegistry(...)</c>; in that case
-    /// snapshot cursors degrade to "best-effort retention" (the WAL GC
-    /// remains free to trim under its TTL / cursor / blocked-floor
-    /// predicates) and any subsequent rebuild that observes a trimmed
-    /// prefix surfaces as the coordinator's underlying failure.
+    /// did not opt into <c>AddWalCursorRegistry(...)</c>; snapshot cursors
+    /// then skip their registry entry. Either way the registry entry (at
+    /// <see cref="HybridLogicalClock.Zero"/>, with no blocked floor) holds back
+    /// no trimming: a snapshot cursor serves the frozen per-shard baselines
+    /// captured at open, and only a legacy coordinate that predates the
+    /// frozen-baseline store replays the WAL, unprotected by the entry.
     /// </summary>
     private IWalCursorRegistry? WalCursorRegistry => services.GetService<IWalCursorRegistry>();
 
@@ -627,10 +628,10 @@ internal sealed partial class LatticeCursorGrain(
         // registry side; it does not block close.
         await ReleasePointInTimePinAsync();
 
-        // Release the WAL retention pin held by a snapshot cursor (if
-        // any). Mirrors the registry-side pin release above so a
-        // closed snapshot cursor does not retain WAL prefix that the
-        // GC would otherwise be free to trim.
+        // Release a snapshot cursor's WAL cursor-registry entry (if any)
+        // so it does not outlive the cursor. The entry sits at HLC Zero
+        // with no blocked floor, so it never held back WAL trimming;
+        // releasing it keeps the snapshot-pin census accurate.
         await TryUnregisterSnapshotPinAsync();
 
         // Delete the per-shard frozen baselines captured for this cursor so

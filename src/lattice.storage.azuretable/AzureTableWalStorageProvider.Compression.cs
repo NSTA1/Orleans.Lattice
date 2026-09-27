@@ -6,8 +6,10 @@ namespace Orleans.Lattice.Storage.AzureTable;
 
 /// <summary>
 /// Per-row WAL payload compression for
-/// <see cref="AzureTableWalStorageProvider"/>. Compression is opt-in
-/// via <see cref="AzureTableWalStorageOptions.Compression"/> and is
+/// <see cref="AzureTableWalStorageProvider"/>. Compression is on by
+/// default (<see cref="AzureTableWalStorageOptions.Compression"/> defaults
+/// to <see cref="LatticeCompression.Zstd"/>; set it to
+/// <see cref="LatticeCompression.None"/> to disable it) and is
 /// applied per entity row so the read path's offset-addressable
 /// <c>fromOffsetExclusive</c> projection still works without inflating
 /// a whole batch to recover a single entry.
@@ -18,7 +20,7 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// column holds <c>[4-byte little-endian uncompressed length][compressed
 /// bytes]</c>. An uncompressed row tags <c>0</c>
 /// (<see cref="LatticeCompression.None"/>) and stores the encoded bytes
-/// verbatim, so a silo that never enabled compression - and any row
+/// verbatim, so a row written with compression disabled - and any row
 /// written before the column existed - reads back unmodified.
 /// </para>
 /// </summary>

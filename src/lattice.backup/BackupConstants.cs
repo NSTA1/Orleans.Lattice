@@ -1,18 +1,17 @@
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// Well-known names for the reserved, dogfooded <c>ILattice</c> trees that will
-/// back the backup catalog and manifest store, plus the guard that keeps that
-/// namespace from being shadowed by an application tree. Like the sibling
-/// membership (<c>sys-membership-*</c>) and authorization (<c>sys-auth-*</c>)
-/// packages, the backup catalog trees are ordinary user-addressable trees that
-/// carry the core <c>sys-</c> system-data prefix, so they self-register, stay
-/// durable and individually auditable, yet are hidden from the default
-/// cluster-state tree catalog surfaced through the state API.
+/// Well-known names for the reserved, dogfooded <c>ILattice</c> trees that back
+/// the backup catalog, manifest store and health records, plus the guard that
+/// keeps that namespace from being shadowed by an application tree. Like the
+/// sibling membership (<c>sys-membership-*</c>) and authorization
+/// (<c>sys-auth-*</c>) packages, the backup trees are ordinary user-addressable
+/// trees that carry the core <c>sys-</c> system-data prefix, so they
+/// self-register, stay durable and individually auditable, yet are hidden from
+/// the default cluster-state tree catalog surfaced through the state API.
 /// <para>
-/// This scaffolding release reserves the <see cref="ReservedTreePrefix"/> so the
-/// catalog / manifest release can create its trees inside a collision-free
-/// namespace.
+/// Every backup-owned tree lives under <see cref="ReservedTreePrefix"/>, so the
+/// package creates its trees inside a collision-free namespace.
 /// </para>
 /// </summary>
 internal static class BackupConstants

@@ -8,7 +8,8 @@ surface:
 
 1. **Permission-scoped discovery.** An authenticated agent that has been granted
    access discovers the state / data / auth tool set and calls a tool end-to-end
-   over MCP, reading back a value the tool wrote through the data facade.
+   over MCP, reading back through the data facade a value the host seeded
+   directly on the demo tree.
 2. **Fail-closed by default.** A caller the credential bridge cannot authenticate
    is offered *nothing* - not even the `lattice_capabilities` meta-tool.
 

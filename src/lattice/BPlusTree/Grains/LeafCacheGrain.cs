@@ -341,6 +341,7 @@ internal sealed class LeafCacheGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+
         await RefreshAsync();
 
         // See GetAsync for the moved-away gate rationale. Surface the
@@ -369,6 +370,10 @@ internal sealed class LeafCacheGrain(
         // path runs unchanged.
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var predicate = LatticePredicateContext.Current;
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
         List<string>? delegated = null;
         HashSet<string>? delegatedSet = null;
 
@@ -432,7 +437,7 @@ internal sealed class LeafCacheGrain(
             if (probeLive)
             {
                 _cache.RecordHit(key);
-                if (predicate is not null && !LatticePredicateEvaluator.Matches(probe.Value, predicate.Value))
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(probe.Value, predicate.Value, predicateFastPath))
                 {
                     hits++;
                     continue;
@@ -496,7 +501,7 @@ internal sealed class LeafCacheGrain(
                 // payload-evicted keys were routed to the delegation partition
                 // above - so cached.Value is non-null here.
                 _cache.RecordHit(key);
-                if (predicate is not null && !LatticePredicateEvaluator.Matches(cached.Value, predicate.Value))
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(cached.Value, predicate.Value, predicateFastPath))
                 {
                     hits++;
                     continue;

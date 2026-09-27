@@ -33,7 +33,8 @@ positive, and `PartitionCount` and `Probes` reject a negative one, each with
 `ArgumentOutOfRangeException`. `Validate()`, which the `VectorIndex` constructor
 runs, additionally rejects an options instance whose `Dimensions` was never set
 or whose `Metric` is not a defined member. The constructor copies the options, so
-changing the instance afterwards does not affect the index.
+changing the instance afterwards does not affect the index; `Clone()` is that
+independent copy, exposed for a caller that wants one.
 
 ### Do not set `Probes` to a fraction of `PartitionCount`
 
@@ -73,6 +74,7 @@ each on assignment; `IngestSliceBudget` accepts any value. `Validate()`, which
 opening an index runs, requires `Index` to be set and validates it. Opening also
 rejects a source whose dimensionality differs from `Index.Dimensions`, and copies
 the options, so later changes to the instance have no effect.
+`DurableVectorIndexOptions.Clone()` is that copy, and clones `Index` with it.
 
 ### Give the index its own tree, or at least its own prefix
 

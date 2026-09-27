@@ -11,7 +11,7 @@ flowchart LR
     gate -- "backend credential" --> backend[(Prometheus backend)]
 ```
 
-1. **MCP-side authorization.** A caller sees and can invoke the `lattice_telemetry_*` tools only if its effective authorization includes a cluster-wide `LatticeOperation.Telemetry` grant. This runs through the same permission-scoped discovery the rest of the MCP surface uses - an ungranted caller never sees the group.
+1. **MCP-side authorization.** A caller sees and can invoke the `lattice_telemetry_*` tools only if its effective authorization includes a cluster-wide `LatticeOperation.Telemetry` grant. Two checks enforce it. Discovery runs through the same permission-scoped filter the rest of the MCP surface uses, so an ungranted caller never sees the group. Every tool then re-checks the capability at call time through `TelemetryAccessAuthorizer` - the same cluster-wide seam the transport-neutral telemetry facade consults - before any other validation and before the backend is called. A refused caller gets `Success = false` with the fixed `Error` "Reading cluster telemetry requires the Telemetry capability granted cluster-wide.", which is distinct from a metric-access denial and echoes neither the caller's subject id nor the gate's reason.
 2. **Backend credential.** The proxy stamps the configured *backend* credential (bearer, basic, mutual-TLS, or a rotating dynamic bearer token) on every backend request. Static credentials are supplied by the host in `LatticeApiMcpTelemetryOptions.Credential`; the dynamic-bearer mode instead resolves a token per request from a registered `ITelemetryBackendTokenProvider`. Either way the backend credential is entirely separate from any caller identity.
 
 **The caller's Lattice credential is never forwarded to the backend.** The backend client's only collaborators are an `HttpClient`, the telemetry options, the backend-token seam, and a server-side logging sink; it holds no reference to any Lattice credential source, so there is no path by which the caller's identity could reach the backend.
@@ -37,7 +37,7 @@ var rule = new LatticeAuthorizationRule(
     LatticeEffect.Allow);
 ```
 
-Because the capability is a distinct bit, a Telemetry grant never widens a caller's data-plane reach, and a data-plane grant never confers telemetry access.
+Because the capability is a distinct bit, a Telemetry grant never widens a caller's data-plane reach, and a data-plane grant never confers telemetry access. A `Telemetry` bit carried on a tree-scoped rule confers nothing either: discovery counts the capability only from a rule written at cluster-wide scope, and the call-time check authorizes over the cluster-wide sentinel, which a rule scoped to a real tree never matches.
 
 ## Metric-access allow-list
 
@@ -60,7 +60,7 @@ A range query is bounded so a single call cannot ask the backend for an unbounde
 
 ## Fail-clean surfacing
 
-Every fault path returns a structured result rather than throwing: a backend timeout, HTTP failure, non-success backend status, malformed payload, guardrail rejection, or metric-access denial arrives as `Success = false` with a human-readable `Error`. A guardrail rejection, a non-success backend status, and a metric-access denial each carry their own specific message, because callers act on that difference; only a backend transport or payload fault is reported with a fixed message, since its free-text detail is the channel that could disclose the backend credential. The one deliberate exception is the metadata tool: a `404` from the backend metadata endpoint is treated as an absent metadata surface and degrades to `Success = true` with an empty `Metrics` list, not a failure. Only a genuine caller cancellation propagates as a cancellation. An agent therefore never sees a raw transport exception, and a denied metric is reported as a clear, actionable message.
+Every fault path returns a structured result rather than throwing: a capability refusal, backend timeout, HTTP failure, non-success backend status, malformed payload, guardrail rejection, or metric-access denial arrives as `Success = false` with a human-readable `Error`. A guardrail rejection, a non-success backend status, and a metric-access denial each carry their own specific message, because callers act on that difference. Two paths report a fixed message instead: a capability refusal, because the underlying denial carries the caller's subject id and the gate's reason, and a backend transport or payload fault, because its free-text detail is the channel that could disclose the backend credential. The one deliberate exception is the metadata tool: a `404` from the backend metadata endpoint is treated as an absent metadata surface and degrades to `Success = true` with an empty `Metrics` list, not a failure. Only a genuine caller cancellation propagates as a cancellation. An agent therefore never sees a raw transport exception, and a denied metric is reported as a clear, actionable message.
 
 ## Next
 

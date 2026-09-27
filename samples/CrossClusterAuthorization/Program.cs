@@ -72,9 +72,11 @@ var treeB = appB.Services.GetRequiredService<IGrainFactory>().GetGrain<ILattice>
 //   carol  -> no groups        (low-privilege)
 Console.WriteLine("== Act 1: create users and groups ==");
 // Seeding writes to the reserved sys-membership-* / sys-auth-policy trees, which
-// require Admin. Run it as the bootstrap administrator (declared in SiteFactory),
-// which bypasses the gate so the directory and policy can be provisioned before
-// any rule exists.
+// the silo-side membership directory and policy store do under system origin,
+// so it needs no grant (a user-origin write to a sys- tree is refused outright,
+// Admin or not). The sample still wraps it in the bootstrap administrator's
+// credential (declared in SiteFactory), as it does the data seeding below that
+// does need it.
 using (LatticeCredentialContext.Use("root-admin", scheme: Scheme))
 {
     foreach (var dir in new[] { dirA, dirB })

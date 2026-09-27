@@ -7,10 +7,9 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// <summary>
 /// Abstract base for the read-only state-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c>
-/// reflects against to discover and register the five unary RPCs
-/// (<c>ListTrees</c>, <c>ListViews</c>, <c>GetTreeStructure</c>,
-/// <c>ScanEntries</c>, <c>GetEntry</c>) and the server-streaming
-/// <c>ObserveChanges</c> subscription RPC.
+/// reflects against to discover and register the service's seventeen unary
+/// RPCs and its two server-streaming subscription RPCs (<c>ObserveChanges</c>
+/// and <c>ObserveMetrics</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c>
@@ -156,11 +155,14 @@ internal abstract class LatticeStateGrpcServiceBase
 }
 
 /// <summary>
-/// Server-side gRPC service for the read-only state API. Adapts each unary
-/// RPC onto the transport-agnostic <see cref="ILatticeStateQuery"/> facade,
-/// mapping the facade's plain result records onto the serializable wire
-/// responses and translating typed not-founds and argument failures onto gRPC
-/// status codes.
+/// Server-side gRPC service for the read-only state API. Adapts each RPC onto
+/// the transport-agnostic state surface - the unary reads onto
+/// <see cref="ILatticeStateQuery"/>, the change subscription onto
+/// <see cref="ILatticeStateObserver"/>, the metrics subscription and snapshot onto
+/// <see cref="ILatticeStateMetricsObserver"/>, and the auth-scheme advertisement
+/// onto the configured scheme source - mapping the facade's plain result records
+/// onto the serializable wire responses and translating typed not-founds and
+/// argument failures onto gRPC status codes.
 /// </summary>
 internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
 {

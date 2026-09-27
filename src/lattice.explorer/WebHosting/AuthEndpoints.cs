@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.Web;
 /// encrypted cookie rather than round-tripped over the SignalR circuit.
 /// Antiforgery is validated on every POST - the forms embed a
 /// <c>RequestVerificationToken</c> - so a cross-site form post cannot drive a
-/// victim's browser to sign the shared process-global session in or out
+/// victim's browser to sign the victim's own session in or out
 /// (login / logout CSRF).
 /// </summary>
 public static class AuthEndpoints

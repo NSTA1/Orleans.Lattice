@@ -29,7 +29,7 @@ Core WAL semantics, the provider seam, and placement are covered in [WAL Storage
 |---|---|
 | `FileWalStorageProvider` | Public `IWalStorageProvider` implementation (also `IDisposable`) that stores one `wal.log` per `(tree, shard)` stream under `FileWalStorageOptions.RootDirectory`. Its public constructor, `FileWalStorageProvider(IOptions<FileWalStorageOptions>, Serializer<WalRecord>)`, builds a provider without the routing reader, so its filtered replay reads decode every record they examine; `AddFileWalStorage` is the registration that supplies one. |
 | `FileWalStorageOptions` | Public options type for the root directory, flush policy, compaction thresholds, and read-page byte ceiling, with public `Default*` constants for the compaction and read-page defaults. |
-| `LatticeFileServiceCollectionExtensions.AddFileWalStorage` | Registration extension that installs the file WAL provider and durable-WAL garbage-collection wiring on an `ISiloBuilder`. |
+| `LatticeFileServiceCollectionExtensions.AddFileWalStorage` | Registration extension that installs the file WAL provider, its options validator, and the durable-WAL garbage-collection wiring on an `ISiloBuilder`. |
 
 ## Quick Start
 

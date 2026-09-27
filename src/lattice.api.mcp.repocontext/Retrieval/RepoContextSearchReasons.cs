@@ -72,9 +72,11 @@ internal static class RepoContextSearchReasons
     /// Builds the reasons for a semantic hit from the canonical source key of the
     /// matched vector. A symbol vector yields <see cref="Semantic"/>,
     /// <see cref="ChunkSymbol"/>, and <c>symbol:&lt;fqName&gt;</c>; a file-chunk
-    /// vector yields <see cref="Semantic"/> and <see cref="ChunkFile"/>; any other
-    /// (or an unparseable) source key yields <see cref="Semantic"/> alone. The key
-    /// is parsed server-side, so no wire-supplied text is echoed.
+    /// vector yields <see cref="Semantic"/> and <see cref="ChunkFile"/>; a memory
+    /// vector yields <see cref="Semantic"/>, <see cref="ChunkMemory"/>, and
+    /// <c>topic:&lt;topic&gt;</c>; any other (or an unparseable) source key yields
+    /// <see cref="Semantic"/> alone. The key is parsed server-side, so no
+    /// wire-supplied text is echoed.
     /// </summary>
     /// <param name="sourceKey">The matched vector's store-of-record source key.</param>
     /// <returns>The ordered, capped reasons for the hit; never <see langword="null"/>.</returns>

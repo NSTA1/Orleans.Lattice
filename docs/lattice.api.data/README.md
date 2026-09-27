@@ -9,7 +9,7 @@ A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md
 It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same way, in two layers:
 
 - **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert, single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
-- **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are Orleans-serialized request / response records that wrap the facade DTOs, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
+- **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are Orleans-serialized request / response records that wrap or reuse the facade DTOs, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 Single-tree operations resolve the caller-supplied tree name to its **effective, tenant-scoped id** and fetch that `ILattice` grain, then call the same public method the in-cluster client calls. Cross-tree atomic batches are different: the facade converts each tree slice into a cross-tree batch and calls the grain-factory cross-tree coordinator surface. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
 
@@ -19,15 +19,15 @@ Every `treeId` this facade accepts is a **tenant-local name**, resolved through 
 
 - With the tenancy add-on **absent** (the default), the core no-op resolver resolves the reserved `default` tenant synchronously and returns the bare name unchanged - the same string reference, no allocation and no `await` - so behaviour is byte-for-byte identical to dialling the name directly.
 - With the tenancy add-on **registered** but no active tenant asserted, the request resolves the default tenant too, so the bare name is again returned unchanged and existing tenant-unaware clients keep addressing their bare tree ids.
-- Under an asserted, non-default active tenant, an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, while an already-qualified `t/` id or a `_lattice_` system-tree name passes through unchanged and is never double-composed (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate, which may admit it under a cross-tenant grant).
+- Under an asserted, non-default active tenant, an unqualified name is scoped into that tenant's `t/{tenant}/{name}` namespace, while an already-qualified, well-formed `t/` id or a `_lattice_` system-tree name passes through unchanged and is never double-composed (a well-formed foreign `t/{other}/{name}` is left to the tenancy access gate, which may admit it under a cross-tenant grant).
 - The verb fails closed with a `LatticeTenantAccessDeniedException` when the asserted tenant fails validation against the caller's own membership (an anonymous caller can never act as a tenant), or when, under an asserted tenant and outside a system-origin scope, it names a `sys-` tree or a malformed `t/` id that belongs to no tenant.
 
 See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation model this resolution establishes.
 
 ## Core properties
 
-- **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeDataApi()` on the silo and `AddLatticeDataApiGrpc()` / `MapLatticeDataApiGrpc()` on the web host. A cluster that does not add the package has no external write surface.
-- **Fail-closed.** An unresolved or anonymous caller is denied every mutation and read. Because calls route through the gated `ILattice` surface with the caller identity on the credential context, an anonymous subject is default-denied by the core authorization gate - the package adds no bypass.
+- **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeDataApi()` on the silo and `AddLatticeDataApiGrpc()` / `MapLatticeDataApiGrpc()` on the web host. A cluster that does not add the package has no external write surface. `AddLatticeDataApi()` must be called after `AddLattice(...)`; called first, it fails fast with an `InvalidOperationException`.
+- **Fail-closed.** The transport authorizer denies every call until a host configures one. Behind it, calls route through the gated `ILattice` surface with the caller identity on the credential context, so once `Orleans.Lattice.Auth` is registered (its `LatticeAuthOptions.DefaultEffect` defaults to `Deny`) an unresolved or anonymous caller is denied every mutation and read - the package adds no bypass. Without that add-on the core no-op access gate allows every call, so the transport authorizer is the only barrier.
 - **Authorization inherited, never re-implemented.** Writes, deletes, range deletes, bulk upserts, and typed CRDT writes throw on denial; point reads and typed CRDT reads of a denied key report an empty value; range reads prune to the authorized subset; atomic and cross-tree batches authorize every leg before any apply. None of this logic lives in this package - it is the core gate, reached through `ILattice`.
 - **Transport-agnostic.** The facade is the contract; gRPC is one binding. The same records flow to an in-process consumer and a remote one.
 
@@ -37,7 +37,7 @@ See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation 
 |---|---|---|---|
 | Point write | `SetAsync` | `Set` | `SetAsync(key, value)` |
 | Point delete | `DeleteAsync` | `Delete` | `DeleteAsync(key)` |
-| Range delete | `DeleteRangeAsync` | `DeleteRange` | the resilient range-delete drain (`DeleteRangeAsync(startInclusive, endExclusive)` extension over the delete-range cursor) |
+| Range delete | `DeleteRangeAsync` | `DeleteRange` | the resilient range-delete drain (the `DeleteRangeAsync(startInclusive, endExclusive, stepSize)` extension over the delete-range cursor, stepping `LatticeApiDataOptions.RangeDeleteStepSize` keys at a time) |
 | Non-atomic bulk upsert | `SetManyAsync` | `SetMany` | `SetManyAsync(pairs)` |
 | Single-tree atomic batch | `SetManyAtomicAsync` | `SetManyAtomic` | `SetManyAtomicAsync(upserts, deletes, operationId)` |
 | Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the grain-factory cross-tree coordinator surface |
@@ -155,8 +155,8 @@ if (read.Found)
 This is a write-capable external surface, so its default posture is closed:
 
 - **Two independent gates.** A coarse transport-level authorizer (`ILatticeDataApiAuthorizer`, default `DenyAllDataApiAuthorizer`) runs first and rejects the whole call before it reaches the facade; then the per-tree / per-key core gate authorizes every leg of the actual operation. The coarse gate is the endpoint-level on/off switch; the core gate is the fine-grained rights check. Both must pass.
-- **Anonymous is denied.** A call with no resolvable credential is default-denied by the core gate (writes and reads alike), because the anonymous subject has no grant. This is verified by tests rather than by a bespoke check in this package.
-- **Denial carries no value.** When the core gate denies a call, the gRPC service maps it to `PermissionDenied` and attaches only the non-sensitive fields of the denial - the tree id, the operation, the subject, and the reason - as response trailers. The entry value is never included in a denial.
+- **Anonymous is denied.** With `Orleans.Lattice.Auth` registered, a call with no resolvable credential is default-denied by the core gate (writes and reads alike), because the anonymous subject has no grant. This is verified by tests rather than by a bespoke check in this package. Without that add-on the core no-op gate admits every call, so only the transport authorizer stands in front of the data plane.
+- **Denial carries no value.** When the core gate denies a call, the gRPC service maps it to `PermissionDenied` and attaches only the non-sensitive fields of the denial - the tree id, the operation, the subject, and the reason - as response trailers. The entry value is never included in a denial. The binding's [status mapping](../lattice.api.data.grpc/README.md#status-mapping) lists every outcome.
 - **Identity bridge.** The caller identity is lifted from request metadata by `ILatticeDataApiCredentialBridge`. The default is header-based: it reads the `authorization` header and strips a leading `Bearer` prefix case-insensitively. Replace the seam to source identity differently.
 
 ## Reference

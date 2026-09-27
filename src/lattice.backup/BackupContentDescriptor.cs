@@ -1,13 +1,19 @@
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// Describes one content-addressed artifact that makes up a backup: the sink
-/// artifact id, the content digest, the byte length, the chunk count of the
-/// streamed payload, and the sub-scope of the backup this artifact covers. The
-/// digest makes the artifact content-addressed so a retried capture that produces
-/// identical bytes reuses the same artifact rather than duplicating it. The
-/// per-artifact <see cref="Scope"/> lets the descriptor granularity follow the
-/// backup definition rather than a fixed per-shard or per-page shape.
+/// Describes one artifact that makes up a backup: the sink artifact id, the
+/// content digest, the byte length, the chunk count of the streamed payload, and
+/// the sub-scope of the backup this artifact covers. The artifact id is minted per
+/// capture (<c>{treeId}-{kind}-{ticks}-{guid}</c>), so the artifact itself is not
+/// content-addressed. The digest (the lowercase hexadecimal SHA-256 of the
+/// artifact bytes) is what restore and backup-health verification re-hash the
+/// bytes against, and the capture engine derives the backup id from it: a full
+/// backup's id is this digest, and an incremental's id is the SHA-256 of its base
+/// backup id folded with it. A retried capture that produces identical bytes (off
+/// the same base) therefore registers the same backup id, while still writing its
+/// own artifact under a new artifact id. The per-artifact <see cref="Scope"/>
+/// lets the descriptor granularity follow the backup definition rather than a
+/// fixed per-shard or per-page shape.
 /// </summary>
 [GenerateSerializer]
 [Alias(BackupTypeAliases.BackupContentDescriptor)]
@@ -42,11 +48,11 @@ public sealed record BackupContentDescriptor
         Scope = scope;
     }
 
-    /// <summary>The sink artifact id.</summary>
+    /// <summary>The sink artifact id, minted per capture (not derived from the artifact bytes).</summary>
     [Id(0)]
     public string ArtifactId { get; init; }
 
-    /// <summary>The content digest of the artifact bytes.</summary>
+    /// <summary>The content digest of the artifact bytes (lowercase hexadecimal SHA-256).</summary>
     [Id(1)]
     public string ContentHash { get; init; }
 

@@ -1,6 +1,6 @@
 # Pairs with RevisionMonotonic. The rollback deliberately stays INSIDE the
-# declared 0..Cardinality(Txns) domain, so TypeOK still holds and the only
-# property that can catch it is the monotonicity one. A mutation that also
+# declared 0..(2 * Cardinality(Txns)) domain, so TypeOK still holds and the
+# only property that can catch it is the monotonicity one. A mutation that also
 # broke TypeOK would fire for the wrong reason and prove nothing about
 # RevisionMonotonic.
 MODULE: RevisionMonotonicRollback

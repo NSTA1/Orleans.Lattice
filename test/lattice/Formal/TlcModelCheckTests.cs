@@ -40,8 +40,8 @@ namespace Orleans.Lattice.Tests.Formal;
 /// <para>
 /// TIER. Tagged <c>[Category("Tlc")]</c> because it needs an external toolchain
 /// (a JVM and <c>tla2tools.jar</c>) - the same reason
-/// <c>AzureStorageEmulator</c> exists as a category. The documented Tier 1 dev
-/// loop excludes it so a contributor without a JVM is not blocked; CI's
+/// <c>AzureStorageEmulator</c> exists as a category. The documented Tier 2
+/// filter excludes it so a contributor without a JVM is not blocked; CI's
 /// <c>deterministic</c> tier is the complement of <c>Chaos</c> and
 /// <c>Coyote</c>, so it runs there with no matrix-planner change.
 /// </para>

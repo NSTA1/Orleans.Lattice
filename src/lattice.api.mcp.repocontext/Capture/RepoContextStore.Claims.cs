@@ -337,7 +337,7 @@ internal sealed partial class RepoContextStore
     /// Enforces the claim fence for a forget over a memory record whose stored value
     /// cannot be decoded, by resolving the claim against the distributed lock rather
     /// than the record's own fencing stamp.
-    /// </summary>    /// <param name="key">The key being written.</param>
+    /// </summary>
     /// <remarks>
     /// <para>
     /// The record's stamp is unreadable here, but it was never the authority for

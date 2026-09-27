@@ -41,7 +41,8 @@ Register the feature(s) you want on the silo, after `AddLattice`:
 ```csharp verify
 using Orleans.Lattice.Schema;
 
-// Enforcement: reject non-JSON writes, dead-letter non-compliant ingest.
+// Enforcement: per-tree policies are installed afterwards through
+// ILatticeSchemaAdmin; StrictIngest is the global half of strict-mode ingest.
 siloBuilder.AddLatticeSchemaEnforcement(options =>
 {
     options.StrictIngest = true;

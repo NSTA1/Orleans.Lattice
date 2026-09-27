@@ -3,10 +3,13 @@ using System.Security.Cryptography;
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// Computes stable, content-addressed digests for backup artifacts and manifests.
-/// A content address is the lowercase hexadecimal SHA-256 of the bytes, so a
-/// retried capture that produces identical content derives the same id and the
-/// sink stores it once rather than duplicating it (idempotent retries).
+/// Computes stable, content-addressed digests for backup payloads: the lowercase
+/// hexadecimal SHA-256 of the bytes. The capture engine records the same digest
+/// for each artifact (restore and backup-health verification re-hash the bytes
+/// against it) and derives the backup id from it, so a retried capture that
+/// produces identical content registers the same backup id. The artifact itself
+/// is not deduplicated: each capture writes it under its own per-capture artifact
+/// id.
 /// </summary>
 public static class BackupContentHash
 {

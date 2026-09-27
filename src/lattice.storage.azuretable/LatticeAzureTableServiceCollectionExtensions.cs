@@ -44,9 +44,11 @@ public static class LatticeAzureTableServiceCollectionExtensions
     /// A <see cref="ZstdLatticeCompressor"/> is registered as an
     /// <see cref="ILatticeCompressor"/> via
     /// <see cref="ServiceCollectionDescriptorExtensions.TryAddEnumerable(IServiceCollection, ServiceDescriptor)"/>
-    /// so opting in to per-row payload compression
-    /// (<see cref="AzureTableWalStorageOptions.Compression"/> =
-    /// <see cref="LatticeCompression.Zstd"/>) requires no extra wiring.
+    /// so the default per-row payload compression
+    /// (<see cref="AzureTableWalStorageOptions.Compression"/> defaults to
+    /// <see cref="LatticeCompression.Zstd"/>) works with no extra wiring;
+    /// set it to <see cref="LatticeCompression.None"/> to write every payload
+    /// verbatim.
     /// <c>TryAddEnumerable</c> deduplicates by
     /// <c>(ServiceType, ImplementationType)</c>, so this fallback
     /// co-exists order-insensitively with the equivalent registrations

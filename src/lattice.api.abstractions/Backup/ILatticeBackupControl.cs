@@ -246,8 +246,10 @@ public interface ILatticeBackupControl
     /// <summary>
     /// Restores a backup into a <b>fresh</b> cluster from the durable sink alone,
     /// after authorizing the operation fail-closed as a high-privilege
-    /// administrative disaster-recovery action. Resolves the target backup and its
-    /// base chain directly from the sink (never the catalog), bootstraps the
+    /// administrative disaster-recovery action. Resolves the target backup's
+    /// manifest from the sink alone (never the catalog), walks its base chain
+    /// catalog-first with a sink fallback so it works while the catalog is
+    /// still empty, bootstraps the
     /// reserved <c>sys-</c> trees if they are absent, replays the chain through the
     /// HLC-preserving restore engine, and re-projects the catalog from the sink so
     /// the recovered cluster ends up with a correct catalog. This is the cold entry

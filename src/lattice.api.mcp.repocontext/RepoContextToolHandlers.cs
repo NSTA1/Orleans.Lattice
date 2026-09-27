@@ -98,7 +98,8 @@ internal static class RepoContextToolHandlers
 
     /// <summary>
     /// Reports an aggregate roll-up of the repository-context surface's usage over a bounded
-    /// recent window: how many calls were answered, the exact response tokens they spent, the
+    /// recent window, counted over the answered <c>repocontext_context</c> bundles: how many were
+    /// answered, the estimated response tokens they spent, the
     /// whole-file read tokens they conservatively replaced, and the net tokens saved. Read-only
     /// and behind the fail-closed authorization gate; it returns only summed token figures and
     /// never any body, query, path, or repository identity.

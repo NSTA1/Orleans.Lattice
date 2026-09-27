@@ -100,8 +100,11 @@ Three of them are this layer's own surfaces:
   [gRPC binding](../lattice.api.auth.grpc/README.md) - the **control plane**:
   administer membership and policy, and explain decisions. Every operation is
   administrator-gated through the same enforcement primitive the data path uses,
-  and `ExplainAsync` produces its verdict from the same gate, so an explanation
-  can never disagree with what would actually be enforced.
+  and `ExplainAsync` produces its verdict from the same gate. The subject it
+  evaluates is rebuilt from the membership directory (the named id and its
+  transitive directory groups), so token-asserted or claim-projected groups are
+  not part of it, and under the `TokenOnly` group-merge mode the explained
+  subject can differ from a live caller's.
 - [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) - the write-capable
   external **data plane** for non-.NET clients. It routes every call through the
   gated `ILattice` surface, so per-tree and per-key rights are enforced

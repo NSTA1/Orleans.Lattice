@@ -219,7 +219,28 @@ visibility primitive, but it is re-driven until it completes (see
 
 ### Phase 1 - Prepare
 
-The coordinator registers a **keepalive reminder** (1-minute period) so that a
+A fresh saga first asks its decision registry shard for admission. It mints
+its transaction id, which fixes the shard (see
+[Sharded decision registry](#sharded-decision-registry)), and the shard
+refuses the saga with a `LatticeSaturatedException` whose `SaturationSource`
+is `LatticeSaturationSource.TxRegistryCapacity` when its estimated row size
+is still at or above `LatticeOptions.TxRegistryAdmissionBudgetBytes`
+(default 768 KiB; `null` disables the bound) after it has purged expired
+tombstones. The refusal comes before the saga registers a reminder,
+persists anything or touches a tree shard, so nothing is written. Only a
+new saga is checked (each sub-saga of a cross-tree write included); a
+resumed or re-attached saga is never refused. A refused saga discards the
+transaction id it drew, so a retry - under the same `operationId` or a new
+one - mints a fresh id and with it a freshly drawn shard. When
+`TxRegistryShardCount` is above 1 an immediate retry is therefore worth
+making, because it may land on a shard with room. A single shard's
+capacity returns only as its tombstones age out of `TxDecisionRetention`,
+so on an unsharded tree, or once retries keep being refused, back off for
+seconds rather than milliseconds. See
+[Configuration](configuration.md#txregistryadmissionbudgetbytes) and
+[API Reference - Saturation back-pressure](api.md#saturation-back-pressure---latticesaturatedexception).
+
+Once admitted, the coordinator registers a **keepalive reminder** (1-minute period) so that a
 silo crash during any subsequent phase triggers reactivation and resumption
 on the next reminder tick. It then resolves the tree's routing once (forcing
 a refresh), groups the batch's keys by the shard that owns them, and reads
@@ -311,7 +332,7 @@ outcome via dial-back until their pending entries are drained.
 
 A tree's decision registry can be split into
 `LatticeOptions.TxRegistryShardCount` shards (default 1, which keeps the
-unsharded layout), each a separate `ITxRegistryGrain` activation keyed
+unsharded layout), each a separate registry grain activation keyed
 `_lattice_txshard_{n}_{treeId}` with its own persisted row, its own admission budget, and
 its own decisions revision. The shard leads the key inside the reserved
 `_lattice_` namespace, so no tree id - including one that itself contains
@@ -325,19 +346,20 @@ The shard is chosen once, when the saga mints its transaction id at
 admission, and the shard index is stamped into the id itself (a version-8
 UUID). The id the admission check ran against is the one Prepare persists,
 so the admission check, every participant registration, the decision, and
-the `ForgetAsync` cleanup all land on the same shard. Every other caller
-that holds the txid - a leaf resolving a pending intent, a shard root, a
-split sweep, a backup, a replication receiver - routes to that shard from
-the id alone. For any one saga the owning shard is therefore still the
+the cleanup that forgets it all land on the same shard. Every other caller
+that holds the txid - a leaf resolving a pending intent, a shard root
+registering as a participant, a split sweep, a point-in-time cursor
+pinning the decisions it captured, a replication receiver - routes to that
+shard from the id alone. For any one saga the owning shard is therefore still the
 single linearization point described above. Routing reads the stamped index
 directly and never consults the configured shard count, so silos with
 different values still route every txid identically.
 
 Reads that need the whole tree's decisions (multi-key reads, scans,
-cursors, point-in-time pins, backups and replication snapshots) fan out to
-every shard up to the tree's **shard high-water mark** and union the
-results. The mark is one durable value per tree, held by
-`ITxRegistryHighWaterGrain` (keyed by the tree id), and a shard raises it
+cursors, the snapshot a point-in-time cursor pins, backups and replication
+snapshots) fan out to every shard up to the tree's **shard high-water
+mark** and union the results. The mark is one durable value per tree, held
+in a per-tree high-water record keyed by the tree id, and a shard raises it
 to its own index plus one before its first write in each activation; a
 failed raise fails that write. So no decision can be persisted on a shard
 the tree-wide reads do not cover. The fan-out reads the mark alongside the
@@ -350,19 +372,21 @@ revision at least as fresh as its own arrival waits for the next round
 rather than joining one that started before it.
 
 **Write failures.** A registry shard commits its mutations as one group
-per state write, and a failed write fails every caller in the group with
-an internal `TxRegistryWriteFailedException` that names the registry key
-and the provider's fault type. Nothing that write carried is durable, so
-the caller may retry. The raw provider exception is never propagated,
+per state write, and a failed write fails every caller in the group, and
+every caller queued behind it, with an internal registry-write fault that
+names the registry key and the provider's fault type. Their mutations are
+rolled back in memory and nothing the write carried is durable, so the
+caller may retry. The raw provider exception is never propagated,
 because a storage-specific exception type (an Azure Table ETag conflict,
 say) need not be loadable on the calling silo. When the fault is an
-optimistic-concurrency conflict, which means a second activation of the
-same shard has written the row, the shard deactivates itself so that the
+optimistic-concurrency conflict, which means storage holds a row this
+activation never read, the shard deactivates itself so that the
 next call reloads the current row rather than failing forever against a
 stale ETag. The same applies to the high-water grain. The saga
 coordinator, the shard root's participant registration and the
-replication receiver retry a failed registry write up to four times, with
-a short doubling backoff, before surfacing it.
+replication receiver make up to four attempts at a failed registry
+write, the first included, with a doubling backoff from 25 ms, before
+surfacing it.
 
 **Saga state-write conflicts.** The saga grain, the cross-tree coordinator
 and the leaf-materialiser pin grain each persist their own state with the
@@ -395,9 +419,10 @@ re-arms retention, removes the keepalive and forgets the decision idempotently,
 so the row is still cleared. Completion metrics and the completed event are not
 re-emitted on that path, since a duplicate is worse than the rare loss.
 `SetManyAtomicAsync` absorbs
-the conflict by retrying on the fresh activation (the retry envelope for
-single-tree writes, and up to three re-attaches by operation id for cross-tree
-writes). A conflict that outlives that budget, or any other provider fault on a
+the conflict by retrying on the fresh activation: the single-tree retry
+envelope and the cross-tree write's re-attach by operation id each make up
+to three attempts in all, 1 s and then 2 s apart. A conflict that outlives
+that budget, or any other provider fault on a
 saga state write, surfaces to the caller as a public, serializable
 `LatticeStateWriteFailedException` that names the grain type, the grain key and
 the provider's fault type, and says whether it was a conflict. The provider
@@ -464,10 +489,12 @@ verdict. Without the retention window, a saga that completed
 microseconds before the sweep installed its pending bucket on the
 destination would leave an orphan bucket whose verdict the registry
 had already forgotten. Tombstones expire and are physically purged by
-the next `ForgetAsync` call, or by a `MarkCommittedAsync` /
-`MarkAbortedAsync` carrying a *conflicting* outcome (a repeat of the
-same outcome is recognised as idempotent and leaves the tombstone in
-place, so it can never resurrect a decision the tree already retired).
+the registry's next forget call, by an admission check that finds the
+shard over its admission budget (see [Phase 1 - Prepare](#phase-1---prepare)),
+or by a later commit or abort decision carrying a *conflicting* outcome
+(a repeat of the same outcome is recognised as idempotent and leaves the
+tombstone in place, so it can never resurrect a decision the tree already
+retired).
 A tombstone held by a live point-in-time cursor pin is skipped by both
 the purge and the read-side mask. Setting
 `TxDecisionRetention = TimeSpan.Zero` restores the
@@ -572,7 +599,7 @@ exists to prevent.
 | After the whole batch is staged, before completion persists | Execute phase, every entry staged | Reminder tick re-records the commit decision (a same-outcome repeat is a no-op), re-broadcasts the commit terminals (idempotent at the leaf), then completes. |
 | During compensate | Compensate phase | Reminder tick re-drives the abort decision and the abort-terminal broadcast (both idempotent), then completes. |
 | Parked as a cross-tree participant | Prepared (paused) | The keepalive tick is a deliberate no-op; the cross-tree coordinator's own reminder re-drives its finalize call, which records this tree's decision, broadcasts the terminals, and completes. |
-| After completion persists | Completed (or precondition-failed) | Reminder tick unregisters itself and deactivates. |
+| After completion persists | Completed (or precondition-failed) | Reminder tick re-runs the terminal cleanup idempotently - it unregisters itself, arms the retention reminder and, for a completed saga, forgets the registry decision - then deactivates. Completion metrics and the completed event are not re-emitted. |
 
 ## Performance Notes
 
@@ -582,8 +609,9 @@ exists to prevent.
   execute phase dispatches the whole unwritten remainder as one
   `SetManyAsync` fan-out whose per-leaf slices collapse into batched WAL
   dispatches. Around that sit the saga's own state writes, a handful of
-  registry calls (a best-effort bulk participant registration after
-  prepare, the single decision write, a post-broadcast participant
+  registry calls (an admission check before prepare, a best-effort bulk
+  participant registration after prepare, the single decision write, a
+  post-broadcast participant
   re-fetch that catches a shard a concurrent split added, and one cleanup
   call that tombstones the decision), a routing refresh, a split-forward
   probe per touched shard, and one terminal RPC per touched shard, whose
@@ -605,16 +633,25 @@ exists to prevent.
   retention window rather than the full batch value payload - which matters
   most for high-cardinality bulk workloads that produce one saga per
   touched key.
-- Readers observing a saga in flight pay one extra registry RPC per
-  pending key: a per-leaf pending-status resolve for direct
-  single-key reads, a single batched pending-status resolve per leaf for
-  scans, or a single `SnapshotAsync` per multi-shard fan-out (stamped
-  onto an ambient context so every leaf in the scan reuses it). The
-  coordinator does not block, lock, or serialise reads - the registry
-  RPC is the entire visibility cost.
+- Reads pay for visibility in registry calls, never in locks. A direct
+  single-key read that finds a pending key resolves it with one call to
+  the saga's registry shard, and a leaf resolving several pending keys
+  without an ambient snapshot batches them into one call per owning
+  shard. Multi-key reads, scans and cursors instead capture one tree-wide
+  registry snapshot at entry on every call, whether or not a saga is in
+  flight, and stamp it onto an ambient context so every leaf in the read
+  reuses it; a multi-key read or count also re-reads the registry
+  revision after its fan-out to confirm the snapshot held. On an
+  unsharded tree the snapshot is one registry call; once sagas are minted
+  across shards it is one call per registry shard up to the tree's shard
+  high-water mark plus the legacy registry. Either way it reads the mark
+  alongside, and a silo's concurrent reads of a tree share one round (see
+  [Sharded decision registry](#sharded-decision-registry)). The
+  coordinator does not block, lock, or serialise reads - these registry
+  calls are the entire visibility cost.
 - Multi-page enumerations (streaming `ScanKeysAsync` /
   `ScanEntriesAsync` and point-in-time durable cursors opened with
-  `pointInTime: true`) take the same single `SnapshotAsync` once and
+  `pointInTime: true`) take the same tree-wide registry snapshot once and
   reuse it across every page, so the per-page registry cost is zero
   after the initial capture. Point-in-time durable cursors additionally
   pin the captured decision set on the registry so a saga that
@@ -1124,7 +1161,14 @@ decision authority. The flow is:
    *delegation* mapping its local txid to the coordinator, then pauses
    without broadcasting any terminal. Each tree votes prepared,
    precondition-failed (its guard missed), or failed (its staging failed
-   and it aborted itself).
+   and it aborted itself). A tree that throws instead of voting - a
+   transient routing or storage fault, an admission refusal, a
+   state-write conflict, or a retryable failure of the park step itself,
+   with its prepared writes still staged - casts no vote: the coordinator stays in its preparing
+   phase and the call surfaces the fault. The coordinator's keepalive
+   reminder, or a re-submission under the same `operationId`, then
+   re-dispatches prepare to every tree, and a tree that already staged
+   its writes re-parks and votes prepared.
 2. **Single global decision.** Once every tree has voted, the
    coordinator writes **one** decision - commit only if every tree voted
    prepared, otherwise abort - to its own persistent state. This single

@@ -34,7 +34,10 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
     /// <summary>
     /// Registers the <c>Orleans.Lattice.Api.State.Grpc</c> binding: the
     /// method-definition singleton, the server-side service, the
-    /// default-deny authorizer, and the authorization interceptor. Idempotent.
+    /// default-deny authorizer, and the authorization interceptor. Every other
+    /// registration uses TryAdd, but each call appends the authorization
+    /// interceptor to the gRPC options again, so a repeated call authorizes every
+    /// call to this service once per registration; call it once.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="configure">
@@ -89,9 +92,9 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps the state-API RPC routes (five unary plus the server-streaming
-    /// <c>ObserveChanges</c> / <c>ObserveMetrics</c> subscriptions and the
-    /// unary <c>GetMetricsSnapshot</c>) on the supplied
+    /// Maps the state-API gRPC service - its seventeen unary RPCs plus the
+    /// server-streaming <c>ObserveChanges</c> / <c>ObserveMetrics</c>
+    /// subscriptions - on the supplied
     /// <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeStateApiGrpc"/> and must expose
     /// <c>ILatticeStateQuery</c>, <c>ILatticeStateObserver</c>, and

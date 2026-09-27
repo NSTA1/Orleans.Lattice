@@ -7,7 +7,8 @@ transport-agnostic runtime per-tree cross-cluster replication control facade.
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
 a strongly-typed `LatticeReplicationApiGrpcClient` that re-exposes the whole
 control surface over the wire: enabling replication for a tree (fixing its wire
-merge mode), disabling it, and inspecting the runtime replicated-tree set. Every
+merge mode), disabling it, and inspecting the effective replicated-tree set
+(runtime and static enrollment reconciled). Every
 wire message rides the Orleans serializer, so the contract stays versioned and
 additive-only.
 

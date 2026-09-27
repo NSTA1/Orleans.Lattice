@@ -41,9 +41,11 @@ public sealed class LatticeBackupOptions
     /// <summary>
     /// The maximum wall-clock time each cross-tree-consistent backup-set fence
     /// attempt waits for in-flight cross-tree atomic sagas touching the set to
-    /// drain to a terminal decision before it gives up and fails that attempt. Must be
-    /// strictly positive. Defaults to 30 seconds. Single-tree and non-flagged
-    /// backups never consult this value.
+    /// drain to a terminal decision. The budget restarts on each attempt; when it
+    /// expires the whole capture fails with
+    /// <see cref="LatticeBackupCrossTreeFenceException"/> (a drain timeout is not
+    /// retried as another attempt). Must be strictly positive. Defaults to 30
+    /// seconds. Single-tree and non-flagged backups never consult this value.
     /// </summary>
     public TimeSpan CrossTreeFenceDrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
 

@@ -138,11 +138,11 @@ internal static class LatticeReplicationGrpcMethodHolder
 internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServiceBase
 {
     /// <summary>
-    /// Bounded backoff (milliseconds) stamped onto a not-accepted ack when the
-    /// applier defers a batch behind the durable inbound receive fence (issue
-    /// #1173). Backs the sender off the fenced tree while the fence is held
-    /// instead of hot-looping the same rejected batch, while staying small
-    /// enough that delivery resumes promptly once the fence lifts.
+    /// Bounded backoff hint (milliseconds) stamped onto a not-accepted ack when
+    /// the applier defers a batch behind the durable inbound receive fence
+    /// (issue #1173). The built-in shipper does not read flow-control hints on a
+    /// rejected ack - it paces the retry with its own error backoff - so this
+    /// value only slows a sender that honours the hint on the rejected path.
     /// </summary>
     private const int ReceiveFenceDeferPauseMs = 500;
 
@@ -280,12 +280,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <para>
     /// <c>GrpcChannelHardening</c> stamps
     /// <c>LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader</c> from
-    /// the sender's own configured cluster id alongside the shared secret, and
-    /// a host whose <c>ILatticeReplicationSecretSource</c> partitions secrets
-    /// per origin has the receiving interceptor select the accepted secret by
-    /// that header - so under per-peer secrets the header is the
-    /// secret-bound identity and this check stops cross-origin forgery
-    /// outright. The header is absent-tolerant (an older or custom binding may
+    /// the sender's own configured cluster id alongside the shared secret. The
+    /// receiving interceptor does not read that header: it matches the presented
+    /// secret against the whole accepted set, so the header is not bound to the
+    /// secret, and this check compares the stamped header with the body only.
+    /// The header is absent-tolerant (an older or custom binding may
     /// not stamp it), matching how <c>LatticeSagaGrpcService</c> treats the
     /// same header; only a present-and-disagreeing value is rejected, so this
     /// never refuses a call the previous build would have accepted from an
@@ -490,9 +489,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // not-accepted ack so the sender takes its transient-retry path: it
         // keeps its per-peer cursor (does not advance past the deferred
         // entries) and re-ships the same batch after a backoff, so the entries
-        // are delivered once the fence lifts on global completion. A modest,
-        // bounded PauseForMs backs the sender off the fenced tree instead of
-        // hot-looping while the fence is held. Every non-deferred result (apply,
+        // are delivered once the fence lifts on global completion. The ack
+        // also carries a bounded PauseForMs hint, but the built-in shipper does
+        // not read flow-control hints on a rejected ack: its own error backoff
+        // paces the retries, so the hint only slows a sender that honours it on
+        // the rejected path. Every non-deferred result (apply,
         // dedup, local-origin rejection) keeps Accepted = true so the sender
         // makes normal cursor progress.
         if (result.Deferred)

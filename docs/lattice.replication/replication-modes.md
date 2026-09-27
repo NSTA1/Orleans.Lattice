@@ -6,11 +6,19 @@ to merge the captured value bytes; the producer stamps it onto every
 emitted `WalRecord` so the receiver never has to guess.
 
 There is no implicit fallback. A tree that is not declared in
-`LatticeReplicationOptions.ReplicatedTrees` is **not replicated**. This is
+`LatticeReplicationOptions.ReplicatedTrees` (or, with runtime replication
+configuration enabled, enabled at runtime - see
+[Runtime Replication Config](runtime-config.md)) is **not replicated**. This is
 deliberate - the core library stores every value as opaque `byte[]`, so
 the producer cannot recognise CRDT primitives by inspection. Implicit
 opt-in would silently fall back to last-writer-wins on bytes and risk
 concurrent-update data loss; explicit declaration removes the footgun.
+
+Receivers enforce the declaration independently. The apply path re-resolves the
+tree's enrollment and merge mode on the receiving cluster: an inbound entry for a
+tree that is not replicated there is dropped, and one whose wire mode disagrees
+with the locally resolved mode is dead-lettered as `mode_mismatch` (see
+[Replication apply](replication-apply.md#4-receiver-side-enrollment-and-merge-mode-gate)).
 
 ## Declaring a mode
 
@@ -48,7 +56,7 @@ commit-time observer short-circuits before any sink call.
 | `MaxRegister` | **Available** | Monotone max register - keeps the greatest totally-ordered value ever seen, paired with an explicit total-order key carried on the wire. The fold is directional max over that total order, so it is commutative, associative, and idempotent - a backwards write or a duplicate delivery is a no-op, and concurrent active-active writes from different clusters converge on the single greatest value without needing the domain comparer on the receiver. The high-water-mark primitive (a monotone gauge, a version ceiling, a max-seen reading). Author through `ILattice.MaxRegister<T>(key, orderKeySelector)`. The descriptor is a global closed shape, so no per-tree registration is required. |
 | `MinRegister` | **Available** | Monotone min register - the inverse of `MaxRegister`, keeping the smallest totally-ordered value ever seen, paired with an explicit total-order key carried on the wire. The fold is directional min over that total order, so it is commutative, associative, and idempotent - a backwards write or a duplicate delivery is a no-op, and concurrent active-active writes from different clusters converge on the single smallest value without needing the domain comparer on the receiver. The low-water-mark primitive (a min-seen latency floor, a first-seen timestamp). Author through `ILattice.MinRegister<T>(key, orderKeySelector)`. The descriptor is a global closed shape, so no per-tree registration is required. |
 
-The validator accepts every defined `LatticeMergeMode` value; only undefined integer values fail validation.
+The validator accepts every defined `LatticeMergeMode` value; only undefined integer values fail validation (it also rejects a null, empty, or whitespace tree-id key).
 
 ## When `LwwRegister` is the right choice
 
@@ -60,7 +68,7 @@ If your workload allows concurrent writes from multiple clusters to the same key
 
 For every typed CRDT mode, the producer-side accessor authors the matching public typed delta DTO into the single `WalRecord.Delta` slot at commit time. The `WalRecord.Value` slot is stripped on the wire from every committed CRDT-mode `Set` that carries a typed delta (prepared saga entries keep it) - the canonical payload travels only as the typed delta, not as a serialised post-merge snapshot. The receiver-side applier forwards the typed delta from `Delta` to the tree's CRDT-delta apply path, which folds it into the stored primitive with the primitive's `MergeDelta` operation inside a single grain turn and records a CRDT-delta revision, exactly as a locally-authored CRDT write is recorded. The merge is wrapped in a `LatticeOriginContext.With(originClusterId)` scope so the entry the receiver's commit appends to its own WAL carries the foreign origin, and the receiver's ship loop - which ships only locally-authored entries - filters it out: the same cycle-break semantics as LWW. Change-feed consumers that historically read `Value` directly on CRDT-mode entries must migrate to either reading `Delta` and folding it against their own prior observed state, or reading the post-merge state through the public lattice surface (`ILattice.GetAsync` / typed accessors).
 
-Typed-delta merge is commutative, associative, and idempotent: late or duplicate delivery converges to the same set / counter / vector / map regardless of arrival order. The per-origin high-water-mark still gates re-delivery to short-circuit redundant work, but correctness does not depend on it for typed CRDT modes.
+Typed-delta merge is commutative, associative, and idempotent: late or duplicate delivery converges to the same set / counter / vector / map regardless of arrival order. The snapshot-pinned causal floor and the shadow-forward identity cache still short-circuit redundant re-delivery, but correctness does not depend on them for typed CRDT modes.
 
 ### OR-Map shape registration
 
@@ -92,8 +100,9 @@ shipped under the one `LatticeMergeMode` the tree is declared with. The mode is
 a property of the *tree*, not of the individual write - the producer stamps the
 declared mode onto every `WalRecord`, hoists it once per batch into the encoded
 batch header, and the receiver re-stamps it onto every decoded entry before
-dispatching the typed apply. There is nowhere on the wire to carry a second
-shape, and the receiver never re-inspects the bytes to guess one.
+dispatching the typed apply, overriding any mode carried on the entry itself,
+so a batch cannot carry a second shape, and the receiver never re-inspects the
+bytes to guess one.
 
 This means a write whose shape disagrees with the declared mode cannot converge
 on the peer. A plain last-writer-wins write to a tree declared as a CRDT mode
@@ -133,12 +142,11 @@ catch (LatticeReplicationModeMismatchException ex)
 }
 ```
 
-The guard is a no-op for trees that are not declared in
-`LatticeReplicationOptions.ReplicatedTrees` (the resolver returns `null`, so
-single-cluster hosts are never affected) and for writes whose shape already
-matches the declared mode, including a plain write to a tree declared as
-`LwwRegister`. It costs a single cached resolver reference and one per-tree
-dictionary read per write.
+The guard is a no-op for trees that are not replicated (the merge-mode resolver
+returns `null`, so single-cluster hosts are never affected) and for writes whose
+shape already matches the declared mode, including a plain write to a tree
+declared as `LwwRegister`. It costs a single cached resolver reference and one
+per-tree dictionary read per write.
 
 The rejection covers the direct `ILattice` write surface. The
 [cross-tree atomic write](../lattice/api.md) builder stages writes through a
@@ -154,11 +162,30 @@ The commit-time observer routes every mutation through
 - The default implementation reads
   `LatticeReplicationOptions.ReplicatedTrees` and caches the per-tree
   outcome until `IOptionsMonitor.OnChange` fires.
+- A host that enables runtime replication configuration
+  (`AddLatticeReplication(..., enableRuntimeConfig: true)`) gets a
+  snapshot-backed resolver instead: it answers from the runtime
+  configuration first, falls back to `ReplicatedTrees`, and returns `null`
+  for a tree whose runtime mode is ambiguous even when the tree is also
+  declared statically (see
+  [Fail-closed ambiguity](runtime-config.md#fail-closed-ambiguity)).
 - Hosts can replace the registration to source the mode map from
   elsewhere (a control plane, a feature flag system, or a permissive
   test stub that opts every tree in to `LwwRegister`).
 - A `null` return value means "this tree is not replicated" and the
   observer returns immediately, before any sink call.
 
-The resolved mode is written to `WalRecord.Mode` so receivers can pick
-the correct apply algorithm without re-inspecting the value bytes.
+The same resolver is consulted again downstream. The leaf commit-log writer
+stamps the resolved mode (or a CRDT write's own authored mode) onto the durable
+`WalRecord.Mode` at WAL append, so a storage replay can recover it, and the
+shipper resolves the mode again when it frames each batch, hoisting it once
+into the batch header that the receiver re-stamps onto every decoded entry - so
+receivers pick the correct apply algorithm without re-inspecting the value
+bytes.
+
+A `null` resolution does not pause a shipper that is already running. It keeps
+draining the tree's WAL and ships new entries under an `LwwRegister` batch
+header; a receiver that still resolves a CRDT mode dead-letters them as
+`mode_mismatch`, one that resolves no mode drops them, and either way the
+sender advances past them (see
+[Fail-closed ambiguity](runtime-config.md#fail-closed-ambiguity)).

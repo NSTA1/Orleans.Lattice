@@ -73,7 +73,9 @@ using var host = Host.CreateDefaultBuilder(args)
 
         // Auth installs the enforcement gate. Default-deny: only explicit allow
         // rules grant access. "root-admin" is a bootstrap administrator so the
-        // sample can seed users/groups/rules before any rule exists.
+        // sample can seed the tree's data keys before any rule grants a write.
+        // (Groups and rules need no grant: the membership directory and the
+        // policy store write their reserved trees under system origin.)
         silo.AddLatticeAuth(options =>
         {
             options.DefaultEffect = LatticeEffect.Deny;
@@ -96,9 +98,10 @@ var tree = host.Services.GetRequiredService<IGrainFactory>().GetGrain<ILattice>(
 
 // -- Act 1: nested membership graph -----------------------------------------
 // Seeding writes to the reserved sys-membership-* / sys-auth-policy trees, which
-// require Admin. Run seeding as the bootstrap administrator (declared above),
-// which bypasses the gate so the directory and policy can be provisioned before
-// any rule exists.
+// the silo-side membership directory and policy store do under system origin,
+// so it needs no grant (a user-origin write to a sys- tree is refused outright,
+// Admin or not). The sample still wraps it in the bootstrap administrator's
+// credential, as it does the data seeding below that does need it.
 Console.WriteLine("== Act 1: build a nested membership graph ==");
 using (LatticeCredentialContext.Use("root-admin", scheme: Scheme))
 {

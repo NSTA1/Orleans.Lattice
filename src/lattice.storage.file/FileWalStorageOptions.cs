@@ -78,10 +78,12 @@ public sealed class FileWalStorageOptions
     /// The fraction of a shard's on-disk payload bytes that may be dead
     /// (trimmed but not yet physically reclaimed) before a
     /// <see cref="IWalStorageProvider.TrimAsync"/> call rewrites the segment file to reclaim
-    /// the space. A value of <c>1.0</c> or greater disables
-    /// trim-triggered compaction (space is still reclaimed on the next
-    /// activation-time <see cref="IWalStorageProvider.ReconcileAsync"/>). Defaults to
-    /// <see cref="DefaultCompactionThreshold"/>.
+    /// the space. A value greater than <c>1.0</c> disables this ratio trigger;
+    /// at exactly <c>1.0</c> it still fires, but only on a shard whose payload
+    /// is entirely dead. Space is still reclaimed by the
+    /// <see cref="CompactionMaximumDeadBytes"/> ceiling when that is set, and on
+    /// the next activation-time <see cref="IWalStorageProvider.ReconcileAsync"/>.
+    /// Defaults to <see cref="DefaultCompactionThreshold"/>.
     /// </summary>
     public double CompactionThreshold { get; set; } = DefaultCompactionThreshold;
 

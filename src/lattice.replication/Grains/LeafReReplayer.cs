@@ -15,7 +15,8 @@ namespace Orleans.Lattice.Replication.Grains;
 /// whole units so a batch is never split.
 /// <para>
 /// Re-shipped entries carry their source clock verbatim and are deduplicated at
-/// the receiver on <c>(originClusterId, hlc)</c>, so re-sending is idempotent.
+/// the receiver on <c>(originClusterId, hlc, key, op)</c>, so re-sending is
+/// idempotent.
 /// </para>
 /// </summary>
 internal static class LeafReReplayer
@@ -68,10 +69,10 @@ internal static class LeafReReplayer
         if (read.WasTrimmed && read.OldestRetainedHlc > peerCursor)
         {
             // The local WAL has been garbage-collected past the divergence
-            // point: the missing entries are gone, so the repair cannot proceed.
-            // Emit the operator-only alert and fall back without attempting
-            // repair; a bootstrap-snapshot remediation (issue #517) is the
-            // follow-up.
+            // point: the missing entries are gone, so the re-replay cannot
+            // proceed. Record the skip and return without attempting repair;
+            // the digest probe escalates this outcome to the scoped
+            // bootstrap-snapshot fallback (issue #517) when it is enabled.
             RecordSkipped(treeName, peer, LeafReReplaySkipReason.WalTrimmed);
             return new LeafReReplayOutcome { SkipReason = LeafReReplaySkipReason.WalTrimmed };
         }

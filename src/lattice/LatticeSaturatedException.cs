@@ -3,11 +3,12 @@ using Orleans.Serialization.Cloning;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Thrown by the WAL writer admission gate, and by the atomic-write
-/// saga coordinator, when an operation cannot complete because the
-/// per-tree saturation signal reported
+/// Thrown when an operation is refused because the tree's storage layer is
+/// back-pressured - most commonly by the WAL writer admission gate or the
+/// atomic-write saga coordinator, when the per-tree saturation signal reported
 /// <see cref="WalSaturationState.Saturated"/> for longer than the
-/// caller's configured wait budget. Distinct from
+/// caller's configured wait budget. <see cref="SaturationSource"/> names the
+/// refusing seam; the full list is under <b>Sources</b> below. Distinct from
 /// <see cref="LatticeShuttingDownException"/>: saturation is a
 /// recoverable steady-state regime (offered load is exceeding the
 /// storage layer's sustained drain rate), not a one-way silo
@@ -70,11 +71,20 @@ namespace Orleans.Lattice;
 ///   waiting for it (issue #3575).</description></item>
 ///   <item><description>The transaction-registry capacity refusal from
 ///   <c>TxRegistryGrain.EnsureSagaAdmissionAsync</c>, raised when a new
-///   atomic-write saga would grow the per-tree registry's persisted row
-///   past <see cref="LatticeOptions.TxRegistryAdmissionBudgetBytes"/>.
+///   atomic-write saga would grow the persisted row of the registry its
+///   transaction id routes to (the tree's single registry, or one of its
+///   <see cref="LatticeOptions.TxRegistryShardCount"/> shards) past
+///   <see cref="LatticeOptions.TxRegistryAdmissionBudgetBytes"/>.
 ///   Like the replay-permit refusal it is raised before the saga does any
 ///   work, and it never refuses a saga that was already admitted.
 ///   Reported as <see cref="LatticeSaturationSource.TxRegistryCapacity"/>.</description></item>
+///   <item><description>The <c>SetManyAsync</c> shard fan-out refusal, raised
+///   when the per-shard fan-out has not settled within
+///   <see cref="LatticeOptions.SetManyFanOutBudget"/>. Nothing declined these
+///   callers; the budget bounds how long they wait, branches already committed
+///   stay committed, and an immediate retry re-fans the batch into the same
+///   regime, so back off first. Reported as
+///   <see cref="LatticeSaturationSource.SetManyFanOut"/>.</description></item>
 /// </list>
 /// <para>
 /// The typed slot lets callers that care about the saturation

@@ -1,6 +1,7 @@
 # Pairs with TypeOK. A revision counter that can be bumped outside a decision
-# write leaves the declared 0..Cardinality(Txns) domain, which is exactly what
-# TypeOK is there to notice.
+# write (or the cleanup that retires one) leaves the declared
+# 0..(2 * Cardinality(Txns)) domain, which is exactly what TypeOK is there to
+# notice.
 MODULE: TypeOkRevisionRunaway
 TARGET: TypeOK
 CLASS: Invariant

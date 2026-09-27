@@ -951,11 +951,16 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys)
     {
+
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.Read);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var predicate = LatticePredicateContext.Current;
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
         // Resolve every key of this fan-out against a single registry view, so a
         // registry InFlight->Committed transition cannot fall mid-scan and split
@@ -983,7 +988,7 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
                     {
-                        if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value))
+                        if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath))
                             result[key] = pending.value.Value!;
 #if LATTICE_DIAG
                         // DIAG: pending-bucket-committed read path.
@@ -1034,7 +1039,7 @@ internal sealed partial class BPlusLeafGrain(
                         throw new StaleShardRoutingException(-1, -1, -1);
                     }
                 }
-                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value, predicateFastPath))
                     continue;
                 result[key] = lww.Value!;
 #if LATTICE_DIAG
@@ -1486,6 +1491,11 @@ internal sealed partial class BPlusLeafGrain(
         LatticePredicateNode predicate,
         bool mayContainOutOfSpanKey)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = LatticePredicateEvaluator.IsFastPathEligible(predicate);
+
         if (entries.Count == 0)
         {
             return new ConditionalSetManyResult { WrittenKeys = Array.Empty<string>() };
@@ -1503,7 +1513,7 @@ internal sealed partial class BPlusLeafGrain(
             if (Cache.TryGetRow(entry.Key, out var lww)
                 && !lww.IsTombstone
                 && !lww.IsExpired(nowTicks)
-                && LatticePredicateEvaluator.Matches(lww.Value, predicate))
+                && LatticePredicateEvaluator.Matches(lww.Value, predicate, predicateFastPath))
             {
                 (matched ??= new List<KeyValuePair<string, byte[]>>(entries.Count)).Add(entry);
                 (writtenKeys ??= new List<string>(entries.Count)).Add(entry.Key);
@@ -2132,6 +2142,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
+
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
@@ -2194,7 +2209,7 @@ internal sealed partial class BPlusLeafGrain(
                 // keys are the only rows tombstoned and are recorded in the
                 // WAL record / result so replay and replication reproduce
                 // exactly this set without re-evaluating the predicate.
-                if (predicate is { } pred && !LatticePredicateEvaluator.Matches(lww.Value, pred))
+                if (predicate is { } pred && !LatticePredicateEvaluator.Matches(lww.Value, pred, predicateFastPath))
                     continue;
                 (keysToDelete ??= []).Add(key);
             }
@@ -3482,6 +3497,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
+
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.RangeRead);
@@ -3555,7 +3575,7 @@ internal sealed partial class BPlusLeafGrain(
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
-                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
+                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)))
                         {
                             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
                             keys.Add(key);
@@ -3574,7 +3594,7 @@ internal sealed partial class BPlusLeafGrain(
                 if (lww.IsTombstone || lww.IsExpired(nowTicks))
                     continue;
 
-                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value, predicateFastPath))
                     continue;
 
                 TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
@@ -3594,7 +3614,7 @@ internal sealed partial class BPlusLeafGrain(
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
-            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)) continue;
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             keys.Add(key);
         }
@@ -3611,6 +3631,11 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
+
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.RangeRead);
@@ -3670,7 +3695,7 @@ internal sealed partial class BPlusLeafGrain(
                     if (status == TxStatus.Committed)
                     {
                         if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
-                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)))
+                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)))
                         {
                             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
                             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
@@ -3684,7 +3709,7 @@ internal sealed partial class BPlusLeafGrain(
                 if (lww.IsTombstone || lww.IsExpired(nowTicks))
                     continue;
 
-                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value))
+                if (predicate is not null && !LatticePredicateEvaluator.Matches(lww.Value, predicate.Value, predicateFastPath))
                     continue;
 
                 TrackEarliestExpiry(ref earliestExpiry, lww.ExpiresAtTicks);
@@ -3704,7 +3729,7 @@ internal sealed partial class BPlusLeafGrain(
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
             if (status != TxStatus.Committed) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
-            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value)) continue;
+            if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)) continue;
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
         }

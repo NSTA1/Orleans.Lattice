@@ -43,7 +43,7 @@ public sealed class BackupToolInvocationsTests
     {
         // Issue #1402 item 6: export_artifact needs an artifactId, and describe is
         // the tool that must expose it. Prove the described backup surfaces its
-        // content-addressed artifacts and that the surfaced id actually drives an
+        // per-capture artifact ids and that the surfaced id actually drives an
         // export end-to-end.
         var control = new FakeLatticeBackupControl();
         var created = await BackupToolInvocations.CreateBackupAsync(

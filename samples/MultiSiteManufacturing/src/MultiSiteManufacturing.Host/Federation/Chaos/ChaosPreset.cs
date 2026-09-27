@@ -58,8 +58,10 @@ public enum ChaosPreset
     /// peer backs off. The local WAL keeps growing while disconnected;
     /// on <see cref="ClearAll"/> the flag clears and replication
     /// resumes from the current cursor, catching the peer up with the
-    /// accumulated backlog. This is the app-level equivalent of
-    /// <c>docker network disconnect msmfg_wan</c> - it lets the
+    /// accumulated backlog. This is the app-level equivalent of the
+    /// Tier 5 partition in docker-compose.yml
+    /// (<c>docker network disconnect msmfg_us-net msmfg-traefik-eu</c> and
+    /// its eu-net mirror) - it lets the
     /// operator demonstrate cross-cluster divergence and
     /// convergence-on-heal from the browser without touching the
     /// compose CLI.

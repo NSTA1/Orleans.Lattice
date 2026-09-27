@@ -42,9 +42,11 @@ public enum ProjectionRebuildPolicy
     SnapshotThenWal = 0,
 
     /// <summary>
-    /// Diagnostic. Replays from the absolute tail of the WAL. Fails
-    /// fast with <see cref="LeafProjectionStaleException"/> if the WAL
-    /// has been trimmed and a complete history is unavailable.
+    /// Diagnostic. Intended to replay from the absolute tail of the WAL. Because
+    /// this policy is consulted only on genuine loss - the WAL has been trimmed
+    /// past the checkpoint and no snapshot covers the gap, so a complete history
+    /// is unavailable - the leaf always surfaces
+    /// <see cref="LeafProjectionStaleException"/> under it; no full-rebuild recovery path is integrated.
     /// </summary>
     FullRebuildFromWal = 1,
 

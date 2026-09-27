@@ -98,7 +98,7 @@ public readonly record struct OrMapAccessor<TKey, TValue>
     /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
     /// <param name="value">The CRDT value snapshot to attach. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the read and write hops.</param>
-    /// <param name="maxAttempts">Maximum number of CAS retries before giving up.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
     public Task SetAsync(TKey mapKey, string replicaId, TValue value, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentNullException.ThrowIfNull(mapKey);

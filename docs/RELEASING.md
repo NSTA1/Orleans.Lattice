@@ -150,7 +150,7 @@ The `v<X.Y.Z>` family tag (e.g. `v9.6.0`) names "the whole family at this versio
 
 ## Release lines
 
-A release wave is long. It pushes one tag per package, serially, waiting for each publish run before the next; a 40-package family takes over two hours end to end. `main` does not hold still for that - it takes automated performance, testing and dependency PRs continuously. So the protocol never releases "from `main`". It releases from a **pinned commit**, named two ways:
+A release wave is long. It pushes one tag per package, serially - each only after the previous tag's publish run has started - and the core tag last, once every other run has succeeded (see step 6 of the [release protocol](#release-protocol)). `main` does not hold still for that - it takes automated performance, testing and dependency PRs continuously. So the protocol never releases "from `main`". It releases from a **pinned commit**, named two ways:
 
 - **The family anchor tag `v<X.Y.Z>`** - immutable. It records the exact tree the wave shipped. Cut once, at the moment the release chore PR merges.
 - **The release line branch `release/<X.Y>`** - mutable, and the only place fixes for that line ever land. Cut from the same commit as the anchor tag.
@@ -168,13 +168,14 @@ A patch release is a cherry-pick onto the release line, never a tag on `main`:
 1. `git switch release/<X.Y>` (fetch it first if this is a fresh clone).
 2. `git cherry-pick <fix-commit-from-main>`.
 3. Bump the `<Version>` slot of **only** the packages being patched, and add the dated `CHANGELOG.md` section.
-4. Tag and push per package exactly as a full wave does (steps 4 onward below).
+4. Push the line: `git push origin release/<X.Y>`. The publish workflow's release-line guard looks for the tagged commit in the `release/*` branches on `origin`, so a tag cut from a cherry-pick that was never pushed fails before anything reaches NuGet.
+5. Tag and push per package exactly as a full wave does (steps 4 onward below).
 
 This is what keeps a patch a patch. Tagging `main` instead would publish everything that landed since the last wave under a patch digit. That is why `9.5.1` was cut from its release line rather than trunk: `main` was already carrying additive public API queued for the next minor, and a patch tag would have shipped a minor's worth of surface.
 
 Reconcile `main` afterwards with a small separate PR carrying the changelog entry and the `<Version>` bump, so trunk's history records the patch.
 
-If the patch is on a line that is no longer the newest, expect its `Docs` run to be green with a **skipped** `deploy` job - see [Only the newest release line publishes the site](#only-the-newest-release-line-publishes-the-site). That is the guard working, not a failure to investigate.
+If the patch pushes the core `lattice-v<X.Y.Z>` tag - the only tag that fires `Docs` - on a line that is no longer the newest, expect its `Docs` run to be green with a **skipped** `deploy` job - see [Only the newest release line publishes the site](#only-the-newest-release-line-publishes-the-site). That is the guard working, not a failure to investigate.
 
 ### Held-back packages
 
@@ -199,7 +200,7 @@ Because the deploy hangs off the core tag, the published site reflects the wave'
 That contract is what makes `main` the wrong ref for an out-of-band docs fix. Publishing from `main` would document unreleased work, silently putting the site ahead of every package on NuGet. So a docs fix reaches the site the same way a code fix reaches NuGet - through the release line:
 
 1. Merge the fix to `main` as an ordinary PR, so trunk carries it into the next wave.
-2. `git switch release/<X.Y>` and `git cherry-pick <fix-commit-from-main>`.
+2. `git switch release/<X.Y>`, `git cherry-pick <fix-commit-from-main>`, and `git push origin release/<X.Y>`: the dispatched run builds the line as it stands on `origin`.
 3. Dispatch the workflow on that line: `gh workflow run Docs --ref release/<X.Y>`.
 
 No tag is involved: the site is a whole-repository artifact with no version of its own, so republishing it does not constitute a release and needs no `<Version>` bump or changelog entry.
@@ -210,7 +211,7 @@ This is enforced twice rather than merely documented. First, the guard in `docs.
 
 Each build states which release it documents, because nothing else on a page can tell a reader - or an agent - whether it describes the version they installed. `docs-site/stage.ps1` reads it from the ref that triggered the run: a `lattice-v<X.Y.Z>` tag push documents `X.Y.Z`, and a dispatch on `release/<X.Y>` documents the newest `lattice-v<X.Y>.*` tag on that line. The footer of every page names that version, the ref and commit it was built from, and the build date; every page's source link, and every link from the site into the repository, points at the same ref rather than at `main`; and the NuGet badges on the Packages page carry each package's newest published version as text, read from its newest `<package>-v<X.Y.Z>` tag when the site is built. The badge image itself stays live, so the two differ only after a wave that pushes no core tag: such a wave does not redeploy the site, and its versions reach the text at the next deploy.
 
-The build also publishes the site's surface for agents and LLM tooling, generated afresh from the tree it builds: `llms.txt`, listing every page from the same catalogue as the documentation map, with the release history, the samples' source and the pages beyond the documentation under its Optional section; `llms-full.txt`, every documentation page in one file, and beside each package's documentation an `llms-full.txt` holding that package's pages alone, so an agent can take one package whole without the rest of the site; `sitemap.xml`, listing every rendered page without modification dates, because DocFX stamps every entry with the build's own time and writes its hour on a 12-hour clock; and a markdown alternate of every page at the same address ending in `.md`. Each alternate's front matter names the release the site documents and, on a package's page, the package, the version of it the page describes, which `llms.txt` also gives beside each package, and the address of the package's one-file copy. A package's documented version is its newest tag on the site's release line or an earlier one, never a later one, so a per-package tag pushed on the next line before its core tag does not claim these pages. Every rendered page carries the same statement in a visually hidden note under its title, with links to its markdown and to `llms.txt`, because a reader that takes a page as text - a screen reader, or any tool that simplifies HTML - never sees the page's head, where the alternate is announced, or its footer. The repository's own `llms.txt` points at the published one rather than duplicating it, so the index a reader finds always matches the release the site documents.
+The build also publishes the site's surface for agents and LLM tooling, generated afresh from the tree it builds: `llms.txt`, listing every page from the same catalogue as the documentation map, with the release history, the samples' source and the pages beyond the documentation under its Optional section; `llms-full.txt`, every documentation page in one file, and beside each package's documentation (and the CRDT guide's) an `llms-full.txt` holding that set's pages alone, so an agent can take one package whole without the rest of the site; `sitemap.xml`, listing every rendered page without modification dates, because DocFX stamps every entry with the build's own time and writes its hour on a 12-hour clock; a markdown alternate of every page at the same address ending in `.md`; and the agent-only specifications under `docs/agents`, which it publishes as raw YAML and JSON resources that never render as pages (the build fails if one is missing from the site or renders as a page), lists under the Agent specifications section of `llms.txt`, and announces from every page's head through a `rel="describedby"` link to their manifest, `docs/agents/index.json`. Each alternate's front matter names the release the site documents and, on a package's page, the package, the version of it the page describes, which `llms.txt` also gives beside each package, and the address of the package's one-file copy. A package's documented version is its newest tag on the site's release line or an earlier one, never a later one, so a per-package tag pushed on the next line before its core tag does not claim these pages. Every rendered page carries the same statement in a visually hidden note under its title, with links to its markdown and to `llms.txt`, because a reader that takes a page as text - a screen reader, or any tool that simplifies HTML - never sees the page's head, where the alternate is announced, or its footer. The repository's own `llms.txt` points at the published one rather than duplicating it, so the index a reader finds always matches the release the site documents.
 
 ### Only the newest release line publishes the site
 
@@ -257,9 +258,9 @@ One known limitation: the site is a single artifact built from one commit, so wh
    git switch release/<X.Y>
    ```
 
-   For a **patch** wave the line branch already exists: skip the create, `git switch` to it, and cherry-pick the fix onto it instead (see [Hotfixes](#hotfixes)). For a wave that includes a **held-back** package, that package's tags are cut from *its* line branch, not this one (see [Held-back packages](#held-back-packages)). The rest of the protocol is identical either way.
+   For a **patch** wave the line branch already exists: skip the create, `git switch` to it, cherry-pick the fix onto it instead, and push it (see [Hotfixes](#hotfixes)). For a wave that includes a **held-back** package, that package's tags are cut from *its* line branch, not this one (see [Held-back packages](#held-back-packages)). The rest of the protocol is identical either way.
 
-   This step is enforced, not merely documented: the publish workflow refuses to build a tag whose commit is not contained in some `release/*` branch, and fails before anything is pushed to NuGet. If you see that error, you skipped this step.
+   This step is enforced, not merely documented: the publish workflow refuses to build a tag whose commit is not contained in some `release/*` branch on `origin`, and fails before anything is pushed to NuGet. If you see that error, you skipped this step.
 
 4. **Verify the working tree's `<Version>` slot.** For each package being released, `Get-Content <csproj> | Select-String "<Version>"`, with `<csproj>` the path the [Packages](#packages) table gives (for example `src/lattice.replication/Orleans.Lattice.Replication.csproj`), must show the version you intend to ship. The `<Version>` slot is authoritative - the publish workflow reads it to set the NuGet package version.
 

@@ -33,8 +33,8 @@ characteristics.
 Each cursor is a single `ILatticeCursorGrain` activation keyed
 `{treeId}/{cursorId}`, where `cursorId` is a server-assigned opaque GUID
 returned by the `Open*Async` call. The grain is an internal implementation
-detail - hidden from IntelliSense and guarded against direct external calls.
-Callers interact exclusively through the `ILattice` facade.
+detail - its interface is declared `internal`, so application code cannot
+reference it. Callers interact exclusively through the `ILattice` facade.
 
 ```mermaid
 sequenceDiagram
@@ -210,18 +210,28 @@ finally
 
 ### How it works
 
-1. **Capture at open.** `OpenAsync` calls
-   `ITxRegistryGrain.SnapshotAsync()` once and persists the resulting
-   `Dictionary<Guid, TxStatus>` in `LatticeCursorState.PointInTimeSnapshot`.
+1. **Capture at open.** The open takes one snapshot of the tree's
+   saga-decision registry and persists the resulting
+   `Dictionary<Guid, TxStatus>` as the cursor's `PointInTimeSnapshot` (see
+   [Persisted state](#persisted-state)).
+   Once the tree's registry is sharded (sagas minted while
+   `LatticeOptions.TxRegistryShardCount` is above `1`), the snapshot unions every
+   registry shard the tree has written to plus the legacy registry, and
+   re-reads the shards' revisions to confirm the union is a consistent cut,
+   settling after a bounded number of attempts for the latest union - which is
+   still exact for every individual saga.
 2. **Pin retention.** If the snapshot recorded a decision for any txid
    (entries the snapshot read as `InFlight` are excluded - they have no
-   tombstone to protect yet), the cursor mints a pin id and calls
-   `ITxRegistryGrain.PinSnapshotAsync(pinId, txids, ttl)` to ask the
-   registry to retain every observed decision (including any
-   `ForgetAsync`'d tombstones) for the cursor's lifetime. The
-   registry's `LatticeOptions.MaxCursorSnapshotPinTtl` (default 7 days)
-   is the hard upper bound. The pin id is persisted in
-   `LatticeCursorState.SnapshotPinId`. Entries the snapshot read as
+   tombstone to protect yet), the cursor mints a pin id and pins those
+   txids on each registry shard that owns at least one of them, so the
+   registry retains every observed decision (including one it has already
+   tombstoned) for the cursor's lifetime. The pin is requested for
+   `LatticeOptions.MaxCursorSnapshotPinTtl` (default 7 days), which is also
+   the registry's cap on the pin's lifetime (a positive value shorter than
+   `LatticeOptions.TxDecisionRetention` is raised to it); a non-positive value
+   disables the cap, so the pin does not expire and is released only when the
+   cursor closes or its idle-TTL reminder fires. The pin id is persisted as the cursor's
+   `SnapshotPinId`. Entries the snapshot read as
    `Indeterminate` are pinned too: an indeterminate reading is an
    aged-out tombstone whose decision row is still stored, which is
    exactly the row a pin exists to protect, and because the retention
@@ -244,15 +254,16 @@ finally
    that *do* reach the registry: an unscoped read of the same keys
    while the cursor is open, and (per step 2) an entry the snapshot
    captured as `Indeterminate`.
-4. **Pin refresh.** Each step also calls
-   `ITxRegistryGrain.RefreshPinAsync(pinId, ttl)` to slide the
-   registry-side TTL. A cursor that pages actively never runs out the
-   pin TTL; a stalled cursor that misses the slide will eventually be
-   reaped by the registry.
+4. **Pin refresh.** Each step also refreshes the pin on every registry
+   shard that holds it, sliding the registry-side TTL; the refresh succeeds
+   only while every one of those shards still holds the pin. A cursor that
+   pages actively never runs out the pin TTL; a stalled cursor that misses
+   the slide will eventually be reaped by the registry, and its next step
+   throws `LatticeCursorSnapshotExpiredException` and closes the cursor.
 5. **Release on close / TTL expiry.** `CloseCursorAsync` and the
-   cursor's own idle-TTL reminder both call
-   `ITxRegistryGrain.UnpinSnapshotAsync(pinId)`, freeing the retained
-   decisions so registry tombstone-prune can resume.
+   cursor's own idle-TTL reminder both release the pin from every registry
+   shard, freeing the retained decisions so registry tombstone-prune can
+   resume.
 
 ### Caps and failure modes
 
@@ -262,8 +273,8 @@ stalled point-in-time cursor can occupy:
 | Cap | Default | Effect |
 |-----|---------|--------|
 | `LatticeOptions.CursorIdleTtl` | 48 h | Cursor-grain idle reminder releases the pin on inactivity. |
-| `LatticeOptions.MaxCursorSnapshotPinTtl` | 7 d | Registry-side hard cap on a single pin's lifetime. A live cursor slides this on every `Next*Async`; a stalled cursor that misses the slide surfaces `LatticeCursorSnapshotExpiredException` on its next call and the cursor must be reopened. |
-| `LatticeOptions.MaxPinnedSagaDecisions` | 100 000 | Per-tree cap on the union of saga decisions pinned by every live point-in-time cursor on that tree. Opening a point-in-time cursor (`OpenKeyCursorAsync` / `OpenEntryCursorAsync` with `pointInTime: true`) throws `LatticeCursorRegistryPinExhaustedException` when accepting the new snapshot would breach the cap; existing pinned cursors continue paging. |
+| `LatticeOptions.MaxCursorSnapshotPinTtl` | 7 d | Registry-side hard cap on a single pin's lifetime, never shorter than `TxDecisionRetention` (a shorter positive value is raised to it). A live cursor slides this on every `Next*Async`; a stalled cursor that misses the slide surfaces `LatticeCursorSnapshotExpiredException` on its next call and the cursor must be reopened. A non-positive value (for example `Timeout.InfiniteTimeSpan`) disables the cap: the pin never expires and is released only by close or the idle-TTL reminder. |
+| `LatticeOptions.MaxPinnedSagaDecisions` | 100 000 | Cap on the union of saga decisions pinned by every live point-in-time cursor on a tree's saga-decision registry; once the registry is sharded, each registry shard enforces it over the decisions it owns. Opening a point-in-time cursor (`OpenKeyCursorAsync` / `OpenEntryCursorAsync` with `pointInTime: true`) throws `LatticeCursorRegistryPinExhaustedException` when accepting the new snapshot would breach the cap; existing pinned cursors continue paging. |
 
 | Condition | Exception |
 |-----------|-----------|
@@ -281,10 +292,13 @@ applies only to key and entry cursors (`OpenKeyCursorAsync` /
 Live-mode and point-in-time cursors share the same per-step
 checkpoint and shard fan-out cost. Point-in-time mode adds:
 
-- One transaction-registry snapshot read and one pin registration at open
+- One saga-decision registry snapshot read and one pin registration at open
   (the registration is skipped when the snapshot captured no decided saga).
-- One pin refresh per step, issued before the step's scan.
-- One pin release at close or idle-TTL expiry.
+  On a sharded registry the read fans out across the tree's registry shards
+  and the registration goes to each shard that owns a pinned decision.
+- One pin refresh per step, issued before the step's scan, on each shard
+  holding the pin.
+- One pin release at close or idle-TTL expiry, on every registry shard.
 
 The persisted `PointInTimeSnapshot` adds one dictionary entry per
 in-flight or recently-completed saga at open time to the cursor's
@@ -405,7 +419,7 @@ stateless scans, plus the per-step overhead per cursor.
 | Per-page overhead | Zero | ~2-10 ms (checkpoint + reminder slide) | ~2-10 ms (adds one registry refresh RPC) |
 | Ordering under splits | Per-call reconciliation (see [Shard Splitting](shard-splitting.md)) | Per-step reconciliation | Per-step reconciliation |
 | Atomic visibility | Scan-lifetime tree-wide | Per-step tree-wide; *not* preserved across pages | **Cursor-lifetime tree-wide** - identical saga view on every page |
-| Max scan duration | Bounded by `MaxScanRetries` | Unbounded - each step has its own budget | Bounded by `MaxCursorSnapshotPinTtl` (default 7 d, slides on activity) |
+| Max scan duration | Bounded by `MaxScanRetries` | Unbounded - each step has its own budget | Unbounded while it pages - each step slides the registry pin; see [Caps and failure modes](#caps-and-failure-modes) for what ends an idle one |
 | Idle cleanup | No state to clean up | Automatic via idle-TTL reminder | Idle-TTL reminder + registry-pin TTL |
 | Cursor ID transferable across processes | No | Yes | Yes |
 | Available for range delete | No | Yes via `OpenDeleteRangeCursorAsync` | No - range deletes are mutations, not snapshot reads |

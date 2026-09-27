@@ -107,20 +107,27 @@ of Lattice rather than by a bespoke scheme.
 `[Indexed]` on a grain's persistent state installs the projection on the grain's
 own write path:
 
-1. The grain activates, or calls `WriteStateAsync`.
+1. The grain activates with stored state, re-reads its state, or calls
+   `WriteStateAsync`.
 2. The state is projected into the index's declared properties, producing the
    entry set that state *should* have.
-3. That set is diffed against the projection stored for the grain, producing an
-   update plan: entries to add, entries to remove.
-4. The plan is applied with `SetManyAtomicAsync`, so a reader never sees a
-   half-updated grain. Entry updates are all-or-nothing.
+3. That set is diffed against the projection last confirmed for the grain,
+   producing an update plan: entries to add, entries to remove. An empty plan
+   writes no index entries.
+4. A non-empty plan is recorded in the [outbox](#the-outbox) before anything is
+   committed.
+5. On `WriteStateAsync`, the grain's own state is committed.
+6. The plan is applied with `SetManyAtomicAsync`, so a reader never sees a
+   half-updated grain, and its outbox marker is cleared. Entry updates are
+   all-or-nothing.
 
 Steps 2 and 3 are what `projection.duration` measures.
 
-Under the default `Synchronous` projection mode this happens as part of the
-write path and a failure is surfaced to the caller. Under `Eventual` the plan is
-recorded in the [outbox](#the-outbox) during the write path and applied by the
-drain afterwards, so the caller neither waits for it nor sees its failures. The
+Under the default `Synchronous` projection mode step 6 happens as part of the
+write path, and a failure on `WriteStateAsync` is surfaced to the caller (on
+activation or a state re-read it is logged instead); either way the marker from
+step 4 is retried until it lands. Under `Eventual` step 6 is left to the outbox
+drain, so the caller neither waits for it nor sees its failures. The
 mode is read once, when the enrolment path is built, because it changes the
 shape of a grain's write path rather than tuning it.
 

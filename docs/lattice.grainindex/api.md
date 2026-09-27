@@ -118,7 +118,7 @@ See [Observability](observability.md).
 
 | Type | Purpose |
 |---|---|
-| `IGrainKeyCodec` / `IGrainKeyCodec<TGrain>` | Encodes a `GrainId` into, and decodes it out of, an index entry. |
+| `IGrainKeyCodec` / `IGrainKeyCodec<TGrain>` | Encodes a `GrainId` into an index entry's grain key (`Encode`, `TryEncode`), and resolves an encoded key back to a grain reference (`Resolve`). |
 | `GrainKeyCodec` | Factory for the built-in codecs. |
 | `StringGrainKeyCodec<TGrain>`, `GuidGrainKeyCodec<TGrain>`, `IntegerGrainKeyCodec<TGrain>` | The built-in codecs. |
 | `GrainIndexKeyCodecIdentity` | The stable codec identity recorded in the registry. |

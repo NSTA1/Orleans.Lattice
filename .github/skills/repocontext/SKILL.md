@@ -123,7 +123,8 @@ disagree with the master file, the master file wins.
   (partially embedded) index can be a worse locator than `grep` - prefer
   distinctive terms, and do not force it when your terms are too generic.
 - **Writes are destructive and fail-closed.** Never call `remember` / `update` /
-  `forget` / `add_repo` / `remove_repo` / `reset_index` speculatively, and never
+  `forget`, the claim trio `claim` / `renew_claim` / `release_claim`, or
+  `add_repo` / `remove_repo` / `reset_index` speculatively, and never
   `remove_repo` the `lattice` repo. `remove_repo` in particular requires
   **explicit user consent** - it drops a repository's entire indexed context
   including its durable memory, so only run it when the user has explicitly

@@ -25,12 +25,14 @@ namespace Orleans.Lattice;
 /// and stable across silos.
 /// </para>
 /// <para>
-/// Shard-level digests are computed by chaining every leaf digest in the
-/// shard's leaf chain through XxHash128 - the shard digest's <see cref="Hash"/>
-/// covers the concatenation <c>XxHash128(leaf_1.Hash || leaf_2.Hash || ...)</c>,
-/// <see cref="EntryCount"/> sums the per-leaf entry counts, and
+/// Shard-level digests reuse the same shape over the shard's aggregates:
+/// every internal node XOR-folds its descendant leaves' running hashes, and
+/// the shard digest's <see cref="Hash"/> is the XxHash128 of
+/// <c>(subtree_xor || EntryCount || CheckpointOffset)</c>, where
+/// <see cref="EntryCount"/> sums the per-leaf entry counts and
 /// <see cref="CheckpointOffset"/> is the maximum per-leaf checkpoint
-/// offset so divergence at any leaf surfaces in the shard total.
+/// offset, so divergence at any leaf surfaces in the shard total. A
+/// single-leaf shard reports its leaf's own digest.
 /// </para>
 /// <para>
 /// <b>Contribution-function compatibility contract.</b> The per-entry

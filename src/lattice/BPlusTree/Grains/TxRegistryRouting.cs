@@ -50,8 +50,14 @@ internal static class TxRegistryRouting
     /// after the first separator and may itself contain anything.
     /// </para>
     /// <para>
-    /// Storage-safe: the registry is persistent and keyed storage backends
-    /// reject <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c> in a grain key.
+    /// Storage-safe: the registry is persistent, and a grain-storage provider
+    /// need not store a grain key's characters verbatim. Orleans' Azure Table
+    /// grain storage rewrites <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c> in the
+    /// key to <c>_</c>, so two keys that differ only in those characters share
+    /// one persisted row, and it passes control characters through to the Table
+    /// service, which rejects them (an HTTP 400). The prefix, digits and
+    /// separator this framing adds contain none of those characters, so the
+    /// framing introduces no such collision or failure of its own.
     /// </para>
     /// </summary>
     public const string ShardKeyPrefix = LatticeConstants.SystemTreePrefix + "txshard_";

@@ -66,9 +66,10 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
   Primitives/              → Unit tests for primitive types  
 
 The tree above covers the core `src/lattice/` library and its test project only.
-For the full set of optional add-on packages (replication, the API facade family
-and gRPC bindings, auth/membership, backup, storage backends, schema, scaling,
-caching, dashboards, and the Explorer), see [PACKAGES.md](../PACKAGES.md) - the
+For the full set of optional add-on packages (for example replication, the API
+facade family and its gRPC and MCP bindings, auth/membership, backup, storage
+backends, schema, scaling, caching, dashboards, and the Explorer), see
+[PACKAGES.md](../PACKAGES.md) - the
 authoritative, maintained inventory, grouped by the seam each package fills. The
 matching capability catalogue is [FEATURES.md](../FEATURES.md). Convention:
 package `foo` lives at `src/foo/`, `test/foo/`, and
@@ -157,7 +158,10 @@ package from that gate's exemption list.
 Instruments are published on a `Meter` owned by a per-package `*Metrics` class
 (`LatticeMetrics`, `BackupMetrics`, `LatticeAuthMetrics`, ...). A class that
 publishes onto another class's meter does not need a `Meter` field of its own -
-it inherits that meter's guarantees.
+it inherits that meter's guarantees. The repository-context package is the one
+exception: each of its reporters constructs its own instance `Meter` named
+`Orleans.Lattice.Api.Mcp.RepoContext` rather than publishing onto a static
+`*Metrics` class.
 
 ### Declare the `Meter` field above every instrument
 
@@ -204,21 +208,22 @@ loudly anyway": that reading is the argument for deleting the guard, and it is
 wrong. The guard compares declaration positions and never inspects which
 reference is used, which is precisely why it catches both shapes.
 
-The silent shape is one field away, not hypothetical. Fifteen sites across
-eight types in `src/` - among them the tag-index reconcile grain, the WAL
-saturation signal, and the leaf grain's own gauges - already create instruments
-through `LatticeMetrics.Meter` from another type, so the cross-type form is
-idiomatic here; they are safe only because those types declare no `Meter`
-field of their own, leaving nothing to match and nothing to be null. Adding one
+The silent shape is one field away, not hypothetical. Many types in `src/` -
+among them the tag-index reconcile grain, the WAL saturation signal, and the
+leaf grain's own gauges - already create instruments through
+`LatticeMetrics.Meter` from another type, directly or through a local copy of
+it, so the cross-type form is idiomatic here; they are safe only because those
+types declare no `Meter` field of their own, leaving nothing to match and
+nothing to be null. Adding one
 for subscriber convenience would introduce the silent shape. `GrainIndexMetrics`
 is the standing candidate, being the only production class whose `Meter` is an
 alias (`= LatticeMetrics.Meter`), so both `Meter.CreateCounter(...)` and
 `LatticeMetrics.Meter.CreateCounter(...)` read naturally there and only the
 first is safe above the field.
 
-Every metrics class in `src/` takes the loud shape **today**, which is why the
-fixtures that depend on the ordering pass. That is a fact about the current
-source, not a guarantee.
+Every metrics class in `src/` that declares a `Meter` field takes the loud
+shape **today**, which is why the fixtures that depend on the ordering pass.
+That is a fact about the current source, not a guarantee.
 
 `MeterFieldDeclarationOrderTests` enforces the ordering across `src/` and fails
 loudly if its own scan matches nothing, so it cannot go vacuous. It scans the
@@ -227,8 +232,9 @@ classes in `src/` declare a static `Meter` field; the two that declare no instru
 (`LatticeTenantMetrics`, `LatticeScalingMetrics`) are outside that set, and the
 guard's silence on them is **correct, not a gap** - there is no ordering to
 check until an instrument exists, and it begins covering them the moment one is
-added. Both declare their `Meter` as the last line of the file, so the natural
-place to add a first instrument is below it; add it above.
+added. Both declare their `Meter` as the last member of the class, so a first
+instrument added to either must go below that field and be constructed from it,
+never above it.
 `MeterListeningTests` is the executable demonstration of both orderings, and its
 `MeterDeclaredLateProbeMetrics` probe is the silent shape, structurally
 isomorphic to the `GrainIndexMetrics` alias case. In new
@@ -573,7 +579,7 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
 
 ## Testing
 
-The testing policy (every public type needs a test; exclude the chaos suite in the dev loop) and the repository hygiene gates live in the **testing** skill (`.github/skills/testing/SKILL.md`). Detailed framework, fixture, and tier conventions remain in `.github/instructions/testing.instructions.md`.
+The testing policy (every public type needs a test; exclude the chaos suite in the dev loop), the framework, fixture, and tier conventions, and the repository hygiene gates live in the single master file `.github/instructions/testing.instructions.md`; the **testing** skill (`.github/skills/testing/SKILL.md`) points there rather than restating them.
 
 ## Security
 

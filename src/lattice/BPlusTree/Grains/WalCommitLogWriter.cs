@@ -1732,7 +1732,7 @@ internal sealed class WalCommitLogWriter(
                 // cached node would require a refactor; instead, the
                 // hot-path cost is bounded by the partition's in-flight
                 // depth which the WalMaxPendingBatches ceiling caps at a
-                // small value (default 8). For a wedged partition the
+                // small value (default 16). For a wedged partition the
                 // unlink never runs (the await never returns), so the
                 // O(n) cost never compounds.
                 _inFlight.Remove(pending);

@@ -270,8 +270,9 @@ What is in place, and why.
   capitals, punctuation, numerals, spelling variants and its guesses at the
   product's names. A clip that either recogniser does not hear exactly, or
   that is implausibly slow or fast for its length, is made again with the
-  next seed, up to four times; `cues.json` records what was heard, and any
-  cue that never passed is listed at the end of the run to be listened to.
+  next seed, up to four attempts in all (`attempts` in `voice/voice.json`);
+  `cues.json` records what was heard, and any cue that never passed is listed
+  at the end of the run to be listened to.
   Each seed comes from the clip's name, so a run is repeatable on the same
   machine; across machines the audio can differ in detail.
 - **Picked by ear where it matters:** the checks catch a wrong or missing
@@ -334,19 +335,22 @@ that the site's player should play them from the site's own origin.
 | D. An external host, embedded | adaptive streaming and discovery | a third-party dependency and its tracking on every page, against the local-first grain |
 | E. Commit sources; publish renders as GitHub release assets | nothing binary in history; no limit on a release's total size or its bandwidth (each file under 2 GiB); renders versioned with the release they describe | the video is served from GitHub's release CDN rather than the site's origin; a workflow must render and attach it |
 
-What the pilot measured (the introduction, 2:52, 1920x1080 at 30 fps):
+What the pilot measured (the introduction's first published cut, 2:52,
+1920x1080 at 30 fps):
 
 - **Size:** 10.8 MB at high quality (502 kbit/s: H.264 about 320, AAC stereo
-  about 175), and 11.6 MB for the published re-render of the same sources,
-  which differs only by encoder variation; the two-minute first cut was 8.0 MB, and a draft is about three
-  quarters of the high-quality size. That is about 4 MB a minute, so the 24
-  episodes planned here, at about three minutes each, are roughly 300 MB a
-  full set, and every re-render of one episode is another 10 to 20 MB.
+  about 175), and 11.6 MB for its published re-render of the same sources,
+  which differed only by encoder variation; the two-minute first cut was
+  8.0 MB, and a draft is about three quarters of the high-quality size. That
+  is about 4 MB a minute, so the 24 episodes planned here, at about three
+  minutes each, are roughly 300 MB a full set, and every re-render of one
+  episode is another 10 to 20 MB.
 - **Render time:** 3 min 39 s for the high-quality render on one worker, on a
   laptop with every core busy: about 1.3 times real time. Its start-up probes
   failed repeatedly under that load until FFmpeg was kept resident (see the
   video-production skill); CI's dedicated runner has no such contention.
-- **Narration:** the mastered track is 5.7 MB as WAV, 1.5 MB as 96 kbit/s AAC
+- **Narration:** the mastered track of the two-minute first cut was 5.7 MB as
+  WAV (24 kHz 16-bit mono, so about 2.9 MB a minute), 1.5 MB as 96 kbit/s AAC
   and 0.7 MB as 48 kbit/s Opus - small enough to commit.
 
 What that means for each option: A puts 300 MB in history for the first set and

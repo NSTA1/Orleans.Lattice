@@ -44,8 +44,10 @@ internal static class LatticeViewTrees
     /// <remarks>
     /// Storage-safe by construction. The composed tree id is an Orleans grain
     /// primary key and is carried into <c>ShardRootGrain</c>'s composite key - a
-    /// persistent grain - and keyed storage backends reject <c>/</c>, <c>\</c>,
-    /// <c>#</c> and <c>?</c> there. <c>~</c> is outside that set and rare enough
+    /// persistent grain - and Orleans' Azure Table grain storage rewrites
+    /// <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c> to <c>_</c> there, so a separator
+    /// from that set could make two ids share one stored row. <c>~</c> is outside
+    /// that set and rare enough
     /// in identifiers to be reserved cheaply, which
     /// <see cref="ViewNameValidator"/> does, keeping the composed id unambiguous.
     /// </remarks>

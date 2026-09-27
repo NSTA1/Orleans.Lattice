@@ -13,12 +13,15 @@ namespace Orleans.Lattice.Views;
 /// <remarks>
 /// <para>
 /// <b>Storage safety.</b> Azure Table grain storage carries a grain key into the
-/// Partition/Row key columns and the request URL, which reject the control
-/// characters <c>0x00-0x1F</c> / <c>0x7F-0x9F</c> and the characters <c>/</c>,
-/// <c>\</c>, <c>#</c> and <c>?</c>. A view named <c>a/b</c> would yield the
-/// persistent shard-root key <c>view-a/b/0</c>. The historical failure mode is an
-/// opaque HTTP 400 on read/write state that no in-memory test storage reproduces
-/// (see <c>.github/instructions/grains.instructions.md</c> and issue #1529).
+/// Partition/Row key columns and the request URL. The Table service rejects the
+/// control characters <c>0x00-0x1F</c> / <c>0x7F-0x9F</c> there, which Orleans
+/// passes through - the historical failure mode, an opaque HTTP 400 on read/write
+/// state that no in-memory test storage reproduces (see
+/// <c>.github/instructions/grains.instructions.md</c> and issue #1529). The
+/// service also forbids <c>/</c>, <c>\</c>, <c>#</c> and <c>?</c>, which Orleans
+/// rewrites to <c>_</c>: a view named <c>a/b</c> would yield the persistent
+/// shard-root key <c>view-a/b/0</c>, stored in the same row as a view named
+/// <c>a_b</c>.
 /// </para>
 /// <para>
 /// <b>Unambiguity.</b> The generation suffix
@@ -47,8 +50,9 @@ namespace Orleans.Lattice.Views;
 internal static class ViewNameValidator
 {
     /// <summary>
-    /// The characters a keyed storage backend rejects in a grain primary key, and
-    /// which therefore may not appear in a view name.
+    /// The characters Azure Table storage forbids in a key column (Orleans rewrites
+    /// them to <c>_</c>, so they would alias keys), and which therefore may not
+    /// appear in a view name.
     /// </summary>
     private static readonly char[] StorageUnsafeCharacters = ['/', '\\', '#', '?'];
 

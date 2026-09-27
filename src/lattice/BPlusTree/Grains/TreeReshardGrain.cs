@@ -25,8 +25,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// grows the map by one distinct physical shard via its swap phase; the
 /// next tick simply re-evaluates.</description></item>
 /// <item><description><see cref="ReshardPhase.Complete"/> - target
-/// reached; coordinator clears <see cref="TreeReshardState.InProgress"/>,
-/// unregisters its keepalive, and deactivates.</description></item>
+/// reached; coordinator re-pins the registry's <c>ShardCount</c> to the
+/// target, clears <see cref="TreeReshardState.InProgress"/>, records the
+/// completion metrics, publishes the reshard-completed event when event
+/// publishing is enabled, triggers a reconcile of any tag index covering the
+/// tree, unregisters its keepalive, and deactivates.</description></item>
 /// </list>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
@@ -544,8 +547,11 @@ internal sealed class TreeReshardGrain(
     }
 
     /// <summary>
-    /// Clears in-progress state, marks the reshard complete, unregisters the
-    /// keepalive, and deactivates. Exposed as <c>internal</c> for unit testing.
+    /// Re-pins the registry's structural shard count to the target, clears
+    /// in-progress state, marks the reshard complete, records the completion
+    /// metrics, publishes the reshard-completed event (when enabled), triggers
+    /// a tag-index reconcile for the tree, unregisters the keepalive, and
+    /// deactivates. Exposed as <c>internal</c> for unit testing.
     /// </summary>
     internal async Task FinaliseAsync()
     {

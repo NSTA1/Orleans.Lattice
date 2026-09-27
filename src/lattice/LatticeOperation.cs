@@ -52,8 +52,12 @@ public enum LatticeOperation
     BulkLoad = 128,
 
     /// <summary>
-    /// Administrative / lifecycle operation on a tree (for example create,
-    /// drop, or reconfigure) that is not an ordinary data read or write.
+    /// Administrative operation on a tree that is not an ordinary data read or
+    /// write (for example snapshot, merge, compaction, a leaf-projection
+    /// rebuild, or reconfiguring per-tree settings). Destructive or structural
+    /// lifecycle verbs - dropping, recovering or purging a tree, reshard,
+    /// resize, and WAL placement moves - require <see cref="TreeLifecycle"/>
+    /// instead, which this capability does not confer.
     /// </summary>
     Admin = 256,
 
@@ -135,8 +139,9 @@ public enum LatticeOperation
     /// <see cref="Admin"/> does not confer it, and holding it does not confer
     /// <see cref="Admin"/>, <see cref="Backup"/>, <see cref="Restore"/>,
     /// <see cref="SchemaAdmin"/>, or any data-plane capability. Routine
-    /// administration (create / exists / alias / reconfigure) stays on
-    /// <see cref="Admin"/>; a destructive or structural rebuild requires this bit,
+    /// administration (create / alias / reconfigure) stays on
+    /// <see cref="Admin"/> (an existence probe needs only a whole-tree read); a
+    /// destructive or structural rebuild requires this bit,
     /// granted explicitly and on its own so a cluster-wide administration grant
     /// never silently authorizes destroying or rebuilding a tree. It is never part
     /// of the data-plane <c>All</c> aggregate. Granting it grants <b>nothing

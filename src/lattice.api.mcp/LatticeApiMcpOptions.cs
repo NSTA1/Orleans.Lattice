@@ -2,17 +2,18 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// Options controlling the <c>Orleans.Lattice.Api.Mcp</c> server-side binding:
-/// the HTTP transport, the fail-closed enforcement toggle, the credential-header
+/// the HTTP transport, the fail-closed endpoint-authentication toggle, the credential-header
 /// mapping, and the per-facade tool-module opt-in flags.
 /// </summary>
 /// <remarks>
 /// The binding fails closed by default. With
 /// <see cref="RequireAuthorization"/> at its <see langword="true"/> default the
 /// mapped MCP endpoint requires an authenticated ASP.NET Core principal, and the
-/// default <c>DenyAllMcpAuthorizer</c> rejects every call until a host either
-/// registers a permissive authorizer or explicitly turns enforcement off. Every
-/// per-facade tool-module flag is <see langword="false"/> by default, so a
-/// freshly registered server exposes no tools.
+/// default <c>DenyAllMcpAuthorizer</c> rejects every call until a host registers
+/// <c>AllowAllMcpAuthorizer</c> or a custom authorizer; setting
+/// <see cref="RequireAuthorization"/> to <see langword="false"/> does not lift
+/// that gate. Every per-facade tool-module flag is <see langword="false"/> by
+/// default, so a freshly registered server exposes no tools.
 /// </remarks>
 public sealed class LatticeApiMcpOptions
 {

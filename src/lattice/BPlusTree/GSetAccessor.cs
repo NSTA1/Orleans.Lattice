@@ -55,7 +55,7 @@ public readonly record struct GSetAccessor
     /// </summary>
     /// <param name="element">The element bytes to add. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the read and write hops.</param>
-    /// <param name="maxAttempts">Maximum number of CAS retries before giving up.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
     public Task AddAsync(byte[] element, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentNullException.ThrowIfNull(element);

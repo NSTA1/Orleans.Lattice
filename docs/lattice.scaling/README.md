@@ -49,8 +49,9 @@ contributes to `ScaleValue`** - it is reported for operator action only.
 
 ## Quick start
 
-Register the signal on the silo builder, then expose it over an HTTP endpoint and
-an ASP.NET Core health check on the co-hosted web host:
+Register the signal on the silo builder, then expose it over an HTTP endpoint on
+the co-hosted web host (the optional ASP.NET Core health check is covered in
+[Configuration](configuration.md#latticescalinghealthcheckoptions)):
 
 ```csharp verify
 using Orleans.Lattice.Scaling;

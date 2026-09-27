@@ -16,8 +16,8 @@ It is built from four parts:
 ## Core properties
 
 - **Fail-closed by construction.** The default `DenyAllMcpAuthorizer`, the fail-closed credential bridge, and `RequireAuthorization` (default `true`) mean an unauthenticated session is default-denied: it can enumerate nothing and call nothing until the host opts in with a real authorizer and authenticator.
-- **No re-modelled surface.** Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and the same Orleans-serialized records the gRPC bindings adapt, so the MCP surface stays in lock-step with the rest of the API family with zero re-modelling.
-- **Permission-scoped at the group level.** Discovery filters the tool list to the caller's effective permissions before it is returned, so an agent never sees the tools of a facade group it holds no grant for. The filter is coarse - one Allow grant for any operation a group covers lists the whole group - so the facade's access gate still refuses, per call, a verb, a tree, or a Deny rule the caller's grants do not cover.
+- **No parallel logic.** Every tool is a thin adapter that delegates to the matching `Orleans.Lattice.Api.*` facade - the same facade the gRPC bindings adapt - and re-implements none of its behaviour, so the MCP surface stays in lock-step with the rest of the API family. The state, auth, and tree-administration tools mostly return the facade's own records; the data, backup, replication, and tenant tools return compact MCP result records projected from the facade's answer (for example with values base64-encoded).
+- **Permission-scoped at the group level.** Discovery filters the tool list to the caller's effective permissions before it is returned, so an agent never sees the tools of a facade group it holds no grant for. The filter is coarse - one Allow grant for any operation a group covers lists the whole group, except that the scopeless `Telemetry` capability counts only when it is granted cluster-wide - so the facade's access gate still refuses, per call, a verb, a tree, or a Deny rule the caller's grants do not cover.
 - **Opt-in and least-privilege.** The server ships no tools; each module is added explicitly, and within a module the destructive verbs stay hidden until the host enables them (`enableWrites`, `enableControl`, `enableAdministration`, `enableSchemaControl`, `enableLifecycle`).
 - **Credential flow-through.** The credential bridge lifts the authenticated MCP session identity onto the ambient `LatticeCredentialContext`, so per-tree / per-key enforcement runs through the same access gate the gRPC bindings and the data path already use. The binding adds no authorization path of its own.
 - **OAuth discovery (opt-in).** Advertise OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself instead of needing a pre-pasted token. See [Setup](setup.md#oauth-discovery-rfc-9728).
@@ -37,8 +37,8 @@ builder.Host.UseOrleans(silo =>
         .AddLatticeDataApi();
 });
 
-// The MCP front door. The default authorizer denies every call, so register a
-// real one (or disable enforcement behind an outer boundary) before serving.
+// The MCP front door. The default authorizer denies every facade tool whether
+// or not RequireAuthorization is on, so register a real one before serving.
 builder.Services.AddLatticeMcp(o => o.RequireAuthorization = true);
 builder.Services.AddSingleton<ILatticeApiMcpAuthorizer, AllowAllMcpAuthorizer>();
 
@@ -50,7 +50,7 @@ var app = builder.Build();
 app.MapLatticeMcp();
 ```
 
-An MCP client then connects to the mapped endpoint, calls `lattice_capabilities` to see which facade groups its credential unlocks (the session's tool list is itself already scoped to the caller's grants), and invokes tools such as `lattice_state_list_trees`, `lattice_data_get`, or `lattice_data_read_range`.
+Permission-scoped discovery reads each caller's grants through the auth facade, so a deployment also registers `AddLatticeAuth(...)` and `AddLatticeAuthApi()` on the silo (the minimal snippet above omits them); without the auth facade, discovery grants no group and an authenticated caller is offered only `lattice_capabilities` (see [Setup](setup.md#prerequisites)). An MCP client then connects to the mapped endpoint, calls `lattice_capabilities` to see which facade groups its credential unlocks (the session's tool list is itself already scoped to the caller's grants), and invokes tools such as `lattice_state_list_trees`, `lattice_data_get`, or `lattice_data_read_range`.
 
 For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`McpServer`](../../samples/McpServer) sample under [`samples/`](../../samples).
 

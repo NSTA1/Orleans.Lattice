@@ -17,7 +17,7 @@ of:
 | `LatticeSchemaDeadLetterSource` | Meaning |
 |---|---|
 | `Replication` | A replicated apply from a peer cluster failed strict validation. |
-| `Restore` | A backup restore item failed strict validation. |
+| `Restore` | A backup restore or bulk-load item failed strict validation. |
 | `LocalRejected` | Reserved for a rejected local write retained for inspection. Not produced by the current release, which fails local writes closed (see below). |
 
 The `Restore` source is assigned only by enforcement. An item the versioning stage

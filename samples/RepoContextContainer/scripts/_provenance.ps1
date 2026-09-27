@@ -247,18 +247,20 @@ function ConvertFrom-ProvenanceDuration {
 	THE COUNT ASSERTION IS THE LOAD-BEARING PART, and it is why this check reads
 	the label rather than walking the repository. The sample stack's real
 	deployment is TWO files: the tracked `docker-compose.yml`, which carries a
-	`build:` stanza and no `image:`, and a `docker-compose.override.yml` that is
-	UNTRACKED AND GITIGNORED (see .gitignore, where it is ignored deliberately
-	because it is machine-local). That override is load-bearing: it supplies the
-	`image:` pin the tracked file does not have, the memory limit, the CPU caps,
+	`build:` stanza and no `image:`, and the tracked `docker-compose.tuning.yml`,
+	which applies only when named with `-f` and is load-bearing: it supplies the
+	`image:` pin the base file does not have, the memory limit, the CPU caps,
 	and the scan-cadence variables every prior measurement on a given box was
-	taken against.
+	taken against. It replaced an untracked, gitignored
+	`docker-compose.override.yml` (issue #2609).
 
 	So a check that enumerated tracked files would not merely be incomplete, it
-	would be WRONG IN THE DANGEROUS DIRECTION. Relaunching from a worktree that
-	lacks the override silently drops the memory limit and the image pin while
-	the tree looks perfectly correct, and a tracked-file check would pass that
-	stack. The count is what fails on a file git has never heard of.
+	would be WRONG IN THE DANGEROUS DIRECTION. Relaunching without the second
+	file silently drops the memory limit and the image pin while the tree looks
+	perfectly correct - both files are still in it - and a tracked-file check
+	would pass that stack. The count is what fails, on a dropped overlay and on an
+	extra file alike; it cannot see a file substituted for one of the two, which
+	keeps the count.
 
 	Note the corollary: fixing a provenance defect by changing the launch
 	directory is itself a provenance change, and it is not self-verifying.
@@ -318,12 +320,12 @@ function Get-ComposeProvenanceViolation {
 	}
 
 	# Deliberately compares the COUNT, not the tracked set. The stack's real
-	# deployment includes a gitignored override supplying the image pin, the
-	# memory limit and the CPU caps, so a stack launched from a directory that
-	# lacks it resolves fewer files while every remaining path still looks right.
+	# deployment includes the docker-compose.tuning.yml overlay supplying the image
+	# pin, the memory limit and the CPU caps, so a stack relaunched without it
+	# resolves fewer files while every remaining path still looks right.
 	if ($ExpectedConfigFileCount -gt 0 -and $ConfigFiles.Count -ne $ExpectedConfigFileCount) {
 		$named = ($ConfigFiles -join ', ')
-		$violations.Add("the container resolved $($ConfigFiles.Count) compose file(s) but $ExpectedConfigFileCount were expected ($named); a missing override drops settings such as the image pin and the memory limit while leaving every remaining file correct")
+		$violations.Add("the container resolved $($ConfigFiles.Count) compose file(s) but $ExpectedConfigFileCount were expected ($named); a missing overlay drops settings such as the image pin and the memory limit while leaving every remaining file correct")
 	}
 
 	return ,$violations.ToArray()
@@ -331,7 +333,7 @@ function Get-ComposeProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 2 of 6. The checkout the container was composed from is at the commit
+	Check 2 of 7. The checkout the container was composed from is at the commit
 	the operator means.
 
 .DESCRIPTION
@@ -407,7 +409,7 @@ function Get-GitProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 3 of 6. The container is running the image its tag currently names.
+	Check 3 of 7. The container is running the image its tag currently names.
 
 .DESCRIPTION
 	Catches the stale container: an image rebuilt from a newer commit moves the
@@ -451,7 +453,7 @@ function Get-ImageProvenanceViolation {
 
 <#
 .SYNOPSIS
-	Check 4 of 6, and the only one that reads the channel the answer lives in.
+	Check 4 of 7, and the only one that reads the channel the answer lives in.
 
 .DESCRIPTION
 	Checks 1 to 3 can ALL pass while the setting under test never reached the
@@ -662,7 +664,7 @@ function Test-GitReadingIsExaminable {
 
 <#
 .SYNOPSIS
-	Check 5 of 6. The archive holding durable memory did not land somewhere a
+	Check 5 of 7. The archive holding durable memory did not land somewhere a
 	routine cleanup deletes.
 
 .DESCRIPTION

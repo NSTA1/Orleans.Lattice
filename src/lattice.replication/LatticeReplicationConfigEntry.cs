@@ -85,8 +85,12 @@ public sealed class LatticeReplicationConfigEntry : ICrdt<LatticeReplicationConf
     /// <summary>
     /// Returns <see langword="true"/> when <see cref="Mode"/> carries more than
     /// one live value, i.e. concurrent clusters assigned divergent merge modes
-    /// that have not been reconciled. A reader should fail closed (pause
-    /// shipping the target tree) until an operator resolves the ambiguity.
+    /// that have not been reconciled. Readers fail closed on the mode: the
+    /// merge-mode resolver returns no mode for the tree (it never picks one of
+    /// the divergent values) and commit-time shipper nudges stop, but an
+    /// already-active shipper keeps shipping the tree's new local writes. An
+    /// operator resolves the ambiguity by disabling the tree and re-enabling it
+    /// under a single mode.
     /// </summary>
     public bool HasAmbiguousMode => Mode.Count > 1;
 

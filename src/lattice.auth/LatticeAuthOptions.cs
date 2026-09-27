@@ -19,9 +19,12 @@ public sealed class LatticeAuthOptions
     public LatticeEffect DefaultEffect { get; set; } = LatticeEffect.Deny;
 
     /// <summary>
-    /// The bootstrap root-of-trust: subject ids that are unconditionally treated
-    /// as <see cref="LatticeOperation.Admin"/> on every tree and operation,
-    /// short-circuited before the decision engine is consulted. This exists so a
+    /// The bootstrap root-of-trust: subject ids the access gate allows for every
+    /// operation on every tree - not only <see cref="LatticeOperation.Admin"/> but
+    /// every capability, including <see cref="LatticeOperation.Telemetry"/>,
+    /// <see cref="LatticeOperation.Replication"/> and
+    /// <see cref="LatticeOperation.TreeLifecycle"/> - short-circuited before the
+    /// decision engine is consulted. This exists so a
     /// deployment cannot lock every operator out of the authorization tree itself
     /// through a policy misconfiguration; keep it to the smallest possible set of
     /// break-glass operator identities. Empty by default (no bootstrap admins).

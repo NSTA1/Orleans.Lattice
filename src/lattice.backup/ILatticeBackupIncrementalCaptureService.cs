@@ -8,11 +8,15 @@ namespace Orleans.Lattice.Backup;
 /// restorable.
 /// <para>
 /// This seam is the entry point the scheduling / retention coordinator invokes
-/// for a scheduled or on-demand incremental. A cluster that has wired a
-/// dedicated incremental-capture engine overrides the default registration; when
-/// none is registered, a baseline stand-in captures a full snapshot and stamps
-/// it as an increment of the supplied base, which keeps the chain shape correct
-/// while a true differential engine is being introduced.
+/// for a scheduled incremental and the backup control facade invokes for an
+/// on-demand one. <c>AddLatticeBackup</c> serves it (TryAdd, so a host may
+/// pre-register its own) from the same capture engine as
+/// <see cref="ILatticeBackupCaptureService"/>: the increment is a forward
+/// write-ahead-log delta from the base backup's consistency cut. The engine
+/// instead captures a fresh full backup of the base's scope - a new chain with
+/// no base, not an increment - when the base chain is owned by another
+/// capturing cluster, when retention has trimmed the log past the base resume
+/// point, or when a range delete surfaces in the delta window.
 /// </para>
 /// </summary>
 public interface ILatticeBackupIncrementalCaptureService

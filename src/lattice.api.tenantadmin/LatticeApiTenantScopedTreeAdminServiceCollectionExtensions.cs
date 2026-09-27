@@ -23,8 +23,9 @@ public static class LatticeApiTenantScopedTreeAdminServiceCollectionExtensions
     /// <see cref="ITenantAdmissionController"/> (always registered).
     /// <para>
     /// Must be called <i>after</i> both wrapped facades are registered
-    /// (<c>siloBuilder.AddLatticeTreeAdminApi(...)</c> and the schema enforcement /
-    /// API add-ons that provide <see cref="ILatticeSchemaAdmin"/>). The facade
+    /// (<c>siloBuilder.AddLatticeTreeAdminApi(...)</c>, and
+    /// <c>siloBuilder.AddLatticeSchemaEnforcement(...)</c>, which provides
+    /// <see cref="ILatticeSchemaAdmin"/>). The facade
     /// delegates to those surfaces, so their absence means it would have nothing to
     /// compose; calling it out of order fails fast with a clear message, mirroring
     /// how the sibling control-API add-ons guard their ordering.
@@ -56,13 +57,13 @@ public static class LatticeApiTenantScopedTreeAdminServiceCollectionExtensions
 
         // Ordering guard: the facade composes the per-tree schema surface, so
         // ILatticeSchemaAdmin must already be registered (by
-        // AddLatticeSchemaEnforcement / the schema API add-on).
+        // AddLatticeSchemaEnforcement, the only registration that provides it).
         if (!builder.Services.Any(d => d.ServiceType == typeof(ILatticeSchemaAdmin)))
         {
             throw new InvalidOperationException(
                 "AddLatticeTenantScopedTreeAdminApi() must be called after the schema control surface is " +
-                "registered (siloBuilder.AddLatticeSchemaEnforcement(...)/AddLatticeSchemaApi(...)). Register it " +
-                "before adding the tenant-scoped facade, which delegates to it.");
+                "registered (siloBuilder.AddLatticeSchemaEnforcement(...), which registers the schema admin " +
+                "surface). Register it before adding the tenant-scoped facade, which delegates to it.");
         }
 
         // The transport-agnostic tenant-scoped control facade. Registered as a silo

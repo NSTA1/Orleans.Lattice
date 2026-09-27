@@ -34,6 +34,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Predicate scan read path.** Predicate row filtering now validates an admitted row's JSON only after it evaluates true, instead of scanning every candidate twice, and the fast-path eligibility decision is hoisted out of the per-row loop in the leaf, cache and snapshot scans. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice`)
+
+- **Performance - Entry-history member decoding.** An entry-history page now reuses one single-element provenance delta buffer across the revisions it decodes, instead of allocating a fresh array per revision. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
+
 - **Performance - CRDT read-path projections.** The grow-only and remove-wins whole-set reads and the sequence provenance projection no longer materialise through a hidden-count iterator or a discarded tuple array; each now fills one exactly-sized destination from a single scan. ([#3647](https://github.com/NSTA1/Orleans.Lattice/pull/3647)) (`Orleans.Lattice`)
 
 - **Performance - Data-plane CRDT collection reads.** The data API's OR-Set, RW-Set and OR-Map whole-collection reads now resolve survivors in one scan into an exactly-sized destination, instead of walking the add-map twice and materialising through hidden-count iterators. ([#3654](https://github.com/NSTA1/Orleans.Lattice/pull/3654)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Data`)

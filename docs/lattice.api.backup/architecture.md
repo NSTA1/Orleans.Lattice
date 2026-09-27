@@ -5,7 +5,7 @@ This page describes how the control facade drives the backup engine. The facade 
 ## Position in the stack
 
 ```
-transport binding (gRPC now, other bindings later)
+transport binding (the gRPC binding, or the Orleans.Lattice.Api.Mcp backup tools)
         |
         v
 control facade  (this package - transport-agnostic)

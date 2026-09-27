@@ -24,8 +24,11 @@ non-interactive flow:
    path to change a tree's merge mode is disable, then re-enable under the new
    mode (naming a bootstrap source cluster on that enable re-seeds a tree that
    already holds data).
-4. **Disable** the tree. Shipping stops without purging data already replicated
-   to peers.
+4. **Disable** the tree. This removes the tree's resolved runtime merge mode but
+   does not tear down a shipper that is already running (a peer that resolves
+   no mode drops what it still ships while acknowledging the batch). It never
+   purges data already replicated to peers and keeps the tree's fixed merge
+   mode, which is why the next report still shows `mode=OrSet`.
 5. **Report** the config again, showing `enabled=False`.
 
 ## Running it

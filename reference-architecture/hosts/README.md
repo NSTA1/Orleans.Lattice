@@ -52,7 +52,7 @@ underscore separator, case-insensitive).
 | `Silo:HttpPort` / `Silo:GrpcPort` | `8080` / `8081` | HTTP port (health, scaling, `/metrics`) and HTTP/2 gRPC port (state, auth, replication). |
 | `Silo:SiloPort` / `Silo:GatewayPort` | `11111` / `30000` | Orleans silo-to-silo and gateway ports. |
 | `Silo:AdvertisedIp` | (auto) | Advertised IP for Orleans endpoints when the default NIC probe is not appropriate. |
-| `Storage:ConnectionString` | - | Emulator / dev storage connection string (Azurite). Mutually exclusive with the service URIs. |
+| `Storage:ConnectionString` | - | Emulator / dev storage connection string (Azurite). Takes precedence over the service URIs when set; without it both `Storage:TableServiceUri` and `Storage:BlobServiceUri` are required, or the host fails to start. |
 | `Storage:TableServiceUri` / `Storage:BlobServiceUri` | - | Managed-identity storage endpoints (production). |
 | `Wal:TableName` / `Clustering:TableName` / `Reminders:TableName` / `GrainStorage:TableName` | `OrleansLatticeWal` / `...Clustering` / `...Reminders` / `...Grains` | Azure Table names. |
 | `Replication:ClusterId` | `Cluster:Id` | This region's replication cluster id. |
@@ -92,7 +92,7 @@ underscore separator, case-insensitive).
 | `Mcp:Stateless` | `true` | Stateless streamable-HTTP transport (no per-session server state), so a follow-up request can land on any region or replica behind Front Door. |
 | `Mcp:AdministratorToken` / `Mcp:AdministratorScheme` | - / `Bearer` | Service credential for discovery-time permission introspection of non-administrator callers. |
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |
-| `Mcp:Telemetry:AuthMode` | `None` | Backend auth mode. `None` for an unauthenticated backend (local compose Prometheus). `DynamicBearer` makes the head mint a rotating managed-identity Entra token per query for an Azure Monitor managed-Prometheus endpoint (no static secret); the workload identity needs Monitoring Data Reader on the workspace. |
+| `Mcp:Telemetry:AuthMode` | `None` | Backend auth mode. `None` for an unauthenticated backend (local compose Prometheus). `DynamicBearer` makes the head send a rotating managed-identity Entra token with each query to an Azure Monitor managed-Prometheus endpoint (no static secret), cached and refreshed shortly before it expires; the workload identity needs Monitoring Data Reader on the workspace. |
 | `Mcp:Telemetry:Scope` | `https://prometheus.monitor.azure.com/.default` | Access-token scope for `DynamicBearer` mode; override only for a non-default Azure Monitor audience. |
 | `Mcp:RegionId` / `Mcp:ClusterId` | `current` / - | This head's own (default) region id and cluster id, surfaced by `lattice_list_regions` and targeted when a tool call supplies no `region`. Compute sets them to the region code and Orleans cluster id. |
 | `Mcp:VerifyRegionIdentity` | `false` | Probe each peer region's state facade once and reject a peer whose endpoint does not reach its advertised cluster (an anycast/Front Door misconfiguration). Compute sets it `true` whenever peer regions are wired. |

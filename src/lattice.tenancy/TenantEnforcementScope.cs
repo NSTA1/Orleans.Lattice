@@ -14,11 +14,13 @@ public enum TenantEnforcementScope
 {
     /// <summary>
     /// The default. Admits against the global sum-fold of the tenant's usage over
-    /// the online resident clusters, so a tenant's total footprint across the
-    /// whole cluster fabric is bounded. Consistency is converged best-effort with
-    /// bounded overshoot: a concurrent write on another cluster can momentarily
-    /// push the true global total slightly over the quota before the per-cluster
-    /// usage slots re-converge.
+    /// every cluster usage slot published into its usage record - residency and
+    /// online status are not consulted, so a slot left by a cluster that no longer
+    /// hosts the tenant still counts - so the tenant's total footprint across the
+    /// clusters publishing into that record is bounded. Consistency is converged
+    /// best-effort with bounded overshoot: a concurrent write on another cluster can
+    /// momentarily push the true global total slightly over the quota before the
+    /// per-cluster usage slots re-converge.
     /// </summary>
     GlobalConverged = 0,
 

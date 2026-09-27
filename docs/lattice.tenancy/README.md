@@ -50,9 +50,12 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
   registration time - not at silo start, and never as a silent downgrade to an
   unenforced state - unless `AddLattice`, `AddLatticeMembership`, and
   `AddLatticeAuth` have all already run on the same builder.
-- **Coordination-free multi-cluster.** Tenant definitions converge across clusters
-  on the existing system-tree replication path; usage enforcement uses a
-  convergent CRDT sum (no locks, no consensus) with bounded, quantified overshoot.
+- **Coordination-free multi-cluster.** Tenant definitions and usage are convergent
+  CRDT state - a registry record merges field by field, and usage enforcement reads a
+  convergent sum (no locks, no consensus) with bounded, quantified overshoot - so they
+  converge across every cluster the `sys-tenant-*` trees replicate to. The package
+  does not enroll those trees for replication itself, and
+  `ReplicateLatticeSystemTrees` covers only the membership and authorization trees.
 
 ## Quick start
 
@@ -74,7 +77,8 @@ siloBuilder.AddLatticeTenancy(options =>
 });
 ```
 
-Tune the durable history retention over the `sys-tenant-*` registry trees:
+Tune the durable history retention on the `sys-tenant-registry` tree (the usage and
+overage trees keep no per-key history):
 
 ```csharp verify
 using Orleans.Lattice;
@@ -221,7 +225,9 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
 - **Enumeration pruning.** `AddLatticeTenancy` likewise replaces the core's no-op
   `ITenantEnumerationFilter`, so a tree-id enumeration (the cluster-state tree
   catalog, the tag-index catalog, the view catalog, the in-cluster all-tree-ids
-  read) is pruned to the trees the active tenant owns. Pruning is defence in depth rather than the
+  read) is pruned to the trees the active tenant owns; platform-owned `_lattice_` and
+  `sys-` ids are left in, for the catalog's system-tree switch and the per-entry
+  authorization check to govern. Pruning is defence in depth rather than the
   boundary: a caller that asserts no tenant is not pruned, and is confined instead
   by the per-entry authorization check, which composes the same tenant enforcer the
   write path uses and denies a tenant-scoped tree outright when no active tenant is
@@ -261,9 +267,9 @@ Each tenant carries **aggregate quotas** across all of its trees, expressed by
 
 | Dimension | Property | Meaning |
 |---|---|---|
-| Durable bytes | `MaxBytes` | Aggregate durable size across the tenant's trees. |
+| Durable bytes | `MaxBytes` | Aggregate durable size across the tenant's trees (WAL, snapshot, and leaf-state bytes). |
 | Live keys | `MaxKeys` | Aggregate live-key count. |
-| Resident memory | `MaxMemoryBytes` | Aggregate resident cache budget. |
+| Resident memory | `MaxMemoryBytes` | Aggregate resident memory, metered as the summed serialized leaf and shard-root grain-state bytes of the tenant's trees. |
 | Tree count | `MaxTreeCount` | Number of trees the tenant may own. |
 | Request rate | `MaxOpsPerSecond` | Cluster-wide ops/sec ceiling. |
 | Burst | `BurstPercent` | Percentage overage above the steady-state caps. |
@@ -287,8 +293,11 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   the refusal reaches a remote caller as `ResourceExhausted` carrying the breached
   dimension as a trailer; the tenant id is not echoed back, because the caller
   asserted its own active tenant on the request.
-- **Metering drives enforcement, on a cadence.** A quota is admitted against the
-  tenant's *metered* usage, so nothing binds until a usage sample lands. Each silo
+- **Metering drives enforcement, on a cadence.** A footprint quota (bytes, keys,
+  memory, and the tree count an ordinary write is checked against) is admitted
+  against the tenant's *metered* usage, so it binds only once a usage sample lands;
+  the request rate and the tree-count check at creation do not wait for one (both
+  are covered below). Each silo
   runs a background metering cycle every
   `TenantUsageAccountingOptions.MeterInterval` (default 30 seconds) that walks each
   tenant's own trees - a bounded range scan over the tenant's `t/{tenant}/` key
@@ -297,8 +306,8 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   **fails open** for a tenant with no landed sample yet, so a cold silo never
   spuriously refuses; that means enforcement arms one cycle after a tenant first
   has usage. Setting `MeterInterval` to zero disables metering entirely and leaves
-  admission permanently open, which is only appropriate for a deployment running
-  tenancy without resource governance.
+  footprint admission permanently open, which is only appropriate for a deployment
+  running tenancy without resource governance.
 - **A tenant's first non-empty sample always publishes.** Republishing a usage slot is gated
   by a hysteresis band (`PublishMinAbsoluteDelta` / `PublishMinRelativeDelta`) so a
   stream of negligible movements does not churn the registry. That band damps churn
@@ -349,7 +358,11 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   at the point of creation. It is enforced once, at the tree-administration facade
   every create funnels through, rather than additionally at the tenant-scoped
   facade above it: admission consumes a rate token, so evaluating it at both layers
-  would bill a single create twice.
+  would bill a single create twice. The ceiling is checked against an authoritative
+  count of the tenant's registered trees read at the moment of the create, not
+  against the metered sample, so it binds even for a tenant that has never been
+  metered; creates that read the count concurrently can each be admitted, so the cap
+  can be overshot by at most the number of creates in flight.
 - **The reserved `sys-` namespace is closed to tenants.** Tenant scoping composes
   the active tenant into a tree name, and deliberately passes an already-qualified
   name through uncomposed so it is never double-composed. The reserved `sys-`
@@ -384,7 +397,9 @@ override):
   to a per-cluster-slot state CRDT (a map from `ClusterId` to that cluster's latest
   sample). A cluster writes only its own slot and reads the whole map, so global
   usage is the sum-fold over every slot published so far - the fold is not filtered
-  by the tenant's region statuses. Enforcement admits against the global fold,
+  by the tenant's region statuses. The map holds another cluster's slot only once
+  the `sys-tenant-usage` tree replicates between them; until then the global fold
+  equals this cluster's own sample. Enforcement admits against the global fold,
   giving a single global budget rather than `limit x clusters`, with bounded
   transient overshoot. The monotonic overage tallies use grow-only `GCounter`s (one
   per bytes, keys, memory, and tree-count dimension). Slots are republished on a
@@ -417,8 +432,8 @@ enforcement stays lock-free:
 | `LeaseCycleTimeout` | `TimeSpan` | `20s` | The bound on a single lease cycle. A cycle that exceeds it is cancelled and retried on a later tick, so a stalled tenant-registry read can never occupy the loop for longer than one interval. Clamped down to `LeaseInterval` if set at or above it, so the duty cycle stays bounded. A non-positive value falls back to the default. |
 | `MaxLeaseBackoff` | `TimeSpan` | `5m` | The ceiling the lease interval backs off to after consecutive cycle failures. The effective interval doubles per consecutive failure and resets to `LeaseInterval` on the first success, so a persistently unhealthy registry is probed at a decaying rate rather than hammered every tick. A value below `LeaseInterval` disables backoff; a non-positive value falls back to the default. |
 | `RateSnapshotTtl` | `TimeSpan` | `2m` | How long a read of the registry's configured rates stays usable before the next cycle re-reads it. Configured rates change at administrative cadence, so caching them decouples the frequent re-apportionment of token buckets from the expensive whole-tree registry scan. The snapshot is stale-if-error, so a failed refresh apportions from the previous snapshot rather than pruning every tenant's bucket. A non-positive value falls back to the default. |
-| `Apportionment` | `TenantRateApportionmentStrategy` | `Demand` | `Demand` leases demand-proportionally and degrades to static-even when no cluster-wide demand aggregate is available; `StaticEven` is the zero-coordination fallback that splits the rate evenly. |
-| `DemandReserveFraction` | `double` | `0.2` | The fraction of the cluster rate that demand-proportional leasing reserves and splits evenly, guaranteeing an idle silo a non-zero floor so it can never be starved out of building demand. In `[0, 1]` (a value outside is clamped to that range); ignored under `StaticEven`. |
+| `Apportionment` | `TenantRateApportionmentStrategy` | `Demand` | `Demand` leases demand-proportionally and degrades to static-even when no cluster-wide demand aggregate is available; `StaticEven` is the zero-coordination fallback that splits the rate evenly. The package ships no cluster-wide demand aggregator - its in-process demand exchange always reports none - so `Demand` apportions exactly as `StaticEven` does. |
+| `DemandReserveFraction` | `double` | `0.2` | The fraction of the cluster rate that demand-proportional leasing reserves and splits evenly, guaranteeing an idle silo a non-zero floor so it can never be starved out of building demand. In `[0, 1]` (a value outside is clamped to that range); ignored under `StaticEven`, and whenever no cluster-wide demand aggregate is available (see `Apportionment`). |
 
 A breach surfaces as a `LatticeQuotaExceededException` on the `ops-per-second`
 dimension. Unlike the footprint dimensions it is **transient**: the same call
@@ -458,32 +473,48 @@ how that scoping applies to region discovery.
   actually replicates to and is served from) within that allowed set. A tenant that
   has never configured residency - every newly created tenant - is treated as online
   in every region, the pre-residency admit-all behaviour, until it does.
-- **Metadata everywhere, data to the residency set.** Tenant definitions still
-  converge to every region, so any region can fail-closed answer "is this tenant
-  resident here?"; tenant data replicates only to the residency set.
+- **Metadata everywhere, data to the residency set.** Tenant definitions
+  converge to every region the registry tree replicates to, so any such region can
+  fail-closed answer "is this tenant resident here?". A tenant's data is shipped to peers like any other replicated
+  tree; the receiving region refuses (and dead-letters) a replicated write for a
+  tenant that is not `Online` there, so the data lands only where the tenant is
+  online.
 - **Symmetric multi-master.** An `Online` region is a full read-write replica; there
   is no primary or leader. Enforcement ties in at the gate (a tenant not `Online` in
-  the serving region is refused) and the replication apply path (a tenant's writes
-  never land in a non-resident region).
+  the serving region is refused) and the replication apply path (a tenant's
+  replicated writes land only in a region where it is `Online`).
 
 ### Lifecycle states
 
-Adding or removing a region is asynchronous and observable. Each region carries one
-`TenantRegionStatus` per tenant:
+Each region carries one `TenantRegionStatus` per tenant, readable through
+`GetTenantRegionStatusAsync`:
 
 | Status | Resident? | Meaning |
 |--------|-----------|---------|
 | `None` | No | No relationship. An *allowed but not yet entered* region reports `None`. |
-| `Provisioning` | Yes | The region has been added and is being prepared. |
-| `Backfilling` | Yes | Existing data is being copied into the region. |
+| `Provisioning` | Yes | The region has been added to the residency set and is not yet serving. |
+| `Backfilling` | Yes | The step between `Provisioning` and `Online`, reserved for copying existing data into the region; not yet serving. |
 | `Online` | Yes | A full read-write replica, and the only status in which this region serves the tenant. |
-| `Draining` | No | The region has been dropped from residency and is shedding data. |
-| `Offline` | No | Drained; data is confirmed present in the remaining residency set. |
-| `Removed` | No | The removal is complete. |
+| `Draining` | No | The region has been dropped from residency and no longer serves. |
+| `Offline` | No | The step after `Draining`: drained, and no longer serving. |
+| `Removed` | No | Terminal: the removal is complete. |
 
 The **resident set** is exactly the rows whose status is `Provisioning`,
 `Backfilling`, or `Online`. A region does not serve the tenant until it reaches
-`Online`. Quota accounting does not follow these statuses: the `GlobalConverged`
+`Online`, and once any region status is set the tenant is served only in a region
+where its status is exactly `Online`.
+
+`SetResidencyAsync` applies only the first step of each path: `Provisioning` for an
+added region and `Draining` for a dropped one. The later steps (`Provisioning` ->
+`Backfilling` -> `Online`, and `Draining` -> `Offline` -> `Removed`) are single-step
+promotions reserved for backfill and drain machinery that no shipped package runs, so
+a region stays at the status `SetResidencyAsync` gave it. A tenant whose residency has
+been set is therefore served in no region until a host advances those statuses
+itself, which it can do only through the public `ITenantRegistry` and
+`TenantRecord.SetRegionStatus`, one legal step at a time as `TenantRegionLifecycle`
+defines them.
+
+Quota accounting does not follow these statuses: the `GlobalConverged`
 fold sums every cluster slot the tenant has published, whatever the status of that
 slot's region.
 
@@ -515,8 +546,8 @@ seconds) publishes per-tenant gauges - current usage against each quota dimensio
 the metered overage tallies - on a fixed cadence, so an operator can see per-tenant
 consumption and headroom. Separately, every registered
 `ITenantRegionStatusChangeListener` is notified of each tenant's local-region status
-transition - any change of `TenantRegionStatus`, such as a region becoming `Online`
-or finishing its drain - once the residency snapshot has observed it.
+transition - any change of `TenantRegionStatus`, such as a region entering
+`Provisioning` or `Draining` - once the residency snapshot has observed it.
 
 Every instrument is an **observable gauge** on the `orleans.lattice.tenancy` meter
 (`LatticeTenantMetrics.MeterName`). Each series carries a single `tenant` tag
@@ -682,21 +713,21 @@ the service collection directly - for example
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| `HistoryRetentionMode` | `HistoryRetentionMode` | `MetadataOnly` | Retention mode for the durable per-key history captured on the `sys-tenant-*` trees. History is never disabled by default. |
+| `HistoryRetentionMode` | `HistoryRetentionMode` | `MetadataOnly` | Retention mode for the durable per-key history captured on the `sys-tenant-registry` tree; the usage and overage trees keep none. History is never disabled by default. |
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
-| `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view over the registry trees. |
+| `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view (`sys-tenant-registry-history`) over the `sys-tenant-registry` tree. |
 | `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
 
 ### `TenantUsageAccountingOptions`
 
-Governs usage metering and the quota-enforcement scope new tenants inherit.
+Governs usage metering and the quota-enforcement scope every tenant is admitted under.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `DefaultEnforcementScope` | `TenantEnforcementScope` | `GlobalConverged` | The [enforcement scope](#enforcement-scope-multi-cluster) every tenant's quota admission runs under, read live; there is no per-tenant override yet. |
 | `PublishMinAbsoluteDelta` | `long` | `65536` (`64 * 1024`) | Absolute movement, in the sampled unit, below which a usage republish is damped. A tenant's *first* non-empty publish is never damped. |
 | `PublishMinRelativeDelta` | `double` | `0.05` | Relative movement, as a fraction of the last published value, below which a usage republish is damped. Per dimension the effective threshold is the larger of this fraction and `PublishMinAbsoluteDelta`, and the slot republishes when any one dimension moves by at least its threshold. |
-| `MeterInterval` | `TimeSpan` | `30s` | The per-silo metering cycle that samples each tenant's footprint and rolls it into that tenant's per-cluster usage slot. Zero or a negative value disables metering entirely, which pins quota admission in its documented fail-open branch so an authored quota never binds. |
+| `MeterInterval` | `TimeSpan` | `30s` | The per-silo metering cycle that samples each tenant's footprint and rolls it into that tenant's per-cluster usage slot. Zero or a negative value disables metering entirely, which pins footprint admission in its documented fail-open branch so an authored footprint quota never binds (the request rate and the tree-count check at creation still apply). |
 
 ### `TenantObservabilityOptions`
 

@@ -78,8 +78,10 @@ builder.Host.UseOrleans(silo =>
 
     // Membership resolves the ambient caller credential into a subject; Auth
     // installs the default-deny data-plane gate. 'admin' is a bootstrap
-    // administrator so the sample can seed the directory, rules, and trees
-    // before any rule exists.
+    // administrator, so the sample can seed the two trees before any rule
+    // grants a write and Act 4 shows it reading every tree (the reader's rule
+    // needs no grant: the policy store writes its reserved tree under system
+    // origin).
     silo.AddLatticeMembership();
     silo.AddLatticeAuth(options =>
     {

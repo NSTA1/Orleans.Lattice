@@ -12,7 +12,7 @@ Static extensions.
 
 - `IServiceCollection AddLatticeSchemaApiGrpc(this IServiceCollection services, Action<LatticeSchemaApiGrpcOptions>? configure = null)`
 
-  Registers the binding: the method-definition singleton, the server-side service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. The interceptor is registered globally but scopes enforcement to the schema control-API service by service-name prefix, so unrelated gRPC services on the same host are unaffected. Idempotent. Throws `ArgumentNullException` when `services` is null.
+  Registers the binding: the method-definition singleton, the server-side service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. The interceptor is registered globally but scopes enforcement to the schema control-API service by service-name prefix, so unrelated gRPC services on the same host are unaffected. Every seam and the service are registered with `TryAdd`, so a repeat call keeps the first registration of each; the interceptor, added to the global gRPC options, is appended again on each call. Throws `ArgumentNullException` when `services` is null.
 
 - `IEndpointRouteBuilder MapLatticeSchemaApiGrpc(this IEndpointRouteBuilder endpoints)`
 

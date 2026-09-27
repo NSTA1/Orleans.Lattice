@@ -959,12 +959,20 @@ public sealed class CrdtShapeRegistry
     private readonly ConcurrentDictionary<LatticeMergeMode, CrdtShape> _global = new();
 
     /// <summary>
-    /// Initialises a new registry pre-populated with the closed-shape
-    /// descriptors (<see cref="LatticeMergeMode.OrSet"/>,
+    /// Initialises a new registry pre-populated with the global descriptors
+    /// for every merge mode whose shape is unambiguous
+    /// (<see cref="LatticeMergeMode.OrSet"/>,
     /// <see cref="LatticeMergeMode.PnCounter"/>,
     /// <see cref="LatticeMergeMode.VersionVector"/>,
     /// <see cref="LatticeMergeMode.MvRegister"/>,
-    /// <see cref="LatticeMergeMode.Sequence"/>). Hosts add their
+    /// <see cref="LatticeMergeMode.Sequence"/>,
+    /// <see cref="LatticeMergeMode.OrFlag"/>,
+    /// <see cref="LatticeMergeMode.RwFlag"/>,
+    /// <see cref="LatticeMergeMode.GCounter"/>,
+    /// <see cref="LatticeMergeMode.GSet"/>,
+    /// <see cref="LatticeMergeMode.RwSet"/>,
+    /// <see cref="LatticeMergeMode.MaxRegister"/> and
+    /// <see cref="LatticeMergeMode.MinRegister"/>). Hosts add their
     /// <see cref="LatticeMergeMode.OrMap"/> descriptors per tree.
     /// </summary>
     public CrdtShapeRegistry()

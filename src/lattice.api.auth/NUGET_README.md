@@ -19,8 +19,9 @@ One combined admin surface carries:
 - **Policy admin.** CRUD authorization rules and list / enumerate them.
 - **`ExplainAsync`.** Returns the authorization verdict for a subject,
   operation, and scope, plus the rules that apply, for debugging policy. The
-  verdict is produced by the **same access gate** the data plane consults, so
-  an explanation can never disagree with the enforced decision.
+  verdict is produced by the **same access gate** the data plane consults,
+  evaluated for the subject as the membership directory resolves it (the id
+  plus its directory group closure; token-asserted groups are not included).
 - **`EffectivePermissionsAsync`.** Returns every authored rule that names a
   subject directly or through one of its groups, for dashboards and UX - a
   listing, not a resolved verdict. It reads the live policy store, so it

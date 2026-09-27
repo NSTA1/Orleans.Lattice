@@ -694,7 +694,8 @@ bootstrapped peer either at every key or at none, never at a strict
 subset.
 
 The export operates in two passes against a single frozen view of the
-producer's per-tree transaction-registry decisions:
+producer's tree-wide transaction-registry decisions, unioned across every
+registry shard of the tree:
 
 1. **Prepared rows pass (runs first).** Walks every shard's leaf
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for

@@ -12,7 +12,9 @@
 #
 # What it buys over the Onyx image:
 #   - one image serves CPU and NVIDIA, selected by the EMBED_PROVIDER env var
-#     with an automatic CPU fallback (build the cuda flavour to include CUDA);
+#     (build the cuda flavour to include CUDA). An unset or unrecognised value
+#     resolves to the CPU; there is no automatic fallback, so a selected CUDA
+#     provider that cannot be bound stops the server at startup;
 #   - no Python and no torch, so the image is roughly an order of magnitude
 #     smaller;
 #   - the same vectors. Run in fp32 this reproduces the Onyx server's output
@@ -43,7 +45,7 @@
 # embedding space. This is the same revision the Onyx companion image loads,
 # which is what makes the two images numerically interchangeable.
 #
-# To move the pin, update the revision and BOTH digests together.
+# To move the pin, update MODEL_REVISION and MODEL_SHA256 together.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS model
 ARG MODEL_REPO=nomic-ai/nomic-embed-text-v1
 ARG MODEL_REVISION=3ac47f125a41961d13b397d0332866be2f9152e1

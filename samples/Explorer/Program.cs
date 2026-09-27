@@ -32,8 +32,9 @@ using Orleans.Lattice.Schema;
 // auth (Access), and schema (Schema) - so those three console areas are live. The
 // console auto-signs-in as a bootstrap administrator (see below), which is what
 // makes the Access and Schema areas, gated on an administrator probe, light up
-// without a manual login. (The Backups area stays disabled: this sample does not
-// co-host the backup gRPC API.)
+// without a manual login. (The Backups area does not appear at all: this sample
+// does not co-host the backup gRPC API, and the console renders no entry for a
+// capability the cluster does not serve.)
 
 const string DemoTree = "factory-floor";
 const int GrpcPort = 5199;   // h2c gRPC endpoint the console connects to
@@ -157,10 +158,11 @@ builder.Host.UseOrleans(silo =>
     silo.AddLatticeStateApi();
 
     // Membership + authorization give the Access admin area a real control plane
-    // to manage and let the fail-closed capability probe succeed. The data-plane
-    // default is left permissive so the Explore area works without a sign-in; the
-    // reserved control plane (membership + policy) is always governed and only the
-    // bootstrap administrator below may manage it.
+    // to manage and let the fail-closed capability probe succeed. The data plane
+    // is deny-by-default (see AddLatticeAuth below): the Explore area works
+    // because the console signs in as the bootstrap administrator, which bypasses
+    // the decision engine. The reserved control plane (membership + policy) is
+    // always governed and only the bootstrap administrator below may manage it.
     silo.AddLatticeMembership(options => options.GroupMergeMode = groupMergeMode);
 
     // The identity directory the Access area validates and searches against. In
@@ -298,8 +300,10 @@ builder.Services.AddLatticeExplorerWeb(o =>
     o.AllowEnvironmentCredentialSeed = true;
 });
 
-// The Schema area is withheld from the Explorer's default UI for the initial
-// release, so this sample hides it too - matching the shipped experience.
+// The Schema area is withheld from the Explorer's default UI - the web head
+// wires its services but does not register its plugin, because its versioning
+// UI cannot yet express what differs between schema versions - so this sample
+// hides it too, matching the shipped experience.
 // Withholding it is simply not registering its plugin; there is no per-area
 // option flag. A developer working on the area can bring it back for a run by
 // setting LATTICE_EXPLORER_ENABLE_SCHEMA=true, with no code change.
