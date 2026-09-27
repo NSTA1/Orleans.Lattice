@@ -41,7 +41,10 @@ public interface ICrdtProvenanceDecoder
     /// <param name="deltas">
     /// The ordered author-delta sequence. Each entry's <c>Delta</c> must be the
     /// concrete delta type this decoder's <see cref="Mode"/> implies. An empty
-    /// sequence yields no events.
+    /// sequence yields no events. An implementation must treat this as a
+    /// read-only view for the duration of the call and must not retain it
+    /// afterwards: callers are free to reuse the backing storage across
+    /// successive decodes.
     /// </param>
     /// <returns>The decoded member-change events, in operation order.</returns>
     IReadOnlyList<CrdtMemberChange> DecodeDeltas(IReadOnlyList<CrdtProvenanceDelta> deltas);
