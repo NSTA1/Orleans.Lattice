@@ -49,7 +49,6 @@ public sealed class AppsGrpcSecurityTests
         var authorizer = services.GetRequiredService<ILatticeAppsApiAuthorizer>();
         Assert.That(authorizer, Is.TypeOf<DenyAppsApiAuthorizer>());
         Assert.That(await authorizer.IsAuthorizedAsync(default, default), Is.False);
-        Assert.That(await new AllowAllAppsApiAuthorizer().IsAuthorizedAsync(default, default), Is.True);
         Assert.That(services.GetRequiredService<ILatticeAppsApiAuthSchemeSource>().GetAdvertisement().Schemes, Is.Empty);
         var interceptor = services.GetRequiredService<LatticeAppsApiGrpcAuthInterceptor>();
         var error = Assert.ThrowsAsync<RpcException>(async () => await interceptor.UnaryServerHandler(
@@ -63,7 +62,7 @@ public sealed class AppsGrpcSecurityTests
     [TestCase("GetAuthScheme")]
     public void Unknown_or_mismatched_requests_fail_closed_even_when_enforcement_disabled(string method)
     {
-        var interceptor = Create(new AllowAllAppsApiAuthorizer(), false);
+        var interceptor = Create(Substitute.For<ILatticeAppsApiAuthorizer>(), false);
         var error = Assert.ThrowsAsync<RpcException>(async () => await interceptor.UnaryServerHandler(
             new AppsSlugRequest { Slug = "demo" }, new TestCallContext(LatticeAppsGrpcMethods.ServicePrefix + method),
             (_, _) => Task.FromResult(new AppCatalog())));
@@ -85,7 +84,10 @@ public sealed class AppsGrpcSecurityTests
     [TestCase(false)]
     public void Streaming_shapes_are_rejected_even_for_discovery_and_opt_out(bool required)
     {
-        var interceptor = Create(new AllowAllAppsApiAuthorizer(), required);
+        var authorizer = Substitute.For<ILatticeAppsApiAuthorizer>();
+        authorizer.IsAuthorizedAsync(Arg.Any<LatticeAppsApiAuthorizationContext>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var interceptor = Create(authorizer, required);
         var context = new TestCallContext(LatticeAppsGrpcMethods.ServicePrefix + "GetAuthScheme");
         var stream = Substitute.For<IAsyncStreamReader<AppsEmptyRequest>>();
         var writer = Substitute.For<IServerStreamWriter<AppCatalog>>();

@@ -7,11 +7,11 @@ facade implementation.
 
 Register Orleans serialization and an `ILatticeAppsControl` implementation in
 the host, call `services.AddLatticeAppsApiGrpc()`, then
-`app.MapLatticeAppsApiGrpc()`. Authorization defaults to deny. Register an
-`ILatticeAppsApiAuthorizer` to admit callers; the facade still independently
-enforces its app-install permissions and validates all requested capabilities.
-`AllowAllAppsApiAuthorizer` and `RequireAuthorization = false` are explicit
-opt-ins for endpoints protected by an outer authentication boundary.
+`app.MapLatticeAppsApiGrpc()`. Authorization defaults to deny. Implement and
+register `ILatticeAppsApiAuthorizer` with the host's admission policy, including
+when an outer authentication boundary protects the endpoint. The facade still
+independently enforces its app-install permissions and validates all requested
+capabilities.
 
 The default credential bridge reads `authorization`, strips a `Bearer` prefix,
 and scopes the token to the call. It does not authenticate the token.
