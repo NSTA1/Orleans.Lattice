@@ -44,7 +44,8 @@ public partial class HotShardMonitorGrainTests
     private static LifecycleHarness CreateLifecycleGrain(
         int physicalShardCount = 2,
         int virtualShardCount = 16,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        FakePersistentState<HotShardMonitorState>? state = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("monitor", TreeId));
@@ -117,7 +118,7 @@ public partial class HotShardMonitorGrainTests
         var grain = new HotShardMonitorGrain(
             context, grainFactory, reminders, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<HotShardMonitorGrain>(),
-            new FakePersistentState<HotShardMonitorState>());
+            state ?? new FakePersistentState<HotShardMonitorState>());
 
         return new LifecycleHarness(grain, grainFactory, lattice, splitGrain, reminders, timers, Shard);
     }
