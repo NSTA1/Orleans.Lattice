@@ -10,7 +10,7 @@ Always contributed to a caller whose effective permissions include a data-plane 
 
 | Tool | What it does |
 |---|---|
-| `repocontext_health` | Reports whether the repository-context surface is registered and reachable for the authenticated caller (`available`), and whether retrieval can actually serve (`retrievalReady`, `retrievalPhase`), alongside the facade `group` (always `repocontext`) and a human-readable `status` line that names any degradation. Returns success only when the caller cleared the authorization gate, so an agent can confirm the surface is wired end to end before using the other tools. `available` reports **reachability only** and stays true on a degraded host, because capture, recall, and scan keep working there; read `retrievalReady` for whether searches are trustworthy. A `retrievalPhase` of `building` means the vector plane is not serving and searches are answered by degraded keyword recall, so treat results as incomplete; `keyword_only` is an intended deployment with no embedding provider bound and IS ready. `serving` (semantic retrieval is serving) and `nothing_registered` (no repository is registered yet, so there is nothing to serve) are ready too. A `retrievalPhase` of `saturated_unavailable` means the vector plane is not serving and is **not expected to start at the present capacity**, because an admission gate refused its open past a declared bound (issue #3286); it is distinct from `building` precisely so a plane that will never arm is distinguishable from one still arming, and it clears by itself once admission recovers. |
+| `repocontext_health` | With `repoId`, reports the passive per-repository verdict and component evidence described under [Repository readiness](#repository-readiness). Without `repoId`, preserves the following host-only behavior: reports whether the repository-context surface is registered and reachable for the authenticated caller (`available`), and whether retrieval can actually serve (`retrievalReady`, `retrievalPhase`), alongside the facade `group` (always `repocontext`) and a human-readable `status` line that names any degradation. Returns success only when the caller cleared the authorization gate, so an agent can confirm the surface is wired end to end before using the other tools. `available` reports **reachability only** and stays true on a degraded host, because capture, recall, and scan keep working there; read `retrievalReady` for whether searches are trustworthy. A `retrievalPhase` of `building` means the vector plane is not serving and searches are answered by degraded keyword recall, so treat results as incomplete; `keyword_only` is an intended deployment with no embedding provider bound and IS ready. `serving` (semantic retrieval is serving) and `nothing_registered` (no repository is registered yet, so there is nothing to serve) are ready too. A `retrievalPhase` of `saturated_unavailable` means the vector plane is not serving and is **not expected to start at the present capacity**, because an admission gate refused its open past a declared bound (issue #3286); it is distinct from `building` precisely so a plane that will never arm is distinguishable from one still arming, and it clears by itself once admission recovers. |
 | `repocontext_recall` | Fetches a single record by its full key - a structural node, a symbol, or a memory entry - and returns its flattened fields, tags, links, and remaining life. For a memory entry it also evaluates **link staleness**: every live structural link is checked against its target's present state, and one whose digest has drifted, whose target has no live record at all, or for which no digest was ever captured is reported through `stale` and `staleLinks`. The subset pointing at nothing is also named in `danglingLinks` - always a subset, never a partition - because the two states have opposite remedies: drift asks the caller to re-read the file, a dangling link asks it to wait for the target to be indexed. A key with no live entry returns `exists=false`, so an absent or expired entry is distinguishable from an empty one. |
 | `repocontext_scan` | Walks an ordered range under a scope (all files, packages, or symbols; all memory; or the memory under one topic) and returns one page at a time with an opaque continuation token. Expired and tombstoned entries are never returned. As a bulk read it does not evaluate staleness, so `stale`/`staleLinks`/`danglingLinks` come back null ("not evaluated"), mirroring the expiry convention; `repocontext_recall` a key for its authoritative staleness. |
 | `repocontext_list_topics` | Enumerates the distinct memory topics for a repository, each with its live entry count, so an agent can discover what notes and decisions exist before recalling them. |
@@ -74,13 +74,61 @@ Contributed only when the host runs in **workspace** mode: a broad parent direct
 | `repocontext_remove_repo` | Removes every record for a repository - structural nodes, symbols, the content and cross-reference projections, session bookkeeping, memory, and every vector tree including the approximate index and the coverage digest - and drops it from `repocontext_list_repos`, cancelling any in-flight run and tearing down its indexing grains. The working tree on disk is never touched, and removing an unknown repository is a no-op. Prefer `repocontext_reset_index` when the goal is repairing a wedged or stale index - it drops the code index and its vectors but preserves the durable memory records. |
 | `repocontext_reset_index` | Drops a repository's code index and its derived planes (structural, symbol, content, cross-reference, session bookkeeping, and every vector tree) and leaves the durable agent-memory records for that repository intact. Use it to repair a wedged, stale, or corrupt code index without discarding notes, decisions, or gotchas: the repository stays registered and stays listed by `repocontext_list_repos`, reporting no ingest, no file count, and no indexed commit - which is exactly the state it is in, and which keeps the preserved memory discoverable rather than reachable only by an id the caller already knew. A subsequent `repocontext_add_repo` rebuilds the code index and its vectors from the working files and repopulates those fields, and the surviving memory records are re-embedded on the next indexing pass. The vector-membership `memkey-` markers are dropped together with the payloads, so surviving memory is not left flagged-but-unreachable by semantic search. Resetting an unknown repository is a no-op that does not register it. The result reports `entriesDeleted`, `elapsedMilliseconds`, the `treesSwept` it dropped (named, in sweep order), `memoryPreserved` (always `true`), and `censusCleared` (whether the repository root marker's index-derived fields were cleared). A lighter-consent operation than `repocontext_remove_repo`, which remains the verb for destroying memory too - and the only verb that drops a repository from the listing. The reset reports its own lifecycle through `repocontext_index_status` (`Running` in phase `Resetting` with advancing tree and entry counters, then `Completed` or `Failed`), and its sweep runs on a background task bound to the host lifetime rather than to the call: a caller that times out or loses its connection abandons only its wait, the reset keeps running under that caller's credential, and polling `repocontext_index_status` reports how it ended - so do not re-run it just because the response never arrived. Only a host restart interrupts it, leaving it `Running`/`Resetting` and never complete; re-running the reset, which is idempotent, finishes it. |
 
+## Repository readiness
+
+Call `repocontext_health` with `repoId` to answer the serving question in one call,
+rather than correlating ingest completion, vector counts, logs and exposition.
+Without it the existing host-only JSON payload is unchanged. With it,
+`retrievalReady`, `retrievalPhase` and `status` describe the requested repository,
+and `repository` carries `RepoContextRepositoryReadiness`:
+
+- `verdict` uses `RepoContextRetrievalReadinessPhase`: `Serving`, `Building`,
+  `KeywordOnly`, `NothingRegistered`, or `SaturatedUnavailable`. The existing
+  top-level `retrievalPhase` keeps its canonical snake-case tags.
+- `reason` names the actual blocking gate or last observed query fault, not a
+  generic degradation. It is also present for an intended keyword-only or empty
+  repository. `authoritative` is always `false`.
+- `ingest` retains the job's own counters, including files embedded versus scanned;
+  `vectorCoverage` reports the existing embedded-source count and `pending` flag.
+  These are different populations: embedded sources include symbols and memory.
+  A missing count is unknown, never zero, and this call schedules no count refresh.
+- `embeddingSpace` comes from provider configuration. `ann` contains this
+  repository/space's local build phase, generation and counts; null means no local
+  handle, not an empty index. `annCanServe` reads the same gate the handle's search
+  uses. An unpartitioned, non-empty index serves exhaustively and is ready.
+- `breakerOpen` and `breakerProbeDueIn` are non-consuming reads. A health call
+  cannot claim the half-open probe reserved for a real query.
+- `lastRetrievalPath` and `lastQueryAt` describe the latest query observation for
+  this repository only. A proven repository retains the 30-second fault hold-down;
+  its pending fault remains visible in `reason` during that grace period.
+- `contentPhase`, `contentReason` and `contentObservedAt` report the latest bounded
+  keyword content-tree scan: readable, completed-empty, faulted, or not observed.
+  They do not execute a scan and do not certify all content or hydration paths.
+
+This is a passive snapshot on the answering server. It does not call the embedder
+(including its health endpoint), run search/hydration, open an ANN handle, or
+advance any build. External embedder availability and hydration are known only
+through the last real query. With no serving ANN or previous successful query,
+`Building` with `semantic_serving_not_yet_demonstrated` is honest: a first successful
+real query demonstrates the eligible exact fallback. Ingest `Completed` alone
+never promotes it. A measured empty vector corpus together with a completed
+zero-file ingest reports `NothingRegistered`, with `retrievalReady: false` at
+repository scope; unknown coverage does not establish emptiness. A keyword-only
+configuration remains ready without requiring a vector plane.
+
+The verdict is advisory, not an authorization or correctness gate. Keep reading
+`retrievalPath` on each result for what that particular query actually did, and
+`index_status` for ingest progress. Neither tool is replaced. No part of this
+verdict is read from Prometheus or process-wide readiness/arming.
+
 ## Tool parameters
 
 Every argument is passed by name. Required arguments are in **bold**; every other argument is optional, and the defaults and bounds below are the ones the handlers apply. An argument is a string unless noted.
 
 | Tool | Parameters |
 |---|---|
-| `repocontext_health`, `repocontext_stats`, `repocontext_list_repos` | None. |
+| `repocontext_health` | `repoId` - optional; omitted preserves the host-only payload, supplied returns passive repository readiness. |
+| `repocontext_stats`, `repocontext_list_repos` | None. |
 | `repocontext_recall`, `repocontext_claim_status` | **`key`** - the full repository-context key (a memory-record key for `repocontext_claim_status`). |
 | `repocontext_list_topics`, `repocontext_index_status`, `repocontext_remove_repo`, `repocontext_reset_index` | **`repoId`**. |
 | `repocontext_scan` | **`repoId`**; **`scope`** - `Files`, `Packages`, `Symbols`, `Memory`, or `MemoryTopic`, matched case-insensitively; `topic` - required for `MemoryTopic`, otherwise ignored; `pathPrefix` - narrows a `Files` scan to a directory and is rejected for every other scope; `continuationToken` - the previous page's token; `pageSize` (integer) - at most 500, and 0 or less means the default of 100. |

@@ -29,8 +29,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// The target shard <c>T</c> never holds a <see cref="ShardSplitInProgress"/>
 /// record, so neither hook fires there - this naturally prevents recursive
 /// shadow-forwarding when <c>T</c> receives the mirrored
-/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> call. A defensive assertion in
-/// <c>TryForwardShadowWriteAsync</c> still guards against pathological
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> call. A defensive check in
+/// <see cref="TryResolveSplitShadowTarget"/> still guards against pathological
 /// configurations where <c>T == S</c>.
 /// </description></item>
 /// </list>
@@ -298,37 +298,6 @@ internal sealed partial class ShardRootGrain
                 throw new StaleShardRoutingException(MyShardIndex, target, slot);
             }
         }
-    }
-
-    /// <summary>
-    /// Forwards a successful local write to the shadow target if the split is
-    /// in <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/>, <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/>,
-    /// or <see cref="ShardSplitPhase.Swap"/> and <paramref name="key"/> hashes
-    /// to a moved virtual slot. Uses <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
-    /// so the original HLC is preserved and the write is idempotent under retry.
-    /// No-op otherwise.
-    /// <para>
-    /// Recursion guard: <c>T</c> never has its own <see cref="ShardSplitInProgress"/>,
-    /// so when <c>T</c> receives the forwarded merge call this hook does not fire.
-    /// </para>
-    /// </summary>
-    private async Task TryForwardShadowWriteAsync(string key, LwwValue<byte[]> value)
-    {
-        var sip = state.State.SplitInProgress;
-        if (sip is null) return;
-        if (sip.Phase != ShardSplitPhase.BeginShadowWrite
-            && sip.Phase != ShardSplitPhase.Drain
-            && sip.Phase != ShardSplitPhase.Swap) return;
-
-        // Defensive guard against pathological T == S configurations.
-        if (sip.ShadowTargetShardIndex == MyShardIndex) return;
-
-        var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
-        if (!sip.IsMovedSlot(slot)) return;
-
-        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{sip.ShadowTargetShardIndex}");
-        await ForwardWithDeadlineAsync(() =>
-            target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = value }, isCrossShardMigration: true));
     }
 
     /// <summary>

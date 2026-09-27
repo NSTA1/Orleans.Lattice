@@ -115,6 +115,10 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     private readonly Dictionary<string, int> _consecutiveMaterialiserDrainLagWindows
         = new(StringComparer.Ordinal);
 
+    // Monotonic timestamps, bounded by currently over-threshold trees.
+    private readonly Dictionary<string, long> _lastDrainLagHolderLogTimestamp
+        = new(StringComparer.Ordinal);
+
     // Per-(tree, shard) prior reading of the cumulative durable pin-write
     // latency-trip counter maintained caller-side by
     // WalMaterialiserPinPressure. Same per-tick delta-from-prior pattern as the
@@ -171,31 +175,34 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         return acc;
     }
 
-    // Logs the consumer holding a tree's drain-lag minimum as the tree crosses
-    // the threshold (#3131). Cursor age is head minus the consumer's position;
-    // position age is how long ago the registry last saw that position advance,
-    // which separates a consumer genuinely falling behind (recent) from one
-    // re-reporting a position it has not moved from (old or unknown).
+    // Each ranked holder gets a structured line under one timestamped observation.
     private void LogDrainLagMinHolder(
         string treeId,
         long lagTicks,
         int laggingConsumers,
         in WalCursorSnapshot minHolder,
-        long observedAtTicks)
+        DateTimeOffset observedAt,
+        Guid observationId,
+        int holderRank,
+        int holderCount)
     {
         double? positionAgeSeconds = minHolder.CursorAdvancedAtTicks is { } advancedAt && advancedAt > 0
-            ? TimeSpan.FromTicks(observedAtTicks - advancedAt).TotalSeconds
+            ? TimeSpan.FromTicks(observedAt.UtcTicks - advancedAt).TotalSeconds
             : null;
 
         _logger.LogWarning(
-            "Materialiser drain lag for tree {TreeId} crossed the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s). Minimum held by {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration).",
+            "Materialiser drain lag for tree {TreeId} is over the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s). Holder {HolderRank}/{HolderCount}: {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration). Observation {ObservationId} at {ObservedAtUtc:O}.",
             treeId,
             TimeSpan.FromTicks(lagTicks).TotalSeconds,
             laggingConsumers,
+            holderRank,
+            holderCount,
             minHolder.ConsumerId,
             minHolder.Cursor,
-            TimeSpan.FromTicks(observedAtTicks - minHolder.LastReportedAtTicks).TotalSeconds,
-            positionAgeSeconds);
+            TimeSpan.FromTicks(observedAt.UtcTicks - minHolder.LastReportedAtTicks).TotalSeconds,
+            positionAgeSeconds,
+            observationId,
+            observedAt);
     }
 
     private CancellationTokenSource? _loopCts;
@@ -591,8 +598,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     // behind - two conditions with opposite responses (issue
                     // #2444). Counting the consumers individually past the same
                     // threshold separates them without putting unbounded consumer
-                    // identity on a tag. It does NOT name the contributor; that is
-                    // issue #2505, out of band via SnapshotAsync.
+                    // identity on a tag. Holder warnings reuse this snapshot
+                    // out of band without changing the instruments.
                     //
                     // Deliberately inside the over-threshold branch: a healthy
                     // estate never reaches here, so steady-state per-tick cost is
@@ -608,11 +615,17 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     // (cold and position-stale consumers excluded, #2446 /
                     // #3131), so the count decomposes exactly the population
                     // the aggregate was computed over.
+                    var logDue = _logger.IsEnabled(LogLevel.Warning)
+                        && (!_consecutiveMaterialiserDrainLagWindows.TryGetValue(treeId, out var priorWindows)
+                            || priorWindows == 0
+                            || (opts.WalDrainLagHolderLogInterval is { } logInterval
+                                && (!_lastDrainLagHolderLogTimestamp.TryGetValue(treeId, out var lastLogged)
+                                    || _time.GetElapsedTime(lastLogged) >= logInterval)));
                     var lagging = 0;
-                    WalCursorSnapshot minHolder = default;
-                    var hasMinHolder = false;
-                    foreach (var entry in snapshot)
+                    WalCursorSnapshot? first = null, second = null, third = null;
+                    for (var index = 0; index < snapshot.Count; index++)
                     {
+                        var entry = snapshot[index];
                         if (!WalDrainLagEligibility.IsEligible(entry, drainLagReportedAtOrAfterTicks))
                         {
                             continue;
@@ -621,10 +634,24 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         {
                             lagging++;
                         }
-                        if (!hasMinHolder || entry.Cursor < minHolder.Cursor)
+                        if (!logDue)
                         {
-                            minHolder = entry;
-                            hasMinHolder = true;
+                            continue;
+                        }
+                        if (first is null || entry.Cursor < first.Value.Cursor)
+                        {
+                            third = second;
+                            second = first;
+                            first = entry;
+                        }
+                        else if (second is null || entry.Cursor < second.Value.Cursor)
+                        {
+                            third = second;
+                            second = entry;
+                        }
+                        else if (third is null || entry.Cursor < third.Value.Cursor)
+                        {
+                            third = entry;
                         }
                     }
 
@@ -633,18 +660,31 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
                         LatticeTenantLabel.ForTree(treeId));
 
-                    // Name the consumer holding the minimum once, on the tick a
-                    // tree crosses the threshold, not on every over-threshold
-                    // tick. Unbounded consumer identity stays off metric tags;
-                    // the structured surface for it is issue #2505.
-                    if (hasMinHolder
-                        && _logger.IsEnabled(LogLevel.Warning)
-                        && (!_consecutiveMaterialiserDrainLagWindows.TryGetValue(treeId, out var priorWindows)
-                            || priorWindows == 0))
+                    if (first is { } minimum)
                     {
-                        LogDrainLagMinHolder(treeId, lagTicks, lagging, minHolder, observedAt.UtcTicks);
+                        var observationId = Guid.NewGuid();
+                        var holderCount = third.HasValue ? 3 : second.HasValue ? 2 : 1;
+                        LogDrainLagMinHolder(treeId, lagTicks, lagging, minimum, observedAt, observationId, 1, holderCount);
+                        if (second is { } runnerUp)
+                        {
+                            LogDrainLagMinHolder(treeId, lagTicks, lagging, runnerUp, observedAt, observationId, 2, holderCount);
+                        }
+                        if (third is { } thirdHolder)
+                        {
+                            LogDrainLagMinHolder(treeId, lagTicks, lagging, thirdHolder, observedAt, observationId, 3, holderCount);
+                        }
+                        _lastDrainLagHolderLogTimestamp[treeId] = _time.GetTimestamp();
                     }
                 }
+            }
+        }
+
+        // Dictionary removal during enumeration is supported; no cleanup list per tick.
+        foreach (var treeId in _lastDrainLagHolderLogTimestamp.Keys)
+        {
+            if (!drainLagEnabled || !perTree.TryGetValue(treeId, out var acc) || !acc.MaterialiserDrainLagOverThreshold)
+            {
+                _lastDrainLagHolderLogTimestamp.Remove(treeId);
             }
         }
 

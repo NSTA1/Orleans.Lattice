@@ -87,6 +87,12 @@ for (var i = 0; i < args.Length - 1; i++)
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
 }
 
+if (string.Equals(suite, "leafgetmany", StringComparison.OrdinalIgnoreCase))
+{
+    var leafSummary = BenchmarkRunner.Run<LeafGetManyBenchmarks>(config);
+    return leafSummary.HasCriticalValidationErrors || leafSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "detachedtransfer", StringComparison.OrdinalIgnoreCase))
 {
     var transferSummary = BenchmarkRunner.Run<DetachedLeafTransferBenchmarks>(config);

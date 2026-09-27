@@ -102,6 +102,10 @@ internal sealed class RepoContextVectorCache
         return Volatile.Read(ref entry.Generation);
     }
 
+    /// <summary>Reads a generation without creating a cache entry for a diagnostic request.</summary>
+    internal long ReadGeneration(string repoId) =>
+        _repos.TryGetValue(repoId, out var entry) ? Volatile.Read(ref entry.Generation) : 0;
+
     /// <summary>
     /// Stores a freshly gathered candidate set for a repository and embedding space,
     /// but only when the repository's generation still matches

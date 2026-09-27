@@ -19,7 +19,9 @@ internal static class RepoContextRequestContexts
 {
     /// <summary>Creates a request context whose <c>Services</c> is <paramref name="services"/>.</summary>
     /// <param name="services">The request service provider, or <c>null</c> to model a context with none.</param>
-    public static async Task<RequestContext<CallToolRequestParams>> CreateAsync(IServiceProvider? services)
+    /// <param name="parameters">Optional wire parameters for invoking a registered tool.</param>
+    public static async Task<RequestContext<CallToolRequestParams>> CreateAsync(
+        IServiceProvider? services, CallToolRequestParams? parameters = null)
     {
         using var input = new MemoryStream();
         using var output = new MemoryStream();
@@ -33,7 +35,7 @@ internal static class RepoContextRequestContexts
         return new RequestContext<CallToolRequestParams>(
             server,
             new JsonRpcRequest { Method = RequestMethods.ToolsCall },
-            new CallToolRequestParams { Name = "test" })
+            parameters ?? new CallToolRequestParams { Name = "test" })
         {
             Services = services,
         };

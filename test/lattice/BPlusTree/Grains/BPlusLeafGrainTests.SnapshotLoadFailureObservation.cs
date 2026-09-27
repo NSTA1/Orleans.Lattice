@@ -88,13 +88,8 @@ public partial class BPlusLeafGrainTests
     {
         var treeId = UniqueSnapshotLoadFailureTree();
 
-        // Wrapped, because that is how the fault actually arrives. The
-        // allocation fails inside the provider's deserialiser, several frames
-        // below this grain call, and Orleans surfaces a failure to read a
-        // grain's persistent state as an activation failure carrying the
-        // original as an inner exception. A classifier that tested only the
-        // outermost type would report "faulted" for every real occurrence -
-        // the exact wrong answer, not a missing one.
+        // Prove recognition when the original OOM survives wrapping. This is
+        // not a claim that snapshot-grain activation preserves the cause.
         var (grain, _) = CreateGrainWithFailingSnapshotLoad(
             treeId,
             new InvalidOperationException(
@@ -207,13 +202,14 @@ public partial class BPlusLeafGrainTests
             + "divide the leaf because raising the limit will make this MORE frequent.");
     }
 
-    [Test]
-    public async Task Snapshot_load_that_fails_for_any_other_reason_is_counted_as_faulted()
+    [TestCase("storage unreachable")]
+    [TestCase("activation failed")]
+    public async Task Snapshot_load_without_an_observable_cause_is_counted_as_unclassified(string message)
     {
         var treeId = UniqueSnapshotLoadFailureTree();
         var (grain, _) = CreateGrainWithFailingSnapshotLoad(
             treeId,
-            new InvalidOperationException("storage unreachable"));
+            new InvalidOperationException(message));
 
         var records = CaptureSnapshotLoadFailures(treeId, out var listener);
         bool rehydrated;
@@ -230,10 +226,11 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(
             records.Single().Tags.Single(t => t.Key == LatticeMetrics.TagReason).Value,
-            Is.EqualTo(LatticeMetrics.SnapshotLoadFailureFaulted.Value),
-            "The two arms call for opposite operator responses - raise the memory limit, versus "
-            + "investigate the storage provider - so folding them together would undo the entire point "
-            + "of the counter.");
+            Is.EqualTo("unclassified"),
+            "A snapshot-grain activation can hide the original OOM. Absence of an observable OOM "
+            + "must not imply a storage fault or rule out memory pressure.");
+        Assert.That(LatticeMetrics.SnapshotLoadFailureFaulted.Value, Is.EqualTo("unclassified"),
+            "Keep the public field source-compatible while correcting its exported reason vocabulary.");
     }
 
     [Test]

@@ -995,4 +995,34 @@ internal sealed class AnnRepoContextSemanticIndex : IRepoContextSemanticIndex
             ? RepoContextExactScanBudgetDecision.WithinBudget
             : RepoContextExactScanBudgetDecision.Exceeded;
     }
+
+    /// <inheritdoc />
+    public RepoContextSemanticReadiness DescribeReadiness(string repoId, EmbeddingSpaceTag space)
+    {
+        var plane = _plane.DescribeReadiness(repoId, space);
+        var open = _exactScanBreaker.IsTripped(repoId);
+        var result = plane with
+        {
+            BreakerOpen = open,
+            ProbeDueIn = open ? _exactScanBreaker.ProbeDueIn(repoId) : null,
+        };
+        if (plane.CanServe == true)
+        {
+            return result;
+        }
+
+        if (open)
+        {
+            return result with { CanServe = false, Blocker = "exact_fallback_suppressed" };
+        }
+
+        if (EvaluateExactScanBudget(repoId, space, out _, out _) == RepoContextExactScanBudgetDecision.Exceeded)
+        {
+            return result with { CanServe = false, Blocker = "exact_scan_budget_exceeded" };
+        }
+
+        // An unbuilt ANN is not a refusal by the semantic index: the exact fallback
+        // remains eligible. Only a real query can demonstrate that it can complete.
+        return result with { CanServe = null, Blocker = plane.Saturated ? plane.Blocker : null };
+    }
 }

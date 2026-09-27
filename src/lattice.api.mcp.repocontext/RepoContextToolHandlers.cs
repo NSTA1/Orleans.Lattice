@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.IO;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -26,6 +27,56 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </remarks>
 internal static class RepoContextToolHandlers
 {
+    /// <summary>Reports host health, or passive repository readiness when an id is supplied.</summary>
+    /// <param name="context">The authorized MCP request context.</param>
+    /// <param name="repoId">The optional repository identity; omitted preserves the host-only response.</param>
+    /// <returns>The health payload for the requested scope.</returns>
+    public static async Task<RepoContextHealthResult> HealthAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Optional repository id. When supplied, report passive per-repository readiness and component evidence instead of process-wide readiness. No embedding, search, or recovery probe is executed.")]
+        string? repoId = null)
+    {
+        if (repoId is null)
+        {
+            return Health(context);
+        }
+
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter must be a non-empty identifier when supplied.");
+        }
+
+        repoId = repoId.Trim();
+        RepoIndexProgress? ingest = null;
+        string? ingestReason = null;
+        try
+        {
+            ingest = await IndexStatusAsync(context, repoId).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            context.Services!.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(RepoContextToolHandlers))
+                .LogWarning(ex, "Could not read ingest metadata for repository readiness of {RepoId}.", repoId);
+            ingestReason = "ingest_metadata_unavailable:" + ex.GetType().Name;
+        }
+        var coverage = context.Services!.GetRequiredService<RepoContextVectorWriter>().ReadEmbeddedCount(repoId);
+        var repository = ResolveSearchService(context).DescribeReadiness(repoId, ingest, ingestReason, coverage);
+        return new RepoContextHealthResult
+        {
+            Available = true,
+            Group = LatticeApiMcpGroupCapabilityMap.DisplayName(LatticeApiMcpGroup.RepoContext),
+            Status = repository.Reason ?? "Semantic retrieval is serving for this repository.",
+            RetrievalReady = repository.Verdict != RepoContextRetrievalReadinessPhase.NothingRegistered
+                && RepoContextRetrievalReadinessState.IsReadyPhase(repository.Verdict),
+            RetrievalPhase = RepoContextRetrievalReadinessState.PhaseTag(repository.Verdict),
+            Repository = repository,
+        };
+    }
+
     /// <summary>
     /// Reports that the repository-context surface is reachable and the caller is
     /// authorized, together with whether retrieval can actually serve.

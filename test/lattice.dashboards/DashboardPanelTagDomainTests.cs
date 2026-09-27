@@ -140,13 +140,14 @@ public sealed class DashboardPanelTagDomainTests
             // arms are diagnostic rather than operational. `stranded` (issue
             // #3213) joins that diagnostic set: it is drawn on the unfiltered
             // by-outcome panel, and this panel's question is narrower - whether
-            // reclamation is happening at all.
+            // reclamation is happening at all. `no_partitions` likewise belongs
+            // on the unfiltered by-outcome panel, not a reclaimed-only panel.
             ["CommitPath|135|orleans.lattice.wal.gc.passes|outcome"] =
-                ["blocked", "failed", "idle", "no_consumer", "over_ceiling", "stranded", "unclassified"],
+                ["blocked", "failed", "idle", "no_consumer", "no_partitions", "over_ceiling", "stranded", "unclassified"],
 
             // Panel 70 is the blocked-pass panel, the mirror of panel 135.
             ["Replication|70|orleans.lattice.wal.gc.passes|outcome"] =
-                ["failed", "idle", "no_consumer", "over_ceiling", "reclaimed", "stranded", "unclassified"],
+                ["failed", "idle", "no_consumer", "no_partitions", "over_ceiling", "reclaimed", "stranded", "unclassified"],
 
             // Panel 161 is the minting-versus-drive RATIO panel, whose single
             // target is by construction a one-arm selection: the quotient it

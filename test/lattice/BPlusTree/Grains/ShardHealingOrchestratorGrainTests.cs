@@ -44,6 +44,9 @@ public partial class ShardHealingOrchestratorGrainTests
         public required Func<int, ITreeShardConsolidationGrain> ConsolidationOf { get; init; }
         public required IReminderRegistry Reminders { get; init; }
 
+        /// <summary>The timer registry the sweep timer is armed through.</summary>
+        public required ITimerRegistry Timers { get; init; }
+
         /// <summary>The map the registry currently reports for the tree.</summary>
         public required Func<ShardMap> CurrentMap { get; init; }
 
@@ -68,7 +71,8 @@ public partial class ShardHealingOrchestratorGrainTests
         // The sweep timer is armed through the activation's service provider, so
         // a test that drives EnsureRunningAsync needs a timer registry wired in.
         var services = Substitute.For<IServiceProvider>();
-        services.GetService(typeof(ITimerRegistry)).Returns(Substitute.For<ITimerRegistry>());
+        var timers = Substitute.For<ITimerRegistry>();
+        services.GetService(typeof(ITimerRegistry)).Returns(timers);
         context.ActivationServices.Returns(services);
 
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -184,6 +188,7 @@ public partial class ShardHealingOrchestratorGrainTests
             ShardOf = Shard,
             ConsolidationOf = Consolidation,
             Reminders = reminderRegistry,
+            Timers = timers,
             CurrentMap = () => map,
             SetMap = m => map = m,
         };

@@ -90,7 +90,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
         var tools = new List<McpServerTool>(capacity)
         {
             McpServerTool.Create(
-                RepoContextToolHandlers.Health,
+                RepoContextToolHandlers.HealthAsync,
                 new McpServerToolCreateOptions
                 {
                     Name = "repocontext_health",
@@ -105,7 +105,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                         + "discriminates the two reasons a host answers keyword recall: 'keyword_only' is an "
                         + "intended keyword-only deployment and IS ready, while 'building' is a plane that "
                         + "cannot serve and is NOT - treat its search results as degraded and incomplete. "
-                        + "This is the same readiness signal the host's /health/ready endpoint reads. "
+                        + "Without repoId this is the same readiness signal the host's /health/ready endpoint reads. "
+                        + "Supply repoId for a passive per-repository verdict, its actual blocking reason, "
+                        + "vector coverage, ANN phase/generation, breaker and last observed content-tree health. "
+                        + "That snapshot is authoritative=false and never runs an embedding, search or recovery probe. "
+                        + "Unknown evidence is not empty; a first real query can demonstrate the exact fallback. "
                         + "Read-only.",
                     ReadOnly = true,
                     Destructive = false,

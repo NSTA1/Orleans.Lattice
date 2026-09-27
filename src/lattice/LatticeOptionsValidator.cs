@@ -436,6 +436,13 @@ if (options.WalSaturationMaterialiserLagSampleWindows < 1)
         + "(the number of consecutive saturation-sampler windows the tree's drain-lag level must exceed the threshold "
         + "before the classifier holds the tree at Throttled via the drain-lag branch).");
 }
+if (options.WalDrainLagHolderLogInterval is { } holderLogInterval
+    && holderLogInterval <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalDrainLagHolderLogInterval)} must be positive when set "
+        + "(null keeps edge-only drain-lag holder warnings).");
+}
 if (options.WalDrainLagConsumerFreshness < TimeSpan.Zero)
 {
     return ValidateOptionsResult.Fail(
