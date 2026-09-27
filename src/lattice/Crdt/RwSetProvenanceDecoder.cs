@@ -185,7 +185,7 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
             // Remove-wins: the element is present only when no remove dot
             // survives (every remove dot has been cancelled by an observed-add
             // tombstone).
-            if (LiveRemoveCount(set, key) != 0) continue;
+            if (HasLiveRemove(set, key)) continue;
 
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
@@ -215,18 +215,88 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
         return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
     }
 
-    private static int LiveRemoveCount(RwSet set, string key)
+    /// <summary>
+    /// Whether any of <paramref name="key"/>'s remove dots survives its
+    /// observed-add tombstones - the remove-wins exclusion test.
+    /// <para>
+    /// Cancellation is coverage-based, not exact-match: a remove dot is
+    /// cancelled when the same replica tombstoned any counter at or above it.
+    /// So when an element's tombstones all carry one replica id - which is what
+    /// they overwhelmingly do - the whole list collapses to that replica's
+    /// highest counter and the per-dot test becomes a single comparison,
+    /// reducing the element from O(removes x tombstones) to O(T + R) with no
+    /// allocation. An element whose tombstones span several replicas, or whose
+    /// list is short, keeps the scan. The shared-replica check is a
+    /// <b>precondition</b>: a counter-only test would wrongly cancel a remove
+    /// dot on replica B whose counter equals a tombstoned counter on replica A.
+    /// </para>
+    /// <para>
+    /// The caller only asks whether any remove survives, so the walk stops at
+    /// the first one rather than counting them all.
+    /// </para>
+    /// </summary>
+    private static bool HasLiveRemove(RwSet set, string key)
     {
-        if (!set.Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return 0;
+        if (!set.Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return false;
         set.Tombstones.TryGetValue(key, out var tomb);
-        if (tomb is null || tomb.Count == 0) return removeDots.Count;
-        var live = 0;
+        if (tomb is null || tomb.Count == 0) return true;
+
+        string? sharedReplica = null;
+        var coverCounter = long.MinValue;
+        if (tomb.Count > TombstoneIndexThreshold && removeDots.Count > 1)
+        {
+            sharedReplica = SingleReplica(tomb);
+            if (sharedReplica is not null)
+            {
+                for (var i = 0; i < tomb.Count; i++)
+                {
+                    if (tomb[i].Counter > coverCounter) coverCounter = tomb[i].Counter;
+                }
+            }
+        }
+
         for (var i = 0; i < removeDots.Count; i++)
         {
             var dot = removeDots[i];
-            if (!OrSetDotCompaction.Covers(tomb, in dot)) live++;
+            var covered = sharedReplica is not null
+                ? dot.Counter <= coverCounter
+                    && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
+                : OrSetDotCompaction.Covers(tomb, in dot);
+            if (!covered) return true;
         }
-        return live;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Tombstone-list length above which the remove-wins test switches from a
+    /// linear coverage scan to the collapsed replica-plus-highest-counter test.
+    /// Below it the scan wins: the precondition pass has a fixed cost that a
+    /// handful of counter-first comparisons does not repay.
+    /// </summary>
+    private const int TombstoneIndexThreshold = 8;
+
+    /// <summary>
+    /// The single replica id every dot in <paramref name="dots"/> carries, or
+    /// <see langword="null"/> when the list spans more than one replica (or is
+    /// empty). One pass, comparing ordinally and short-circuiting on the
+    /// reference the list overwhelmingly repeats.
+    /// </summary>
+    private static string? SingleReplica(List<OrSetDot> dots)
+    {
+        if (dots.Count == 0) return null;
+        var first = dots[0].ReplicaId;
+        for (var i = 1; i < dots.Count; i++)
+        {
+            var candidate = dots[i].ReplicaId;
+            if (!ReferenceEquals(candidate, first)
+                && !string.Equals(candidate, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return first;
     }
 
     private static void EmitDots(
