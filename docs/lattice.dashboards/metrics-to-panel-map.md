@@ -63,31 +63,25 @@ exporter does not double the word. Writing `..._stored_bytes_bytes_total`
 queries a series that cannot exist, and a panel querying a non-existent series
 renders as an empty graph, which is visually identical to a real zero.
 
-> **The drift guard accepts only the container's spelling for the `By` unit.**
+> **The drift guard accepts only the `.AddPrometheusExporter()` spelling.**
 > `AddInstrumentForms` in `DashboardJsonTests` and
-> `MeterDashboardCoverageTestsBase` no longer synthesizes `_bytes` /
-> `_bytes_total` (issue #3259), so a token carrying an inserted `_bytes` segment
-> fails the build. That is harmless for the byte-unit instruments whose names
-> already end in `bytes`, and wrong under `.AddPrometheusExporter()` for the ten
-> `By`-unit instruments whose names do not - for example
-> `orleans.lattice.storage.policy.bytes_reclaimed` and
-> `orleans.lattice.replication.peer.bytes_behind` - which the bundled dashboards
-> query without the `_bytes` segment that exporter emits. Twelve further query
-> tokens follow the container's spelling in the same way and are accepted as
-> written: seven `s`-unit gauges (among them
-> `orleans.lattice.leaf.split.completion.oldest_age` and
-> `orleans.lattice.backup.inventory.oldest_age`), the `_sum` / `_count` of the
-> `s`-unit histograms `orleans.lattice.wal.gc.scheduler.pass_duration` and
-> `orleans.lattice.wal.gc.scheduler.wait`, and the `%`-unit gauge
-> `orleans.lattice.grainindex.backfill.percent_complete`. The guard still
-> synthesizes `_milliseconds_*` and `_seconds_*` forms, and
-> `DashboardBucketUnitSuffixTests` requires every `_bucket` token to carry the
-> suffix its instrument's unit implies, so the 75 distinct millisecond and second
-> tokens in the bundled dashboards' queries (60 `_milliseconds_bucket`, 11
-> `_milliseconds_sum` / `_milliseconds_count`, 4 `_seconds_bucket`) are the
-> `.AddPrometheusExporter()` spellings. They match nothing on the container's
-> exposition, where a histogram also has no `_bucket` series at all; issues
-> #3260 and #3261 track that split.
+> `MeterDashboardCoverageTestsBase` derive the single family name that exporter
+> emits from each instrument's declared unit and kind, using the shared
+> `PrometheusExporterNaming` model of the rules above (issue #3260). No other
+> spelling resolves: neither the container's unsuffixed one, nor a unit word the
+> instrument's unit does not imply. So a `By`-unit counter whose name does not
+> end in `bytes` is queried as, for example,
+> `orleans_lattice_storage_policy_bytes_reclaimed_bytes_total`; an `s`-unit gauge
+> as `orleans_lattice_leaf_split_completion_oldest_age_seconds`; the `s`-unit
+> histogram `orleans.lattice.wal.gc.scheduler.wait` as
+> `orleans_lattice_wal_gc_scheduler_wait_seconds_sum` / `_count`; and the
+> `%`-unit gauge `orleans.lattice.grainindex.backfill.percent_complete` as
+> `orleans_lattice_grainindex_backfill_percent_complete_percent`, because its name
+> does not end in `percent`. `DashboardBucketUnitSuffixTests` separately requires
+> every `_bucket` token to carry the suffix its instrument's unit implies. None of
+> these spellings match anything on the container's exposition, where a histogram
+> also has no `_bucket` series at all. Issue #3261 records why that split is
+> deliberate.
 
 ### How to read the Tags column
 
@@ -130,7 +124,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.leaf.tombstone.ratio` | histogram (`1`) | `tree`, `tenant` | Overview | Leaf tombstone ratio p95 |
 | `orleans.lattice.leaf.splits` | counter (`{split}`) | `tree`, `tenant` | Overview | Splits committed |
 | `orleans.lattice.leaf.split.completion.in_flight` | gauge (`{completion}`) | `tree`, `tenant` | Overview | Leaf-split completions currently suspended inside `CompleteSplitAsync` (issue #2967). The divided/faulted outcome counters partition only TERMINATED divisions, so a division still in the completion body at scrape time belongs to none of them, and because the catch that records faulted is unconditional a division carrying neither divided nor faulted did not throw - it is genuinely in flight, a state nothing named before this gauge. Read beside the oldest-completion-age panel: a non-zero count is only actionable once that age is climbing. No per-tree pre-mint, so a tree with nothing in flight emits no series and No data is the healthy steady state |
-| `orleans.lattice.leaf.split.completion.oldest_age` | gauge (`s`) | `tree`, `tenant` | Overview | Age in seconds of the oldest leaf-split completion suspended inside `CompleteSplitAsync` (issue #2967). Separates a division momentarily in flight (age near zero, falling) from one that is stuck (age climbing without bound), which the bare in-flight count cannot. A measurement, not a threshold: the code encodes no abandonment age, so alert on a sustained climb read against real completion durations. A registry-backed gauge rather than a completion-duration histogram on purpose - a histogram only records on completion, so a division that never completes would never appear in one. The panel queries the bare name, matching `orleans.lattice.backup.inventory.oldest_age`; that is the repository-context container's spelling, and under `.AddPrometheusExporter()` the family carries a `_seconds` suffix (see [How an instrument name becomes a PromQL series name](#how-an-instrument-name-becomes-a-promql-series-name)) |
+| `orleans.lattice.leaf.split.completion.oldest_age` | gauge (`s`) | `tree`, `tenant` | Overview | Age in seconds of the oldest leaf-split completion suspended inside `CompleteSplitAsync` (issue #2967). Separates a division momentarily in flight (age near zero, falling) from one that is stuck (age climbing without bound), which the bare in-flight count cannot. A measurement, not a threshold: the code encodes no abandonment age, so alert on a sustained climb read against real completion durations. A registry-backed gauge rather than a completion-duration histogram on purpose - a histogram only records on completion, so a division that never completes would never appear in one. The panel queries `orleans_lattice_leaf_split_completion_oldest_age_seconds`, the `.AddPrometheusExporter()` family for its `s` unit, matching `orleans.lattice.backup.inventory.oldest_age`; the repository-context container publishes the bare name instead (see [How an instrument name becomes a PromQL series name](#how-an-instrument-name-becomes-a-promql-series-name)) |
 | `orleans.lattice.leaf.bisect_refusals` | counter (`{refusal}`) | `tree`, `reason`, `detach_seam`, `tenant` | Overview | Leaf division fast path forfeited (issue #2787). Read `reason` and `detach_seam` together: `no_snapshot_attached` with seam `none` is benign, the same reason with any other seam means an unrelated whole-leaf operation consumed the frame and the split must now materialise the entire leaf. Seam values `underlying_rows_accessor` and `range_hydration_completed` are never produced by a deployed process (issue #2865), so a missing line for either is expected and is not evidence about leaf behaviour |
 | `orleans.lattice.leaf.byte.overflow` | counter (`{leaf}`) | `tree`, `outcome`, `tenant` | Overview | Splits committed. Pre-minted at zero for both outcomes when a leaf reaches the byte-bound check during snapshot capture, with the tag set a real emission carries, so a missing series means the build did not land rather than that no leaf overflowed (issue #2756). The panel's byte-overflow target nonetheless still appends `or vector(0)`, so on the chart that absence draws as a zero line |
 | `orleans.lattice.leaf.split_attempts` | counter (`{attempt}`) | `tree`, `outcome`, `failure_class`, `tenant` | Overview | Leaf divisions sought; `failure_class` (`unaffordable`, `timeout`, `other`) is carried by the `faulted` arm only. Read beside the bisect-refusal panel, which is uninterpretable alone: a zero refusal rate means either no division forfeited its fast path or none was ever attempted, and only this counter separates them. All five outcomes are pre-minted at zero when a leaf reaches the byte-bound check during snapshot capture, so the panel omits `or vector(0)` and a flat zero is a measured zero (issue #2756). `no_admissible_pivot` means the division was declined because no row fell strictly inside the leaf's own declared range, so it owned nothing it was entitled to divide (issue #3117); it is self-correcting rather than a wedge - the out-of-span rows drain to their real custodians and the leaf is then under threshold or divisible - but a sustained non-zero rate means rows are not draining and should be read beside the span-admission forward metrics |

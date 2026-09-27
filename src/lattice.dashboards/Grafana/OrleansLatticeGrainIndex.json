@@ -163,7 +163,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (index) (orleans_lattice_grainindex_backfill_percent_complete{index=~\"$index\"})",
+          "expr": "max by (index) (orleans_lattice_grainindex_backfill_percent_complete_percent{index=~\"$index\"})",
           "legendFormat": "{{index}}"
         }
       ]

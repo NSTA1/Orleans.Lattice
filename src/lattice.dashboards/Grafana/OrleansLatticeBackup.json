@@ -357,7 +357,7 @@
         },
         {
           "refId": "B",
-          "expr": "sum (rate(orleans_lattice_backup_bytes_processed_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum (rate(orleans_lattice_backup_bytes_processed_bytes_total{scope=~\"$scope\"}[5m]))",
           "legendFormat": "bytes/s"
         }
       ]
@@ -385,7 +385,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum (rate(orleans_lattice_backup_retention_bytes_reclaimed_total{scope=~\"$scope\"}[5m]))",
+          "expr": "sum (rate(orleans_lattice_backup_retention_bytes_reclaimed_bytes_total{scope=~\"$scope\"}[5m]))",
           "legendFormat": "bytes reclaimed/s"
         }
       ]
@@ -814,7 +814,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(orleans_lattice_backup_inventory_oldest_age)"
+          "expr": "max(orleans_lattice_backup_inventory_oldest_age_seconds)"
         }
       ]
     },
@@ -841,7 +841,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(orleans_lattice_backup_inventory_newest_age)"
+          "expr": "max(orleans_lattice_backup_inventory_newest_age_seconds)"
         }
       ]
     },
@@ -896,7 +896,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (scope) (orleans_lattice_backup_scope_last_success_age)",
+          "expr": "max by (scope) (orleans_lattice_backup_scope_last_success_age_seconds)",
           "legendFormat": "{{scope}}"
         }
       ]

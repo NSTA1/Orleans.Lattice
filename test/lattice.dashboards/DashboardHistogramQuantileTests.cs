@@ -9,131 +9,35 @@ using Orleans.Lattice.Testing.Hygiene;
 namespace Orleans.Lattice.Dashboards.Tests;
 
 /// <summary>
-/// The Prometheus family a .NET instrument declaration renders as, derived from
-/// the <c>Meter.Create*</c> factory that declares it.
-/// </summary>
-internal enum DeclaredInstrumentKind
-{
-    /// <summary>A <c>Counter&lt;T&gt;</c>.</summary>
-    Counter,
-
-    /// <summary>An <c>UpDownCounter&lt;T&gt;</c>.</summary>
-    UpDownCounter,
-
-    /// <summary>A <c>Histogram&lt;T&gt;</c> - the only kind that exports bucket series.</summary>
-    Histogram,
-
-    /// <summary>An <c>ObservableGauge&lt;T&gt;</c>.</summary>
-    ObservableGauge,
-
-    /// <summary>An <c>ObservableCounter&lt;T&gt;</c>.</summary>
-    ObservableCounter,
-
-    /// <summary>An <c>ObservableUpDownCounter&lt;T&gt;</c>.</summary>
-    ObservableUpDownCounter,
-}
-
-/// <summary>
-/// The source-derived registry of every instrument declared anywhere under
-/// <c>src/</c>, keyed by its canonical dotted name and carrying the factory kind
-/// that declares it.
+/// Maps every Prometheus <c>_bucket</c> token a declared instrument could be
+/// written as back to the instrument and the kind that declares it.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The registry is built by parsing source rather than by reflecting over live
-/// instruments, because many instruments - observable gauges in particular - are
-/// created only when the host starts the subsystem that owns them, so a snapshot
-/// <see cref="MeterListener"/> at test time never sees them. Parsing the
-/// declaration covers the lazily-created and the eagerly-created alike, and does
-/// so uniformly.
+/// This map is a <b>binder</b>, not a naming gate. Its job is to attach a bucket
+/// token to the instrument a panel author meant, so that the kind gate below can
+/// report a panel reading buckets off a counter as a kind violation, and the unit
+/// gate can report a wrong unit suffix as a wrong suffix - rather than both being
+/// reported as an unknown instrument. It is deliberately permissive for that
+/// reason: it generates the unsuffixed and both time-suffixed forms for every
+/// instrument. Whether a token is the exact family the exporter emits is judged by
+/// <see cref="PrometheusExporterNaming"/>, through <c>DashboardJsonTests</c>.
 /// </para>
 /// <para>
-/// <b>The mapping is built forward, never reverse.</b> The exporter translates
-/// both <c>'.'</c> and any underscore already present in the .NET name into
-/// <c>'_'</c>, so a Prometheus token cannot be parsed back into a dotted name:
-/// <c>orleans_lattice_wal_gc_passes_total</c> is consistent with several distinct
-/// dotted names and the mangling is not injective. Every lookup here therefore
-/// generates the candidate Prometheus forms from a known dotted name and matches
-/// tokens against that generated set.
+/// Bucket forms are generated for <b>every</b> kind, not only histograms, so that
+/// a panel naming <c>some_counter_bucket</c> resolves to a counter and is reported
+/// as a kind violation, rather than failing to resolve at all.
 /// </para>
 /// </remarks>
-internal static class DeclaredInstruments
+internal static class DeclaredBucketTokens
 {
-    private static readonly Regex CreateRegex = new(
-        @"Create(?<kind>Histogram|UpDownCounter|Counter|ObservableGauge|ObservableCounter|ObservableUpDownCounter)"
-        + @"\s*(?:<[^>()]*>)?\s*(?<open>\()\s*(?<arg>@?""(?:[^""\\]|\\.)*""|[A-Za-z_][A-Za-z0-9_.]*)",
-        RegexOptions.Compiled);
+    private static readonly Lazy<IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)>> TokensLazy =
+        new(Build, isThreadSafe: true);
 
-    private static readonly Regex NamedUnitRegex = new(
-        @"^unit\s*:\s*""(?<u>[^""\\]*)""$",
-        RegexOptions.Compiled);
+    /// <summary>Every candidate bucket token, bound to its declaring instrument and kind.</summary>
+    public static IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)> BucketTokens => TokensLazy.Value;
 
-    private static readonly Regex ConstRegex = new(
-        @"const\s+string\s+(?<id>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*""(?<val>[^""\\]*)""\s*;",
-        RegexOptions.Compiled);
-
-    private static readonly Lazy<Registry> RegistryLazy = new(Build, isThreadSafe: true);
-
-    /// <summary>Every declared instrument, keyed by canonical dotted name.</summary>
-    public static IReadOnlyDictionary<string, DeclaredInstrumentKind> ByDottedName => RegistryLazy.Value.ByDottedName;
-
-    /// <summary>
-    /// Declarations whose name argument could not be resolved to a literal. This
-    /// must stay empty: an unresolved declaration is an instrument the gates
-    /// silently stop covering, so it is asserted rather than tolerated.
-    /// </summary>
-    public static IReadOnlyList<string> Unresolved => RegistryLazy.Value.Unresolved;
-
-    /// <summary>The number of <c>Create*</c> declarations the scan matched.</summary>
-    public static int DeclarationCount => RegistryLazy.Value.DeclarationCount;
-
-    /// <summary>
-    /// Maps every Prometheus <c>_bucket</c> token any declared instrument could
-    /// produce - under any unit suffix the exporter may insert - back to the kind
-    /// that declares it.
-    /// </summary>
-    /// <remarks>
-    /// Bucket forms are generated for <b>every</b> kind, not only histograms, so
-    /// that a panel naming <c>some_counter_bucket</c> resolves to a counter and is
-    /// reported as a kind violation, rather than failing to resolve at all and
-    /// being reported as an unknown instrument. The two are different defects with
-    /// different remedies and must not be conflated.
-    /// </remarks>
-    public static IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)> BucketTokens =>
-        RegistryLazy.Value.BucketTokens;
-
-    /// <summary>
-    /// The unit string each instrument declares, keyed by canonical dotted name.
-    /// An instrument that declares no unit maps to the empty string.
-    /// </summary>
-    /// <remarks>
-    /// The unit is read from the declaration's argument list, which is located by
-    /// balancing parentheses from the factory call rather than by matching a
-    /// trailing anchor such as <c>description:</c>. That distinction is
-    /// load-bearing: an anchored pattern reads only the declarations shaped the
-    /// way its author happened to look at, and silently reports every other
-    /// declaration as <i>no unit</i> rather than as <i>not read</i>. Four
-    /// instruments in <c>src/</c> supply the unit positionally, and an anchored
-    /// scan misses all four while reporting a clean result.
-    /// </remarks>
-    public static IReadOnlyDictionary<string, string> UnitByDottedName => RegistryLazy.Value.UnitByDottedName;
-
-    /// <summary>
-    /// Declarations whose argument list could not be read to its closing
-    /// parenthesis, so the declared unit is <b>unknown</b> rather than absent.
-    /// Asserted empty, because a parser that classifies what it could not read as
-    /// "no unit" reports its own depth as the repository's content.
-    /// </summary>
-    public static IReadOnlyList<string> UnitUnresolved => RegistryLazy.Value.UnitUnresolved;
-
-    /// <summary>
-    /// The number of instruments whose unit was supplied positionally rather than
-    /// with a <c>unit:</c> label. Asserted non-zero, so that the parser's ability
-    /// to read positional units stays proven rather than assumed.
-    /// </summary>
-    public static int PositionalUnitCount => RegistryLazy.Value.PositionalUnitCount;
-
-    /// <summary>Generates every Prometheus bucket token a dotted instrument name could produce.</summary>
+    /// <summary>Generates every Prometheus bucket token a dotted instrument name could be written as.</summary>
     public static IEnumerable<string> BucketFormsOf(string dottedName)
     {
         ArgumentNullException.ThrowIfNull(dottedName);
@@ -144,83 +48,10 @@ internal static class DeclaredInstruments
         yield return underscored + "_seconds_bucket";
     }
 
-    private static Registry Build()
+    private static IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)> Build()
     {
-        var root = HygieneRepository.FindRepoRoot();
-        var src = Path.Combine(root, "src");
-
-        var constants = new Dictionary<string, string>(StringComparer.Ordinal);
-        var ambiguous = new HashSet<string>(StringComparer.Ordinal);
-        var files = new List<(string Path, string Text)>();
-
-        foreach (var file in HygieneRepository.EnumerateFiles(src, "*.cs"))
-        {
-            var text = File.ReadAllText(file);
-            files.Add((file, text));
-
-            foreach (Match m in ConstRegex.Matches(text))
-            {
-                var id = m.Groups["id"].Value;
-                var val = m.Groups["val"].Value;
-                if (constants.TryGetValue(id, out var existing))
-                {
-                    if (!string.Equals(existing, val, StringComparison.Ordinal))
-                    {
-                        ambiguous.Add(id);
-                    }
-                }
-                else
-                {
-                    constants[id] = val;
-                }
-            }
-        }
-
-        var byDotted = new Dictionary<string, DeclaredInstrumentKind>(StringComparer.Ordinal);
-        var unitByDotted = new Dictionary<string, string>(StringComparer.Ordinal);
-        var unresolved = new List<string>();
-        var unitUnresolved = new List<string>();
-        var positionalUnits = 0;
-        var count = 0;
-
-        foreach (var (path, text) in files)
-        {
-            foreach (Match m in CreateRegex.Matches(text))
-            {
-                count++;
-                var kind = Enum.Parse<DeclaredInstrumentKind>(m.Groups["kind"].Value);
-                var arg = m.Groups["arg"].Value;
-                var dotted = ResolveName(arg, constants, ambiguous);
-
-                if (dotted is null)
-                {
-                    unresolved.Add($"{Path.GetFileName(path)}: Create{kind}(... {arg} ...)");
-                    continue;
-                }
-
-                // A name declared twice must agree on its kind; the exporter would
-                // otherwise emit two conflicting "# TYPE" lines for one family.
-                if (byDotted.TryGetValue(dotted, out var existing) && existing != kind)
-                {
-                    unresolved.Add($"{dotted}: declared as both {existing} and {kind}");
-                    continue;
-                }
-
-                byDotted[dotted] = kind;
-
-                var arguments = ReadArgumentList(text, m.Groups["open"].Index);
-                if (arguments is null)
-                {
-                    unitUnresolved.Add($"{Path.GetFileName(path)}: {dotted} - argument list did not close");
-                    continue;
-                }
-
-                unitByDotted[dotted] = ResolveUnit(SplitTopLevelArguments(arguments), ref positionalUnits);
-            }
-        }
-
         var bucketTokens = new Dictionary<string, (string, DeclaredInstrumentKind)>(StringComparer.Ordinal);
-        foreach (var (dotted, kind) in byDotted)
+        foreach (var (dotted, kind) in DeclaredInstruments.ByDottedName)
         {
             foreach (var token in BucketFormsOf(dotted))
             {
@@ -236,243 +67,10 @@ internal static class DeclaredInstruments
             }
         }
 
-        unresolved.Sort(StringComparer.Ordinal);
-        unitUnresolved.Sort(StringComparer.Ordinal);
-        return new Registry(byDotted, unitByDotted, unresolved, unitUnresolved, count, positionalUnits, bucketTokens);
+        return bucketTokens;
     }
-
-    /// <summary>
-    /// Returns the text between the parenthesis at <paramref name="openIndex"/> and
-    /// its match, or <see langword="null"/> when the list does not close. String
-    /// literals, character literals, and comments are skipped so that a parenthesis
-    /// inside one cannot unbalance the scan.
-    /// </summary>
-    private static string? ReadArgumentList(string text, int openIndex)
-    {
-        var depth = 0;
-
-        for (var i = openIndex; i < text.Length; i++)
-        {
-            var c = text[i];
-
-            if (c == '"')
-            {
-                i = SkipStringLiteral(text, i);
-                if (i < 0)
-                {
-                    return null;
-                }
-
-                continue;
-            }
-
-            if (c == '\'')
-            {
-                i = SkipCharLiteral(text, i);
-                if (i < 0)
-                {
-                    return null;
-                }
-
-                continue;
-            }
-
-            if (c == '/' && i + 1 < text.Length && text[i + 1] == '/')
-            {
-                while (i < text.Length && text[i] != '\n')
-                {
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (c == '/' && i + 1 < text.Length && text[i + 1] == '*')
-            {
-                var end = text.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                if (end < 0)
-                {
-                    return null;
-                }
-
-                i = end + 1;
-                continue;
-            }
-
-            if (c == '(')
-            {
-                depth++;
-                continue;
-            }
-
-            if (c == ')')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    return text[(openIndex + 1)..i];
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>Returns the index of the closing quote, or -1 when unterminated.</summary>
-    private static int SkipStringLiteral(string text, int quoteIndex)
-    {
-        var verbatim = quoteIndex > 0 && text[quoteIndex - 1] == '@';
-
-        for (var i = quoteIndex + 1; i < text.Length; i++)
-        {
-            if (verbatim)
-            {
-                if (text[i] != '"')
-                {
-                    continue;
-                }
-
-                // A doubled quote inside a verbatim literal is an escaped quote.
-                if (i + 1 < text.Length && text[i + 1] == '"')
-                {
-                    i++;
-                    continue;
-                }
-
-                return i;
-            }
-
-            if (text[i] == '\\')
-            {
-                i++;
-                continue;
-            }
-
-            if (text[i] == '"')
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    /// <summary>Returns the index of the closing quote, or -1 when unterminated.</summary>
-    private static int SkipCharLiteral(string text, int quoteIndex)
-    {
-        for (var i = quoteIndex + 1; i < text.Length; i++)
-        {
-            if (text[i] == '\\')
-            {
-                i++;
-                continue;
-            }
-
-            if (text[i] == '\'')
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    /// <summary>Splits an argument list on its top-level commas.</summary>
-    private static List<string> SplitTopLevelArguments(string arguments)
-    {
-        var parts = new List<string>();
-        var depth = 0;
-        var start = 0;
-
-        for (var i = 0; i < arguments.Length; i++)
-        {
-            var c = arguments[i];
-
-            if (c == '"')
-            {
-                var end = SkipStringLiteral(arguments, i);
-                i = end < 0 ? arguments.Length : end;
-                continue;
-            }
-
-            if (c is '(' or '[' or '{' or '<')
-            {
-                depth++;
-                continue;
-            }
-
-            if (c is ')' or ']' or '}' or '>')
-            {
-                depth--;
-                continue;
-            }
-
-            if (c == ',' && depth <= 0)
-            {
-                parts.Add(arguments[start..i].Trim());
-                start = i + 1;
-            }
-        }
-
-        parts.Add(arguments[start..].Trim());
-        return parts;
-    }
-
-    /// <summary>
-    /// Reads the declared unit from a split argument list. A <c>unit:</c> label
-    /// wins; failing that the second positional argument is the unit, which is the
-    /// shape the <c>Meter.Create*</c> overloads define.
-    /// </summary>
-    private static string ResolveUnit(List<string> arguments, ref int positionalUnits)
-    {
-        foreach (var argument in arguments)
-        {
-            var named = NamedUnitRegex.Match(argument);
-            if (named.Success)
-            {
-                return named.Groups["u"].Value;
-            }
-        }
-
-        if (arguments.Count >= 2 && arguments[1].Length > 1 && arguments[1][0] == '"' && arguments[1][^1] == '"')
-        {
-            positionalUnits++;
-            return arguments[1][1..^1];
-        }
-
-        return string.Empty;
-    }
-
-    private static string? ResolveName(string arg, Dictionary<string, string> constants, HashSet<string> ambiguous)
-    {
-        if (arg.Length > 1 && arg[0] == '"')
-        {
-            return arg[1..^1];
-        }
-
-        if (arg.Length > 2 && arg[0] == '@' && arg[1] == '"')
-        {
-            return arg[2..^1];
-        }
-
-        var identifier = arg.Split('.')[^1];
-        if (ambiguous.Contains(identifier))
-        {
-            return null;
-        }
-
-        return constants.TryGetValue(identifier, out var value) ? value : null;
-    }
-
-    private sealed record Registry(
-        IReadOnlyDictionary<string, DeclaredInstrumentKind> ByDottedName,
-        IReadOnlyDictionary<string, string> UnitByDottedName,
-        IReadOnlyList<string> Unresolved,
-        IReadOnlyList<string> UnitUnresolved,
-        int DeclarationCount,
-        int PositionalUnitCount,
-        IReadOnlyDictionary<string, (string Dotted, DeclaredInstrumentKind Kind)> BucketTokens);
 }
+
 
 /// <summary>
 /// Asserts that every Prometheus bucket series a bundled Grafana panel reads is
@@ -775,7 +373,7 @@ public sealed class DashboardHistogramQuantileTests
         {
             foreach (var token in site.BucketTokens)
             {
-                if (!DeclaredInstruments.BucketTokens.TryGetValue(token, out var binding))
+                if (!DeclaredBucketTokens.BucketTokens.TryGetValue(token, out var binding))
                 {
                     violations.Add(
                         $"{site.Describe()} reads '{token}', which does not correspond to any instrument "

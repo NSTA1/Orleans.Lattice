@@ -217,20 +217,14 @@ public sealed class DashboardByteSeriesNameTests
     }
 
     /// <summary>
-    /// The series names the measured exporter rule produces for one instrument.
+    /// The series names the measured exporter rule produces for one instrument:
+    /// exactly those <see cref="PrometheusExporterNaming"/> derives from its declared
+    /// unit and kind (issue #3260), so a byte counter whose name does not already
+    /// end in <c>_bytes</c> is emittable only as <c>..._bytes_total</c>, and a gauge
+    /// never as a <c>_total</c> or <c>_bucket</c> form.
     /// </summary>
-    private static IReadOnlyList<string> EmittableForms(string dotted)
-    {
-        var underscored = dotted.Replace('.', '_');
-
-        // The measured rule: append the unit segment only when the name does not
-        // already carry it. Applying it unconditionally is precisely the defect.
-        var based = underscored.EndsWith("_bytes", StringComparison.Ordinal)
-            ? underscored
-            : underscored + "_bytes";
-
-        return [.. SeriesSuffixes.Select(s => based + s).Distinct(StringComparer.Ordinal)];
-    }
+    private static IReadOnlyList<string> EmittableForms(string dotted) =>
+        DashboardJsonTests.TryGetExporterSeriesNames(dotted, out var series) ? series : [];
 
     /// <summary>
     /// The byte-shaped series names no exporter emits for one instrument: those

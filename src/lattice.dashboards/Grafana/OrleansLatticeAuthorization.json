@@ -197,7 +197,7 @@
       "targets": [
         {
           "refId": "AGE",
-          "expr": "max by (instance) (orleans_lattice_auth_snapshot_age)",
+          "expr": "max by (instance) (orleans_lattice_auth_snapshot_age_seconds)",
           "legendFormat": "{{instance}}"
         }
       ]
