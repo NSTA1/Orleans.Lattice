@@ -151,6 +151,16 @@ public partial class TreeShardConsolidationGrainTests
         var freezeIndex = h.Log.IndexOf("donor.EnterReject");
         var flipIndex = h.Log.IndexOf("registry.ReassignSlots");
 
+        // IndexOf returns -1 for an absent marker, and every log position is
+        // greater than -1. Without these two preconditions a fold that never
+        // froze the donor or never flipped the slots would count EVERY merge as
+        // "after" the missing marker, so both closing assertions would hold for
+        // precisely the run they exist to reject.
+        Assert.That(freezeIndex, Is.GreaterThanOrEqualTo(0),
+            "precondition: the fold must actually have frozen the donor, or 'after the freeze' names no point in the log");
+        Assert.That(flipIndex, Is.GreaterThan(freezeIndex),
+            "precondition: the slot flip must follow the freeze, or 'after the flip' names no point in the log");
+
         var mergesAfterFreeze = 0;
         var mergesAfterFlip = 0;
         for (var i = 0; i < h.Log.Entries.Count; i++)

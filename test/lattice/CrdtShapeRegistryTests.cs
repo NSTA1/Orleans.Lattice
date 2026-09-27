@@ -804,6 +804,15 @@ public class CrdtShapeRegistryTests
         var ab = ApplySequential(Combine(a, b));
         var ba = ApplySequential(Combine(b, a));
 
+        // AssertLiveEquivalent compares two key sets and then loops over them,
+        // so it holds trivially when BOTH maps are empty and the loop body never
+        // runs. Establish that there is something to compare before comparing it,
+        // or a regression that dropped every add would read as "commutative".
+        Assert.That(ab.Keys(), Is.Not.Empty,
+            "positive control: the combined delta must apply to a non-empty map, or the equivalence below compares nothing");
+        Assert.That(ab.ContainsKey("k"), Is.True,
+            "positive control: 'k' is added by both operands and tombstoned by neither, so it must survive");
+
         AssertLiveEquivalent(ab, ba);
     }
 
@@ -816,6 +825,14 @@ public class CrdtShapeRegistryTests
 
         var combinedMap = ApplySequential(Combine(a, a));
         var singleMap = ApplySequential(a);
+
+        // Same guard as the commutativity test: two empty maps are "equivalent",
+        // so without a live key the idempotence claim is satisfied by a combine
+        // that produced nothing at all.
+        Assert.That(combinedMap.Keys(), Is.Not.Empty,
+            "positive control: the self-combined delta must apply to a non-empty map, or the equivalence below compares nothing");
+        Assert.That(combinedMap.ContainsKey("k"), Is.True,
+            "positive control: the tombstone carries dot (C,5), which matches neither add, so 'k' must remain live");
 
         AssertLiveEquivalent(combinedMap, singleMap);
     }
