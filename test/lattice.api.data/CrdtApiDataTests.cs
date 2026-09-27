@@ -188,4 +188,45 @@ public sealed class CrdtApiDataTests
         var afterRemove = await _fixture.Api.MapGetAsync(tree, "doc");
         Assert.That(afterRemove.Keys, Is.EquivalentTo(new[] { "title" }));
     }
+
+    [Test]
+    public async Task whole_collection_reads_project_only_survivors_after_removes()
+    {
+        // The three whole-collection reads each resolve their live members in a
+        // single scan whose survivor test is the only liveness test performed.
+        // A removed member keeps its causal history in the stored state, so the
+        // case that distinguishes a correct scan from one that projects whatever
+        // it finds is exactly this one: read back after removing part of each
+        // collection, including a map field removed down to nothing.
+        const string tree = "crdt-survivors";
+        await _fixture.RegisterTreeAsync(tree);
+        // The OR-Map is the one mode whose shape is registered per tree, so its
+        // half of the check runs on the fixture's shaped tree.
+        var mapTree = CrdtApiDataClusterFixture.MapTreeId;
+        await _fixture.RegisterTreeAsync(mapTree);
+
+        foreach (var name in new[] { "a", "b", "c" })
+        {
+            await _fixture.Api.SetAddAsync(tree, "orset", Encoding.UTF8.GetBytes(name), "r1");
+            await _fixture.Api.RwSetAddAsync(tree, "rwset", Encoding.UTF8.GetBytes(name), "r1");
+            await _fixture.Api.MapSetAsync(mapTree, "survivors", name, "r1", Encoding.UTF8.GetBytes(name));
+        }
+
+        await _fixture.Api.SetRemoveAsync(tree, "orset", Encoding.UTF8.GetBytes("b"));
+        await _fixture.Api.RwSetRemoveAsync(tree, "rwset", Encoding.UTF8.GetBytes("b"), "r1");
+        await _fixture.Api.MapRemoveAsync(mapTree, "survivors", "b");
+
+        var orset = await _fixture.Api.SetGetAsync(tree, "orset");
+        var rwset = await _fixture.Api.RwSetGetAsync(tree, "rwset");
+        var map = await _fixture.Api.MapGetAsync(mapTree, "survivors");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(orset.Select(Encoding.UTF8.GetString), Is.EquivalentTo(new[] { "a", "c" }));
+            Assert.That(rwset.Select(Encoding.UTF8.GetString), Is.EquivalentTo(new[] { "a", "c" }));
+            Assert.That(map.Keys, Is.EquivalentTo(new[] { "a", "c" }));
+            Assert.That(Encoding.UTF8.GetString(map["a"][0]), Is.EqualTo("a"));
+            Assert.That(Encoding.UTF8.GetString(map["c"][0]), Is.EqualTo("c"));
+        });
+    }
 }

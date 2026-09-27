@@ -302,7 +302,18 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     {
         ArgumentNullException.ThrowIfNull(key);
         if (!Adds.TryGetValue(key, out var entries) || entries.Count == 0) return default;
+        return MergeLive(key, entries);
+    }
 
+    /// <summary>
+    /// Folds the live entries already resolved for <paramref name="key"/> into a
+    /// fresh merged value, or <c>null</c> when every observed dot for the key has
+    /// been tombstoned. Split out of <see cref="Get"/> so a whole-map projection
+    /// can reuse the fold without repeating the <see cref="Adds"/> lookup that
+    /// produced <paramref name="entries"/>.
+    /// </summary>
+    private TValue? MergeLive(TKey key, List<OrMapEntry<TValue>> entries)
+    {
         // Skip the hash-set allocation entirely when this key has no
         // tombstones (the common case). For small tombstone lists a
         // linear scan is also cheaper than a HashSet alloc.
@@ -398,6 +409,51 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         if (live.Count == 0) return Array.Empty<TKey>();
         SortKeys(live);
         return live;
+    }
+
+    /// <summary>
+    /// The whole-map counterpart to <see cref="Keys"/> followed by a
+    /// <see cref="Get"/> per key: every live key paired with its lattice-merged
+    /// value, resolved in a <em>single</em> walk of <see cref="Adds"/> and
+    /// returned in an exactly-sized array.
+    /// <para>
+    /// Prefer this on a read path that materialises the whole map into an
+    /// unordered destination. The <c>Keys()</c>-then-<c>Get(key)</c> shape pays
+    /// for the map twice: <see cref="Keys"/> walks <see cref="Adds"/> and runs a
+    /// tombstone probe per key to decide liveness, then <see cref="Get"/> repeats
+    /// both the <see cref="Adds"/> lookup and the tombstone probe for every key
+    /// the first pass just kept. This form runs each exactly once, and the
+    /// liveness test <em>is</em> the merge - a key whose dots are all tombstoned
+    /// folds to <c>null</c> and is dropped - so no separate probe is needed at
+    /// all.
+    /// </para>
+    /// <para>
+    /// The order is <see cref="Adds"/> enumeration order, deliberately
+    /// <b>unordered</b> and not the deterministic key ordering
+    /// <see cref="Keys"/> guarantees. Callers that fold into a hash map discard
+    /// that ordering anyway, so sorting the survivors would be pure work; a
+    /// caller that needs the replica-stable order must use <see cref="Keys"/>.
+    /// </para>
+    /// </summary>
+    internal KeyValuePair<TKey, TValue>[] SnapshotLiveEntriesUnordered()
+    {
+        if (Adds.Count == 0) return Array.Empty<KeyValuePair<TKey, TValue>>();
+
+        var live = new KeyValuePair<TKey, TValue>[Adds.Count];
+        var n = 0;
+        foreach (var (key, entries) in Adds)
+        {
+            if (entries.Count == 0) continue;
+            var merged = MergeLive(key, entries);
+            if (merged is null) continue;
+            live[n++] = new KeyValuePair<TKey, TValue>(key, merged);
+        }
+
+        // The steady state is a map with no fully-tombstoned key, where the
+        // upper bound is exact and the buffer ships as-is with no second copy.
+        if (n == live.Length) return live;
+        if (n == 0) return Array.Empty<KeyValuePair<TKey, TValue>>();
+        return live[..n];
     }
 
     /// <summary>
