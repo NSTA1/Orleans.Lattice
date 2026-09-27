@@ -99,6 +99,12 @@ if (string.Equals(suite, "leafrangeread", StringComparison.OrdinalIgnoreCase))
     return rangeSummary.HasCriticalValidationErrors || rangeSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "leafrangedelete", StringComparison.OrdinalIgnoreCase))
+{
+    var rangeSummary = BenchmarkRunner.Run<LeafRangeDeleteBenchmarks>(config);
+    return rangeSummary.HasCriticalValidationErrors || rangeSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "detachedtransfer", StringComparison.OrdinalIgnoreCase))
 {
     var transferSummary = BenchmarkRunner.Run<DetachedLeafTransferBenchmarks>(config);
