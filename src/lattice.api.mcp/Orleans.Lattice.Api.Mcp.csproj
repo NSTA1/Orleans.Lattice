@@ -19,6 +19,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Telemetry" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Apps" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Apps.Tests" />
   </ItemGroup>
 
   <ItemGroup>

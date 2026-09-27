@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Mcp.Apps</PackageId>
+    <Version>9.6.0</Version>
+    <Description>Installable-app tool surface for Orleans.Lattice.Api.Mcp. Exposes every enabled app's MCP tools on the single Lattice MCP endpoint under a mandatory {slug}_{tool} namespace, gated per tool by the caller's grants on the declaring role's scopes through the shared access gate. Reuses the Api.Mcp credential bridge, default-deny authorizer, per-session tool collection and fail-closed discovery. Registered with AddAppMcpTools() alongside AddLatticeMcp(...).</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Apps.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
+    <ProjectReference Include="..\lattice.apps\Orleans.Lattice.Apps.csproj" />
+  </ItemGroup>
+
+</Project>

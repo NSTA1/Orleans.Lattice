@@ -73,6 +73,7 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
         "lattice.api.data",
         "lattice.api.data.grpc",
         "lattice.api.mcp",
+        "lattice.api.mcp.apps",
         "lattice.api.mcp.repocontext",
         "lattice.api.mcp.repocontext.replication",
         "lattice.api.mcp.telemetry",

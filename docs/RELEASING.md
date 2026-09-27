@@ -38,6 +38,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | `src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj` |
 | `Orleans.Lattice.Api.Mcp.RepoContext` | `src/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.csproj` |
 | `Orleans.Lattice.Api.Mcp.RepoContext.Replication` | `src/lattice.api.mcp.repocontext.replication/Orleans.Lattice.Api.Mcp.RepoContext.Replication.csproj` |
+| `Orleans.Lattice.Api.Mcp.Apps` | `src/lattice.api.mcp.apps/Orleans.Lattice.Api.Mcp.Apps.csproj` |
 | `Orleans.Lattice.Api.Schema` | `src/lattice.api.schema/Orleans.Lattice.Api.Schema.csproj` |
 | `Orleans.Lattice.Api.Schema.Grpc` | `src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin` | `src/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.csproj` |
@@ -111,6 +112,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | `lattice.api.mcp.telemetry.azure-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.RepoContext` | `lattice.api.mcp.repocontext-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.RepoContext.Replication` | `lattice.api.mcp.repocontext.replication-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Mcp.Apps` | `lattice.api.mcp.apps-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Schema` | `lattice.api.schema-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Schema.Grpc` | `lattice.api.schema.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin` | `lattice.api.treeadmin-v<X.Y.Z>` |
