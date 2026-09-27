@@ -321,6 +321,36 @@ internal sealed partial class LeafEntryCache
     }
 
     /// <summary>
+    /// Reports whether any current key sorts at or above <paramref name="bound"/>,
+    /// including tombstones and expired rows, without hydrating snapshot blocks
+    /// or materialising deferred payloads.
+    /// </summary>
+    internal bool HasKeyAtOrAboveWithoutHydrating(string bound)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        var source = _hydration;
+        if (source is not null)
+        {
+            var first = LowerBound(source, bound);
+            if (first < source.RowCount)
+            {
+                // Remove pins its hydrated block, so only unhydrated blocks
+                // still have an authoritative frame index. Later blocks also
+                // qualify because the frame is strictly ascending.
+                for (var block = LeafSnapshotHydrationSource.BlockOf(first); block < source.BlockCount; block++)
+                {
+                    if (!source.IsHydrated(block))
+                        return true;
+                }
+            }
+        }
+
+        foreach (var _ in new RangeRows(_rows, bound, null))
+            return true;
+        return false;
+    }
+
+    /// <summary>
     /// Stores (or replaces) the byte row for <paramref name="key"/>. The
     /// typed shadow (if any) for <paramref name="key"/> is evicted so the
     /// next typed read re-deserializes from the freshly written row.
