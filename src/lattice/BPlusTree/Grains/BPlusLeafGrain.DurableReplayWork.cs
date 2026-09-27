@@ -281,11 +281,15 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// Issue #2183 observability. Recording beyond <paramref name="thresholdCap"/>
-    /// is safe on the default <c>local</c> SQLite profile but a persist hazard
-    /// on an Azure Table deployment (1MB entity cap), so the crossing is metered
-    /// (<see cref="LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap"/>) and
-    /// warned once per activation. This is observability ONLY - the prepare is
-    /// still recorded unconditionally; nothing here caps or drops it.
+    /// is a persist hazard on Azure Table: its 1MB entity cap rejects an
+    /// oversized write and bounds persisted row growth. The larger SQLite
+    /// limit on the default <c>local</c> profile permits growth that can exhaust
+    /// memory or the read budget during activation, before grain-level repair
+    /// can run. A successful persist is not proof of a safe activation read.
+    /// Alert on every profile using
+    /// <see cref="LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap"/>; a
+    /// warning also fires once per activation. This is observability ONLY -
+    /// the prepare is still recorded unconditionally; nothing caps or drops it.
     /// </para>
     /// <para>
     /// The threshold test is <c>&gt;=</c>, not <c>&gt;</c> (issue #2756). The
@@ -325,11 +329,13 @@ internal sealed partial class BPlusLeafGrain
                     + "prepare is never dropped, so the row grows for as long as a saga "
                     + "leaves a prepare unresolved (registry status InFlight, or "
                     + "Indeterminate once its decision has aged out; that orphan "
-                    + "source is issue #2304). This is expected and benign on the "
-                    + "default `local` SQLite durability profile (~1GB row), but on an Azure "
-                    + "Table deployment the 1MB entity cap makes an unbounded row a persist "
-                    + "hazard - alert on orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap "
-                    + "there. Observability only; the ceiling still advances.",
+                    + "source is issue #2304). Persist risk: Azure Table rejects writes "
+                    + "above its 1MB entity cap, bounding persisted row growth. Read risk: "
+                    + "the larger SQLite limit on the default `local` profile permits "
+                    + "growth that can exhaust memory or the read budget during activation, "
+                    + "before grain-level repair can run. Alert on every profile using "
+                    + "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap. "
+                    + "Observability only; the ceiling still advances.",
                     state.State.TreeId, work.Count, thresholdCap);
             }
         }
