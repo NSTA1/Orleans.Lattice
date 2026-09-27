@@ -121,6 +121,30 @@ internal static class LatticeConstants
     public const string TenantRegistryTreePrefix = "sys-tenant-";
 
     /// <summary>
+    /// Reserved system-data tree-name sub-prefix owned by the app-registry surface
+    /// of the <c>Orleans.Lattice.Apps</c> add-on, whose backing trees are named
+    /// <c>sys-app-*</c>.
+    /// <para>
+    /// Subsumed by <see cref="SystemDataTreePrefix"/> (every <c>sys-app-</c> name
+    /// also starts with <c>sys-</c>), so it inherits the same catalog-hiding and
+    /// user-origin-write guard as the other dogfooded system-data trees. It is
+    /// exposed as a named constant so <b>control-plane read isolation</b> can be
+    /// applied to the app registry, as it is for
+    /// <see cref="TenantRegistryTreePrefix"/>: the registry records every
+    /// installed app's ceilings, consent, and role bindings, so a data-plane read
+    /// grant (including a cluster-wide all-trees wildcard) must not expose them.
+    /// First-party access runs system-origin and short-circuits before the access
+    /// gate, so the isolation governs only external data-plane requests.
+    /// </para>
+    /// <para>
+    /// Disjoint from <see cref="TenantRegistryTreePrefix"/>: neither prefix starts
+    /// with the other, so an app-registry tree is never classified as a
+    /// tenant-registry tree or vice versa.
+    /// </para>
+    /// </summary>
+    public const string AppRegistryTreePrefix = "sys-app-";
+
+    /// <summary>
     /// Tree-name prefix for the trees an installed app owns, named
     /// <c>a/{appId}/{tree}</c>. Each installed app addresses its data through
     /// ordinary trees under its own <c>a/{appId}/</c> segment, so one app's trees
