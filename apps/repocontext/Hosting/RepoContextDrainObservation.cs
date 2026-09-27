@@ -67,18 +67,50 @@ public enum RepoContextDrainOutcome
 /// through, and because sampling during teardown competes with the very drain being
 /// measured.
 /// </param>
+/// <param name="StrandedActivations">
+/// For an <see cref="RepoContextDrainOutcome.Abandoned"/> drain, the resident
+/// activation count sampled at the instant the host stopped waiting: the activations
+/// torn down without banking their projection checkpoints. <see langword="null"/>
+/// for any other outcome, or when the count was unavailable. Persisted because the
+/// abandonment log line that also reports it does not survive a container recreate
+/// (issue #3628), and because it is what separates the part of an abandoned drain
+/// that was actually measured from the part that was cut.
+/// </param>
 public readonly record struct RepoContextDrainObservation(
     DateTimeOffset ObservedAtUtc,
     RepoContextDrainOutcome Outcome,
     TimeSpan Budget,
     TimeSpan? Duration,
-    int? ResidentActivations)
+    int? ResidentActivations,
+    int? StrandedActivations = null)
 {
+    /// <summary>
+    /// The number of activations the drain actually got through, when that is known.
+    /// </summary>
+    /// <remarks>
+    /// For a completed drain this is the resident count at the start. For an
+    /// abandoned one it is the resident count at the start minus the count still
+    /// stranded when the host stopped waiting, and is known only when both were
+    /// sampled and the difference is positive: a stranded count at or above the
+    /// starting one (activations created during the drain) leaves nothing that can be
+    /// honestly called the drained set.
+    /// </remarks>
+    public int? DrainedActivations => Outcome switch
+    {
+        RepoContextDrainOutcome.Completed => ResidentActivations,
+        RepoContextDrainOutcome.Abandoned when ResidentActivations is { } resident
+            && StrandedActivations is { } stranded
+            && stranded >= 0
+            && stranded < resident => resident - stranded,
+        _ => null,
+    };
+
     /// <summary>
     /// The measured cost per resident activation, when both the duration and the
     /// residency it was measured against are known.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This is the one derived quantity on the record and it is deliberately a
     /// division of two measurements rather than a constant. It is an average over a
     /// single drain, so treat it as a scale rather than a prediction: activations
@@ -86,10 +118,40 @@ public readonly record struct RepoContextDrainObservation(
     /// the same average as one spread evenly. It is enough to answer the question
     /// that matters - whether the current resident set is of an order that fits the
     /// budget - and not enough to promise a duration.
+    /// </para>
+    /// <para>
+    /// For an abandoned drain whose stranded count was recorded, the duration is
+    /// divided by <see cref="DrainedActivations"/>, the part of the set the drain
+    /// actually got through in that time. Otherwise an abandoned drain's duration is
+    /// the budget rather than the drain, so dividing it by the whole starting set
+    /// yields a <b>floor</b> on the cost, and <see cref="PerActivationCostIsLowerBound"/>
+    /// says so (issue #3628).
+    /// </para>
     /// </remarks>
-    public TimeSpan? PerActivationCost => Duration is { } duration
-        && ResidentActivations is { } resident
-        && resident > 0
-        ? duration / resident
-        : null;
+    public TimeSpan? PerActivationCost
+    {
+        get
+        {
+            if (Duration is not { } duration)
+            {
+                return null;
+            }
+
+            if (Outcome == RepoContextDrainOutcome.Abandoned && DrainedActivations is { } drained)
+            {
+                return duration / drained;
+            }
+
+            return ResidentActivations is { } resident && resident > 0 ? duration / resident : null;
+        }
+    }
+
+    /// <summary>
+    /// Whether <see cref="PerActivationCost"/> is only a lower bound on the real
+    /// cost: the drain was abandoned, so its duration is the budget it was cut at,
+    /// and no stranded count was recorded to separate the part it got through.
+    /// </summary>
+    public bool PerActivationCostIsLowerBound => Outcome == RepoContextDrainOutcome.Abandoned
+        && DrainedActivations is null
+        && PerActivationCost is not null;
 }

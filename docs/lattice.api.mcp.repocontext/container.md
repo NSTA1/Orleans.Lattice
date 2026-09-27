@@ -631,9 +631,17 @@ Two mechanisms supply that, and they are complementary:
 
 **1. The last drain is remembered across the restart.** The host writes a `drain-history.txt` under its data root: a marker when a drain starts, replaced by the measured outcome when it finishes. A container that starts and finds a **start marker with no outcome** knows its predecessor was killed mid-drain, which is direct evidence the real grace period is smaller than the drain needed. That is the one fact the running process genuinely cannot observe about itself, and it is observable across a restart precisely because the file outlives the process.
 
-**2. Drain cost is projected from live residency.** The host samples Orleans' own activation working set, divides the last measured drain by the residency it was measured against to get a per-activation cost, and multiplies by residency now. When the projection exceeds the budget, the host says so at `Error` on a one-minute poll rather than waiting for a stop to prove it; a projection that fits is reported at `Information`.
+**2. Drain cost is projected from live residency.** The host samples Orleans' own activation working set every 10 seconds, divides the last measured drain by the residency it was measured against to get a per-activation cost, and multiplies by residency. It keeps the samples of the trailing 10 minutes and projects both the **instant** reading and the **peak** of that window. When the peak projection exceeds the budget, the host says so at `Error` rather than waiting for a stop to prove it; a peak projection that fits is reported at `Information`.
 
-The forecast verdict, which compares the last recorded drain with this process's budget, is reported once in the startup log. The live projection is reported on its first poll and after that only when it flips between fitting and exceeding the budget. The verdicts are:
+**Gate a stop on the windowed peak, never on the instant reading (issue #3628).** The resident set swings by an order of magnitude within minutes: the hourly compaction and reclaim walks (issue #3607) drive it from about 550 to over 8,000 and back. A stop taken on an instant "fits" reading of 786 activations began its drain fifteen seconds later with 1,791 resident, and was abandoned at the budget. The peak over the window is the reading that says the current wave has passed, so `lattice_repocontext_projected_drain_peak_seconds` is the gauge to check before a planned stop, and the logged verdict follows it.
+
+**A projection from an abandoned drain is a floor.** An abandoned drain's duration is the budget it was cut at, not the drain, so dividing it by the starting residency understates the cost. When the record also carries the stranded count (below), the duration is divided by the activations the drain actually got through, which measures that part and errs high, because the partial work on the stranded activations is charged to it. When it does not, the projection is reported as **at least** its value, at `Warning` if it fits and `Error` if it does not, and `lattice_repocontext_projected_drain_lower_bound` reads `1`. A floor that exceeds the budget is a certain overrun; a floor that fits proves nothing.
+
+**The loss is recorded as well as the duration.** An abandoned drain writes `strandedActivations` into `drain-history.txt`: the resident count at the instant the host stopped waiting, which is the set torn down without banking its projection checkpoints. The abandonment log line reports it too, but that line goes with the container when `docker compose up` recreates it; the file is what survives. The next start names it in the `Exceeded` or `Unproven` line. A record written before this field existed reads with the count absent, never as zero.
+
+**The record describes the last drain, not necessarily the last stop.** A stop that never raised the host's stopping signal (the host sleeping, or Docker Desktop restarting underneath the container) writes nothing, so the next start reports the earlier drain. Check `observedAtUtc` in the file against the stop you think it describes.
+
+The forecast verdict, which compares the last recorded drain with this process's budget, is reported once in the startup log. The live projection is reported on its first poll and after that only when the peak projection flips between fitting and exceeding the budget, so a residency dip between two waves does not clear an over-budget verdict until the peak has aged out of the window. The verdicts are:
 
 | Verdict | Meaning | Severity |
 |---------|---------|----------|
@@ -652,7 +660,7 @@ Two properties hold structurally since issue #3305, and both are pinned by `Repo
 
 Those lines also distinguish a **declared** grant from an **assumed** one, because the remedy differs. If the grace period was declared and the evidence contradicts it, the declaration is wrong and must be raised. If it was merely assumed because the variable is unset, the deployment may already grant enough and simply never said so. The same distinction is carried in the effective-configuration dump since issue #2593; before that fix a defaulted `120s` and a declared `120s` printed identically, which is how epic #2368's gate run 2 came to record a grace period nobody had actually set.
 
-Seven gauges expose the same state on `/metrics`, so this is alertable without log scraping:
+Ten gauges expose the same state on `/metrics`, so this is alertable without log scraping:
 
 | Gauge | Meaning |
 |-------|---------|
@@ -663,6 +671,9 @@ Seven gauges expose the same state on `/metrics`, so this is alertable without l
 | `lattice_repocontext_resident_activations` | Activations resident now. |
 | `lattice_repocontext_projected_drain_seconds` | Projected drain at current residency. |
 | `lattice_repocontext_required_stop_grace_period_seconds` | The grant that projection would need. |
+| `lattice_repocontext_resident_activations_peak` | The highest residency sampled over the trailing 10 minutes. |
+| `lattice_repocontext_projected_drain_peak_seconds` | Projected drain at that peak. Gate a planned stop on this. |
+| `lattice_repocontext_projected_drain_lower_bound` | `1` when the projections are floors because the last drain was abandoned, `0` when scaled from a measured cost. |
 
 `lattice_repocontext_drain_forecast == 3 or lattice_repocontext_drain_forecast == 4` is the alert worth having: it fires on `Exceeded` and `KilledMidDrain`, the two verdicts that predict a failure, and on nothing else. Write it as that pair rather than as `>= 3`: `Unproven` is `5` and would be swept up by the inequality, which is exactly the false alarm issue #3305 was about. The enum's ordinals are wire format for this gauge, so `Unproven` was appended rather than inserted and `0`-`4` are unchanged.
 
