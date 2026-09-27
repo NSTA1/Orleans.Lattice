@@ -49,6 +49,13 @@ public sealed class AppControlContractTests
     }
 
     [Test]
+    public void Exception_scope_contract_carries_only_named_tree_targets()
+    {
+        Assert.That(typeof(AppExceptionScope).GetProperties().Select(p => p.Name),
+            Is.EquivalentTo(new[] { "Kind", "App", "Tree", "AdoptedTreeId", "KeyOrPrefix" }));
+    }
+
+    [Test]
     public void Alias_table_is_short_unique_complete_and_disjoint_from_other_contracts()
     {
         var aliases = typeof(ApiAppsTypeAliases).GetFields(BindingFlags.Public | BindingFlags.Static)

@@ -44,7 +44,6 @@ public sealed class AppSerializationTests
         [
             ExceptionScope,
             new() { AdoptedTreeId = "legacy-orders", Kind = LatticeScopeKind.Prefix, KeyOrPrefix = "open/" },
-            new() { AllTrees = true },
         ],
     };
     private static readonly AppTreeDescriptor Tree = new()
