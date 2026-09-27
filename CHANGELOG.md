@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
+
 - **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Retrieval - Latency and readiness.** Retrieval latency is measured end to end and by stage, readiness and its 503 are attributable on the wire, a suppressed exact fallback is its own retrieval path, and both ladder guards report their operating state. ([#2253](https://github.com/NSTA1/Orleans.Lattice/issues/2253), [#2624](https://github.com/NSTA1/Orleans.Lattice/issues/2624), [#2720](https://github.com/NSTA1/Orleans.Lattice/issues/2720), [#2936](https://github.com/NSTA1/Orleans.Lattice/issues/2936), [#2962](https://github.com/NSTA1/Orleans.Lattice/issues/2962)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -37,6 +39,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **WAL - Drain-lag holders named while lag persists.** A tree above the materialiser lag threshold repeats its structured warning naming the lowest-cursor consumers, at most every `LatticeOptions.WalDrainLagHolderLogInterval` (default 10 minutes; null keeps edge-only logging). ([#2505](https://github.com/NSTA1/Orleans.Lattice/issues/2505)) (`Orleans.Lattice`)
 
 ### Changed
+
+- **Performance - GetMany strict-pass retry capture.** The single-shard `GetManyAsync` strict-pass retry closure no longer allocates a nested parent capture, removing 24 bytes from every call. ([#3678](https://github.com/NSTA1/Orleans.Lattice/issues/3678)) (`Orleans.Lattice`)
+
+- **Docs - Unresolved-prepare ledger risk.** The ledger's metric description, runtime warning and docs now say Azure Table's row cap bounds its growth while SQLite's larger limit can exhaust activation reads, and recommend the beyond-cap alert on every profile. ([#2830](https://github.com/NSTA1/Orleans.Lattice/issues/2830)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Performance - Predicate scan read path.** Predicate row filtering now validates an admitted row's JSON only after it evaluates true, instead of scanning every candidate twice, and the fast-path eligibility decision is hoisted out of the per-row loop in the leaf, cache and snapshot scans. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice`)
 
@@ -64,11 +70,19 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Observability - Snapshot load failures no longer claim a cause.** The leaf snapshot load-failure counter's residual reason is `unclassified` instead of `faulted`, since a wrapped activation failure can hide an OOM; reason-filtered alerts should match both values during rollout. ([#2404](https://github.com/NSTA1/Orleans.Lattice/issues/2404)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
-- **Container - CPU quota parsing.** Three unreachable clauses in the cgroup `cpu.max` quota parser are removed, its comment on how an unlimited `max` is handled is corrected, and every parse outcome, including saturation, is pinned by tests. ([#2819](https://github.com/NSTA1/Orleans.Lattice/issues/2819)) (`Orleans.Lattice`)
+- **Container - Cgroup readers.** The silo and the ONNX embedder compile one dependency-free set of cgroup CPU and memory readers, a gate confines cgroup reads to it, and three unreachable `cpu.max` parser clauses are removed with every parse outcome pinned. ([#2817](https://github.com/NSTA1/Orleans.Lattice/issues/2817), [#2819](https://github.com/NSTA1/Orleans.Lattice/issues/2819), [#2828](https://github.com/NSTA1/Orleans.Lattice/issues/2828)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Docs - Naming registry covers RepoContext.** The naming-conventions registry gains its missing `Orleans.Lattice.Api.Mcp.RepoContext` section, and a gate fails when that section drifts from the package's public types. ([#2494](https://github.com/NSTA1/Orleans.Lattice/issues/2494)) (`repository-wide`)
 
 ### Fixed
+
+- **Scan - Settled page reuse could serve a stale transactional outcome.** A reused scan page was guarded against writes and TTL expiry but not against a transaction decision changing by the clock alone. Reuse is now refused when the leaf read resolved pending transactional writes. ([#2823](https://github.com/NSTA1/Orleans.Lattice/issues/2823)) (`Orleans.Lattice`)
+
+- **Leaf - A range delete hydrated the whole leaf.** A foreground range delete enumerated every cached row and detached the leaf's snapshot frame. It now enumerates only the requested range, keeps the frame, and hydrates only the blocks that overlap it. ([#2841](https://github.com/NSTA1/Orleans.Lattice/issues/2841)) (`Orleans.Lattice`)
+
+- **Vector - The index tree split leaves by key count.** The vector-index tree used the core 128-key leaf bound, so leaves of 64 KiB chunks split at about 8 MiB and its 64 MiB byte bound never fired. A new tree now derives its key bound from the byte bound, 1024 at defaults. ([#2829](https://github.com/NSTA1/Orleans.Lattice/issues/2829)) (`Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Observability - set_many stage timers mixed two write paths.** The shard-root `set_many` stage timers carry an `operation` tag separating conditional from unconditional batches, and the conditional path gains its own `orleans.lattice.set_many_where_predicate.duration` envelope. ([#2687](https://github.com/NSTA1/Orleans.Lattice/issues/2687)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Vector - An ingest checkpoint after a replacement rewrote the whole index.** Once a vector was replaced or removed mid-build, every checkpoint wrote a complete image of the untrained cell, and one that timed out retried it from scratch. It now writes only the chunks that changed. ([#3669](https://github.com/NSTA1/Orleans.Lattice/issues/3669)) (`Orleans.Lattice.Vector`)
 
@@ -154,7 +168,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Atomic - Multi-key reads surfaced an indeterminate prepare.** `GetManyAsync`, key and entry scans, counts and stats now resolve every pending override through the same visibility gate as a point read, so a prepare a point read hides is hidden on every multi-key path too. ([#3665](https://github.com/NSTA1/Orleans.Lattice/issues/3665)) (`Orleans.Lattice`)
 
-- **Shard - Healing never swept a read-only tree.** The healing orchestrator latched itself running before registering its keepalive, so a reminder service still initializing left it with no sweep timer. The timer is now armed first and the keepalive retried on each sweep. ([#3682](https://github.com/NSTA1/Orleans.Lattice/issues/3682)) (`Orleans.Lattice`)
+- **Shard - Healing and hot-shard sampling stalled on a cold silo.** The healing orchestrator and hot-shard monitor latched themselves running before registering their keepalive, so a still-initializing reminder service left them with no timer. Each now arms its timer first and retries the keepalive. ([#3682](https://github.com/NSTA1/Orleans.Lattice/issues/3682), [#3713](https://github.com/NSTA1/Orleans.Lattice/issues/3713)) (`Orleans.Lattice`)
 
 - **WAL - A GC pass that resolved no provider read as idle.** `orleans.lattice.wal.gc.passes` gains a zero-primed `no_partitions` arm for a pass whose silo resolved no pinned WAL provider, so a misplaced tree no longer reports an arm that asserts health. ([#2465](https://github.com/NSTA1/Orleans.Lattice/issues/2465)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
