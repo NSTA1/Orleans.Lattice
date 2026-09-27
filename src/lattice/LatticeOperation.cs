@@ -143,4 +143,23 @@ public enum LatticeOperation
     /// else</b>.
     /// </summary>
     TreeLifecycle = 16384,
+
+    /// <summary>
+    /// Install, upgrade, or uninstall an <b>app</b> on the cluster: a
+    /// <b>cluster-wide, scopeless</b> capability, granted over
+    /// <c>LatticeScope.ClusterWide()</c> exactly as <see cref="Telemetry"/>
+    /// is. It does not attach to a tree, prefix, or key - it authorizes changing
+    /// the cluster's installed app set as a whole. A scopeless capability is
+    /// evaluated against the cluster-wide scope, so a collision between that scope
+    /// and a real tree id is harmless: scopeless capability bits never overlap the
+    /// data-plane operation bits, so a data-plane grant over such a tree can never
+    /// confer this capability and this capability can never confer data access.
+    /// It is deliberately <b>distinct</b> from <see cref="Admin"/>: holding
+    /// <see cref="Admin"/> does not confer it, and holding it does not confer
+    /// <see cref="Admin"/>, <see cref="TreeLifecycle"/>, or any data-plane
+    /// capability. It is never part of the data-plane <c>All</c> aggregate, so it
+    /// must be granted explicitly and on its own. Granting it grants <b>nothing
+    /// else</b>.
+    /// </summary>
+    AppInstall = 32768,
 }
