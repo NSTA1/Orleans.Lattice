@@ -9,18 +9,24 @@
 // render, ...) on episodes/<slug>/composition.html instead of the smoke test;
 // see tools/lib/episode.js. An episode render that names its output with -o
 // also gets a receipt of what it was rendered from, which `npm run publish`
-// checks; see tools/lib/receipt.js.
+// checks; see tools/lib/receipt.js. `--warm` keeps FFmpeg and Chrome resident
+// while a render starts, for a machine short of memory; see tools/lib/warm.js.
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { brandCommands, syncBrand } from "./lib/brand.js";
 import { recoverWorkspaceIndex, takeEpisodeArgument, withEpisode } from "./lib/episode.js";
 import { runHyperframes, workspaceRoot } from "./lib/hyperframes.js";
 import { digestFiles, receiptPath, renderInputs, renderOutput, writeReceipt } from "./lib/receipt.js";
+import { keepWarm } from "./lib/warm.js";
 
 let slug;
 let args;
+let warm = false;
 try {
   ({ slug, args } = takeEpisodeArgument(process.argv.slice(2)));
+  warm = args.includes("--warm");
+  args = args.filter((arg) => arg !== "--warm");
+  if (warm && args[0] !== "render") throw new Error("--warm applies only to render");
   if (slug !== null && !brandCommands.has(args[0])) {
     throw new Error(`--episode applies only to the commands that load a composition (${[...brandCommands].join(", ")})`);
   }
@@ -54,6 +60,8 @@ try {
 }
 
 const run = () => runHyperframes(args);
+const stopWarm = warm ? keepWarm() : null;
+if (stopWarm) console.log("render: keeping FFmpeg and Chrome resident while the render starts (--warm)");
 try {
   const { code } = slug === null ? await run() : await withEpisode(slug, run);
   process.exitCode = code;
@@ -64,4 +72,6 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
+} finally {
+  stopWarm?.();
 }

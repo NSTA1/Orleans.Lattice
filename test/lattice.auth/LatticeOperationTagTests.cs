@@ -79,6 +79,22 @@ public sealed class LatticeOperationTagTests
     }
 
     [Test]
+    public void For_falls_back_for_a_single_bit_above_the_cached_table()
+    {
+        // The enum is public, so a caller can present a single-bit value no
+        // member is defined for - a forward-compatibility case a client compiled
+        // against a newer build would produce. Bit 16 sits one past the cached
+        // table, so it must leave the indexed path and fall back rather than
+        // index out of range.
+        var beyondTable = (LatticeOperation)(1 << 16);
+
+        Assert.That(
+            LatticeOperationTag.For(beyondTable),
+            Is.EqualTo(beyondTable.ToString()),
+            "a single-bit value past the cached table falls back to the flags string");
+    }
+
+    [Test]
     public void Cached_single_flag_table_covers_bit_fifteen_app_install()
     {
         var field = typeof(LatticeOperationTag).GetField(

@@ -72,6 +72,17 @@ your user, never into this repository: `npx skills add heygen-com/hyperframes -g
     render (`series.md`, "Hosting - decided").
 12. **Label unreleased packages on screen**, and make no claim the corpus does
     not make.
+13. **The plan is data too.** `videos/series.json` holds the production order
+    that `series.md` states; change the two together, and run
+    `npm run series -- check`, which the required check runs as well. An
+    episode's `episode.json` lists in `items` the series items its published
+    cut completes, and the published items must be a gapless run from the
+    start of the order.
+14. **Merging is the approval, and promotion is a person's decision.** An agent
+    never merges an episode's pull request, never enables auto-merge on it, and
+    never dispatches Promote videos or Docs. The scheduled producer follows
+    `.github/agents/video-producer.agent.md`: one item per run, and one open
+    episode pull request at a time.
 
 ## Making an episode
 
@@ -87,7 +98,10 @@ the three files it writes to `docs-site/media/` with the episode. An episode's
 slug is kebab-case and is shared by `episodes/<slug>/`,
 `renders/narration/<slug>/`, `renders/<slug>-high.mp4`,
 `docs/videos/<slug>.md` and `docs-site/media/<slug>-<cut>.*`. The
-introduction is the worked example.
+introduction is the worked example. `npm run series -- next --json` names the
+next item to make. `npm run packet -- <slug>` writes its pull request's
+description (with `--review-copy` and `--upload` for the video it plays), and
+the pull request carries the `video-series` label.
 
 ## Gotchas
 
@@ -171,8 +185,16 @@ introduction is the worked example.
   in a row even though `ffmpeg -version` answers in 50 ms from a shell: under
   memory pressure the 180 MB static binary's pages are evicted during the
   render's minute-long start-up, and re-reading them misses the 5 seconds.
-  Keep FFmpeg resident while the render starts - one idle
-  `ffmpeg -re -f lavfi -i anullsrc=r=8000:cl=mono -t 2400 -f null NUL` in the
-  background, plus a loop running `ffprobe -version` - and stop them
-  afterwards; with that, the pilot's render passed its probes first time.
-  `check` and `snapshot` have no such probe.
+  Keep FFmpeg resident while the render starts:
+  `npm run render -- ... --warm` holds one idle FFmpeg and probes FFmpeg and
+  the cached Chrome every two seconds until the render ends
+  (`tools/lib/warm.js`). With that, the pilot's render passed its probes first
+  time. `check` and `snapshot` have no such probe.
+- What must outlive a worktree lives in a per-user state directory,
+  `%LOCALAPPDATA%\orleans-lattice\videos` on Windows (`VIDEOS_HOME`
+  overrides it). It holds the voice's Python environment (`npm run voice:setup`),
+  a copy of every narration clip and take, and the production lease. Narration
+  and auditions copy clips and takes back into a fresh checkout, so a picked
+  take survives it. Clear `clips/<slug>/` there as well as
+  `renders/narration/<slug>/clips/` to make an episode speak again from
+  nothing.

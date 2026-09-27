@@ -1,0 +1,317 @@
+{
+  "description": "The series plan as data: the paths, the production order a scheduled automation works through, and the holds that stop it. The prose - who each episode is for, its idea, and the reasons for the order - is in series.md, and 'npm run series -- check' keeps the two in step. What is done is not recorded here: an item is done when a published episode lists it in its episode.json 'items'.",
+  "paths": [
+    { "id": "front-door", "title": "Front door" },
+    {
+      "id": "build",
+      "title": "Build",
+      "for": "if you are writing code against `ILattice`",
+      "then": { "title": "Samples", "site": "samples/index.html" }
+    },
+    { "id": "evaluate", "title": "Evaluate", "for": "if you are deciding whether it fits", "then": { "path": "secure" } },
+    { "id": "operate", "title": "Operate", "for": "if you are running an estate", "then": { "path": "secure" } },
+    { "id": "secure", "title": "Secure and govern", "then": { "title": "Security", "page": "docs/lattice/security.md" } },
+    { "id": "how-it-works", "title": "How it works" }
+  ],
+  "holds": {
+    "explorer": {
+      "label": "the Explorer",
+      "reason": "Operate and Secure and govern wait for the redesigned Explorer: an operator works through its console, the console has its own areas for access, schemas, tenants and backups, and it is one of the surfaces S4 is about. Releasing the hold is a change to series.md and to this file."
+    }
+  },
+  "items": [
+    { "code": "F", "episode": "introduction", "title": "Orleans.Lattice in three minutes", "path": "front-door", "order": 1 },
+    {
+      "code": "B1",
+      "episode": "hello-lattice",
+      "title": "Hello, Lattice",
+      "path": "build",
+      "order": 1,
+      "introduces": [
+        { "title": "Quick start", "page": "README.md#quick-start" },
+        { "title": "API reference", "page": "docs/lattice/api.md" }
+      ]
+    },
+    {
+      "code": "E1",
+      "episode": "when-lattice-fits",
+      "title": "When Lattice fits, and when it doesn't",
+      "path": "evaluate",
+      "order": 1,
+      "introduces": [
+        { "title": "What it is and why it exists", "page": "README.md#what-is-it" },
+        { "title": "A core plus seams", "page": "README.md#architecture-a-core-plus-seams" }
+      ]
+    },
+    { "code": "F2", "recut": "F", "title": "The front door, re-cut to name Build's and Evaluate's first episodes", "names": ["B1", "E1"] },
+    {
+      "code": "B2",
+      "episode": "values-that-merge",
+      "title": "Values that merge",
+      "path": "build",
+      "order": 2,
+      "introduces": [{ "title": "CRDT primitives", "page": "docs/crdt/readme.md" }],
+      "leadsTo": "H1"
+    },
+    {
+      "code": "H1",
+      "episode": "conflict-free-merges",
+      "title": "Conflict-free merges in 90 seconds",
+      "path": "how-it-works",
+      "order": 1,
+      "introduces": [
+        { "title": "CRDT primitives", "page": "docs/crdt/readme.md" },
+        { "title": "state primitives", "page": "docs/lattice/state-primitives.md" }
+      ]
+    },
+    {
+      "code": "B3",
+      "episode": "scans-filters-and-cursors",
+      "title": "Scans, filters and cursors",
+      "path": "build",
+      "order": 3,
+      "introduces": [
+        { "title": "Predicate operations", "page": "docs/lattice/predicated-operations.md" },
+        { "title": "API reference", "page": "docs/lattice/api.md" }
+      ]
+    },
+    {
+      "code": "B4",
+      "episode": "atomic-writes",
+      "title": "Atomic writes",
+      "path": "build",
+      "order": 4,
+      "introduces": [{ "title": "Atomic writes", "page": "docs/lattice/atomic-writes.md" }],
+      "leadsTo": "H4"
+    },
+    {
+      "code": "H4",
+      "episode": "atomic-commit-without-consensus",
+      "title": "Atomic commit without consensus",
+      "path": "how-it-works",
+      "order": 4,
+      "introduces": [{ "title": "Verified atomic commit", "page": "docs/lattice/verified-atomic-commit.md" }]
+    },
+    {
+      "code": "B5",
+      "episode": "ttl-and-soft-delete",
+      "title": "TTL and soft delete",
+      "path": "build",
+      "order": 5,
+      "introduces": [{ "title": "TTL", "page": "docs/lattice/ttl.md" }]
+    },
+    {
+      "code": "B6",
+      "episode": "going-durable",
+      "title": "Going durable",
+      "path": "build",
+      "order": 6,
+      "introduces": [
+        { "title": "Configuration", "page": "docs/lattice/configuration.md" },
+        { "title": "WAL storage providers", "page": "docs/lattice/wal-storage-providers.md" },
+        { "title": "File WAL", "page": "docs/lattice.storage.file/README.md" },
+        { "title": "Azure Table storage", "page": "docs/lattice.storage.azuretable/README.md" }
+      ]
+    },
+    {
+      "code": "B7",
+      "episode": "moving-in-from-another-store",
+      "title": "Moving in from another store",
+      "path": "build",
+      "order": 7,
+      "introduces": [{ "title": "External store migration", "page": "docs/lattice/external-store-migration.md" }]
+    },
+    {
+      "code": "E2",
+      "episode": "guarantees",
+      "title": "The guarantees",
+      "path": "evaluate",
+      "order": 2,
+      "introduces": [{ "title": "Consistency guarantees", "page": "docs/lattice/consistency.md" }],
+      "leadsTo": "H2"
+    },
+    {
+      "code": "H2",
+      "episode": "clocks-and-version-vectors",
+      "title": "Clocks and version vectors",
+      "path": "how-it-works",
+      "order": 2,
+      "introduces": [{ "title": "Version vector", "page": "docs/crdt/versionvector.md" }]
+    },
+    {
+      "code": "E3",
+      "episode": "evidence",
+      "title": "The evidence",
+      "path": "evaluate",
+      "order": 3,
+      "introduces": [
+        { "title": "Chaos tests", "page": "docs/lattice/chaos-tests.md" },
+        { "title": "Verified atomic commit", "page": "docs/lattice/verified-atomic-commit.md" },
+        { "title": "Single-silo performance", "page": "docs/lattice/performance-single-silo.md" }
+      ],
+      "leadsTo": "H5"
+    },
+    {
+      "code": "H5",
+      "episode": "how-it-is-verified",
+      "title": "How it is verified",
+      "path": "how-it-works",
+      "order": 5,
+      "introduces": [
+        { "title": "Verified atomic commit", "page": "docs/lattice/verified-atomic-commit.md" },
+        { "title": "verified WAL", "page": "docs/lattice/verified-wal.md" },
+        { "title": "chaos tests", "page": "docs/lattice/chaos-tests.md" }
+      ]
+    },
+    {
+      "code": "E4",
+      "episode": "reference-estate",
+      "title": "A reference estate",
+      "path": "evaluate",
+      "order": 4,
+      "introduces": [{ "title": "Reference architecture", "page": "reference-architecture.md" }]
+    },
+    {
+      "code": "O1",
+      "episode": "where-your-data-lives",
+      "title": "Where your data lives, and when it's safe",
+      "path": "operate",
+      "order": 1,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Configuration", "page": "docs/lattice/configuration.md" },
+        { "title": "WAL", "page": "docs/lattice/wal.md" },
+        { "title": "WAL storage providers", "page": "docs/lattice/wal-storage-providers.md" }
+      ]
+    },
+    { "code": "F3", "recut": "F", "title": "The front door, re-cut to name Operate's first episode", "names": ["O1"], "hold": "explorer" },
+    {
+      "code": "O2",
+      "episode": "metrics-and-dashboards",
+      "title": "Metrics and dashboards",
+      "path": "operate",
+      "order": 2,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Metrics", "page": "docs/lattice/metrics.md" },
+        { "title": "Dashboards", "page": "docs/lattice.dashboards/README.md" }
+      ]
+    },
+    {
+      "code": "O3",
+      "episode": "sizing-and-tuning",
+      "title": "Sizing and tuning",
+      "path": "operate",
+      "order": 3,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Tree sizing", "page": "docs/lattice/tree-sizing.md" },
+        { "title": "WAL tuning", "page": "docs/lattice/wal-tuning.md" }
+      ],
+      "leadsTo": "H3"
+    },
+    {
+      "code": "H3",
+      "episode": "trees-that-split-online",
+      "title": "Trees that split online",
+      "path": "how-it-works",
+      "order": 3,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Architecture", "page": "docs/lattice/architecture.md" },
+        { "title": "tree structure", "page": "docs/lattice/tree-structure.md" }
+      ]
+    },
+    {
+      "code": "O4",
+      "episode": "scaling",
+      "title": "Scaling",
+      "path": "operate",
+      "order": 4,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Multi-silo scaling", "page": "docs/lattice/performance-multi-silo.md" },
+        { "title": "Scaling", "page": "docs/lattice.scaling/README.md" }
+      ]
+    },
+    {
+      "code": "O5",
+      "episode": "running-active-active",
+      "title": "Running active-active",
+      "path": "operate",
+      "order": 5,
+      "hold": "explorer",
+      "introduces": [{ "title": "Replication", "page": "docs/lattice.replication/README.md" }]
+    },
+    {
+      "code": "O6",
+      "episode": "diagnosing-a-tree",
+      "title": "Diagnosing a tree",
+      "path": "operate",
+      "order": 6,
+      "hold": "explorer",
+      "introduces": [{ "title": "Troubleshooting", "page": "docs/lattice/troubleshooting.md" }]
+    },
+    {
+      "code": "O7",
+      "episode": "backup-and-cold-restore",
+      "title": "Backup and cold restore",
+      "path": "operate",
+      "order": 7,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Backup", "page": "docs/lattice.backup/README.md" },
+        { "title": "Disaster recovery", "page": "docs/lattice.backup/disaster-recovery.md" }
+      ]
+    },
+    {
+      "code": "S1",
+      "episode": "identity",
+      "title": "Identity",
+      "path": "secure",
+      "order": 1,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Membership", "page": "docs/lattice.membership/README.md" },
+        { "title": "OIDC", "page": "docs/lattice.membership.oidc/README.md" },
+        { "title": "Entra", "page": "docs/lattice.membership.entra/README.md" }
+      ]
+    },
+    {
+      "code": "S2",
+      "episode": "fail-closed-by-default",
+      "title": "Fail-closed by default",
+      "path": "secure",
+      "order": 2,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Security", "page": "docs/lattice/security.md" },
+        { "title": "Authorization", "page": "docs/lattice.auth/README.md" }
+      ]
+    },
+    {
+      "code": "S3",
+      "episode": "schemas-and-tenants",
+      "title": "Schemas and tenants",
+      "path": "secure",
+      "order": 3,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Schema", "page": "docs/lattice.schema/README.md" },
+        { "title": "Tenancy", "page": "docs/lattice.tenancy/README.md" }
+      ]
+    },
+    {
+      "code": "S4",
+      "episode": "one-gate-for-every-surface",
+      "title": "One gate for every surface",
+      "path": "secure",
+      "order": 4,
+      "hold": "explorer",
+      "introduces": [
+        { "title": "Security", "page": "docs/lattice/security.md#external-surfaces" },
+        { "title": "MCP server", "page": "docs/lattice.api.mcp/README.md" }
+      ]
+    }
+  ]
+}

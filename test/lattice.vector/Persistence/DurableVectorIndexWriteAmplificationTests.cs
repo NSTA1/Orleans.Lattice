@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 /// <para>
 /// While the index is ingesting it holds one untrained cell, and the checkpoint
 /// that banks a build slice can either append the chunks that arrived since the
-/// last one or rewrite the cell whole. Which of the two it picks is decided by
+/// last one or re-flush the cell. Which of the two it picks is decided by
 /// whether anything disturbed the committed prefix. Charging a rewrite to a
 /// mutation that disturbed nothing is not a small overcharge: the writer hands a
 /// batch over once per slice, so the build pays a rewrite of the whole index per
@@ -135,7 +135,7 @@ public sealed class DurableVectorIndexWriteAmplificationTests
     /// <para>
     /// Only two writers produce it, and both commit a true vector count rather
     /// than one rounded down to a chunk boundary: a completed ingest checkpoint,
-    /// and the full rewrite the checkpoint falls back to when something replaced a
+    /// and the re-flush the checkpoint falls back to when something replaced a
     /// vector mid-build. The second is reproduced here, because it is reachable
     /// while the build is still ingesting and so leaves the index in the state a
     /// restart has to resume from.

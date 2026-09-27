@@ -107,6 +107,14 @@ test("stamping is idempotent, so a check can compare the file with a fresh stamp
   assert.equal(stampComposition(once, manifest, { clipRoot: "renders/narration/episode" }), once);
 });
 
+test("a stamp is written in the composition's own line endings, so a Windows checkout is left as it is", () => {
+  const crlf = composition.replace(/\n/g, "\r\n");
+  const once = stampComposition(crlf, manifest, { clipRoot: "renders/narration/episode" });
+  assert.ok(!/[^\r]\n/.test(once), "every line the stamp adds ends in CRLF");
+  assert.equal(stampComposition(once, manifest, { clipRoot: "renders/narration/episode" }), once);
+  assert.equal(once.replace(/\r\n/g, "\n"), stampComposition(composition, manifest, { clipRoot: "renders/narration/episode" }));
+});
+
 test("a composition that disagrees with the narration is refused", () => {
   const stamp = (html, m = manifest) => stampComposition(html, m, { clipRoot: "r" });
   assert.throws(() => stamp(composition.replace('data-scene="opening"', 'data-scene="prologue"')), /scene 'prologue', which SCRIPT.md does not have/);

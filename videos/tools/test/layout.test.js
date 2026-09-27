@@ -14,6 +14,8 @@ import {
   listEpisodes,
   listFiles,
   sharedDir,
+  stateDir,
+  stateRoot,
   workspaceIndex,
 } from "../lib/layout.js";
 
@@ -36,7 +38,20 @@ test("everything an episode owns sits in its own folder, and its narration and t
   assert.equal(path.basename(paths.composition), "composition.html");
   assert.equal(paths.narration, path.join(workspaceRoot, "renders", "narration", "introduction"));
   assert.equal(paths.takes, path.join(workspaceRoot, "renders", "takes", "introduction"), "takes are output, never committed");
+  assert.equal(paths.clipCache, path.join(stateDir, "clips", "introduction"), "a copy of the clips outlives the checkout");
+  assert.equal(paths.takeCache, path.join(stateDir, "takes", "introduction"));
   assert.throws(() => episodePaths("../escape"), /not an episode slug/);
+});
+
+test("the state directory is per user and outside every worktree, unless VIDEOS_HOME names one", () => {
+  assert.equal(stateRoot({ VIDEOS_HOME: path.join(scratch, "home") }, "linux", "/home/ada"), path.join(scratch, "home"));
+  assert.equal(
+    stateRoot({ LOCALAPPDATA: "C:\\Users\\ada\\AppData\\Local" }, "win32", "C:\\Users\\ada"),
+    path.join("C:\\Users\\ada\\AppData\\Local", "orleans-lattice", "videos"),
+  );
+  assert.equal(stateRoot({ XDG_STATE_HOME: "/state" }, "linux", "/home/ada"), path.join("/state", "orleans-lattice", "videos"));
+  assert.equal(stateRoot({}, "darwin", "/Users/ada"), path.join("/Users/ada", ".local", "state", "orleans-lattice", "videos"));
+  assert.ok(!path.resolve(stateDir).startsWith(path.resolve(workspaceRoot) + path.sep) || process.env.VIDEOS_HOME, "not inside the workspace");
 });
 
 test("the shared material lives under shared/, and the site copy inside the brand seam", () => {
@@ -82,6 +97,7 @@ test("the compositions are the smoke test, the shared components and each episod
 const ROOT_FILES = new Set([
   "README.md",
   "series.md",
+  "series.json",
   "frame.md",
   "index.html",
   "hyperframes.json",

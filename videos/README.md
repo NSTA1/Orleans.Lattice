@@ -14,6 +14,9 @@ video. A video is reviewed, diffed and rebuilt like any other source file.
   [series.md](series.md).
 - **The look** - canvas, type, colour roles, the order-diagram vocabulary,
   motion, code, captions and audio - is in [frame.md](frame.md).
+- **How the series is made, reviewed and released** - one item at a time, by
+  a scheduled automation, approved by merging and released by a person - is in
+  [Production, review and release](#production-review-and-release).
 - **Agent conventions** are in the
   [video-production skill](../.github/skills/video-production/SKILL.md).
 
@@ -55,14 +58,17 @@ The narration is Emma, read by Chatterbox (Resemble AI, MIT licence) and
 cloned from [voice/reference.wav](voice/reference.wav); the settings are in
 [voice/voice.json](voice/voice.json) and the reasons in
 [series.md, "Voice"](series.md#voice). It runs locally on the CPU, in a Python
-3.11 environment of its own:
+3.11 environment of its own, which `npm run voice:setup` makes in the per-user
+state directory (see [Production, review and release](#production-review-and-release)),
+where narration and auditions find it:
 
 ```bash
 uv python install 3.11                            # or any Python 3.11
-python3.11 -m venv ~/.venvs/lattice-voice         # outside the repository
-~/.venvs/lattice-voice/bin/python -m pip install -r voice/requirements.txt
-export VIDEOS_VOICE_PYTHON=~/.venvs/lattice-voice/bin/python   # on Windows: ...\Scripts\python.exe
+npm run voice:setup                               # or: npm run voice:setup -- --python <a python3.11>
 ```
+
+To use an environment of your own instead, set `VIDEOS_VOICE_PYTHON` to its
+interpreter.
 
 The first narration downloads the voice model (about 3 GB, pinned to one
 revision) and two speech recognisers (about 0.6 GB) from Hugging Face; after
@@ -79,6 +85,60 @@ The first engine, Kokoro, remains available for auditions (`"provider":
 "kokoro"`; `pip install kokoro-onnx soundfile`, and `HYPERFRAMES_PYTHON` when
 the CLI cannot find that interpreter).
 
+## Production, review and release
+
+The series is made one item at a time, in the order [series.md](series.md) sets
+("Production order"), which [series.json](series.json) holds as data. A
+scheduled automation runs the
+[Video Producer](../.github/agents/video-producer.agent.md) agent on the machine
+that has the series voice, and a person can run it too. Each run does at most
+one thing: it acts on the review feedback on the open episode pull request, or,
+when none is open, makes the next item and opens its pull request to `main`.
+
+- **One run at a time.** A run takes the production lease first
+  (`npm run series -- lease take --owner <run>`), renews it while it works and
+  releases it when it stops. A lease that is not renewed lapses by itself.
+- **What outlives a worktree.** Each run works in a fresh worktree, so what must
+  survive one lives in a per-user state directory outside every checkout:
+  `%LOCALAPPDATA%\orleans-lattice\videos` on Windows,
+  `~/.local/state/orleans-lattice/videos` elsewhere, or wherever `VIDEOS_HOME`
+  names. It holds the series voice's Python environment (`npm run voice:setup`),
+  a copy of every narration clip and take, and the lease. A fresh checkout
+  copies clips and takes back from it, so an unchanged cue is never spoken
+  again and a picked take is never lost.
+- **Review.** The pull request's description is its review packet
+  (`npm run packet`). It holds:
+  - the video, playing in place from a review copy attached to the pull
+    request;
+  - its length, size, loudness and cut;
+  - the moments to listen to, and why: a take picked by ear, a clip no
+    recogniser heard exactly, words the voice has not said before, and lines
+    changed since the published cut;
+  - the script with its timings, and the takes there are to pick from;
+  - the claims and their sources;
+  - a ledger of the feedback acted on.
+
+  Comment in plain words, with a time where it helps, or with
+  `/retake <cue>`, `/pick <cue> <take>` or `/reword <cue> <text>`. The next run
+  acts on every comment it has not answered.
+
+  The automation acts as the repository's own account, so GitHub does not
+  notify you of its pull requests. Watch
+  [the open episode pull requests](https://github.com/NSTA1/Orleans.Lattice/pulls?q=is%3Apr+is%3Aopen+label%3Avideo-series)
+  instead.
+- **Approval is the merge**, and only a person merges. At most one episode pull
+  request is open at a time, so episodes are approved in order. The required
+  check backs that up: it fails any pull request that publishes an episode
+  ahead of one before it (`npm run series -- check`, in the content gates of
+  `ci.yml`).
+- **Release is a second step.** Approved episodes wait on `main`, because the
+  site is built from the newest release line, never from `main`. The
+  [Promote videos](../.github/workflows/promote-videos.yml) workflow is
+  dispatched only by a person. It copies the approved episodes onto that line,
+  either all of them or those up to the item you name, checks the line, builds
+  the site as a gate, then pushes and deploys. The next release wave publishes
+  every approved episode anyway, because a line is cut from `main`.
+
 ## Commands
 
 | Command | What it does |
@@ -89,20 +149,28 @@ the CLI cannot find that interpreter).
 | `npm run snapshot` | key frames of `index.html` as PNGs under `snapshots/` |
 | `npm run <command> -- --episode <slug>` | any of the above, and `render`, on `episodes/<slug>/composition.html` instead of the smoke test |
 | `npm run check:episodes` | `check` on every episode; one not narrated on this machine is checked against silence of its stamped length |
-| `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4` | render an episode; naming the output also writes the render's receipt, a digest of what it was rendered from, which `publish` checks |
+| `npm run render -- --episode <slug> --quality high -o renders/<slug>-high.mp4` | render an episode; naming the output also writes the render's receipt, a digest of what it was rendered from, which `publish` checks. `--warm` keeps FFmpeg and Chrome resident while the render starts, for a machine short of memory |
 | `npm run render -- --docker ...` | render in Docker (pinned Chromium, fonts and FFmpeg) when output must be byte-reproducible |
 | `npm run narrate -- <slug>` | speak `episodes/<slug>/SCRIPT.md` in the series voice, one cached clip per cue, each heard back by two local recognisers and made again with the next seed when it does not match the script; then master the joined track to the series loudness, and write the cue timeline and WebVTT captions |
 | `npm run review -- <slug> --audio` | a page with the narration alone, every cue listed to play from, highlighting what changed and what the checks could not settle: approve the voice by ear before rendering |
-| `npm run audition -- <slug> <cue>... [--takes N]` | several takes of a line (4 by default), each checked, on a page to listen and pick from; `--pick <cue>=<take>` uses a take in the narration. Takes and picks stay on this machine, under `renders/`; only the published cut is committed |
+| `npm run audition -- <slug> <cue>... [--takes N]` | several takes of a line (4 by default), each checked, on a page to listen and pick from; `--pick <cue>=<take>` uses a take in the narration. Takes and picks stay on this machine, under `renders/` and in the state directory; only the published cut is committed |
 | `npm run phonemes -- <slug>` | for the Kokoro engine: how its phonemizer will read each cue, with words that have two readings flagged (`--flagged` for only those cues) |
 | `npm run timeline -- <slug>` | stamp the narration's timeline into the episode's composition (`--check` fails if it is out of date) |
 | `npm run review -- <slug>` | a local review page for the episode's latest render: the player with captions, its size, bit rate and delivered loudness, and the transcript (serve `videos/` over HTTP to watch it) |
 | `npm run voice:samples` | the voice audition set, under `renders/voice-samples/` |
 | `npm run snippets` | copy the compiled snippets from the companion pages into the compositions |
 | `npm run snippets:check` | fail if a composition's code has drifted from its companion page |
-| `npm run companions` | write each companion page's video block (from `episode.json` and the composition) and transcript (from the script) |
+| `npm run companions` | write each companion page's video block (from `episode.json` and the composition), transcript (from the script) and Where next (from the plan) |
 | `npm run companions:check` | fail if a companion page has drifted from its episode, or `docs-site/media/` lacks a pinned file or holds one no page pins |
-| `npm run publish -- <slug>` | while the render's receipt matches the sources, write the episode's video, captions and poster into `docs-site/media/` under a new cut, remove its earlier cut, and record the cut in `episode.json` and the companion page |
+| `npm run publish -- <slug>` | while the render's receipt matches the sources, write the episode's video, captions and poster into `docs-site/media/` under a new cut, remove its earlier cut, and record the cut in `episode.json` and the companion page; every other page whose Where next names the episode now links to it |
+| `npm run series -- check` | fail if `series.json` and `series.md` disagree, or an episode is published ahead of one before it in the production order; the required check runs it too |
+| `npm run series -- status` | every item of the production order: done, next, held or to make |
+| `npm run series -- next [--json]` | the next item to make, or the hold that stops the queue; `--json` adds the ending the plan gives it and its companion page's Where next |
+| `npm run series -- ending <code>` | the ending the plan gives an episode, as narration to start its closing scene from |
+| `npm run series -- endings` | fail if a published episode's closing scene does not name what the plan says it leads to |
+| `npm run series -- lease take --owner <run>` | take the production lease (and `renew`, `release` or `status` it), so that one run makes the series at a time |
+| `npm run packet -- <slug>` | the episode's review packet, the body of its pull request; `--review-copy` makes a copy of the video small enough to attach, and `--upload` attaches it |
+| `npm run voice:setup` | make the series voice's Python environment in the state directory |
 | `npm run ascii` | fail on any non-ASCII character in this folder |
 | `npm test` | unit tests for the tools and the browser runtime |
 
@@ -128,6 +196,7 @@ are root-relative, exactly as the smoke test's are.
 ```text
 videos/
   README.md, series.md, frame.md    how to work here, the plan, the look
+  series.json                       the plan's production order, as data
   package.json, package-lock.json   the workspace and its pinned toolchain
   hyperframes.json, meta.json       HyperFrames project configuration
   index.html                        workspace smoke test, not an episode
@@ -142,7 +211,7 @@ videos/
   episodes/<slug>/                  everything one episode owns
     BRIEF.md, SCRIPT.md             the brief, and the narration it is timed from
     STORYBOARD.md                   what is on screen for each cue
-    episode.json                    its path, its place on it, its poster's moment, and its published cut
+    episode.json                    its path, its place on it, the series items it completes, its poster's moment, and its published cut
     composition.html                the episode: shared scenes, its words, stamped timing
     assets/                         media no other episode uses, if any
   voice/                            the series voice: its settings, reference clip, Python environment and lexicon;
@@ -201,7 +270,8 @@ committed to `docs-site/media/`, which the site plays (`npm run publish`).
    [series.md, Hosting - decided](series.md#hosting---decided)), and the
    voice's reference clip, `voice/reference.wav`, which defines the voice.
    Takes made to pick from (`npm run audition`) live in `renders/takes/`, and a
-   picked take in the local clip cache.
+   picked take in the local clip cache, with a copy of both in the per-user
+   state directory.
 
 ## CI
 
@@ -211,15 +281,18 @@ pages, the published media (`docs-site/media`), the parts of the site it reads
 (`docs-site/template/public`, `docs-site/figures`, `docs-site/pages`,
 `PACKAGES.md`) or the workflow itself, on pushes to `*/epic/**` integration
 branches that touch the same paths, and by hand. It runs the unit tests, the
-ASCII check, the snippet and companion-page checks, `lint` and `check` on the
-smoke test and `check:episodes` on every episode, then draft-renders the smoke
-test and uploads it as an artifact. Narration audio is not committed, so CI checks each
+ASCII check, the snippet and companion-page checks, the series plan's check
+and its endings check, `lint` and `check` on the smoke test and
+`check:episodes` on every episode, then draft-renders the smoke test and
+uploads it as an artifact. Narration audio is not committed, so CI checks each
 episode's pictures, timing and structure against silence of its stamped
 length; hearing it means narrating it locally, or watching its published cut.
 
 The repository's `build-and-test` job skips its package tests for a change
 confined to `videos/`, as it does for `docs/` and `benchmark/`. The content
-gates still scan every file here.
+gates still scan every file here, and they run `node videos/tools/series.js
+check`, so the order of the series is part of the required check: the videos
+lane is advisory, and merging is how an episode is approved.
 
 ## Licences
 

@@ -109,6 +109,18 @@ jobs:
       - name: Companion pages match their episodes
         run: npm run companions:check
 
+      # The plan as data (series.json) must agree with its prose (series.md),
+      # and what is published must be a gapless run of its production order.
+      # ci.yml runs the same check in the required path; here it sits with the
+      # rest of the workspace's checks.
+      - name: The series plan and its order
+        run: npm run series -- check
+
+      # Each published episode's closing scene names what the plan says comes
+      # next and the deep dive it leads to, by their titles in the plan.
+      - name: Endings name what the plan says they lead to
+        run: npm run series -- endings
+
       - name: Lint the smoke test
         run: npm run lint
 

@@ -1,6 +1,7 @@
 {
   "path": "front-door",
   "order": 1,
+  "items": ["F"],
   "poster": {
     "scene": "in-more-than-one-place",
     "beat": 5,

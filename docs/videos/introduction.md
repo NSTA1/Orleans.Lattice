@@ -118,12 +118,11 @@ var user = await lattice.GetAsync<User>("user/42");
 
 ## Where next
 
-- **Build**, if you are writing code against `ILattice`: start with the
-  [Quick Start](../../README.md#quick-start) and the
-  [API reference](../lattice/api.md).
-- **Evaluate**, if you are deciding whether it fits: start with
-  [What is it?](../../README.md#what-is-it) and
-  [Architecture: a core plus seams](../../README.md#architecture-a-core-plus-seams).
-- **Operate**, if you are running an estate: start with
-  [Configuration](../lattice/configuration.md) and
-  [Troubleshooting](../lattice/troubleshooting.md).
+<!-- The list is written from the series plan (videos/series.json) by `npm run companions` in videos/; edit the plan, not this block. -->
+<!-- where-next:begin -->
+
+- **Build**, if you are writing code against `ILattice`: read [Quick start](../../README.md#quick-start) and [API reference](../lattice/api.md).
+- **Evaluate**, if you are deciding whether it fits: read [What it is and why it exists](../../README.md#what-is-it) and [A core plus seams](../../README.md#architecture-a-core-plus-seams).
+- **Operate**, if you are running an estate: read [Configuration](../lattice/configuration.md), [WAL](../lattice/wal.md) and [WAL storage providers](../lattice/wal-storage-providers.md).
+
+<!-- where-next:end -->

@@ -1,4 +1,5 @@
 import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { workspaceRoot } from "./hyperframes.js";
 
@@ -33,6 +34,26 @@ export const workspaceIndex = path.join(workspaceRoot, "index.html");
 /** Output: renders, narration and snapshots. Ignored by git. */
 export const rendersDir = path.join(workspaceRoot, "renders");
 
+/**
+ * Where what must outlive one checkout is kept: per user, outside every
+ * worktree, and never committed. It holds a copy of the narration clips
+ * (picked takes included) and the audition takes, so a fresh checkout - a
+ * scheduled run's new worktree - reuses what an earlier one spoke rather than
+ * speaking the episode again, and keeps the takes a reviewer picked. It also
+ * holds the series voice's Python environment (npm run voice:setup) and the
+ * production lease (npm run series -- lease). VIDEOS_HOME overrides it.
+ */
+export function stateRoot(env = process.env, platform = process.platform, home = homedir()) {
+  if (env.VIDEOS_HOME) return path.resolve(env.VIDEOS_HOME);
+  if (platform === "win32") {
+    return path.join(env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "orleans-lattice", "videos");
+  }
+  return path.join(env.XDG_STATE_HOME ?? path.join(home, ".local", "state"), "orleans-lattice", "videos");
+}
+
+/** The state directory for this user (see stateRoot). */
+export const stateDir = stateRoot();
+
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** True for a kebab-case episode slug. */
@@ -57,6 +78,8 @@ export function episodePaths(slug) {
     assets: path.join(dir, "assets"),
     narration: path.join(rendersDir, "narration", slug),
     takes: path.join(rendersDir, "takes", slug),
+    clipCache: path.join(stateDir, "clips", slug),
+    takeCache: path.join(stateDir, "takes", slug),
   };
 }
 

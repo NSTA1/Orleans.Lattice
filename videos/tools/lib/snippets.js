@@ -72,12 +72,15 @@ const SNIPPET_TARGET = /(<code\b[^>]*?\bdata-snippet="([^"]+)"[^>]*>)([\s\S]*?)(
 
 /**
  * Rewrites the body of every `<code data-snippet="id">` element in an HTML
- * document to the named snippet, escaped. Returns the rewritten document and
+ * document to the named snippet, escaped, in the document's own line endings
+ * (a Windows checkout has CRLF), so a composition that already shows the
+ * snippet is left byte-for-byte as it is. Returns the rewritten document and
  * the ids it used and could not resolve.
  */
 export function applySnippets(html, snippets) {
   const used = [];
   const missing = [];
+  const newline = html.includes("\r\n") ? "\r\n" : "\n";
   const output = html.replace(SNIPPET_TARGET, (whole, open, id, _body, close) => {
     const snippet = snippets.get(id);
     if (!snippet) {
@@ -85,7 +88,7 @@ export function applySnippets(html, snippets) {
       return whole;
     }
     used.push(id);
-    return open + escapeHtml(snippet.code) + close;
+    return open + escapeHtml(snippet.code).replace(/\n/g, newline) + close;
   });
   return { output, used, missing };
 }
