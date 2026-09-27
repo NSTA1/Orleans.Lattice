@@ -2054,7 +2054,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
       },
       "concurrency": {
-        "rule": "The target tree must be empty. The emptiness probe first invalidates the per-tree diagnostics cache and then runs a deep DiagnoseAsync, so a report cached before chunks were grafted onto the tree cannot admit a second session.",
+        "rule": "Target tree must be empty before bulk load; a tree carrying only tombstones is treated as non-empty.",
         "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
       },
       "sources": [

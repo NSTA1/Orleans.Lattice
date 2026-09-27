@@ -5733,10 +5733,6 @@
       },
       "errors": [
         {
-          "error_id": "telemetry-capability-denied",
-          "condition": "TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync denies the caller; checked first, before metric-access policy and range guardrails."
-        },
-        {
           "error_id": "authorization-denied",
           "condition": "The coarse MCP authorizer or the facade access gate denies the call."
         },
@@ -5752,7 +5748,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5761,12 +5757,11 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
-        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync",
-        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync"
       ]
     },
     {
@@ -5801,10 +5796,6 @@
       },
       "errors": [
         {
-          "error_id": "telemetry-capability-denied",
-          "condition": "TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync denies the caller; checked first, before metric-access policy and range guardrails."
-        },
-        {
           "error_id": "authorization-denied",
           "condition": "The coarse MCP authorizer or the facade access gate denies the call."
         },
@@ -5820,7 +5811,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5829,12 +5820,11 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
-        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync",
-        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync"
       ]
     },
     {
@@ -5875,10 +5865,6 @@
       },
       "errors": [
         {
-          "error_id": "telemetry-capability-denied",
-          "condition": "TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync denies the caller; checked first, before metric-access policy and range guardrails."
-        },
-        {
           "error_id": "authorization-denied",
           "condition": "The coarse MCP authorizer or the facade access gate denies the call."
         },
@@ -5894,7 +5880,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5903,12 +5889,11 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
-        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync",
-        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync"
       ]
     },
     {
@@ -5960,10 +5945,6 @@
       },
       "errors": [
         {
-          "error_id": "telemetry-capability-denied",
-          "condition": "TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync denies the caller; checked first, before metric-access policy and range guardrails."
-        },
-        {
           "error_id": "authorization-denied",
           "condition": "The coarse MCP authorizer or the facade access gate denies the call."
         },
@@ -5979,7 +5960,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -5988,12 +5969,11 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync"
       },
       "sources": [
         "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup",
-        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync",
-        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync"
       ]
     },
     {
@@ -6816,7 +6796,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
       },
       "concurrency": {
-        "rule": "The target tree must be empty. The emptiness probe first invalidates the per-tree diagnostics cache and then runs a deep DiagnoseAsync, so a report cached before chunks were grafted onto the tree cannot admit a second session.",
+        "rule": "Target tree must be empty before bulk load; a tree carrying only tombstones is treated as non-empty.",
         "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
       },
       "sources": [
@@ -11680,7 +11660,7 @@
           "type": "int",
           "required": false,
           "default": "50",
-          "notes": "The maximum number of neighbor entries to return. Clamped to the range [1, 100]; defaults to 50. A non-positive value applies the default of 50, not the ceiling."
+          "notes": "The maximum number of neighbor entries to return. Clamped to the range [1, 100]; defaults to 50. A non-positive value applies the ceiling of 100."
         },
         {
           "name": "region",
@@ -11710,7 +11690,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes"
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -11719,10 +11699,9 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes"
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
       },
       "sources": [
-        "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes",
         "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
         "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
       ]
@@ -12029,7 +12008,7 @@
           "type": "string?",
           "required": false,
           "default": "null",
-          "notes": "The memory kind applied when the entry is created: 'Decision', 'Note', or 'Memory'. Defaults to 'Note'. Any other value, including 'Unspecified', is rejected with an McpException."
+          "notes": "The memory kind applied when the entry is created: 'Decision', 'Note', or 'Memory'. Defaults to 'Note'."
         },
         {
           "name": "title",
@@ -12709,14 +12688,6 @@
       "retryable": "conditional",
       "meaning": "Telemetry backend failures are returned in the result Error field except caller cancellation.",
       "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync"
-    },
-    {
-      "id": "telemetry-capability-denied",
-      "type": "result-error",
-      "grpc_status": null,
-      "retryable": false,
-      "meaning": "The caller lacks the cluster-wide LatticeOperation.Telemetry capability; the tool returns a fixed message in the result Error field before any backend call.",
-      "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.CapabilityDeniedMessage"
     }
   ]
 }
