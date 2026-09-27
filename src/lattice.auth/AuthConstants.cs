@@ -48,7 +48,9 @@ internal static class AuthConstants
     /// system-data namespace (<c>sys-tenant-*</c>, per
     /// <see cref="LatticeConstants.TenantRegistryTreePrefix"/>). Such a tree holds
     /// the cross-tenant registry - every tenant's admin subjects, quotas,
-    /// placement, and grants - so the enforcement gate governs it with
+    /// placement, and grants - so the enforcement gate governs it (through
+    /// <see cref="IsControlPlaneRegistryTree"/>, which also covers the app
+    /// registry) with
     /// control-plane read isolation rather than the data-plane default effect,
     /// keeping a broad data-plane Read grant (including a cluster-wide all-trees
     /// wildcard) from scanning it. Allocation-free: a single ordinal
@@ -62,6 +64,32 @@ internal static class AuthConstants
     {
         ArgumentNullException.ThrowIfNull(treeId);
         return treeId.StartsWith(LatticeConstants.TenantRegistryTreePrefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="treeId"/> names a tree in either control-plane
+    /// registry system-data namespace: the tenant registry (<c>sys-tenant-*</c>,
+    /// per <see cref="LatticeConstants.TenantRegistryTreePrefix"/>) or the app
+    /// registry (<c>sys-app-*</c>, per
+    /// <see cref="LatticeConstants.AppRegistryTreePrefix"/>). The tenant registry
+    /// holds every tenant's admin subjects, quotas, placement, and grants; the app
+    /// registry holds every installed app's capability ceiling, consent record, and
+    /// role-to-group bindings. The enforcement gate governs both with control-plane
+    /// read isolation rather than the data-plane default effect, and the evaluator
+    /// excludes both from the all-trees tier, so a broad data-plane Read grant
+    /// (including a cluster-wide all-trees wildcard) cannot scan either. Allocation-
+    /// free: at most two ordinal <see cref="string.StartsWith(string, StringComparison)"/>
+    /// probes on the request's tree id, so it is safe to evaluate on the gate's
+    /// synchronous fast path.
+    /// </summary>
+    /// <param name="treeId">The candidate tree id. Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> if the id is in either registry namespace; otherwise <c>false</c>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
+    internal static bool IsControlPlaneRegistryTree(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return treeId.StartsWith(LatticeConstants.TenantRegistryTreePrefix, StringComparison.Ordinal)
+            || treeId.StartsWith(LatticeConstants.AppRegistryTreePrefix, StringComparison.Ordinal);
     }
 
     /// <summary>

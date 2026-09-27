@@ -147,12 +147,14 @@ internal static class PolicyEvaluator
     /// Whether the all-trees (<c>Tree:*</c>) tier participates in this evaluation:
     /// the opt-in flag is set, a compiled <c>"*"</c> bucket exists, and the target
     /// tree is a genuine application tree - not a control-plane namespace (the
-    /// reserved authorization namespace <c>sys-auth-*</c>, the tenant-registry
-    /// system-data namespace <c>sys-tenant-*</c>, or the tenant-administration
+    /// reserved authorization namespace <c>sys-auth-*</c>, the tenant-registry and
+    /// app-registry system-data namespaces <c>sys-tenant-*</c> and <c>sys-app-*</c>,
+    /// or the tenant-administration
     /// capability namespace <c>_lattice_tenant_admin_*</c>) and not the sentinel id
     /// <c>"*"</c> itself. The control-plane exclusion is the fail-closed guard that
     /// keeps a wildcard data grant from ever reaching the control plane -
-    /// membership, policy, the cross-tenant registry, or a delegated tenant-admin
+    /// membership, policy, the cross-tenant registry, the app registry's ceilings
+    /// and role bindings, or a delegated tenant-admin
     /// capability - so an all-trees read cannot exfiltrate tenant metadata and an
     /// all-trees <see cref="LatticeOperation.Admin"/> grant cannot be laundered into
     /// tenant administration over every tenant; the sentinel exclusion keeps a
@@ -172,7 +174,7 @@ internal static class PolicyEvaluator
         }
 
         return !LatticeAuthReservedTrees.IsReserved(treeId)
-            && !AuthConstants.IsTenantRegistryTree(treeId)
+            && !AuthConstants.IsControlPlaneRegistryTree(treeId)
             && !IsTenantAdminCapabilityNamespace(treeId);
     }
 

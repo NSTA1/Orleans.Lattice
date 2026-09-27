@@ -60,7 +60,12 @@ internal sealed class PolicyAccessGate(
         // control-plane id) names the platform-operator and delegated-per-tenant-admin
         // capabilities, the tenant-registry system-data namespace (sys-tenant-*,
         // LatticeConstants.TenantRegistryTreePrefix) holds the cross-tenant registry -
-        // every tenant's admin subjects, quotas, placement, and grants - and the
+        // every tenant's admin subjects, quotas, placement, and grants - the
+        // app-registry system-data namespace (sys-app-*,
+        // LatticeConstants.AppRegistryTreePrefix) holds every installed app's
+        // capability ceiling, consent record, and role-to-group bindings (the two
+        // registry namespaces are tested together by
+        // AuthConstants.IsControlPlaneRegistryTree and treated identically), and the
         // all-trees sentinel ("*") is only ever the target of a scopeless
         // cluster-wide capability request such as Telemetry (issue #1795), never of a
         // data-plane read or write, which always names a real tree. All four are
@@ -83,8 +88,8 @@ internal sealed class PolicyAccessGate(
         // namespace it is an ordinary Admin grant on the exact tenant-scope id
         // (authorable because the id is not sys-auth-*), so a delegated per-tenant admin
         // is honoured only for its own tenant and can never inherit Allow for another's;
-        // for the tenant registry it is an explicit rule an operator deliberately scoped
-        // at the registry tree; and for the sentinel it is the cluster-wide grant
+        // for the tenant registry and the app registry it is an explicit rule an
+        // operator deliberately scoped at the registry tree; and for the sentinel it is the cluster-wide grant
         // LatticeScope.ClusterWide() authors, which lands in the "*" bucket and is
         // resolved against it directly. A cluster-wide all-trees (Tree:*) wildcard never
         // satisfies the first three, because the evaluator excludes those namespaces
@@ -92,7 +97,7 @@ internal sealed class PolicyAccessGate(
         if (LatticeAuthReservedTrees.IsReserved(request.TreeId)
             || IsClusterWideCapabilityScope(request.TreeId)
             || IsTenantAdminCapabilityNamespace(request.TreeId)
-            || AuthConstants.IsTenantRegistryTree(request.TreeId))
+            || AuthConstants.IsControlPlaneRegistryTree(request.TreeId))
         {
             var controlPlane = EvaluateControlPlane(in request);
             observer.Observe(in request, in controlPlane, default, maintainer.CurrentEpoch, start);
@@ -291,8 +296,9 @@ internal sealed class PolicyAccessGate(
         }
 
         // Control-plane isolation: the reserved authorization namespace, the
-        // tenant-administration capability namespace, the tenant-registry system-data
-        // namespace, and the all-trees capability sentinel
+        // tenant-administration capability namespace, the tenant-registry and
+        // app-registry system-data namespaces (sys-tenant-*, sys-app-*), and the
+        // all-trees capability sentinel
         // are never visible to a non-bootstrap caller by default effect - only an
         // explicit matched allow grant makes them so. Mirror the enforcement path so a
         // caller that cannot administer (or, for the registry, read) the namespace also
@@ -303,7 +309,7 @@ internal sealed class PolicyAccessGate(
         if (LatticeAuthReservedTrees.IsReserved(treeId)
             || IsClusterWideCapabilityScope(treeId)
             || IsTenantAdminCapabilityNamespace(treeId)
-            || AuthConstants.IsTenantRegistryTree(treeId))
+            || AuthConstants.IsControlPlaneRegistryTree(treeId))
         {
             var reserved = engine.Evaluate(subject, treeId, operation, key: null, rangeStart: null, rangeEnd: null, out var match);
             return new ValueTask<bool>(match.Matched && match.Effect == LatticeEffect.Allow && reserved.Allowed);
