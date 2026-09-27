@@ -1626,10 +1626,13 @@ internal sealed partial class LatticeGrain(
                             // retry below are all identical to the multi-shard path, so
                             // atomic visibility is unchanged.
                             var shard = GetShardGrainByIndex(physicalTreeId, fastShardIdx);
+                            // Capture both arguments in this scope, not fastBucket's
+                            // enclosing attempt scope (an extra display-class allocation).
+                            var shardKeys = fastBucket;
                             using (BeginRegistryScope(snap1Pair, strictPass))
                             {
                                 singleShardFetched = await ShardActivationRetry.RunAsync(
-                                    () => shard.GetManyAsync(fastBucket));
+                                    () => shard.GetManyAsync(shardKeys));
                             }
                         }
                         else
