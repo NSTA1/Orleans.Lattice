@@ -153,6 +153,16 @@ public sealed class RepoContextToolHandlerValidationTests
             "Enum.TryParse OR-folds a comma list, so 'Decision,Note' folds onto the distinct member Memory and "
             + "slips past Enum.IsDefined; the round-trip name check is what files the entry under the right kind.");
 
+    [TestCase("Unspecified")]
+    [TestCase("unspecified")]
+    public void RememberAsync_rejects_the_unspecified_kind(string kind)
+        => Assert.That(
+            () => RepoContextToolHandlers.RememberAsync(null!, "acme", "decisions", kind: kind),
+            Throws.InstanceOf<McpException>().With.Message.Contains("Decision, Note, Memory"),
+            "Unspecified is the never-classified default, not a caller-selectable kind: it is a defined member "
+            + "whose name round-trips, so without an explicit guard it passed every check and filed an entry "
+            + "under a kind the documented contract does not offer.");
+
     [TestCase("Decision")]
     [TestCase("note")]
     [TestCase("MEMORY")]
