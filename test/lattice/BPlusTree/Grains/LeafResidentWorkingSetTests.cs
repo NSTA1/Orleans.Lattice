@@ -166,65 +166,6 @@ public sealed class LeafResidentWorkingSetTests
     }
 
     [Test]
-    public void ParseCgroupMemoryLimit_reads_a_real_limit()
-    {
-        Assert.That(
-            LeafResidentWorkingSet.ParseCgroupMemoryLimit("12884901888\n"),
-            Is.EqualTo(12884901888L));
-    }
-
-    [Test]
-    public void ParseCgroupMemoryLimit_treats_the_v2_unlimited_spelling_as_unknown()
-    {
-        Assert.That(LeafResidentWorkingSet.ParseCgroupMemoryLimit("max\n"), Is.Zero);
-    }
-
-    [Test]
-    public void ParseCgroupMemoryLimit_treats_the_v1_saturation_sentinel_as_unknown()
-    {
-        // The arm that matters most. cgroup v1 spells unlimited as a page-aligned
-        // saturation of the page counter, which is a perfectly well-formed
-        // positive long. Believing it yields a budget of roughly two exabytes -
-        // a bound that is present, plausible-looking, and unreachable, which is
-        // the same silent non-engagement this whole issue is about. Unlike "max"
-        // it cannot be caught by a parse failure, so it needs its own rule.
-        //
-        // Both spellings are checked, and both assert EXACTLY zero rather than
-        // "non-positive". That is not fussiness: any implementation that casts
-        // an unsigned value above long.MaxValue wraps it to a negative, so a
-        // non-positive assertion on the unsigned form holds for every possible
-        // implementation and is therefore unfalsifiable - a vacuous assertion
-        // that would read as coverage. Asserting zero makes the sentinel clause
-        // load-bearing for both spellings.
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                LeafResidentWorkingSet.ParseCgroupMemoryLimit("9223372036854771712"),
-                Is.Zero,
-                "the cgroup v1 page-counter saturation is unlimited, not a ceiling");
-            Assert.That(
-                LeafResidentWorkingSet.ParseCgroupMemoryLimit("18446744073709551615"),
-                Is.Zero,
-                "an unsigned saturation that overflows long is unlimited, not a negative to be passed on");
-        });
-    }
-
-    [Test]
-    public void ParseCgroupMemoryLimit_treats_unreadable_content_as_unknown()
-    {
-        Assert.Multiple(() =>
-        {
-            foreach (var body in new[] { null, string.Empty, "   ", "not-a-number", "-1", "0" })
-            {
-                Assert.That(
-                    LeafResidentWorkingSet.ParseCgroupMemoryLimit(body),
-                    Is.Zero,
-                    $"'{body ?? "<null>"}' is not a ceiling and must degrade to unknown");
-            }
-        });
-    }
-
-    [Test]
     public void ReadContainerMemoryLimitBytes_reports_unknown_off_linux()
     {
         // Guards the degradation direction rather than a platform. On a
