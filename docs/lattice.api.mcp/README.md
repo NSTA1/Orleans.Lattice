@@ -71,3 +71,4 @@ For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`
 - [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) - the whole-tree administration facade (composing the schema control facade) the tree-administration tools adapt.
 - [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) - the tenant-administration, region-residency, and self-service facades the tenant tools adapt.
 - [`Orleans.Lattice.Api.Mcp.Telemetry`](../lattice.api.mcp.telemetry/README.md) - the opt-in telemetry tool module that serves cluster metrics over this server.
+- [`Orleans.Lattice.Api.Mcp.Apps`](../lattice.api.mcp.apps/README.md) - the opt-in surface that adds every enabled [installable app](../lattice.apps/README.md)'s tools to this endpoint, namespaced `{slug}_{tool}`, without changing the facade groups or `lattice_capabilities`.

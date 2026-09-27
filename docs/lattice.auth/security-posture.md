@@ -65,7 +65,7 @@ path:
   decision in the reserved authorization namespace resolves to deny, so only a
   bootstrap administrator (or an explicitly modelled grant) is ever an
   administrator. The same isolation governs the tenant-registry (`sys-tenant-*`)
-  namespace, the tenant-administration capability ids, and a cluster-wide
+  namespace, the app-registry (`sys-app-*`) namespace, the tenant-administration capability ids, and a cluster-wide
   capability request on the `*` sentinel (such as `Telemetry`): each is granted
   only by an explicit matched allow rule.
 - **Denied mutations leave no partial state.** A denied single-key write,

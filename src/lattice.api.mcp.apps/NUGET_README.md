@@ -9,7 +9,9 @@ mandatory name `{slug}_{tool}`.
 - **One endpoint, mandatory namespacing.** An app's tool `search` in app `notes`
   is advertised as `notes_search`. Slugs are unique and never contain `_`, so two
   apps can reuse a local tool name without colliding, and a name maps back to
-  exactly one app and tool (`AppMcpToolName.TryParse`).
+  exactly one app and tool (`AppMcpToolName.TryParse`). The slugs `lattice` and
+  `repocontext` lead the built-in tool namespaces, so an app with either slug
+  contributes no tools.
 - **Exact pairing or nothing.** For each enabled app, the manifest's
   `mcpTools` declarations are paired with the tools every `IAppMcpToolProvider`
   registered for the slug supplies. A declared tool without an implementation, an

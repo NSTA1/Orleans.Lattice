@@ -103,7 +103,11 @@ siloBuilder.ConfigureLatticeTenancy(options =>
   structural owner is the caller's own active tenant - which is exactly what the
   facades compose - so a caller can never name another tenant's namespace, and with
   tenancy off (where there is no active tenant) the namespace is uncreatable through
-  the public surface. Compose and inspect tenant tree ids with the core
+  the public surface. The app-tree prefix `a/` used by
+  [installable apps](../lattice.apps/README.md) is deliberately **not** reserved or
+  treated as qualified: an app tree `a/{app}/{tree}` is an ordinary unqualified name,
+  so it composes to `t/{tenantId}/a/{app}/{tree}` and each tenant gets its own copy of
+  an installed app (with tenancy off it stays the bare `a/{app}/{tree}`). Compose and inspect tenant tree ids with the core
   `LatticeTenantTrees` helper:
 
 ```csharp verify
