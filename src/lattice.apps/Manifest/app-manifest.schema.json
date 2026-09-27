@@ -7,12 +7,12 @@
   "required": ["identity", "trees", "roles", "subscriptions", "mcpTools"],
   "properties": {
     "identity": { "$ref": "#/$defs/identity" },
-    "trees": { "type": "array", "items": { "$ref": "#/$defs/tree" } },
-    "roles": { "type": "array", "items": { "$ref": "#/$defs/role" } },
-    "replication": { "type": ["array", "null"], "items": { "$ref": "#/$defs/replication" } },
-    "schema": { "type": ["array", "null"], "items": { "$ref": "#/$defs/schema" } },
-    "subscriptions": { "type": "array", "items": { "$ref": "#/$defs/subscription" } },
-    "mcpTools": { "type": "array", "items": { "$ref": "#/$defs/tool" } }
+    "trees": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/tree" } },
+    "roles": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/role" } },
+    "replication": { "type": ["array", "null"], "maxItems": 256, "items": { "$ref": "#/$defs/replication" } },
+    "schema": { "type": ["array", "null"], "maxItems": 256, "items": { "$ref": "#/$defs/schema" } },
+    "subscriptions": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/subscription" } },
+    "mcpTools": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/tool" } }
   },
   "$defs": {
     "name": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(?![\\s\\S])", "minLength": 1, "maxLength": 128 },
@@ -30,9 +30,9 @@
         "provenance": {
           "type": "object", "additionalProperties": false,
           "properties": {
-            "source": { "$ref": "#/$defs/text", "default": "in-image" },
-            "publisher": { "$ref": "#/$defs/text", "default": "first-party" },
-            "reference": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] }
+            "source": { "$ref": "#/$defs/text", "maxLength": 1024, "default": "in-image" },
+            "publisher": { "$ref": "#/$defs/text", "maxLength": 1024, "default": "first-party" },
+            "reference": { "anyOf": [{ "$ref": "#/$defs/text", "maxLength": 1024 }, { "type": "null" }] }
           }
         }
       }
@@ -41,7 +41,7 @@
       "type": "object", "additionalProperties": false, "required": ["name"],
       "properties": {
         "name": { "$ref": "#/$defs/name" },
-        "adoptedTreeId": { "type": ["string", "null"], "minLength": 1, "pattern": "^(?!a/|_lattice_|sys-|t/)[\\s\\S]*\\S", "description": "Existing pre-app physical tree. Requires operator-approved exception scopes in the install ceiling; never structurally granted. Adopted ids must be unique within the manifest." },
+        "adoptedTreeId": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024, "pattern": "^(?!a/|_lattice_|sys-|t/|\\*(?![\\s\\S]))[^\\s\\x00-\\x1F\\x7F-\\x9F](?:[^\\x00-\\x1F\\x7F-\\x9F]*[^\\s\\x00-\\x1F\\x7F-\\x9F])?(?![\\s\\S])", "description": "Existing pre-app physical tree, never the cluster-wide sentinel, without surrounding white space or control characters. Requires operator-approved exception scopes in the install ceiling; never structurally granted. Adopted ids must be unique within the manifest." },
         "shardCount": { "type": ["integer", "null"], "minimum": 1, "maximum": 4096 },
         "virtualShardCount": { "type": ["integer", "null"], "minimum": 1, "description": "Fixed at creation. Cannot change during manifest upgrade." },
         "maxLeafKeys": { "type": ["integer", "null"], "minimum": 2 },
@@ -57,7 +57,7 @@
         "tree": { "$ref": "#/$defs/name" },
         "app": { "anyOf": [{ "$ref": "#/$defs/slug" }, { "type": "null" }] },
         "kind": { "enum": ["Tree", "Key", "Prefix"], "default": "Tree" },
-        "keyOrPrefix": { "type": ["string", "null"], "minLength": 1 }
+        "keyOrPrefix": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024 }
       },
       "if": { "required": ["kind"], "properties": { "kind": { "enum": ["Key", "Prefix"] } } },
       "then": { "required": ["keyOrPrefix"], "properties": { "keyOrPrefix": { "type": "string" } } },
@@ -71,7 +71,7 @@
           "type": "array", "minItems": 1, "uniqueItems": true,
           "items": { "enum": ["Read", "Write", "Delete", "RangeRead", "RangeDelete", "CrdtApply", "AtomicWrite", "BulkLoad", "Admin", "Backup", "Restore", "SchemaAdmin", "Replication", "TreeLifecycle"] }
         },
-        "scopes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/scope" } }
+        "scopes": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/scope" } }
       }
     },
     "replication": {
@@ -85,7 +85,7 @@
       "type": "object", "additionalProperties": false, "required": ["tree", "family", "version"],
       "properties": {
         "tree": { "$ref": "#/$defs/name" },
-        "family": { "$ref": "#/$defs/text" },
+        "family": { "$ref": "#/$defs/text", "maxLength": 1024 },
         "version": { "type": "integer", "minimum": 1 },
         "strictIngest": { "type": "boolean", "default": false }
       }
@@ -96,14 +96,14 @@
         "name": { "$ref": "#/$defs/name" },
         "tree": { "$ref": "#/$defs/name" },
         "app": { "anyOf": [{ "$ref": "#/$defs/slug" }, { "type": "null" }] },
-        "keyPrefix": { "type": ["string", "null"], "minLength": 1 }
+        "keyPrefix": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024 }
       }
     },
     "tool": {
       "type": "object", "additionalProperties": false, "required": ["name", "description", "role"],
       "properties": {
         "name": { "$ref": "#/$defs/name", "maxLength": 96 },
-        "description": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text", "maxLength": 4096 },
         "role": { "$ref": "#/$defs/name" }
       }
     }

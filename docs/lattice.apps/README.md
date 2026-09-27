@@ -149,7 +149,9 @@ concept (the RepoContext pilot uses this for its legacy tree names). An adopted
 tree sits outside the app namespace, so it is **never** granted structurally: it
 must appear in the install ceiling's approved exception scopes, and uninstall never
 soft-deletes it. Adopted ids may not use the structural `a/` prefix or a reserved
-prefix (`_lattice_`, `sys-`, `t/`), and each may be adopted only once per manifest.
+prefix (`_lattice_`, `sys-`, `t/`), may not be the cluster-wide sentinel `*`, may not
+carry leading or trailing white space or control characters, may be at most 1024
+characters, and each may be adopted only once per manifest.
 
 ### Roles and scopes
 
@@ -163,7 +165,10 @@ expressible, but, like everything else, must be inside the operator's ceiling.
 Each scope template names an app-local tree declared by the app and an optional
 `kind` (`Tree`, `Key`, or `Prefix`) with its `keyOrPrefix`. A scope may instead
 name another app's tree with `app`; such a scope, like one over an adopted tree,
-requires an approved exception.
+requires an approved exception. No exception can approve a scope on the cluster-wide
+sentinel `*` or on a `_lattice_`, `sys-` or `t/` tree, and no ceiling can grant a role
+`Telemetry` or `AppInstall`: the role compiler reports either as an excess even for a
+manifest that skipped validation.
 
 ### Validation
 
@@ -174,6 +179,14 @@ values (a code, a JSON path and a message). Validation never throws for bad cont
 same way. When a previous manifest is supplied, validation also enforces upgrade
 rules: the slug cannot change and an existing tree's `virtualShardCount` cannot
 change.
+
+Parsing and validation are bounded, because a runtime-installed manifest is
+untrusted input: a manifest larger than 1 MiB (characters of text, or bytes of a
+stream) is refused before it is deserialized with code `too-large`, each section and
+the scopes of each role hold at most 256 entries, keys, prefixes, adopted ids, schema
+families and provenance fields are at most 1024 characters, and a tool description is
+at most 4096. An exceeded bound is reported with code `limit`, and an oversized section
+is rejected before any per-entry work.
 
 ## Install, consent and the ceiling
 
@@ -195,6 +208,12 @@ and the lifecycle state.
 - **Version pinning.** The ceiling is pinned to the version it was consented for.
   Upgrading to a new version requires a new ceiling, and enabling an app whose
   ceiling was consented for a different version fails.
+- **Compare on version.** `AppRegistryInstallRequest.ExpectedVersion`, when set,
+  applies an upgrade only while that version is still installed and otherwise returns
+  `ConcurrencyConflict`. The control facade always sets it to the version it read, so a
+  consent update racing an upgrade is refused instead of rolling the upgrade back. An
+  upgrade made directly through `IAppRegistry` does not re-apply an enabled app's
+  grants; call `IAppActivationPipeline.ReconcileAsync` afterwards.
 
 The registry is **control-plane read isolated** exactly like the tenant registry: a
 data-plane read grant, including a cluster-wide all-trees wildcard, cannot read
@@ -215,7 +234,11 @@ describing success or a structured failure (`AppActivationFailure`) with diagnos
 **Enable** resolves the installed version's manifest from the app source, validates
 it, compiles its roles against the pinned ceiling and bindings, provisions the app's
 structural trees with their declared shape (recovering a tree soft-deleted by an
-earlier uninstall), persists the compiled rule set, and marks the app `Enabled`.
+earlier uninstall), persists the compiled rule set, and marks the app `Enabled`. If a
+consent change landed while the run was in flight, it re-activates against the record
+its own transition wrote, so no grant compiled from superseded consent stays live.
+Replacing the owned rule set withdraws stale rules before writing new ones, so a
+policy-store fault part-way through never keeps a grant the current consent revoked.
 
 **Disable** removes every rule the app owns and marks it `Disabled`; its trees and
 data stay in place.
@@ -335,6 +358,9 @@ only sees trees composed for its own install's tenant.
 - App rules are ordinary rules evaluated by the existing gate. The data path, the
   gate and the enforcement helpers are unchanged by this package.
 - App-owned rule ids cannot be edited or deleted except under system origin.
+- The role and subscription compilers never grant or observe the cluster-wide
+  sentinel, a reserved or system-data tree, or a tenant-qualified id, whatever the
+  ceiling approves, and never emit a scopeless capability.
 - Physical tree ids are kept out of the control facade's responses and exception
   messages (see the [facade](../lattice.api.apps/README.md)). They remain visible in
   telemetry, storage accounting and backup artifacts, which require the `Telemetry`,

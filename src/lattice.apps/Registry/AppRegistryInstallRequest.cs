@@ -23,4 +23,16 @@ public sealed record AppRegistryInstallRequest
 
     /// <summary>The role-to-membership-group bindings. Role names must be unique; empty by default.</summary>
     [Id(3)] public IReadOnlyList<AppRoleBinding> RoleBindings { get; init; } = Array.Empty<AppRoleBinding>();
+
+    /// <summary>
+    /// The version the caller read as installed when it decided this transition, or <c>null</c>
+    /// to apply against whatever is installed. When set, the transition is applied only while the
+    /// live record still carries exactly this version, compared inside the registry's
+    /// optimistic-concurrency loop; otherwise it is rejected with
+    /// <see cref="AppRegistryTransitionError.ConcurrencyConflict"/> and nothing changes. An
+    /// install (which requires no live record) that sets it is therefore always rejected. This
+    /// closes the read-then-upgrade race in which a consent update decided against one version
+    /// would otherwise roll back an upgrade that landed after the read.
+    /// </summary>
+    [Id(4)] public AppVersion? ExpectedVersion { get; init; }
 }

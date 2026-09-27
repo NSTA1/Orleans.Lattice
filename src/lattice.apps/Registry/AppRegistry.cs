@@ -112,6 +112,17 @@ internal sealed class AppRegistry : IAppRegistry
             var read = await _store.GetAsync(key, cancellationToken).ConfigureAwait(false);
             current = read.Record;
 
+            // Compared on every attempt against the record this attempt will write over, so a
+            // competing upgrade that lands between the caller's read and this write is detected.
+            if (request?.ExpectedVersion is { } expected
+                && (current is null || current.State == AppRegistryLifecycleState.Uninstalled || current.Version != expected))
+            {
+                return AppRegistryTransitionResult.Rejected(
+                    current,
+                    AppRegistryTransitionError.ConcurrencyConflict,
+                    $"The installed version is no longer '{expected}'; re-read the app and retry the transition.");
+            }
+
             var decision = AppLifecycle.Evaluate(current, action);
             switch (decision.Kind)
             {

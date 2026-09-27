@@ -72,7 +72,7 @@ public sealed class AppRegistrySerializationTests
     {
         var serializer = CreateSerializer(out var services);
         using var _ = services;
-        var request = AppRegistryTestData.Request(tenant: TenantId.Parse("acme"));
+        var request = AppRegistryTestData.Request(tenant: TenantId.Parse("acme")) with { ExpectedVersion = AppRegistryTestData.V1 };
         var result = AppRegistryTransitionResult.Rejected(
             AppRegistryTestData.Record(AppRegistryLifecycleState.Installed), AppRegistryTransitionError.InvalidTransition, "nope");
 
@@ -80,6 +80,7 @@ public sealed class AppRegistrySerializationTests
         var resultCopy = serializer.Deserialize<AppRegistryTransitionResult>(serializer.SerializeToArray(result));
 
         Assert.That(requestCopy.Tenant, Is.EqualTo(request.Tenant));
+        Assert.That(requestCopy.ExpectedVersion, Is.EqualTo(AppRegistryTestData.V1));
         Assert.That(requestCopy.Identity, Is.EqualTo(request.Identity));
         Assert.That(requestCopy.RoleBindings, Is.EqualTo(request.RoleBindings));
         Assert.That(requestCopy.Ceiling.AllowedOperations, Is.EqualTo(request.Ceiling.AllowedOperations));
@@ -142,6 +143,11 @@ public sealed class AppRegistrySerializationTests
             Identity = new AppIdentity { Slug = AppRegistryTestData.Slug, Version = AppRegistryTestData.V1 },
             Ceiling = new AppCapabilityCeiling(),
         }.Tenant, Is.EqualTo(TenantId.Default), "an install defaults to the default tenant");
+        Assert.That(new AppRegistryInstallRequest
+        {
+            Identity = new AppIdentity { Slug = AppRegistryTestData.Slug, Version = AppRegistryTestData.V1 },
+            Ceiling = new AppCapabilityCeiling(),
+        }.ExpectedVersion, Is.Null, "an install request applies against whatever is installed by default");
         Assert.That(record.RoleBindings, Is.Empty);
         Assert.That(AppRegistryTestData.Record(AppRegistryLifecycleState.Installed, version: AppRegistryTestData.V2, ceilingVersion: AppRegistryTestData.V1)
             .IsCeilingPinnedToVersion, Is.False);

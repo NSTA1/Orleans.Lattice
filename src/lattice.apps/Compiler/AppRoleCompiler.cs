@@ -36,6 +36,14 @@ namespace Orleans.Lattice.Apps;
 /// is not a wildcard here. Any excess fails the whole compilation; nothing is clamped.
 /// </para>
 /// <para>
+/// <b>Non-data trees.</b> No exception can approve an out-of-namespace scope on the cluster-wide
+/// sentinel, the reserved <c>_lattice_</c> or system-data <c>sys-</c> namespaces, or an already
+/// tenant-qualified <c>t/</c> id: such a scope is always reported as a scope excess, even when
+/// the manifest skipped validation. Likewise the scopeless capabilities
+/// (<see cref="LatticeOperation.Telemetry"/>, <see cref="LatticeOperation.AppInstall"/>) are never
+/// role operations and are reported as an operations excess whatever the ceiling allows.
+/// </para>
+/// <para>
 /// <b>Subjects.</b> Each binding emits <see cref="LatticeSubjectSelector.Group(string)"/> for its
 /// group, never a user selector. A declared role with no binding emits nothing and is reported in
 /// <see cref="AppRuleCompilation.UnboundRoles"/>; a binding naming an undeclared role fails
@@ -113,7 +121,9 @@ public static class AppRoleCompiler
         HashSet<LatticeScope>? reportedScopes = null;
         foreach (var role in roles)
         {
-            var excessOperations = role.Operations & ~ceiling.AllowedOperations;
+            // Scopeless capabilities (Telemetry, AppInstall) are never role operations, whatever
+            // the ceiling allows: a rule carrying one could otherwise confer it cluster-wide.
+            var excessOperations = role.Operations & ~(ceiling.AllowedOperations & AppManifestValidator.RoleOperations);
             if (excessOperations != LatticeOperation.None)
                 (excesses ??= []).Add(new(role.Name, AppCeilingExcessKind.Operations, excessOperations, null));
 
@@ -122,8 +132,15 @@ public static class AppRoleCompiler
             for (var i = 0; i < scopes.Length; i++)
             {
                 var local = ResolveLocalScope(slug, role.Scopes[i], adopted, out var structural);
-                if (!structural && !IsCovered(local, exceptions) && (reportedScopes ??= []).Add(local))
-                    (excesses ??= []).Add(new(role.Name, AppCeilingExcessKind.Scope, role.Operations, local));
+                if (!structural && (!AppTreeIds.IsGrantable(local.TreeId) || !IsCovered(local, exceptions)))
+                {
+                    // No exception can approve a non-data tree; the failed compilation needs no
+                    // composed scope, and composing a reserved id could itself throw.
+                    if ((reportedScopes ??= []).Add(local))
+                        (excesses ??= []).Add(new(role.Name, AppCeilingExcessKind.Scope, role.Operations, local));
+                    scopes[i] = local;
+                    continue;
+                }
 
                 var effectiveTree = LatticeTenantResolution.ComposeEffectiveTreeId(tenant, local.TreeId);
                 scopes[i] = ReferenceEquals(effectiveTree, local.TreeId) ? local : local with { TreeId = effectiveTree };

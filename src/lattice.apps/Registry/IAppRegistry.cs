@@ -66,7 +66,12 @@ public interface IAppRegistry
     /// <see cref="AppRegistryLifecycleState.Enabled"/> or <see cref="AppRegistryLifecycleState.Disabled"/>):
     /// replaces its version, provenance, ceiling and role bindings, pinning the new ceiling
     /// to the new version, and keeps its lifecycle state. The same version may be supplied
-    /// to re-consent without an upgrade.
+    /// to re-consent without an upgrade. Set <see cref="AppRegistryInstallRequest.ExpectedVersion"/>
+    /// to the version the decision was made against so a concurrent upgrade is refused with
+    /// <see cref="AppRegistryTransitionError.ConcurrencyConflict"/> rather than rolled back. An
+    /// upgrade of an enabled app does not re-apply its grants: call
+    /// <see cref="IAppActivationPipeline.ReconcileAsync"/> afterwards, or a narrowed ceiling keeps
+    /// its superseded grants until the next reconcile.
     /// </summary>
     /// <param name="request">The consented upgrade. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the transition.</param>

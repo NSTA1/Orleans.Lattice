@@ -59,7 +59,10 @@ its app and tool unambiguously (`AppMcpToolName.Compose` and
 
 A namespaced name that collides with a tool already in the session - a built-in
 meta-tool or a facade-group tool - is skipped with a warning, so an app can never
-shadow a built-in tool.
+shadow a built-in tool. The slugs `lattice` and `repocontext` lead the built-in tool
+namespaces (`lattice_*` and `repocontext_*`), so an app with either slug contributes no
+tools at all: for a caller the built-in tool is withheld from, nothing would collide,
+and the app's tool would otherwise be advertised under the built-in tool's name.
 
 ## Exact pairing
 

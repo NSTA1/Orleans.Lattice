@@ -286,6 +286,26 @@ internal sealed class AppActivationEngine
                     activated.Applied);
             }
 
+            // The rules were compiled from the record this run read. A consent write (a
+            // narrowed ceiling, rebound roles, or an upgrade) that landed between that read and
+            // the transition leaves them describing superseded consent, and because the record
+            // was not yet enabled, the writer did not re-apply it. The transition's record is
+            // authoritative from here on, so re-activate against it; a later consent write sees
+            // the app enabled and queues its own reconcile behind this run.
+            var enabled = transition.Record;
+            var expectedRevision = record!.Revision + (transition.Changed ? 1 : 0);
+            if (enabled is not null && enabled.Revision != expectedRevision)
+            {
+                applied = activated.Applied;
+                var reactivated = await ActivateAsync(enabled, cancellationToken).ConfigureAwait(false);
+                if (reactivated.Failure != AppActivationFailure.None)
+                {
+                    return await FailClosedAsync(reactivated, cancellationToken).ConfigureAwait(false);
+                }
+
+                return Step.Ok(enabled, transition.Changed, reactivated.Applied);
+            }
+
             return Step.Ok(transition.Record, transition.Changed, activated.Applied);
         }
 
@@ -542,14 +562,18 @@ internal sealed class AppActivationEngine
                 }
 
                 var diff = AppRoleCompiler.ComputeDiff(slug, compiled, stored);
-                foreach (var rule in diff.ToUpsert)
-                {
-                    await store.PutRuleAsync(rule, cancellationToken).ConfigureAwait(false);
-                }
 
+                // Withdrawals before grants: a store fault part-way through leaves a subset of
+                // the old grants plus part of the new ones, never a grant the current consent
+                // has withdrawn (a revoked binding, a dropped scope) alongside the new set.
                 foreach (var rule in diff.ToDelete)
                 {
                     await store.RemoveRuleAsync(rule.Scope.TreeId, rule.RuleId, cancellationToken).ConfigureAwait(false);
+                }
+
+                foreach (var rule in diff.ToUpsert)
+                {
+                    await store.PutRuleAsync(rule, cancellationToken).ConfigureAwait(false);
                 }
 
                 return null;
