@@ -338,7 +338,8 @@ public interface ILatticeTreeAdmin
     /// <see cref="LatticeOperation.BulkLoad"/> capability fail-closed. Bulk-load is a
     /// bottom-up initial-seed primitive, so the tree must be <b>empty</b>: a deep
     /// diagnostic probe rejects a tree that already holds data or tombstones with <see cref="TreeNotEmptyException"/>
-    /// so the caller can distinguish it from a transient fault. Reserved system tree
+    /// so the caller can distinguish it from a transient fault. A shard the probe could
+    /// not sample fails the call closed rather than counting as empty. Reserved system tree
     /// ids are rejected.
     /// </summary>
     /// <remarks>
@@ -355,6 +356,7 @@ public interface ILatticeTreeAdmin
     /// <returns>The opened bulk-load session.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="operationId"/> is <c>null</c>, empty, or contains <c>'/'</c>.</exception>
     /// <exception cref="TreeNotEmptyException">The target tree already contains data.</exception>
+    /// <exception cref="InvalidOperationException">A shard of the target tree could not be sampled, so its emptiness cannot be verified; retry once the shard is reachable.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the bulk-load capability.</exception>
     Task<TreeBulkLoadSession> BeginBulkLoadAsync(
         string treeId, string operationId, CancellationToken cancellationToken = default);

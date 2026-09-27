@@ -144,7 +144,10 @@ public class LatticeQueueGrainTests
     {
         var (grain, data, _) = await CreateGrainAsync();
         await grain.EnqueueAsync(Payload("a"));
-        await grain.TryDequeueAsync(); // advances head once, below the flush interval
+        await grain.EnqueueAsync(Payload("b"));
+        // Advances head once, below the flush interval. A later row survives, so
+        // this is not the tail delete that writes the next id eagerly.
+        await grain.TryDequeueAsync();
         Assert.That(data.ContainsKey(LatticeQueueCore.HeadCursorKey), Is.False);
 
         await grain.OnDeactivateAsync(default, CancellationToken.None);

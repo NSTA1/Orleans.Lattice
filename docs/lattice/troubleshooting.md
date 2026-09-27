@@ -93,6 +93,7 @@ report's per-shard counts would still disclose the keys they counted. See
 | `HotnessWindow` | The window the counters cover: the time since the shard activated, so it restarts when the shard deactivates. Positive on every shard that answered the fan-out. | Exactly `TimeSpan.Zero` marks the placeholder entry of a shard whose diagnostics call failed (`OpsPerSecond` then reads `0.0`); see [the traps](#traps-when-reading-a-report). A very short window means the shard activated recently, so its counters and `OpsPerSecond` cover only that span. |
 | `SplitInProgress` | `false` on a stable tree. | `true` means this shard is the source of an in-flight split - adaptive, or driven by an online reshard. Normal if transient; see [Concurrent split activity](#concurrent-split-activity). |
 | `BulkOperationPending` | `false` on a stable tree. | `true` means the shard has recorded a bulk-load graft it has not finished linking in: normal while a chunk of an append-based bulk load grafts, and cleared by the shard's next read or write if the graft was interrupted. While any shard reports it, autonomic splitting is suspended for the whole tree. See [Bulk loading](bulk-loading.md). |
+| `SampleFailed` | `false` on every shard. | `true` marks the placeholder entry of a shard whose diagnostics call failed: its counts are unmeasured, not zero, and a bulk load refuses to begin until every shard answers. See [the traps](#traps-when-reading-a-report). |
 
 ### A worked reading
 
@@ -135,14 +136,15 @@ These are the report behaviours that most often lead to a wrong conclusion.
 - **An all-zero shard entry can mean the fan-out failed.** When a shard's
   diagnostics call throws, the aggregator logs a warning
   (`Diagnostics fan-out failed for shard {ShardIndex} in tree {TreeId}`) and
-  substitutes an entry carrying only the shard index - every other field is
-  its default. A genuinely empty shard also reports `Depth = 0` and
-  `LiveKeys = 0`, but its `HotnessWindow` is positive, because a shard that
-  answers always reports the time since it activated. An entry whose
-  `HotnessWindow` is exactly `TimeSpan.Zero` is therefore the placeholder for
-  a shard that did not answer, and the silo log carries the exception. If one
-  shard reads as empty on a tree you know holds data, check `HotnessWindow`
-  and the log before concluding the data is gone.
+  substitutes an entry carrying only the shard index and
+  `SampleFailed = true`; every other field is its default. A genuinely empty
+  shard also reports
+  `Depth = 0` and `LiveKeys = 0`, but its `SampleFailed` is `false` and its
+  `HotnessWindow` is positive, because a shard that answers always reports the
+  time since it activated. An entry with `SampleFailed` set is therefore the
+  placeholder for a shard that did not answer, and the silo log carries the
+  exception. If one shard reads as empty on a tree you know holds data, check
+  `SampleFailed` and the log before concluding the data is gone.
 - **Reports are cached per mode.** Shallow and deep results are cached
   independently for `DiagnosticsCacheTtl` (default 5 s), so a shallow poll
   never refreshes the deep report and vice versa. `SampledAt` tells you how old

@@ -13,8 +13,8 @@ This is the "does it work in anger" capstone for the autoscaling-signal work
 (`MapLatticeScalingSignal`, `AddLatticeScalingSignal`, and the health check from
 `Orleans.Lattice.Scaling`); it does not redefine them. Its scale rule is written
 inline in `main.bicep` in the shape of the package's reference ACA scale rule,
-but with `targetValue: 0.5` where the reference rule uses `1` (see "Why
-`targetValue: 0.5` and not `1`?" under Deploy).
+including its `targetValue: 0.5` (see "Why `targetValue: 0.5` and not `1`?"
+under Deploy).
 
 ## The two axes (read this first)
 
