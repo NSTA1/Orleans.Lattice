@@ -800,13 +800,22 @@ internal sealed class RepoContextBootstrapService : IDisposable
             }
             else
             {
+                // Name which of the two back-off conditions held. The gate skips when
+                // coverage was last observed complete OR when the last scan could not
+                // measure it at all, and those mean opposite things: a single message
+                // claiming completeness for both read an unmeasured backlog of gaps as
+                // convergence in a deployed log (issue #3483).
                 _logger.LogInformation(
                     "Repo {RepoId}: vectorising {Changed} changed file(s); skipping the embedding-gap scan over "
-                    + "{Unchanged} unchanged file(s) - coverage was last observed complete and the next scheduled "
-                    + "scan is {Remaining} pass(es) away.",
+                    + "{Unchanged} unchanged file(s) - {Reason}, and the next scheduled scan is {Remaining} "
+                    + "pass(es) away.",
                     repoId,
                     changed.Count,
                     unchangedForBackfill.Count,
+                    coverageUnmeasurable
+                        ? "the last gap scan could NOT measure coverage, so completeness has not been observed "
+                          + "and the scan is backed off to its periodic cadence"
+                        : "coverage was last observed complete",
                     Math.Max(0, _options.PassesPerEmbeddingGapScan - (passesSinceGapScan + 1)));
             }
 

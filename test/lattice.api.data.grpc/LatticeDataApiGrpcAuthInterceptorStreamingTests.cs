@@ -188,6 +188,184 @@ public sealed class LatticeDataApiGrpcAuthInterceptorStreamingTests
             Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public async Task An_authorized_server_streaming_call_reaches_the_continuation()
+    {
+        // The denial arm above proves the gate closes. Nothing proved it opens:
+        // an interceptor that threw on every server-streaming call would pass
+        // that test and fail every real request, and the shape most likely to
+        // regress here is the one the service actually uses for its drains.
+        var interceptor = Create(Authorizer(allow: true));
+        var written = new List<DataSetResponse>();
+        var expected = new DataSetResponse();
+
+        await interceptor.ServerStreamingServerHandler(
+            new DataSetRequest { TreeId = "t", Key = "k", Value = [1] },
+            new RecordingStreamWriter<DataSetResponse>(written),
+            new StubServerCallContext(LatticeMethod),
+            async (_, stream, _) => await stream.WriteAsync(expected));
+
+        Assert.That(written, Is.EqualTo(new[] { expected }).AsCollection);
+    }
+
+    [Test]
+    public async Task A_non_data_api_server_streaming_method_is_passed_through_without_an_auth_check()
+    {
+        // Every streaming shape has its own pass-through branch, so proving it
+        // on one shape says nothing about the others. A denying authorizer
+        // makes the pass-through observable: were the branch missing, the call
+        // would be refused rather than forwarded.
+        var authorizer = Authorizer(allow: false);
+        var interceptor = Create(authorizer);
+        var reached = false;
+
+        await interceptor.ServerStreamingServerHandler(
+            new DataSetRequest { TreeId = "t", Key = "k", Value = [1] },
+            new DiscardingStreamWriter<DataSetResponse>(),
+            new StubServerCallContext(ForeignMethod),
+            (_, _, _) =>
+            {
+                reached = true;
+                return Task.CompletedTask;
+            });
+
+        Assert.That(reached, Is.True, "a foreign method must be forwarded, not refused");
+        await authorizer.DidNotReceive().IsAuthorizedAsync(
+            Arg.Any<LatticeDataApiAuthorizationContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_non_data_api_duplex_streaming_method_is_passed_through_without_an_auth_check()
+    {
+        var authorizer = Authorizer(allow: false);
+        var interceptor = Create(authorizer);
+        var reached = false;
+
+        await interceptor.DuplexStreamingServerHandler(
+            new EmptyStreamReader<DataSetRequest>(),
+            new DiscardingStreamWriter<DataSetResponse>(),
+            new StubServerCallContext(ForeignMethod),
+            (_, _, _) =>
+            {
+                reached = true;
+                return Task.CompletedTask;
+            });
+
+        Assert.That(reached, Is.True, "a foreign method must be forwarded, not refused");
+        await authorizer.DidNotReceive().IsAuthorizedAsync(
+            Arg.Any<LatticeDataApiAuthorizationContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_server_streaming_call_describes_itself_to_the_authorizer()
+    {
+        // The authorizer is the whole point of the interceptor, and a host
+        // writes its policy against these three fields. Every existing test
+        // matches the context with Arg.Any, so nothing asserted that the
+        // interceptor populates it at all: an interceptor that handed over a
+        // default context would satisfy all of them while making every
+        // per-operation and per-tree policy decide on nothing.
+        LatticeDataApiAuthorizationContext observed = default;
+        var authorizer = Substitute.For<ILatticeDataApiAuthorizer>();
+        authorizer
+            .IsAuthorizedAsync(Arg.Any<LatticeDataApiAuthorizationContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                observed = call.Arg<LatticeDataApiAuthorizationContext>();
+                return Task.FromResult(true);
+            });
+
+        var interceptor = Create(authorizer);
+        var context = new StubServerCallContext(LatticeMethod);
+
+        await interceptor.ServerStreamingServerHandler(
+            new DataSetRequest { TreeId = "tree-7", Key = "k", Value = [1] },
+            new DiscardingStreamWriter<DataSetResponse>(),
+            context,
+            (_, _, _) => Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed.Operation, Is.EqualTo(LatticeDataApiOperation.SetPoint));
+            Assert.That(observed.TargetTreeId, Is.EqualTo("tree-7"));
+            Assert.That(
+                observed.Call,
+                Is.SameAs(context),
+                "the authorizer inspects headers and peer through the call context");
+        });
+    }
+
+    [Test]
+    public async Task A_duplex_streaming_call_describes_itself_without_a_single_request_message()
+    {
+        // A duplex call has no one request to describe, so the interceptor
+        // passes `default!` and the description has to come from the method
+        // name alone. The tree id is genuinely unknown here, and null is the
+        // honest answer: a deny-by-default policy must be able to tell "no tree
+        // was named" from "the root tree was named".
+        LatticeDataApiAuthorizationContext observed = default;
+        var authorizer = Substitute.For<ILatticeDataApiAuthorizer>();
+        authorizer
+            .IsAuthorizedAsync(Arg.Any<LatticeDataApiAuthorizationContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                observed = call.Arg<LatticeDataApiAuthorizationContext>();
+                return Task.FromResult(true);
+            });
+
+        var interceptor = Create(authorizer);
+
+        await interceptor.DuplexStreamingServerHandler(
+            new EmptyStreamReader<DataSetRequest>(),
+            new DiscardingStreamWriter<DataSetResponse>(),
+            new StubServerCallContext(LatticeMethod),
+            (_, _, _) => Task.CompletedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed.Operation, Is.EqualTo(LatticeDataApiOperation.SetPoint));
+            Assert.That(observed.TargetTreeId, Is.Null, "no request message means no target tree to report");
+        });
+    }
+
+    [Test]
+    public void The_authorization_context_refuses_a_null_call()
+    {
+        // The context is a struct, so a caller can reach a default instance
+        // without the constructor. The guard is what stops a half-built context
+        // being handed to a policy that would then read a null call.
+        Assert.Throws<ArgumentNullException>(() =>
+            _ = new LatticeDataApiAuthorizationContext(null!, LatticeDataApiOperation.GetPoint, "t"));
+    }
+
+    [Test]
+    public void The_authorization_context_carries_the_fields_a_policy_reads()
+    {
+        var call = new StubServerCallContext(LatticeMethod);
+        var context = new LatticeDataApiAuthorizationContext(call, LatticeDataApiOperation.DeleteRange, "tree-3");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Call, Is.SameAs(call));
+            Assert.That(context.Operation, Is.EqualTo(LatticeDataApiOperation.DeleteRange));
+            Assert.That(context.TargetTreeId, Is.EqualTo("tree-3"));
+        });
+    }
+
+    [Test]
+    public void The_authorization_context_accepts_a_call_that_targets_no_single_tree()
+    {
+        var call = new StubServerCallContext(LatticeMethod);
+        var context = new LatticeDataApiAuthorizationContext(
+            call,
+            LatticeDataApiOperation.SetManyAtomicCrossTree,
+            targetTreeId: null);
+
+        Assert.That(context.TargetTreeId, Is.Null);
+    }
+
     /// <summary>
     /// An inbound request stream that is already complete. The authorization
     /// decision is taken before the first message is read, so the streaming
@@ -206,6 +384,22 @@ public sealed class LatticeDataApiGrpcAuthInterceptorStreamingTests
         public WriteOptions? WriteOptions { get; set; }
 
         public Task WriteAsync(T message) => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// An outbound response stream that records what the continuation wrote, so
+    /// an authorized streaming call can be proven to have reached the service
+    /// rather than merely to have not thrown.
+    /// </summary>
+    private sealed class RecordingStreamWriter<T>(List<T> written) : IServerStreamWriter<T>
+    {
+        public WriteOptions? WriteOptions { get; set; }
+
+        public Task WriteAsync(T message)
+        {
+            written.Add(message);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>

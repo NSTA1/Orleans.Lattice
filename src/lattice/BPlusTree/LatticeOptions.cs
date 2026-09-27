@@ -1438,7 +1438,9 @@ public class LatticeOptions
     /// forever. Default 7 days. The minimum effective interval is
     /// <see cref="TxDecisionRetention"/> - a pin shorter than the tombstone
     /// retention is silently floored, because the registry's own
-    /// tombstone-prune pass already covers anything shorter.
+    /// tombstone-prune pass already covers anything shorter. A non-positive
+    /// value (for example <see cref="Timeout.InfiniteTimeSpan"/>) disables the
+    /// cap: the pin then does not expire and is released when its cursor closes.
     /// </summary>
     public TimeSpan MaxCursorSnapshotPinTtl { get; set; } = DefaultMaxCursorSnapshotPinTtl;
 

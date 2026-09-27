@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 189 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 191 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -400,6 +400,7 @@ src/lattice/LatticeMetrics.cs#WalGcCoverageUnknownPinOffset	unresolved	reason=bo
 src/lattice/LatticeMetrics.cs#WalGcDurabilityHoldEngaged	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#WalGcDurabilityHoldForced	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#WalGcDurableFloorStallSeconds	unresolved	reason=dimension (unread-tag-argument:status): tag argument(s) status are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#WalGcFloorHeadDistance	open	open=shard, tenant, tree; open dimension: shard carries a runtime identifier (shardIndex)
 src/lattice/LatticeMetrics.cs#WalGcFloorHolderAdmission	unresolved	reason=dimension (unread-tag-argument:status): tag argument(s) status are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcFloorHolderClassification	unresolved	reason=dimension (unread-tag-argument:status): tag argument(s) status are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#WalGcFloorHolderOffsetAdmission	unresolved	reason=dimension (unread-tag-argument:status): tag argument(s) status are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
@@ -416,6 +417,7 @@ src/lattice/LatticeMetrics.cs#WalGcSchedulerPassDuration	unresolved	reason=const
 src/lattice/LatticeMetrics.cs#WalGcSchedulerPassesStarted	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#WalGcSchedulerTerminations	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#WalGcSchedulerWait	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
+src/lattice/LatticeMetrics.cs#WalGcTerminalBreach	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#WalGcTreeReach	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#WalGcTrimStops	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#WalRecoveryTornTailBytes	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (treeId)

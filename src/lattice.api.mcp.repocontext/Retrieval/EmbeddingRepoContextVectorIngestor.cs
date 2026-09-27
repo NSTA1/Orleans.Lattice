@@ -737,17 +737,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     }
 
     /// <summary>
-    /// Records that a pass measured no gap-set shape, and says which of the four
+    /// Records that a pass measured no gap-set shape, and says which of the five
     /// mutually exclusive reasons produced it.
     /// <para>
     /// The reason is the whole point. An empty gap selection is reached by causes
     /// that mean OPPOSITE things - the probe failed so nothing was attempted, the
     /// probe was answered incompletely because the store's access gate pruned it,
-    /// the probe succeeded and found nothing left to do, or the back-fill was
-    /// skipped under backoff and never asked - and a pass that does not name which
+    /// the back-fill was skipped under backoff and never asked, no unchanged file was
+    /// offered so there was nothing to probe, or the probe succeeded and found
+    /// nothing left to do - and a pass that does not name which
     /// is indistinguishable from the others in a deployed container's log. This is
     /// the line an operator reads to tell "quiet because converged" from "quiet
-    /// because backed off" (issues #2208, #2253).
+    /// because backed off" (issues #2208, #2253), and from "quiet because the
+    /// coordinator's gap scan was not due" (issue #3483).
     /// </para>
     /// </summary>
     /// <param name="repoId">The repository whose pass measured nothing.</param>
@@ -785,8 +787,18 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 : skippedGapScan
                     ? "the gap back-fill was SKIPPED under the file-arm backoff, so no gap sweep was attempted "
                       + "and this pass advanced the back-fill by nothing. This is NOT convergence"
-                    : "the coverage probe succeeded and selected no gap files, so every walked file is already "
-                      + "covered or contentless. This IS convergence for the file arm";
+                    : unchangedFiles == 0
+                        // Offered no content-unchanged file, the probe had nothing to
+                        // find a gap in. The coordinator withholds the unchanged set
+                        // whenever its gap scan is not due, so this is the ordinary
+                        // shape of a between-scans pass - and calling it convergence
+                        // is what read thousands of unscanned gaps as a converged
+                        // repository in a deployed log (issue #3483).
+                        ? "no content-unchanged file was offered, so this pass measured nothing about the "
+                          + "unchanged corpus and only the changed files were checked. This is NOT a "
+                          + "convergence verdict"
+                        : "the coverage probe succeeded and selected no gap files, so every walked file is already "
+                          + "covered or contentless. This IS convergence for the file arm";
 
         _logger.LogInformation(
             "Repo {RepoId}: back-fill gap set shape not measured this pass: {Reason} (walked={Walked} file(s), "
@@ -2074,7 +2086,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // that did land suppress the arm's "no embedding batch succeeded" line
                 // and leave a healthy-looking outcome behind (issue #2272).
                 var failedSources = NameBatchSources(start, count);
-                _pacer?.RecordBatch(batchStartedAt, succeeded: false);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: false, units: count);
                 failedBatches++;
                 embedFailedBatches++;
                 strandedSources += failedSources.Count;
@@ -2166,7 +2178,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
                 embedded += batchEmbedded;
                 consecutiveBatchFailures = 0;
-                _pacer?.RecordBatch(batchStartedAt, succeeded: true);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: true, units: count);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2176,7 +2188,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // repair, which is what makes continuing safe rather than merely
                 // convenient.
                 firstBatchFailure ??= ex;
-                _pacer?.RecordBatch(batchStartedAt, succeeded: false);
+                _pacer?.RecordBatch(batchStartedAt, succeeded: false, units: count);
                 failedBatches++;
                 if (stage == "record")
                 {

@@ -205,4 +205,48 @@ public class SequenceProvenanceDecoderTests
         Assert.That(members, Has.Count.EqualTo(1));
         Assert.That(members[0].Element, Is.EqualTo(B));
     }
+
+    [Test]
+    public void DecodeCurrentValue_matches_the_public_ToList_projection()
+    {
+        // The decoder now reads the shared cached view instead of the public
+        // tuple projection, so the guard is that the two stay in lockstep:
+        // same order, same values, same provenance.
+        var rga = new Rga();
+        var d1 = rga.InsertAfter(Rga.Root, "r1", A);
+        var d2 = rga.InsertAfter(d1, "r2", B);
+        rga.InsertAfter(d2, "r1", [0xFF, 0x00]);
+        rga.InsertAfter(Rga.Root, "r3", []);
+
+        var expected = rga.ToList();
+        var members = Decoder.DecodeCurrentValue(rga);
+
+        Assert.That(members, Has.Count.EqualTo(expected.Count));
+        for (var i = 0; i < expected.Count; i++)
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(members[i].Element, Is.EqualTo(expected[i].Value));
+                Assert.That(members[i].ReplicaId, Is.EqualTo(expected[i].Dot.ReplicaId));
+                Assert.That(members[i].Ordinal, Is.EqualTo(expected[i].Dot.Counter));
+            });
+        }
+    }
+
+    [Test]
+    public void DecodeCurrentValue_does_not_alias_the_sequences_live_buffers()
+    {
+        // The shared view hands back the sequence's own durable buffers, so the
+        // ownership copy that the public projection used to perform has to
+        // survive the move into the member. Mutating a decoded element must not
+        // be observable through a later read.
+        var rga = new Rga();
+        rga.InsertAfter(Rga.Root, "r1", [1, 2, 3]);
+
+        var first = Decoder.DecodeCurrentValue(rga);
+        first[0].Element[0] = 0x7F;
+        var second = Decoder.DecodeCurrentValue(rga);
+
+        Assert.That(second[0].Element, Is.EqualTo(new byte[] { 1, 2, 3 }));
+    }
 }

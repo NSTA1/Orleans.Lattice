@@ -2009,6 +2009,30 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (increase(orleans_lattice_wal_gc_offset_floor_population_gap_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}}" }
       ]
+    },
+    {
+      "id": 31491,
+      "title": "WAL GC terminal breach (ops/s) - issue #3149",
+      "description": "Rate of WAL garbage-collection passes on which the tree has been OVER ITS BYTE CEILING, WITH AN AVAILABLE CURSOR FLOOR, AND RECLAIMED NOTHING for 10 consecutive passes (orleans.lattice.wal.gc.terminal_breach, issue #3149). THIS IS THE PANEL THAT SAYS THE RETRIES HAVE STOPPED HELPING. over_ceiling on the pass-outcome panel is by design a transient: the scheduler holds such a tree at the floor interval and asks again, and the arm reads exactly the same on the tenth fruitless pass as on the first, so a retry loop that will never succeed was indistinguishable from one about to. A tree on this panel has been asked at least ten times in a row and has released nothing each time, which is unbounded WAL growth rather than a lag working itself out. Counted once per qualifying pass from the tenth onwards, so while the breach persists the rate tracks that tree's pass rate; any pass that reclaims, falls inside the ceiling, or finds the cursor floor blocked resets the run. A BLOCKED FLOOR IS DELIBERATELY EXCLUDED: the blocked arm already names that tree and its remedy - a consumer holding the floor - differs. The run is held in memory, so a silo restart delays the signal by at most one threshold's worth of passes and can never fabricate it. READ IT WITH THE FLOOR-TO-HEAD DISTANCE PANEL, which sizes how much each shard's floor is holding, and the trim-stop panel, which names what holds it. Zero-primed per tree beside the pass-outcome arms, which is why this query omits the or-vector-zero fallback used elsewhere on this dashboard - fabricating a zero would reintroduce the false zero the priming exists to remove, and an absent series here genuinely means WAL GC is not running for that tree on the selected silo.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 372 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_gc_terminal_breach_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}}/s" }
+      ]
+    },
+    {
+      "id": 31492,
+      "title": "WAL GC floor-to-head distance p95 (offsets) - issue #3149",
+      "description": "p95 of the floor-to-head reclaimable distance of each WAL garbage-collection shard scan, per tree and shard (orleans.lattice.wal.gc.floor_head_distance, issue #3149): the offsets from the first entry the scan had to retain through the shard's head, inclusive. THE QUESTION THIS ANSWERS: how much of each shard is the effective trim floor holding? The trim-stop panel says a scan stopped and the entries-trimmed series says what it released first, but neither sizes what was left behind - the quantity that separates a floor holding a handful of recent writes from one stranded far behind the head. MEASURED IN OFFSETS, NOT BYTES, because byte accounting is per tree rather than per shard. Recorded on EVERY scanned shard, at zero when the scan released everything it was offered or found the shard empty, so a measured zero means the floor holds nothing rather than that the shard is not reporting, and the query needs no or-vector-zero fallback. A LARGE VALUE ON ONE SHARD BESIDE ZEROS ON ITS SIBLINGS NAMES THE STRANDED SHARD; a value that keeps growing alongside the terminal-breach panel is unbounded retention with a measured size. Tagged with the same tree, shard and tenant set as entries trimmed, so the retained side of a scan joins its released side shard for shard.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 379 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree, shard) (rate(orleans_lattice_wal_gc_floor_head_distance_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "{{tree}} shard {{shard}}" }
+      ]
     }
   ]
 }

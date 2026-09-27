@@ -258,6 +258,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
 | `rowcodec` | The aggregation-view row codec's encode and decode paths on the projection write and read path. |
 | `replayadmission` | The WAL replay-permit admission gate: the activation-time admission decision every replaying leaf passes (healthy, saturated and stale-mean-expired queues, the last exercising the freshness test on its smoothed-wait arm), the wait fold that feeds that mean, and background starvation-drive admission for a WAL GC sweep drive, a coverage-lag timer drive and a refused drive. |
+| `replayownership` | The leaf WAL replay pass-1 ownership gate every replayed record passes: the pre-#3601 `ShouldApply` judgement against `ShouldApply` plus the disjoint range-delete check, over a key-scoped `Set`, a disjoint range delete and an overlapping one. |
 | `fanout` | Three read sites that replaced N sequential awaited grain reads with one batched multi-get. Prints a host-independent round-trip census first, also written to a `fanout-roundtrips.json` sidecar; set `BENCH_FANOUT_ROUNDTRIPS_ONLY=true` to skip the latency pass. |
 | `crosstree` | The allocation trim to the string sets the cross-tree and view coordination barriers canonicalise on every call. |
 | `alloctrims` | Three steady-state allocation trims on warm dictionary and set maintenance paths. |

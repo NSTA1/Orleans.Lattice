@@ -712,6 +712,8 @@ How long the leaf-projection materialiser may defer persisting an advancing chec
 
 A graceful deactivation always force-flushes a pending checkpoint, so a clean silo shutdown loses no progress regardless of interval. A worst-case crash loses up to `MaterialiserCheckpointInterval` x steady-state apply rate of replay work on restart.
 
+The interval is also re-checked on each leaf's coverage-lag tick ([`LeafSnapshotMaxCoverageLagSeconds`](#leafsnapshotmaxcoveragelagseconds)), so a pending advance on a leaf that receives no further advances is still persisted once the interval has elapsed, at the next tick, rather than held until the leaf deactivates.
+
 ```csharp verify
 // Strict RTO: checkpoint on every advance.
 siloBuilder.ConfigureLattice("strict-tree", o => o.MaterialiserCheckpointInterval = TimeSpan.Zero);

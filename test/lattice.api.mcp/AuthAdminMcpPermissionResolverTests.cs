@@ -381,6 +381,79 @@ public sealed class AuthAdminMcpPermissionResolverTests
     }
 
     [Test]
+    public async Task Telemetry_grant_over_a_tree_scope_does_not_make_telemetry_usable()
+    {
+        // Telemetry is a cluster-wide capability with no tree to scope it to, so a
+        // tree-scoped rule that happens to carry the bit is a data-plane grant on
+        // that one tree - not a grant of the scopeless capability. LatticeScope's
+        // own contract says a data-plane rule on a tree can never confer it.
+        var resolver = CreateResolver(AdminReturning(
+            Rule(LatticeOperation.Telemetry, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False,
+            "A rule scoped to a single tree must not grant the cluster-wide telemetry group.");
+    }
+
+    [Test]
+    public async Task Telemetry_over_a_tree_scope_is_not_carried_into_the_granted_operations()
+    {
+        // Group membership is only half the gate: per-tool filtering consults
+        // GrantedOperations, so leaking the bit there would re-open every telemetry
+        // tool on a set whose group membership was correctly withheld.
+        var resolver = CreateResolver(AdminReturning(
+            Rule(LatticeOperation.Read | LatticeOperation.Telemetry, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.Telemetry), Is.False,
+                "The cluster-wide bit must be masked off a tree-scoped rule before it is carried.");
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.Read), Is.True,
+                "Masking must remove only the cluster-wide-only bits, never the rule's data-plane grant.");
+        });
+    }
+
+    [Test]
+    public async Task A_tree_scoped_telemetry_grant_does_not_suppress_a_cluster_wide_one()
+    {
+        // The mask must not turn into a denial: a caller holding both rules is
+        // entitled to telemetry by the cluster-wide one.
+        var resolver = CreateResolver(AdminReturning(
+            Rule(LatticeOperation.Telemetry, LatticeEffect.Allow),
+            ClusterWideRule(LatticeOperation.Telemetry, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.True);
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.Telemetry), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task A_tree_scoped_rule_still_grants_its_data_plane_groups()
+    {
+        // The scope predicate is narrow by design: it withholds only the
+        // capabilities that have no tree to scope to, and leaves ordinary
+        // tree-scoped authorization exactly as it was.
+        var resolver = CreateResolver(AdminReturning(
+            Rule(LatticeOperation.Read | LatticeOperation.Write, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.Contains(LatticeApiMcpGroup.Data), Is.True,
+                "A tree-scoped read/write grant must still open the data group.");
+            Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False);
+        });
+    }
+
+    [Test]
     public async Task Read_grant_does_not_make_telemetry_usable()
     {
         var resolver = CreateResolver(AdminReturning(Rule(LatticeOperation.Read, LatticeEffect.Allow)));

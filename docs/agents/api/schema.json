@@ -1,0 +1,1441 @@
+{
+  "schema": "lattice.agents/api/v1",
+  "surface": "schema",
+  "packages": [
+    "Orleans.Lattice.Api.Schema",
+    "Orleans.Lattice.Api.Schema.Grpc"
+  ],
+  "sources": [
+    "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ILatticeSchemaControl",
+    "src/lattice.api.schema/LatticeSchemaControl.cs#LatticeSchemaControl",
+    "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#LatticeSchemaGrpcMethods",
+    "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#LatticeSchemaGrpcService",
+    "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#ILatticeSchemaRemediationAdmin",
+    "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#ILatticeSchemaVersionAdmin"
+  ],
+  "in_process": {
+    "interface": "ILatticeSchemaControl",
+    "registration": "ISiloBuilder.AddLatticeSchemaApi after AddLatticeSchemaEnforcement.",
+    "source": "src/lattice.api.schema/LatticeApiSchemaServiceCollectionExtensions.cs#AddLatticeSchemaApi"
+  },
+  "grpc": {
+    "service": "orleans.lattice.api.schema",
+    "methods_source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#LatticeSchemaGrpcMethods",
+    "marshalling": "LatticeSchemaGrpcMarshallers.Create delegates to the Orleans serializer.",
+    "metadata": [
+      {
+        "name": "authorization",
+        "purpose": "Credential token header; the default bridge strips the configured Bearer scheme and stamps a LatticeCredential.",
+        "source": "src/lattice.api.schema.grpc/HeaderLatticeSchemaApiCredentialBridge.cs#HeaderLatticeSchemaApiCredentialBridge"
+      },
+      {
+        "name": "active tenant header",
+        "purpose": "Configured active tenant assertion header; the assertion is re-validated downstream and grants no access by itself.",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaApiGrpcOptions.cs#ActiveTenantHeaderName"
+      },
+      {
+        "name": "lattice-quota-current",
+        "purpose": "ResourceExhausted trailer carrying the observed breached value when a numeric ceiling exists.",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#QuotaCurrentTrailer"
+      },
+      {
+        "name": "lattice-quota-dimension",
+        "purpose": "ResourceExhausted trailer naming the breached quota dimension.",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#QuotaDimensionTrailer"
+      },
+      {
+        "name": "lattice-quota-limit",
+        "purpose": "ResourceExhausted trailer carrying the configured breached ceiling when a numeric ceiling exists.",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#QuotaLimitTrailer"
+      },
+      {
+        "name": "lattice-quota-tree",
+        "purpose": "ResourceExhausted trailer naming the tree whose quota was breached.",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#QuotaTreeTrailer"
+      }
+    ],
+    "auth": {
+      "interceptor": "LatticeSchemaApiGrpcAuthInterceptor",
+      "authorizer": "ILatticeSchemaApiAuthorizer",
+      "decision": "Default deny when RequireAuthorization is true; GetAuthScheme is exempt.",
+      "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs#LatticeSchemaApiGrpcAuthInterceptor"
+    }
+  },
+  "types": {
+    "AdvanceVersionRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "NewTargetVersion",
+          "type": "uint",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/AdvanceVersionRequest.cs#AdvanceVersionRequest"
+    },
+    "AuthSchemeAdvertisement": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schemes",
+          "type": "IReadOnlyList<AuthSchemeDescriptor>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/AuthSchemeAdvertisement.cs#AuthSchemeAdvertisement"
+    },
+    "AuthSchemeAdvertisementRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.schema.grpc/Model/AuthSchemeAdvertisementRequest.cs#AuthSchemeAdvertisementRequest"
+    },
+    "AuthSchemeDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DisplayName",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "Parameters",
+          "type": "IReadOnlyDictionary<string, string>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/AuthSchemeDescriptor.cs#AuthSchemeDescriptor"
+    },
+    "GetPolicyResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Policy",
+          "type": "LatticeSchemaPolicy?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/GetPolicyResponse.cs#GetPolicyResponse"
+    },
+    "GetVersionConfigResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Config",
+          "type": "LatticeSchemaVersionConfig",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/GetVersionConfigResponse.cs#GetVersionConfigResponse"
+    },
+    "LatticeBooleanOperator": {
+      "kind": "enum",
+      "values": [
+        "And",
+        "Or",
+        "Not"
+      ],
+      "source": "src/lattice/Predicates/LatticeBooleanOperator.cs#LatticeBooleanOperator"
+    },
+    "LatticeComparisonOperator": {
+      "kind": "enum",
+      "values": [
+        "Equal",
+        "NotEqual",
+        "LessThan",
+        "LessThanOrEqual",
+        "GreaterThan",
+        "GreaterThanOrEqual"
+      ],
+      "source": "src/lattice/Predicates/LatticeComparisonOperator.cs#LatticeComparisonOperator"
+    },
+    "LatticeComputeOperator": {
+      "kind": "enum",
+      "values": [
+        "Concat",
+        "Coalesce"
+      ],
+      "source": "src/lattice.schema/LatticeComputeOperator.cs#LatticeComputeOperator"
+    },
+    "LatticeConstant": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Kind",
+          "type": "LatticeConstantKind",
+          "required": false
+        },
+        {
+          "name": "BooleanValue",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "StringValue",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Int64Value",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "DoubleValue",
+          "type": "double",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/Predicates/LatticeConstant.cs#LatticeConstant"
+    },
+    "LatticeConstantKind": {
+      "kind": "enum",
+      "values": [
+        "Null",
+        "Boolean",
+        "String",
+        "Int64",
+        "Double"
+      ],
+      "source": "src/lattice/Predicates/LatticeConstantKind.cs#LatticeConstantKind"
+    },
+    "LatticePredicateNode": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Kind",
+          "type": "LatticePredicateNodeKind",
+          "required": false
+        },
+        {
+          "name": "MemberPath",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Constant",
+          "type": "LatticeConstant",
+          "required": false
+        },
+        {
+          "name": "ComparisonOperator",
+          "type": "LatticeComparisonOperator",
+          "required": false
+        },
+        {
+          "name": "BooleanOperator",
+          "type": "LatticeBooleanOperator",
+          "required": false
+        },
+        {
+          "name": "StringMethod",
+          "type": "LatticeStringMethod",
+          "required": false
+        },
+        {
+          "name": "Children",
+          "type": "LatticePredicateNode[]?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/Predicates/LatticePredicateNode.cs#LatticePredicateNode"
+    },
+    "LatticePredicateNodeKind": {
+      "kind": "enum",
+      "values": [
+        "Member",
+        "Constant",
+        "Compare",
+        "Boolean",
+        "StringMethod"
+      ],
+      "source": "src/lattice/Predicates/LatticePredicateNodeKind.cs#LatticePredicateNodeKind"
+    },
+    "LatticeSchemaCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "CanViewPolicy",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanViewDeadLetters",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanViewVersionConfig",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanViewRemediationStatus",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanScanCompliance",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanManagePolicy",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanManageVersion",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanRemediate",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Schema/Model/LatticeSchemaCapabilities.cs#LatticeSchemaCapabilities"
+    },
+    "LatticeSchemaComplianceReport": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "HasPolicy",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "CompliantCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "NonCompliantCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "ScannedCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "RuleBreakdown",
+          "type": "IReadOnlyList<LatticeSchemaComplianceRuleCount>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaComplianceReport.cs#LatticeSchemaComplianceReport"
+    },
+    "LatticeSchemaComplianceRuleCount": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaComplianceRuleCount.cs#LatticeSchemaComplianceRuleCount"
+    },
+    "LatticeSchemaDeadLetterEntry": {
+      "kind": "class",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ValuePreview",
+          "type": "byte[]",
+          "required": true,
+          "notes": "Bounded leading bytes only."
+        },
+        {
+          "name": "ValueByteLength",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "Reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Source",
+          "type": "LatticeSchemaDeadLetterSource",
+          "required": true
+        },
+        {
+          "name": "TimestampUtc",
+          "type": "DateTimeOffset",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaDeadLetterEntry.cs#LatticeSchemaDeadLetterEntry"
+    },
+    "LatticeSchemaDeadLetterSource": {
+      "kind": "enum",
+      "values": [
+        "Replication",
+        "Restore",
+        "LocalRejected"
+      ],
+      "source": "src/lattice.schema/LatticeSchemaDeadLetterSource.cs#LatticeSchemaDeadLetterSource"
+    },
+    "LatticeSchemaEncodingKind": {
+      "kind": "enum",
+      "values": [
+        "Utf8",
+        "Json",
+        "MaxByteLength"
+      ],
+      "source": "src/lattice.schema/LatticeSchemaEncodingKind.cs#LatticeSchemaEncodingKind"
+    },
+    "LatticeSchemaPolicy": {
+      "kind": "class",
+      "fields": [
+        {
+          "name": "Rules",
+          "type": "IReadOnlyList<LatticeSchemaRule>",
+          "required": true
+        },
+        {
+          "name": "StrictIngest",
+          "type": "bool",
+          "required": false,
+          "notes": "When true, trusted ingest is re-validated and non-compliant items are dead-lettered."
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaPolicy.cs#LatticeSchemaPolicy"
+    },
+    "LatticeSchemaRemediationPhase": {
+      "kind": "enum",
+      "values": [
+        "Idle",
+        "DryRun",
+        "Build",
+        "Cutover",
+        "Completed",
+        "Aborted"
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRemediationPhase.cs#LatticeSchemaRemediationPhase"
+    },
+    "LatticeSchemaRemediationReport": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Phase",
+          "type": "LatticeSchemaRemediationPhase",
+          "required": false
+        },
+        {
+          "name": "InProgress",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "ScannedCount",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "OffendingKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Reason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "OffendingValuePreview",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "DestinationTreeId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "OperationId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRemediationReport.cs#LatticeSchemaRemediationReport"
+    },
+    "LatticeSchemaRule": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Kind",
+          "type": "LatticeSchemaRuleKind",
+          "required": false
+        },
+        {
+          "name": "Predicate",
+          "type": "LatticePredicateNode?",
+          "required": false
+        },
+        {
+          "name": "RegexPattern",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "MemberPath",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "EncodingKind",
+          "type": "LatticeSchemaEncodingKind",
+          "required": false
+        },
+        {
+          "name": "MaxByteLength",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "Description",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRule.cs#LatticeSchemaRule"
+    },
+    "LatticeSchemaRuleKind": {
+      "kind": "enum",
+      "values": [
+        "Structured",
+        "Regex",
+        "Encoding"
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRuleKind.cs#LatticeSchemaRuleKind"
+    },
+    "LatticeSchemaVersionConfig": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "SchemaId",
+          "type": "uint",
+          "required": false
+        },
+        {
+          "name": "TargetVersion",
+          "type": "uint",
+          "required": false
+        },
+        {
+          "name": "StrictIngest",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaVersionConfig.cs#LatticeSchemaVersionConfig"
+    },
+    "LatticeStringMethod": {
+      "kind": "enum",
+      "values": [
+        "StartsWith",
+        "EndsWith",
+        "Contains",
+        "Equals"
+      ],
+      "source": "src/lattice/Predicates/LatticeStringMethod.cs#LatticeStringMethod"
+    },
+    "LatticeValueTransform": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Kind",
+          "type": "LatticeValueTransformKind",
+          "required": false
+        },
+        {
+          "name": "MemberPath",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ToPath",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Constant",
+          "type": "LatticeConstant",
+          "required": false
+        },
+        {
+          "name": "Condition",
+          "type": "LatticePredicateNode",
+          "required": false
+        },
+        {
+          "name": "ComputeOperator",
+          "type": "LatticeComputeOperator",
+          "required": false
+        },
+        {
+          "name": "Children",
+          "type": "LatticeValueTransform[]?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeValueTransform.cs#LatticeValueTransform"
+    },
+    "LatticeValueTransformKind": {
+      "kind": "enum",
+      "values": [
+        "Passthrough",
+        "SetMember",
+        "DropMember",
+        "RenameMember",
+        "Member",
+        "Constant",
+        "Conditional",
+        "Compute"
+      ],
+      "source": "src/lattice.schema/LatticeValueTransformKind.cs#LatticeValueTransformKind"
+    },
+    "RemediateRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Transform",
+          "type": "LatticeValueTransform",
+          "required": true
+        },
+        {
+          "name": "TargetPolicy",
+          "type": "LatticeSchemaPolicy",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/RemediateRequest.cs#RemediateRequest"
+    },
+    "SchemaAckResponse": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaAckResponse.cs#SchemaAckResponse"
+    },
+    "SchemaComplianceReportResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Report",
+          "type": "LatticeSchemaComplianceReport",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaComplianceReportResponse.cs#SchemaComplianceReportResponse"
+    },
+    "SchemaCountResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaCountResponse.cs#SchemaCountResponse"
+    },
+    "SchemaRemediationReportResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Report",
+          "type": "LatticeSchemaRemediationReport",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaRemediationReportResponse.cs#SchemaRemediationReportResponse"
+    },
+    "SchemaRemovedResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Removed",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaRemovedResponse.cs#SchemaRemovedResponse"
+    },
+    "SchemaTreeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaTreeRequest.cs#SchemaTreeRequest"
+    },
+    "SetPolicyRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Policy",
+          "type": "LatticeSchemaPolicy",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SetPolicyRequest.cs#SetPolicyRequest"
+    },
+    "SetVersionConfigRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Config",
+          "type": "LatticeSchemaVersionConfig",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SetVersionConfigRequest.cs#SetVersionConfigRequest"
+    },
+    "VersionConfigResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Config",
+          "type": "LatticeSchemaVersionConfig",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/VersionConfigResponse.cs#VersionConfigResponse"
+    }
+  },
+  "operations": [
+    {
+      "id": "advance-and-migrate",
+      "in_process": "ILatticeSchemaControl.AdvanceAndMigrateAsync",
+      "grpc_method": "/orleans.lattice.api.schema/AdvanceAndMigrate",
+      "transport_scope": "both",
+      "request": "AdvanceVersionRequest",
+      "response": "SchemaRemediationReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The tree is unversioned, the target does not advance, or versioning is not registered."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Do not retry blindly after success because the target version must strictly advance.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "The operation first advances a monotonic target version; repeating the same target no longer advances.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+      },
+      "concurrency": {
+        "rule": "Target version must be strictly greater than the current target; eager migration aborts without data cutover on the first value that cannot be upcast.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#AdvanceAndMigrateMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#AdvanceAndMigrate"
+      ]
+    },
+    {
+      "id": "advance-target-version",
+      "in_process": "ILatticeSchemaControl.AdvanceTargetVersionAsync",
+      "grpc_method": "/orleans.lattice.api.schema/AdvanceTargetVersion",
+      "transport_scope": "both",
+      "request": "AdvanceVersionRequest",
+      "response": "VersionConfigResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The tree is unversioned, the target does not advance, or versioning is not registered."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Do not retry blindly after success because the target version must strictly advance.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "The target is monotonic and the new version must be strictly greater than the current target.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
+      },
+      "concurrency": {
+        "rule": "New writes are stamped at the new version immediately; existing values are upcast lazily on read.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#AdvanceTargetVersionMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#AdvanceTargetVersion"
+      ]
+    },
+    {
+      "id": "clear-policy",
+      "in_process": "ILatticeSchemaControl.ClearPolicyAsync",
+      "grpc_method": "/orleans.lattice.api.schema/ClearPolicy",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "SchemaRemovedResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retrying converges on no policy; the response may change from Removed=true to Removed=false.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation returns false when no policy remains.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "Caller-supplied tree names are tenant-scoped before authorization and mutation.",
+        "source": "src/lattice.api.schema/LatticeSchemaControl.cs#ClearPolicyAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ClearPolicyMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ClearPolicy"
+      ]
+    },
+    {
+      "id": "clear-version-config",
+      "in_process": "ILatticeSchemaControl.ClearVersionConfigAsync",
+      "grpc_method": "/orleans.lattice.api.schema/ClearVersionConfig",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "SchemaRemovedResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Schema versioning is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retrying converges on the tree being unversioned; the response may change from Removed=true to Removed=false.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#ClearVersionConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Returns false when the tree was already unversioned.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#ClearVersionConfigAsync"
+      },
+      "concurrency": {
+        "rule": "New writes are no longer stamped; already stamped values remain self-describing and are still stripped on read.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#ClearVersionConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearVersionConfigAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ClearVersionConfigMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ClearVersionConfig"
+      ]
+    },
+    {
+      "id": "count-dead-letters",
+      "in_process": "ILatticeSchemaControl.CountDeadLettersAsync",
+      "grpc_method": "/orleans.lattice.api.schema/CountDeadLetters",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "SchemaCountResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only count after read authorization.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync"
+      },
+      "concurrency": {
+        "rule": "Caller-supplied tree names are tenant-scoped before authorization and read.",
+        "source": "src/lattice.api.schema/LatticeSchemaControl.cs#CountDeadLettersAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#CountDeadLettersAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#CountDeadLettersMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#CountDeadLetters"
+      ]
+    },
+    {
+      "id": "get-auth-scheme",
+      "in_process": "ILatticeSchemaApiAuthSchemeSource.GetAdvertisement",
+      "grpc_method": "/orleans.lattice.api.schema/GetAuthScheme",
+      "transport_scope": "both",
+      "request": "AuthSchemeAdvertisementRequest",
+      "response": "AuthSchemeAdvertisement",
+      "errors": [],
+      "retry": {
+        "safe": true,
+        "policy": "Unauthenticated read of configured public advertisement.",
+        "source": "src/lattice.api.schema.grpc/Security/OptionsLatticeSchemaApiAuthSchemeSource.cs#GetAdvertisement"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Returns the configured advertised auth schemes and has no side effects.",
+        "source": "src/lattice.api.schema.grpc/Security/OptionsLatticeSchemaApiAuthSchemeSource.cs#GetAdvertisement"
+      },
+      "concurrency": {
+        "rule": "Exempt from the authorization interceptor so clients can discover how to sign in.",
+        "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs#IsUnauthenticatedMethod"
+      },
+      "sources": [
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetAuthSchemeMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#GetAuthScheme"
+      ]
+    },
+    {
+      "id": "get-policy",
+      "in_process": "ILatticeSchemaControl.GetPolicyAsync",
+      "grpc_method": "/orleans.lattice.api.schema/GetPolicy",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "GetPolicyResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only policy lookup after read authorization.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation returns Found=false when no policy exists.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "Caller-supplied tree names are tenant-scoped before authorization and read.",
+        "source": "src/lattice.api.schema/LatticeSchemaControl.cs#GetPolicyAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetPolicyAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetPolicyMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#GetPolicy"
+      ]
+    },
+    {
+      "id": "get-remediation-status",
+      "in_process": "ILatticeSchemaControl.GetRemediationStatusAsync",
+      "grpc_method": "/orleans.lattice.api.schema/GetRemediationStatus",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "SchemaRemediationReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status lookup after read authorization.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Reports the current or last-known remediation status.",
+        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#GetRemediationStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRemediationStatusAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetRemediationStatusMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#GetRemediationStatus"
+      ]
+    },
+    {
+      "id": "get-version-config",
+      "in_process": "ILatticeSchemaControl.GetVersionConfigAsync",
+      "grpc_method": "/orleans.lattice.api.schema/GetVersionConfig",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "GetVersionConfigResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Schema versioning is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only config lookup after read authorization.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation returns Found=false when the tree is unversioned.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync"
+      },
+      "concurrency": {
+        "rule": "Version operations require AddLatticeSchemaVersioning to be registered.",
+        "source": "src/lattice.api.schema/LatticeSchemaControl.cs#RequireVersionAdmin"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetVersionConfigAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetVersionConfigMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#GetVersionConfig"
+      ]
+    },
+    {
+      "id": "migrate-to-target-version",
+      "in_process": "ILatticeSchemaControl.MigrateToTargetVersionAsync",
+      "grpc_method": "/orleans.lattice.api.schema/MigrateToTargetVersion",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "SchemaRemediationReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The tree is unversioned or versioning is not registered."
+        },
+        {
+          "error_id": "resource-exhausted",
+          "condition": "A migration rebuild breached a per-tree admission cap."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Runs, idempotently resumes, or no-ops the eager migration.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#MigrateToTargetVersionAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "No-op success when already migrated and idempotent resume when in flight.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#MigrateToTargetVersionAsync"
+      },
+      "concurrency": {
+        "rule": "Aborts on the first value that cannot be upcast and leaves tree data untouched.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#MigrateToTargetVersionAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#MigrateToTargetVersionAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#MigrateToTargetVersionMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#MigrateToTargetVersion"
+      ]
+    },
+    {
+      "id": "probe-capabilities",
+      "in_process": "ILatticeSchemaControl.ProbeCapabilitiesAsync",
+      "grpc_method": "/orleans.lattice.api.schema/ProbeCapabilities",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaCapabilities",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No-side-effect probe of the same gates used by real operations.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "No-side-effect operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "Flags are advisory; every real operation is still authorized on attempt.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ProbeCapabilitiesMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ProbeCapabilities"
+      ]
+    },
+    {
+      "id": "remediate",
+      "in_process": "ILatticeSchemaControl.RemediateAsync",
+      "grpc_method": "/orleans.lattice.api.schema/Remediate",
+      "transport_scope": "both",
+      "request": "RemediateRequest",
+      "response": "SchemaRemediationReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId or target policy is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "A remediation with different parameters is already in flight."
+        },
+        {
+          "error_id": "resource-exhausted",
+          "condition": "A remediation rebuild breached a per-tree admission cap."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Safe only for the same transform and target policy because a different in-flight remediation is rejected.",
+        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#RemediateAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Starts or idempotently resumes the same remediation; different parameters fail while one is in flight.",
+        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#RemediateAsync"
+      },
+      "concurrency": {
+        "rule": "Dry-run gate aborts before cutover on the first value that cannot satisfy the target policy; different in-flight parameters fail.",
+        "source": "src/lattice.schema/ILatticeSchemaRemediationAdmin.cs#RemediateAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RemediateAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#RemediateMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#Remediate"
+      ]
+    },
+    {
+      "id": "scan-compliance",
+      "in_process": "ILatticeSchemaControl.ScanComplianceAsync",
+      "grpc_method": "/orleans.lattice.api.schema/ScanCompliance",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "SchemaComplianceReportResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Pure read audit; it never mutates data.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read operation.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync"
+      },
+      "concurrency": {
+        "rule": "Cancellable, with best-effort progress via ScannedCount.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ScanComplianceAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#ScanComplianceMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ScanCompliance"
+      ]
+    },
+    {
+      "id": "set-policy",
+      "in_process": "ILatticeSchemaControl.SetPolicyAsync",
+      "grpc_method": "/orleans.lattice.api.schema/SetPolicy",
+      "transport_scope": "both",
+      "request": "SetPolicyRequest",
+      "response": "SchemaAckResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId or policy is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retrying the same request converges on the same replacement policy.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Sets or replaces the enforcement policy for the tree.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync"
+      },
+      "concurrency": {
+        "rule": "Caller-supplied tree names are tenant-scoped before authorization and mutation.",
+        "source": "src/lattice.api.schema/LatticeSchemaControl.cs#SetPolicyAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#SetPolicyMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#SetPolicy"
+      ]
+    },
+    {
+      "id": "set-version-config",
+      "in_process": "ILatticeSchemaControl.SetVersionConfigAsync",
+      "grpc_method": "/orleans.lattice.api.schema/SetVersionConfig",
+      "transport_scope": "both",
+      "request": "SetVersionConfigRequest",
+      "response": "SchemaAckResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Schema versioning is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retrying the same request converges on the same replacement version config.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#SetVersionConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Opts in or replaces the existing version config.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#SetVersionConfigAsync"
+      },
+      "concurrency": {
+        "rule": "New writes are stamped at the configured target version immediately.",
+        "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#SetVersionConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetVersionConfigAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#SetVersionConfigMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#SetVersionConfig"
+      ]
+    },
+    {
+      "id": "stream-dead-letters",
+      "in_process": "ILatticeSchemaControl.ListDeadLettersAsync",
+      "grpc_method": "/orleans.lattice.api.schema/StreamDeadLetters",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "stream<LatticeSchemaDeadLetterEntry>",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeId is invalid."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only server-streaming drain; cancellation cleanly ends the stream.",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#StreamDeadLetters"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only bounded-memory stream.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync"
+      },
+      "concurrency": {
+        "rule": "Large queues enumerate with bounded memory via IAsyncEnumerable.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StreamDeadLettersMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#StreamDeadLetters"
+      ]
+    }
+  ],
+  "error_taxonomy": [
+    {
+      "id": "cancelled",
+      "type": "OperationCanceledException",
+      "grpc_status": "Cancelled",
+      "retryable": false,
+      "meaning": "The request or authorization check was cancelled.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "failed-precondition",
+      "type": "InvalidOperationException",
+      "grpc_status": "FailedPrecondition",
+      "retryable": false,
+      "meaning": "A schema operation precondition failed.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "internal",
+      "type": "Exception",
+      "grpc_status": "Internal",
+      "retryable": false,
+      "meaning": "Unhandled server failure.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "invalid-argument",
+      "type": "ArgumentException",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "The request is invalid.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "not-found",
+      "type": "KeyNotFoundException",
+      "grpc_status": "NotFound",
+      "retryable": false,
+      "meaning": "A referenced key or target was not found.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "permission-denied",
+      "type": "LatticeAuthorizationDeniedException or LatticeTenantAccessDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The caller is not authorized or cannot act as the asserted tenant.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "resource-exhausted",
+      "type": "LatticeQuotaExceededException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": false,
+      "meaning": "A remediation or migration rebuild breached a per-tree admission cap.",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#ToResourceExhausted"
+    }
+  ]
+}

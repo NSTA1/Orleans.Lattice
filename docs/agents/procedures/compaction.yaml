@@ -1,0 +1,69 @@
+schema: lattice.agents/procedure/v1
+id: compaction
+name: "Trigger shard tombstone compaction"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.TriggerShardCompactionAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/TriggerShardCompaction"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#TriggerShardCompactionMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_compaction_trigger"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: not-reserved
+    check: "Target tree id is not a reserved system tree id."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: shard-index-known
+    check: "Target physical shard index is known from tree stats or shard-map inspection."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: tree-admin
+    check: "Caller has whole-tree Admin authority."
+    source: "docs/lattice.api.treeadmin/README.md"
+steps:
+  - n: 1
+    action: "Read tree stats or shard map to choose a physical shard."
+    api: "ILatticeTreeAdmin.GetTreeStatsAsync / GetTreeStats"
+    expects: "Returns shard counts and storage byte breakdown."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeStatsAsync"
+  - n: 2
+    action: "Trigger an out-of-cycle tombstone compaction pass."
+    api: "ILatticeTreeAdmin.TriggerShardCompactionAsync / TriggerShardCompaction"
+    expects: "Returns whether the coordinator accepted the pass."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#TriggerShardCompactionAsync"
+  - n: 3
+    action: "If not accepted, read diagnostics before retrying."
+    api: "ILatticeTreeAdmin.GetDiagnosticsAsync / GetDiagnostics"
+    expects: "Reports in-flight maintenance flags and tombstone counts."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
+postconditions:
+  - check: "Only settled tombstones and expired entries are reaped."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "Readable live state is not destroyed by the compaction trigger."
+    source: "docs/lattice.api.treeadmin/README.md"
+failure_modes:
+  - id: already-running
+    signal: "Accepted is false when a pass is already in flight for the shard."
+    effect: "The existing pass continues."
+    response: "Poll diagnostics and retry later."
+  - id: disabled
+    signal: "Accepted is false when compaction is disabled for the tree."
+    effect: "No pass is started."
+    response: "Change the underlying compaction policy or leave it disabled."
+rollback:
+  supported: false
+  mechanism: "Compaction reaps only non-readable tombstones and expired entries; no revert verb is documented."
+  steps: []
+  source: "docs/lattice.api.treeadmin/README.md"
+concurrency:
+  - rule: "The trigger is online and does not pause the tree."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - rule: "A shard with an in-flight pass rejects another operator trigger."
+    source: "docs/lattice.api.treeadmin/README.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/tombstone-compaction.md"

@@ -73,6 +73,11 @@ internal interface ILeafProjection
     /// write until either threshold is reached, the caller invokes
     /// <see cref="FlushCheckpointAsync"/>, the grain re-asserts the
     /// same offset (force-flush), or the grain gracefully deactivates.
+    /// A leaf also re-evaluates the thresholds on its periodic
+    /// coverage-lag tick, so an advance left pending by the last call is
+    /// persisted once the interval has elapsed even if no further call
+    /// arrives; that bound is therefore the later of the interval and the
+    /// next tick (<c>LatticeOptions.LeafSnapshotMaxCoverageLagSeconds</c>).
     /// Callers that require an immediate durable advance should set
     /// <c>MaterialiserCheckpointInterval = TimeSpan.Zero</c> or call
     /// <see cref="FlushCheckpointAsync"/> after each advance.

@@ -1,0 +1,87 @@
+schema: lattice.agents/procedure/v1
+id: wal-move
+name: "Move WAL partition placement"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.PlanWalMoveAsync, ExecuteWalMoveAsync, ReclaimMovedWalSourceAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/PlanWalMove, ExecuteWalMove, ReclaimMovedWalSource"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#PlanWalMoveMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_execute, lattice_treeadmin_wal_move_reclaim"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: lifecycle-for-move
+    check: "Caller has TreeLifecycle authority for execute and reclaim."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: read-for-plan
+    check: "Caller has Read authority for inspect, audit, and plan."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: target-resolves
+    check: "Target provider key resolves on every silo before execute."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
+steps:
+  - n: 1
+    action: "Inspect current placement."
+    api: "ILatticeTreeAdmin.GetWalPlacementAsync / GetWalPlacement"
+    expects: "Returns default provider, partition placements, placement version, and resolvability."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetWalPlacementAsync"
+  - n: 2
+    action: "Audit placement against the storage-provider catalog."
+    api: "ILatticeTreeAdmin.AuditWalPlacementAsync / AuditWalPlacement"
+    expects: "Reports unresolved provider keys and known keys."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
+  - n: 3
+    action: "Plan the partition move."
+    api: "ILatticeTreeAdmin.PlanWalMoveAsync / PlanWalMove"
+    expects: "Returns copy range, entry estimate, and target resolvability without side effects."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
+  - n: 4
+    action: "Execute the move."
+    api: "ILatticeTreeAdmin.ExecuteWalMoveAsync / ExecuteWalMove"
+    expects: "Quiesces the partition, copies and verifies the retained tail, flips placement, and returns a receipt."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+  - n: 5
+    action: "Reclaim only after rollback is no longer needed."
+    api: "ILatticeTreeAdmin.ReclaimMovedWalSourceAsync / ReclaimMovedWalSource"
+    expects: "Discards the orphaned source tail and returns a reclaim receipt."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+postconditions:
+  - check: "The moved source tail is retained until explicit reclaim."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+  - check: "After reclaim, moving back cannot recover the discarded source data."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+failure_modes:
+  - id: continuity-failure
+    signal: "InvalidOperationException when target cannot continue offsets."
+    effect: "Placement pin is not flipped."
+    response: "Use a target retaining the required offset range."
+  - id: live-source-reclaim
+    signal: "Reclaim fails if the source key is still the live placement."
+    effect: "No source tail is trimmed."
+    response: "Inspect placement and move away first."
+  - id: target-missing
+    signal: "Unresolvable target key fails before placement flips."
+    effect: "Partition remains on the source provider."
+    response: "Fix provider catalog configuration and retry."
+rollback:
+  supported: true
+  mechanism: "Move the partition back to its original provider before ReclaimMovedWalSourceAsync; after reclaim rollback is unsupported."
+  steps:
+    - action: "Execute another WAL move to the original provider key."
+      api: "ILatticeTreeAdmin.ExecuteWalMoveAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+concurrency:
+  - rule: "Placement mutation must not interleave with another move of the same partition."
+    source: "src/lattice/ILatticeAdmin.cs#ExecuteWalMoveAsync"
+  - rule: "Batch core moves flip placement once under a single compare-and-swap."
+    source: "src/lattice/ILatticeAdmin.cs#ExecuteWalMoveAsync"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice/ILatticeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/wal-storage-providers.md"

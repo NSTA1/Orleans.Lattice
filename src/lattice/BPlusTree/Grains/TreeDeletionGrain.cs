@@ -325,7 +325,9 @@ internal sealed class TreeDeletionGrain(
 
         if (state.State.PurgeComplete)
         {
-            // Already done - unregister all reminders and deactivate.
+            // Already done - unregister all reminders and deactivate. This is the
+            // single teardown guard for both reminders; nothing below it can
+            // observe PurgeComplete == true.
             await UnregisterAllRemindersAsync();
             this.DeactivateOnIdle();
             return;
@@ -341,17 +343,11 @@ internal sealed class TreeDeletionGrain(
             if (_purgeTimer is not null) return;
             await StartPurgeAsync(startFromShard: 0);
         }
-        else if (reminderName == KeepaliveReminderName)
+        else if (reminderName == KeepaliveReminderName
+            && state.State.PurgeInProgress
+            && _purgeTimer is null)
         {
-            if (state.State.PurgeInProgress && _purgeTimer is null)
-            {
-                await StartPurgeAsync(startFromShard: state.State.NextShardIndex);
-            }
-            else if (!state.State.PurgeInProgress && state.State.PurgeComplete)
-            {
-                await UnregisterAllRemindersAsync();
-                this.DeactivateOnIdle();
-            }
+            await StartPurgeAsync(startFromShard: state.State.NextShardIndex);
         }
     }
 
