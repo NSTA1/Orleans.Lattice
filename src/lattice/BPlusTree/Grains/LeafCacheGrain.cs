@@ -36,6 +36,53 @@ internal sealed class LeafCacheGrain(
     ILatticeOriginClusterIdResolver originClusterIdResolver) : ILeafCacheGrain
 #pragma warning restore CS9113
 {
+    /// <summary>
+    /// The read-through mirror of the primary leaf's rows.
+    /// <para>
+    /// <b>Complete-mirror invariant (issue #2412).</b> Once
+    /// <see cref="RefreshAsync"/> has returned normally, every key the primary
+    /// leaf would serve a read for has a row here: resident, tombstoned, or
+    /// payload-evicted (the <c>Value is null &amp;&amp; !IsTombstone</c>
+    /// sentinel, which the read paths delegate to the leaf). The read paths
+    /// rely on it without consulting the leaf: a key that misses this mirror is
+    /// answered as absent - <see cref="GetAsync"/> returns <c>null</c>,
+    /// <see cref="ExistsAsync"/> returns <c>false</c>, and
+    /// <see cref="GetManyAsync"/> omits it - which the caller cannot tell from a
+    /// genuinely absent key. Every path that writes or removes a row preserves
+    /// it, and each is the only thing standing between it and a silent miss:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><b>Resync</b> (first refresh, leaf reactivation, a stale
+    ///   cursor): <see cref="LeafPayloadCache.Clear"/> then a full snapshot that
+    ///   the leaf builds from every row it holds
+    ///   (<c>BPlusLeafGrain.GetDeltaSinceCursorAsync</c>).</item>
+    ///   <item><b>Incremental delta</b>: every leaf row mutation funnels through
+    ///   <c>StoreEntry</c> / <c>RemoveEntry</c>, which record a fresh per-key
+    ///   delivery sequence, so everything newer than the cursor ships; a
+    ///   seal lift re-records the reclaimed rows (issue #3524).</item>
+    ///   <item><b>Payload eviction</b>: rewrites a row's payload to <c>null</c>
+    ///   and never removes the row, so an evicted key delegates rather than
+    ///   misses.</item>
+    ///   <item><b>Tombstones and TTL</b>: a tombstone row is retained and expiry
+    ///   is judged here with the same predicate the leaf uses, so both answer
+    ///   absent together.</item>
+    ///   <item><b>Split and moved-away prunes</b>: remove only keys the leaf is
+    ///   giving up - at or above its published split key, which the division
+    ///   hands to the new sibling, or in a sealed slot, which the read paths
+    ///   reject with <see cref="StaleShardRoutingException"/> before ever
+    ///   reaching the miss.</item>
+    ///   <item><b>Interleaving</b>: the activation is non-reentrant, so no read
+    ///   observes the gap between a resync's clear and its repopulation.</item>
+    ///   <item><b>Failure mid-refresh</b>: every await in
+    ///   <see cref="RefreshAsync"/> precedes the first mutation, and the
+    ///   freshness markers are stamped last, so a fault leaves the prior mirror
+    ///   intact and unstamped and the next read retries.</item>
+    /// </list>
+    /// <para>
+    /// A new path that writes or removes rows here must preserve the invariant,
+    /// or make the read paths delegate a miss to the leaf instead.
+    /// </para>
+    /// </summary>
     private readonly LeafPayloadCache _cache = new();
 
 #if LATTICE_DIAG
@@ -378,6 +425,9 @@ internal sealed class LeafCacheGrain(
             }
 
             // Fused serve. Discarded wholesale below if any key delegates.
+            // A key that is not live here is omitted, with no leaf RPC: sound
+            // only because _cache is a complete mirror once RefreshAsync has
+            // returned (see the invariant on _cache, issue #2412).
             cacheLookups++;
             if (probeLive)
             {
@@ -437,6 +487,8 @@ internal sealed class LeafCacheGrain(
             }
 
             cacheLookups++;
+            // No else: a miss is omitted without a leaf RPC, relying on the
+            // complete-mirror invariant on _cache (issue #2412).
             if (_cache.TryPeek(key, out var cached) && !cached.IsTombstone
                 && !cached.IsExpired(nowTicks))
             {
@@ -576,6 +628,22 @@ internal sealed class LeafCacheGrain(
         var priorCursor = _deliveryCursor;
         var delta = await primaryLeaf.GetDeltaSinceCursorAsync(priorCursor);
 
+        // Resolve the per-activation payload budget here, BEFORE the first
+        // mutation of this activation's mirror state, so this await is the LAST
+        // one in the method (issue #2412). The complete-mirror invariant on
+        // _cache is only as strong as this refresh is all-or-nothing, and the
+        // budget read is a registry round trip that can fault. Resolved after
+        // the resync Clear() and the revision-cookie stamp - where it used to
+        // sit - a transient registry fault left the mirror cleared or only
+        // partly advanced while the cookie already claimed "provably fresh", so
+        // every later same-silo read short-circuited the refresh and
+        // GetManyAsync silently dropped keys the leaf holds. Resolved here, a
+        // fault propagates with the mirror untouched, the cookie unstamped, and
+        // the cursor unadopted, so the next read simply retries the refresh.
+        // An empty delta never applies a budget, so it still pays no registry
+        // read, exactly as before.
+        var budgetBytes = delta.IsEmpty ? 0L : await ResolveCacheBudgetBytesAsync();
+
         // A full snapshot is signalled either by the epoch changing (the
         // ordinary re-activation case) or by our sequence having been
         // ahead of the leaf's, which the leaf treats as a stale cursor and
@@ -708,22 +776,6 @@ internal sealed class LeafCacheGrain(
             _movedAwayVsc = 0;
         }
 
-        // Stamp the pre-fetch cookie so subsequent same-silo reads can
-        // short-circuit when no further state has accumulated.
-        //
-        // preFetchRevision is 0 when the registry held no entry for the
-        // primary at the moment we looked. That has TWO causes, not one:
-        // the primary is activated on another silo (permanent for a
-        // cross-silo cache), or it was not activated anywhere just then
-        // (transient - the next activation publishes a cookie during
-        // OnActivateAsync). Recording 0 in either case keeps the fast-path
-        // guard `_lastSeenPrimaryRevision > 0` false, so this cache stays
-        // on the TTL gate until its next refresh restamps a real cookie.
-        // That is bounded: the assignment below is unconditional on the
-        // refresh path and _lastRefreshTicks is restamped, so the cache
-        // self-heals after one TTL rather than being pinned indefinitely.
-        _lastSeenPrimaryRevision = preFetchRevision;
-
         _pendingKeys.Clear();
         if (pendingKeys is { Count: > 0 })
         {
@@ -739,6 +791,7 @@ internal sealed class LeafCacheGrain(
             // gate has a meaningful starting point.
             _deliveryCursor = delta.DeliveryCursor;
             _lastRefreshTicks = Environment.TickCount64;
+            StampRevisionCookie(preFetchRevision);
             return;
         }
 
@@ -750,8 +803,9 @@ internal sealed class LeafCacheGrain(
         // zero-overhead path. Eviction runs inside LeafPayloadCache.Set as
         // entries are merged below. The resolved cap is applied once per refresh
         // (not per cache operation): LeafPayloadCache holds the budget internally
-        // so subsequent per-key Set calls perform no override lookup.
-        _cache.SetBudget(await ResolveCacheBudgetBytesAsync());
+        // so subsequent per-key Set calls perform no override lookup. It was
+        // resolved above, ahead of every mutation (issue #2412).
+        _cache.SetBudget(budgetBytes);
 
         // Merge each entry using LWW semantics.
         foreach (var (key, lww) in delta.Entries)
@@ -772,7 +826,36 @@ internal sealed class LeafCacheGrain(
         // refresh ships only the strictly-newer per-key sequences.
         _deliveryCursor = delta.DeliveryCursor;
         _lastRefreshTicks = Environment.TickCount64;
+        StampRevisionCookie(preFetchRevision);
     }
+
+    /// <summary>
+    /// Stamps the pre-fetch revision cookie so subsequent same-silo reads can
+    /// short-circuit when no further state has accumulated on the primary.
+    /// <para>
+    /// Called only at the two points where a refresh has fully committed, and
+    /// never earlier (issue #2412). The cookie is a claim that the mirror
+    /// reflects the primary as of <paramref name="preFetchRevision"/>; a stamp
+    /// taken before the mirror was actually advanced would let a refresh that
+    /// fails part-way leave that claim standing over a cleared or half-advanced
+    /// mirror, and the same-silo fast path in <see cref="RefreshAsync"/> would
+    /// then never refresh again until the primary happened to write.
+    /// </para>
+    /// <para>
+    /// <paramref name="preFetchRevision"/> is 0 when the registry held no entry
+    /// for the primary at the moment it was captured. That has TWO causes, not
+    /// one: the primary is activated on another silo (permanent for a
+    /// cross-silo cache), or it was not activated anywhere just then (transient
+    /// - the next activation publishes a cookie during OnActivateAsync).
+    /// Recording 0 in either case keeps the fast-path guard
+    /// <c>_lastSeenPrimaryRevision &gt; 0</c> false, so this cache stays on the
+    /// TTL gate until its next refresh restamps a real cookie. That is bounded:
+    /// the stamp is unconditional on every committed refresh and
+    /// <c>_lastRefreshTicks</c> is restamped with it, so the cache self-heals
+    /// after one TTL rather than being pinned indefinitely.
+    /// </para>
+    /// </summary>
+    private void StampRevisionCookie(long preFetchRevision) => _lastSeenPrimaryRevision = preFetchRevision;
 
     private async Task<TimeSpan> GetCacheTtlAsync()
     {
