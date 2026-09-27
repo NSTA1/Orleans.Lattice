@@ -3,13 +3,15 @@
   "surface": "replication",
   "packages": [
     "Orleans.Lattice.Api.Replication",
-    "Orleans.Lattice.Api.Replication.Grpc"
+    "Orleans.Lattice.Api.Replication.Grpc",
+    "Orleans.Lattice.Replication"
   ],
   "sources": [
     "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
-    "src/lattice.api.replication/LatticeReplicationControl.cs#LatticeReplicationControl",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+    "src/lattice.api.replication/LatticeReplicationControl.cs#LatticeReplicationControl",
+    "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin",
     "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#ILatticeReplicationConfigAuthority"
   ],
   "in_process": {
@@ -97,6 +99,27 @@
         "MinRegister"
       ],
       "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
+    },
+    "OperatorReseedDecision": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "Triggered",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "LastRequestedAt",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "RetryAfter",
+          "type": "TimeSpan?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/OperatorReseedDecision.cs#OperatorReseedDecision"
     },
     "ReplicationConfigResponse": {
       "kind": "record",
@@ -318,6 +341,45 @@
       ]
     },
     {
+      "id": "force-request-snapshot",
+      "in_process": "ILatticeReplicationAdmin.ForceRequestSnapshotAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeName, string sourceClusterId",
+      "response": "OperatorReseedDecision",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "treeName or sourceClusterId is null or empty."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "A bootstrap is already in flight from a different source cluster."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "A failed call leaves the rate-limit state unchanged; reissue once the coordinator fault clears.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ForceRequestSnapshotAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The bootstrap coordinator is idempotent under concurrent invocations against the same tree with the same source cluster id.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
+      },
+      "concurrency": {
+        "rule": "The bootstrap coordinator is idempotent under concurrent invocations for one tree: a second request with the same source cluster id is absorbed as a no-op and a request with a different source cluster id is rejected. The per-(tree, sourceClusterId) rate limit is held in process memory, is reset by a silo restart, and is a fairness mechanism rather than a correctness one.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationAdmin.cs#ForceRequestSnapshotAsync"
+      ]
+    },
+    {
       "id": "get-auth-scheme",
       "in_process": "ILatticeReplicationApiAuthSchemeSource.GetAdvertisement",
       "grpc_method": "/orleans.lattice.api.replication/GetAuthScheme",
@@ -376,6 +438,45 @@
         "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#GetReplicationConfigMethodName",
         "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#GetReplicationConfig"
       ]
+    },
+    {
+      "id": "request-snapshot",
+      "in_process": "ILatticeReplicationAdmin.RequestSnapshotAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeName, string sourceClusterId",
+      "response": "OperatorReseedDecision",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "treeName or sourceClusterId is null or empty."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "A bootstrap is already in flight from a different source cluster."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "A rate-limited request returns Triggered false with RetryAfter and starts no bootstrap; retry after RetryAfter. A thrown coordinator exception leaves the next request honourable.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The bootstrap coordinator is idempotent under concurrent invocations against the same tree with the same source cluster id.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
+      },
+      "concurrency": {
+        "rule": "The bootstrap coordinator is idempotent under concurrent invocations for one tree: a second request with the same source cluster id is absorbed as a no-op and a request with a different source cluster id is rejected. The per-(tree, sourceClusterId) rate limit is held in process memory, is reset by a silo restart, and is a fairness mechanism rather than a correctness one.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
+      ]
     }
   ],
   "error_taxonomy": [
@@ -410,6 +511,14 @@
       "retryable": false,
       "meaning": "The request is invalid.",
       "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "invalid-operation",
+      "type": "InvalidOperationException",
+      "grpc_status": null,
+      "retryable": false,
+      "meaning": "The bootstrap coordinator rejected the re-seed, for example because a bootstrap is already in flight from a different source cluster; propagated verbatim.",
+      "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
     },
     {
       "id": "permission-denied",

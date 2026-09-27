@@ -11,9 +11,9 @@
     {
       "id": "authorization",
       "name": "authorization",
-      "value": "Bearer token by default",
+      "value": "credential, optionally prefixed by the CredentialScheme (default Bearer)",
       "request_context_key": "ol.cred",
-      "source": "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs"
+      "source": "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs#LatticeAuthApiGrpcOptions.CredentialScheme"
     }
   ],
   "request_context_keys": [
@@ -139,6 +139,13 @@
       "sources": [
         "src/lattice/LatticeActiveTenantAssertion.cs",
         "src/lattice.tenancy/TenantContextResolver.cs"
+      ]
+    },
+    {
+      "id": "mcp-region-catalog-tenant-assertion",
+      "rule": "The MCP region catalog re-resolves an asserted active tenant through ITenantContextResolver and honours it only on an exact match; a refused or unvalidatable assertion yields the current region alone with no tenantScope annotation.",
+      "sources": [
+        "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
       ]
     }
   ]

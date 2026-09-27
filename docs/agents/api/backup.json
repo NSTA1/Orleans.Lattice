@@ -1060,8 +1060,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1108,8 +1108,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1163,12 +1163,12 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "failed-precondition",
-          "condition": "Facade precondition failed."
+          "error_id": "restore-validation",
+          "condition": "Restore pre-apply validation failed: missing manifest or artifact, digest mismatch, out-of-scope request, or an aborted coordinated saga."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1215,8 +1215,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1269,8 +1269,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1323,8 +1323,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1377,8 +1377,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1431,8 +1431,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1479,8 +1479,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1576,8 +1576,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1624,8 +1624,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1673,8 +1673,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1721,8 +1721,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1761,8 +1761,8 @@
       "response": "BackupHealthAvailabilityResponse",
       "errors": [
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1809,8 +1809,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1898,8 +1898,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -1946,12 +1946,12 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "failed-precondition",
-          "condition": "Facade precondition failed."
+          "error_id": "restore-validation",
+          "condition": "Restore pre-apply validation failed: missing manifest or artifact, digest mismatch, out-of-scope request, or an aborted coordinated saga."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -2004,8 +2004,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -2052,8 +2052,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",
@@ -2101,8 +2101,8 @@
           "condition": "Authorization denied the caller."
         },
         {
-          "error_id": "unavailable",
-          "condition": "Transient infrastructure failure."
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
         },
         {
           "error_id": "cancelled",

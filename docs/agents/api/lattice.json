@@ -1018,11 +1018,11 @@
         },
         {
           "error_id": "argument-null",
-          "condition": "is ."
+          "condition": "deltas is null."
         },
         {
-          "error_id": "argument",
-          "condition": "/// is ; use /// for LWW writes. ///"
+          "error_id": "argument-exception",
+          "condition": "mode is LatticeMergeMode.LwwRegister; LWW batches use SetManyAsync."
         }
       ],
       "retry": {
@@ -5746,12 +5746,8 @@
           "condition": "The cancellation token is canceled before or during the operation."
         },
         {
-          "error_id": "argument",
-          "condition": "Thrown when is null, empty, whitespace, or contains '/' ; or when the combined batch contains a duplicate or null key, or a null upsert value."
-        },
-        {
-          "error_id": "lattice-idempotency-key-mismatch",
-          "condition": "Thrown when was previously submitted with a different key set."
+          "error_id": "argument-exception",
+          "condition": "operationId is null, empty, whitespace, or contains '/'; or the combined batch contains a duplicate or null key, or a null upsert value."
         },
         {
           "error_id": "invalid-operation",
@@ -5954,12 +5950,8 @@
           "condition": "The cancellation token is canceled before or during the operation."
         },
         {
-          "error_id": "argument",
-          "condition": "Thrown when is null, empty, whitespace, or contains '/' ; or when contains duplicate keys or null values."
-        },
-        {
-          "error_id": "lattice-idempotency-key-mismatch",
-          "condition": "Thrown when was previously submitted with a different key set."
+          "error_id": "argument-exception",
+          "condition": "operationId is null, empty, whitespace, or contains '/'; or entries contains duplicate keys or null values."
         },
         {
           "error_id": "invalid-operation",
@@ -6457,7 +6449,7 @@
         },
         {
           "error_id": "invalid-operation",
-          "condition": "/// Thrown if no resize exists to undo, or if the old tree has /// already been purged. ///"
+          "condition": "No resize exists to undo, or the old tree has already been purged."
         }
       ],
       "retry": {
@@ -6532,7 +6524,7 @@
           "condition": "The cancellation token is canceled before or during the operation."
         },
         {
-          "error_id": "lattice-authorization-denied",
+          "error_id": "authorization-denied",
           "condition": "The caller is not authorized to read this tree."
         }
       ],

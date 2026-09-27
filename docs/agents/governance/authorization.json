@@ -26,6 +26,20 @@
           "source": "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
+        }
+      ],
       "fail_closed": "DenyAllAuthApiAuthorizer is the default and unknown methods map to Unknown.",
       "sources": [
         "src/lattice.api.auth.grpc/Security/ILatticeAuthApiAuthorizer.cs",
@@ -64,6 +78,24 @@
           "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call proceeds without authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
+        }
+      ],
       "fail_closed": "DenyAllBackupApiAuthorizer is the default and unrecognised methods map to Unknown.",
       "sources": [
         "src/lattice.api.backup.grpc/Security/ILatticeBackupApiAuthorizer.cs",
@@ -93,6 +125,20 @@
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
         }
       ],
       "fail_closed": "DenyAllDataApiAuthorizer is the default and unrecognised methods map to Unknown.",
@@ -131,6 +177,24 @@
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call proceeds without authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
         }
       ],
       "fail_closed": "DenyAllReplicationApiAuthorizer is the default and unrecognised methods map to Unknown.",
@@ -185,6 +249,24 @@
           "source": "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
+        },
+        {
+          "id": "deny-unauthenticated",
+          "outcome": "The call fails with gRPC status Unauthenticated."
+        }
+      ],
       "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, and saga control also requires an authorized peer origin.",
       "sources": [
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs",
@@ -226,6 +308,24 @@
           "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call proceeds without authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
+        }
+      ],
       "fail_closed": "DenySchemaApiAuthorizer is the default and unrecognised methods map to Unknown.",
       "sources": [
         "src/lattice.api.schema.grpc/Security/ILatticeSchemaApiAuthorizer.cs",
@@ -262,6 +362,24 @@
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call proceeds without authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
         }
       ],
       "fail_closed": "DenyAllStateApiAuthorizer is the default and unrecognised methods map to Unknown.",
@@ -302,6 +420,24 @@
           "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call proceeds without authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
+        }
+      ],
       "fail_closed": "DenyTelemetryApiAuthorizer is the default and unrecognised methods map to Unknown.",
       "sources": [
         "src/lattice.api.telemetry.grpc/Security/ILatticeTelemetryApiAuthorizer.cs",
@@ -338,6 +474,24 @@
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-facade-scoped",
+          "outcome": "GetAuthScheme or a tenant self-service method proceeds past the transport authorizer; the facade applies its own tenant-scoped authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
         }
       ],
       "fail_closed": "DenyTenantAdminApiAuthorizer is the default and unknown operations map to Unknown.",
@@ -392,6 +546,24 @@
           "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call proceeds without authorization."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied."
+        }
+      ],
       "fail_closed": "DenyTreeAdminApiAuthorizer is the default; unrecognised methods map to Unknown and every caller-supplied tree target is authorized.",
       "sources": [
         "src/lattice.api.treeadmin.grpc/Security/ILatticeTreeAdminApiAuthorizer.cs",
@@ -444,6 +616,20 @@
           "source": "src/lattice.auth/PolicyAccessGate.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "deny",
+          "outcome": "The request is denied."
+        },
+        {
+          "id": "deny-control-plane",
+          "outcome": "Denied: a control-plane namespace without a bootstrap administrator or an explicit matching allow, independent of DefaultEffect."
+        }
+      ],
       "fail_closed": "Control-plane namespaces deny independently of DefaultEffect unless bootstrap or explicit allow applies.",
       "sources": [
         "src/lattice/ILatticeAccessGate.cs",
@@ -483,6 +669,20 @@
           "source": "src/lattice.auth/PolicyEvaluator.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "deny",
+          "outcome": "The request is denied."
+        },
+        {
+          "id": "matched-effect",
+          "outcome": "The matched rule effect (Allow or Deny) for the specific tree is the decision."
+        }
+      ],
       "fail_closed": "DefaultEffect defaults to Deny and control-plane namespaces do not consult the all-trees tier.",
       "sources": [
         "src/lattice.auth/LatticeAuthOptions.cs",
@@ -496,13 +696,13 @@
           "id": "http-authorization",
           "check": "LatticeApiMcpOptions.RequireAuthorization is true.",
           "on_true": "aspnet-authenticated",
-          "on_false": "session-plan",
+          "on_false": "credential",
           "source": "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs"
         },
         {
           "id": "aspnet-authenticated",
           "check": "ASP.NET Core endpoint authorization authenticates the caller.",
-          "on_true": "session-plan",
+          "on_true": "credential",
           "on_false": "deny-http",
           "source": "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs"
         },
@@ -549,6 +749,36 @@
           "source": "src/lattice.api.mcp/Discovery/McpToolAuthorizationGate.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "advertise-capabilities-only",
+          "outcome": "The session is offered only the capabilities tool."
+        },
+        {
+          "id": "advertise-no-tools",
+          "outcome": "The session is offered no tools."
+        },
+        {
+          "id": "deny-http",
+          "outcome": "ASP.NET Core endpoint authorization rejects the HTTP request before MCP handling."
+        },
+        {
+          "id": "deny-mcp",
+          "outcome": "The tool invocation fails with an authorization McpException."
+        },
+        {
+          "id": "not-advertised",
+          "outcome": "The tool is not listed for the session."
+        },
+        {
+          "id": "not-registered",
+          "outcome": "The tool does not exist on the server."
+        },
+        {
+          "id": "stamp-and-invoke",
+          "outcome": "The caller credential and active tenant are stamped and the tool handler runs, subject to the facade access gate."
+        }
+      ],
       "fail_closed": "The endpoint requires authentication by default, DenyAllMcpAuthorizer denies by default, missing HttpContext or authorizer denies, unauthenticated sessions get no tools, and data write tools are absent unless explicitly enabled.",
       "sources": [
         "src/lattice.api.mcp/LatticeApiMcpOptions.cs",
@@ -559,6 +789,181 @@
         "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs",
         "src/lattice.api.mcp/Discovery/AuthorizedMetaTool.cs",
         "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs"
+      ]
+    },
+    {
+      "id": "mcp-discovery-group-grant",
+      "nodes": [
+        {
+          "id": "allow-rule",
+          "check": "The caller rule effect is Allow.",
+          "on_true": "rule-scope",
+          "on_false": "rule-ignored",
+          "source": "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.GroupIsGranted"
+        },
+        {
+          "id": "rule-scope",
+          "check": "The rule scope TreeId equals LatticeScope.ClusterWideTreeId.",
+          "on_true": "match-all-operations",
+          "on_false": "match-tree-scoped-operations",
+          "source": "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.CarriedOperations"
+        },
+        {
+          "id": "match-all-operations",
+          "check": "rule.Operations intersects the group capability mask.",
+          "on_true": "group-discoverable",
+          "on_false": "rule-ignored",
+          "source": "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.GroupIsGranted"
+        },
+        {
+          "id": "match-tree-scoped-operations",
+          "check": "rule.Operations with the cluster-wide-only bits (LatticeOperation.Telemetry) masked out intersects the group capability mask.",
+          "on_true": "group-discoverable",
+          "on_false": "rule-ignored",
+          "source": "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "group-discoverable",
+          "outcome": "The tool group is advertised to the session; discovery is not an authorization decision and the call-time gate re-checks every invocation."
+        },
+        {
+          "id": "rule-ignored",
+          "outcome": "The rule contributes nothing; the next rule is evaluated, and a group no rule grants is not advertised."
+        }
+      ],
+      "fail_closed": "Deny rules are not consulted at discovery and stay the call-time gate job; a tree-scoped rule never confers the scopeless Telemetry capability, for group discovery or for per-tool minimums.",
+      "sources": [
+        "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.GroupIsGranted",
+        "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.CarriedOperations",
+        "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
+      ]
+    },
+    {
+      "id": "mcp-region-catalog-tenant-scope",
+      "nodes": [
+        {
+          "id": "tenant-asserted",
+          "check": "LatticeActiveTenantContext is active with a non-null tenant that is not the reserved default tenant.",
+          "on_true": "tenancy-active",
+          "on_false": "unscoped",
+          "source": "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+        },
+        {
+          "id": "tenancy-active",
+          "check": "An ITenantRegionVisibilityResolver is registered and IsActive.",
+          "on_true": "context-resolver",
+          "on_false": "unscoped",
+          "source": "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+        },
+        {
+          "id": "context-resolver",
+          "check": "An ITenantContextResolver is registered.",
+          "on_true": "assertion-validates",
+          "on_false": "refused",
+          "source": "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+        },
+        {
+          "id": "assertion-validates",
+          "check": "ITenantContextResolver resolves the current tenant and it equals the asserted tenant.",
+          "on_true": "scoped",
+          "on_false": "refused",
+          "source": "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "refused",
+          "outcome": "The catalog advertises the current region alone with no tenantScope annotation; the asserted value is never echoed."
+        },
+        {
+          "id": "scoped",
+          "outcome": "The catalog advertises the current region plus peers in the tenant allowed-union-resident set, annotated with the validated tenant; standing that cannot be established degrades to the current region alone."
+        },
+        {
+          "id": "unscoped",
+          "outcome": "The catalog advertises the full routing topology, subject to region identity verification."
+        }
+      ],
+      "fail_closed": "A tenant-asserted call whose assertion does not validate, or whose standing cannot be established, never falls back to the full routing topology.",
+      "sources": [
+        "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog",
+        "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
+      ]
+    },
+    {
+      "id": "mcp-telemetry-tool-capability-gate",
+      "nodes": [
+        {
+          "id": "system-origin",
+          "check": "LatticeSystemOrigin.IsActive is true.",
+          "on_true": "range-guardrails",
+          "on_false": "gate-registered",
+          "source": "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        },
+        {
+          "id": "gate-registered",
+          "check": "An ILatticeAccessGate is registered.",
+          "on_true": "gate-authorize",
+          "on_false": "range-guardrails",
+          "source": "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        },
+        {
+          "id": "gate-authorize",
+          "check": "ILatticeAccessGate.AuthorizeAsync for LatticeOperation.Telemetry on LatticeScope.ClusterWideTreeId returns Allowed.",
+          "on_true": "key-filter",
+          "on_false": "deny-capability",
+          "source": "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        },
+        {
+          "id": "key-filter",
+          "check": "The allow decision carries a KeyFilter.",
+          "on_true": "deny-capability",
+          "on_false": "range-guardrails",
+          "source": "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        },
+        {
+          "id": "range-guardrails",
+          "check": "The tool is lattice_telemetry_query_range and TelemetryRangeGuardrails.TryValidateRange rejects the range.",
+          "on_true": "deny-range",
+          "on_false": "metric-policy",
+          "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync"
+        },
+        {
+          "id": "metric-policy",
+          "check": "For query, query_range, and metric_metadata, TelemetryMetricAccessPolicy (via TelemetryQueryAuthorizer or IsAdmitted) admits the query or named metric; list_metrics always passes and filters names by IsAdmitted.",
+          "on_true": "allow",
+          "on_false": "deny-metric",
+          "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The backend request is issued; backend failures are returned in the result Error field."
+        },
+        {
+          "id": "deny-capability",
+          "outcome": "The result Error field carries the fixed capability-denied message; no backend call is made and no subject id or gate reason is echoed."
+        },
+        {
+          "id": "deny-metric",
+          "outcome": "The result Error field carries the metric-access denial message."
+        },
+        {
+          "id": "deny-range",
+          "outcome": "The result Error field carries the range guardrail violation message."
+        }
+      ],
+      "fail_closed": "Every telemetry tool checks the cluster-wide Telemetry capability at call time before any backend call; discovery is not relied on. A key-filtered allow is refused. With no access gate registered the capability check admits, matching the authorization-off default.",
+      "sources": [
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryAsync",
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.QueryRangeAsync",
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.ListMetricsAsync",
+        "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.MetricMetadataAsync",
+        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync",
+        "src/lattice.api.mcp.telemetry/LatticeMcpTelemetryServiceCollectionExtensions.cs#AddTelemetryTools"
       ]
     },
     {
@@ -600,6 +1005,24 @@
           "source": "src/lattice.membership/MembershipContext.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "anonymous",
+          "outcome": "The caller resolves to LatticeSubject.Anonymous."
+        },
+        {
+          "id": "map-subject",
+          "outcome": "The principal maps to a LatticeSubject without a directory group merge."
+        },
+        {
+          "id": "merge-directory",
+          "outcome": "The principal maps to a LatticeSubject with directory groups merged."
+        },
+        {
+          "id": "return-cached",
+          "outcome": "The cached subject is returned."
+        }
+      ],
       "fail_closed": "No credential, no handler, invalid token, or unmapped principal resolves to LatticeSubject.Anonymous.",
       "sources": [
         "src/lattice.membership/MembershipContext.cs",
@@ -634,6 +1057,20 @@
           "source": "src/lattice.tenancy/LatticeTenantAdmissionController.cs"
         }
       ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The request proceeds."
+        },
+        {
+          "id": "allow-fail-open-warmup",
+          "outcome": "The operation is admitted because the tenant usage view is not yet warm."
+        },
+        {
+          "id": "deny-quota-exceeded",
+          "outcome": "The operation is refused with LatticeQuotaExceededException."
+        }
+      ],
       "fail_closed": "Quota breaches throw LatticeQuotaExceededException; unknown or not-yet-warm tenants admit until the first sample lands.",
       "sources": [
         "src/lattice.tenancy/LatticeTenantAdmissionController.cs",
@@ -649,6 +1086,16 @@
           "on_true": "include",
           "on_false": "exclude",
           "source": "src/lattice.tenancy/TenantEnumerationFilter.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "exclude",
+          "outcome": "The tree id is excluded from the enumeration."
+        },
+        {
+          "id": "include",
+          "outcome": "The tree id is included in the enumeration."
         }
       ],
       "fail_closed": "An uninitialized tenant owns no tenant trees and observes only platform-owned ids.",
@@ -672,6 +1119,16 @@
           "on_true": "project-map",
           "on_false": "unresolved",
           "source": "src/lattice.tenancy/TenantRegionVisibilityResolver.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "project-map",
+          "outcome": "The tenant region visibility map is projected from the registry record."
+        },
+        {
+          "id": "unresolved",
+          "outcome": "Visibility resolves to Unresolved and every region lookup misses."
         }
       ],
       "fail_closed": "Unknown standing resolves to Unresolved rather than a permissive topology.",
