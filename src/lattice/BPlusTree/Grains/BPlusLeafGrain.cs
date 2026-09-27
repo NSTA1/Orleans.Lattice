@@ -2149,58 +2149,15 @@ internal sealed partial class BPlusLeafGrain(
 
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         using var _mutationScope = EnterMutationScope();
-        // Collect matching keys. Entries is a SortedDictionary so we can
-        // break early once we pass endExclusive - but we must still report
-        // whether we observed a key >= endExclusive so the shard
-        // coordinator can terminate the chain walk deterministically.
-        //
-        // NOT converted to a bounded Cache.EnumerateRange(...) walk, unlike the
-        // sibling read seams on this surface (issue #2368). The work itself is
-        // ranged and retains only keys, so it looks like the easiest
-        // conversion here - but `pastRange` is derived from observing a key at
-        // or above endExclusive, and a ranged walk yields no such key by
-        // construction. A conversion that simply drops the observation reports
-        // PastRange=false forever, and ShardRootGrain's range-delete chain walk
-        // then visits every remaining leaf in the shard instead of stopping.
-        //
-        // A frame-index lower-bound probe is the obvious substitute and is
-        // UNSOUND: Cache.Remove hydrates and pins the key's block before
-        // removing the row, so a removed key stays in the frame's ordinal index
-        // while being absent from the projection. Such a probe therefore
-        // over-reports, and an over-reported PastRange truncates the walk and
-        // silently leaves part of the range undeleted - trading a performance
-        // fault for a correctness one. A sound probe has to ask for a resident
-        // key at or above the bound, or an UNHYDRATED frame block at or above
-        // it, which is new cache surface rather than a call-site change.
-        //
-        // BEWARE THE COMMIT RECORD HERE, WHICH OVERSTATES WHAT WAS CONVERTED.
-        // 563681c99 carries the subject "stop the baseline freeze and range
-        // delete detaching the leaf frame (#2835)". The "range delete" in that
-        // subject is ApplyDeleteRange in BPlusLeafGrain.Projection.cs - the
-        // REPLAYED range delete - and that commit does not touch this method at
-        // all. The foreground DeleteRangeAsync you are reading is still a
-        // whole-cache walk, deliberately, for the reasons above.
-        //
-        // That discrepancy is recorded here rather than quietly reconciled. A
-        // merged commit subject cannot be rewritten, so the only place a reader
-        // can discover the overstatement is from the source side, and an
-        // epic-level reader reconciling subjects against the definition of done
-        // would otherwise score this seam as converted when it is not. The
-        // source is the honest record; the subject is the overstated one
-        // (issue #2864).
+        // A ranged walk cannot observe the upper bound. Probe separately so
+        // the coordinator still stops at the right leaf, ignoring frame keys
+        // removed from hydrated blocks earlier in this activation (#2841).
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         List<string>? keysToDelete = null;
-        var pastRange = false;
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        var pastRange = Cache.HasKeyAtOrAboveWithoutHydrating(endExclusive);
+        foreach (var (key, lww) in Cache.EnumerateRange(startInclusive, endExclusive))
         {
-            if (string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
-            {
-                pastRange = true;
-                break;
-            }
-
-            if (string.Compare(key, startInclusive, StringComparison.Ordinal) >= 0
-                && !lww.IsTombstone && !lww.IsExpired(nowTicks))
+            if (!lww.IsTombstone && !lww.IsExpired(nowTicks))
             {
                 // Predicate-filtered delete evaluates the predicate once,
                 // here at write time, against the live value. The matched
