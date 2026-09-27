@@ -984,24 +984,22 @@ internal sealed partial class BPlusLeafGrain(
             if (pendingKeys.TryGetValue(key, out var pending))
             {
                 var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.FallThroughToPreSaga)
+                var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks));
+                switch (visibility)
                 {
-                    if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
-                    {
+                    case PendingReadOutcome.SurfacePrepared:
                         if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath))
                             result[key] = pending.value.Value!;
 #if LATTICE_DIAG
                         // DIAG: pending-bucket-committed read path.
                         DiagSink.Write($"[DIAG read-pending-committed] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid} valRound={DiagDecodeRound(pending.value.Value)} hlc={pending.value.Timestamp}");
 #endif
-                    }
-                    else
-                    {
+                        continue;
+                    case PendingReadOutcome.Hidden:
 #if LATTICE_DIAG
-                        DiagSink.Write($"[DIAG read-pending-committed-tomb] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid}");
+                        DiagSink.Write($"[DIAG read-pending-hidden] silo={DiagSiloTag} gid={context.GrainId} key={key} tx={pending.txid} status={status}");
 #endif
-                    }
-                    continue;
+                        continue;
                 }
 #if LATTICE_DIAG
                 // DIAG: pending-bucket-fallthrough (InFlight, Aborted, or already-terminal'd).
@@ -2419,12 +2417,14 @@ internal sealed partial class BPlusLeafGrain(
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                    if (status == TxStatus.Committed)
+                    var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks));
+                    if (visibility == PendingReadOutcome.Hidden) continue;
+                    if (visibility == PendingReadOutcome.SurfacePrepared)
                     {
-                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)) count++;
+                        count++;
                         continue;
                     }
-                    // InFlight or Aborted - fall through to Entries
+                    // InFlight, Aborted, or already-terminal orphan - fall through to Entries
                     // (pre-saga visibility). See GetWithPendingAsync.
                 }
                 if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
@@ -2447,8 +2447,7 @@ internal sealed partial class BPlusLeafGrain(
                 string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
                 continue;
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-            if (status != TxStatus.Committed) continue;
-            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.SurfacePrepared) continue;
             count++;
         }
 
@@ -2497,14 +2496,17 @@ internal sealed partial class BPlusLeafGrain(
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                    if (status == TxStatus.Committed)
+                    // Stats retain known tombstones, but not indeterminate candidates.
+                    var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), preparedHiddenByTombstoneOrExpiry: false);
+                    if (visibility == PendingReadOutcome.Hidden) continue;
+                    if (visibility == PendingReadOutcome.SurfacePrepared)
                     {
                         if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
                         else live++;
                         stateBytes += EntryStateBytes(key, pending.value.Value);
                         continue;
                     }
-                    // InFlight or Aborted - fall through to Entries
+                    // InFlight, Aborted, or already-terminal orphan - fall through to Entries
                     // (pre-saga visibility). See GetWithPendingAsync.
                 }
                 if (lww.IsTombstone || lww.IsExpired(nowTicks)) tombstones++;
@@ -2521,7 +2523,7 @@ internal sealed partial class BPlusLeafGrain(
                 string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                 continue;
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-            if (status != TxStatus.Committed) continue;
+            if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), preparedHiddenByTombstoneOrExpiry: false) != PendingReadOutcome.SurfacePrepared) continue;
             if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) tombstones++;
             else live++;
             stateBytes += EntryStateBytes(key, pending.value.Value);
@@ -3572,10 +3574,11 @@ internal sealed partial class BPlusLeafGrain(
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                    if (status == TxStatus.Committed)
+                    var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks));
+                    if (visibility == PendingReadOutcome.Hidden) continue;
+                    if (visibility == PendingReadOutcome.SurfacePrepared)
                     {
-                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
-                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)))
+                        if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath))
                         {
                             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
                             keys.Add(key);
@@ -3612,8 +3615,7 @@ internal sealed partial class BPlusLeafGrain(
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0) continue;
             if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0) continue;
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-            if (status != TxStatus.Committed) continue;
-            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.SurfacePrepared) continue;
             if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)) continue;
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             keys.Add(key);
@@ -3692,17 +3694,18 @@ internal sealed partial class BPlusLeafGrain(
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                    if (status == TxStatus.Committed)
+                    var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks));
+                    if (visibility == PendingReadOutcome.Hidden) continue;
+                    if (visibility == PendingReadOutcome.SurfacePrepared)
                     {
-                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks)
-                            && (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)))
+                        if (predicate is null || LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath))
                         {
                             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
                             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
                         }
                         continue;
                     }
-                    // InFlight or Aborted - fall through to Entries
+                    // InFlight, Aborted, or already-terminal orphan - fall through to Entries
                     // (pre-saga visibility). See GetWithPendingAsync.
                 }
 
@@ -3727,8 +3730,7 @@ internal sealed partial class BPlusLeafGrain(
             if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0) continue;
             if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0) continue;
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-            if (status != TxStatus.Committed) continue;
-            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.SurfacePrepared) continue;
             if (predicate is not null && !LatticePredicateEvaluator.Matches(pending.value.Value, predicate.Value, predicateFastPath)) continue;
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
@@ -3770,13 +3772,14 @@ internal sealed partial class BPlusLeafGrain(
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                    if (status == TxStatus.Committed)
+                    var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks));
+                    if (visibility == PendingReadOutcome.Hidden) continue;
+                    if (visibility == PendingReadOutcome.SurfacePrepared)
                     {
-                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
-                            result[key] = pending.value.Value!;
+                        result[key] = pending.value.Value!;
                         continue;
                     }
-                    // InFlight or Aborted - fall through to Entries
+                    // InFlight, Aborted, or already-terminal orphan - fall through to Entries
                     // (pre-saga visibility). See GetWithPendingAsync.
                 }
                 if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
@@ -3787,8 +3790,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             if (Cache.ContainsKey(key)) continue;
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-            if (status != TxStatus.Committed) continue;
-            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.SurfacePrepared) continue;
             result[key] = pending.value.Value!;
         }
         return result;
@@ -3848,13 +3850,14 @@ internal sealed partial class BPlusLeafGrain(
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-                    if (status == TxStatus.Committed)
+                    var visibility = AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks));
+                    if (visibility == PendingReadOutcome.Hidden) continue;
+                    if (visibility == PendingReadOutcome.SurfacePrepared)
                     {
-                        if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
-                            result.Add(new LwwEntry(key, pending.value));
+                        result.Add(new LwwEntry(key, pending.value));
                         continue;
                     }
-                    // InFlight or Aborted - fall through to Entries
+                    // InFlight, Aborted, or already-terminal orphan - fall through to Entries
                     // (pre-saga visibility). See GetWithPendingAsync.
                 }
                 if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
@@ -3865,8 +3868,7 @@ internal sealed partial class BPlusLeafGrain(
         {
             if (Cache.ContainsKey(key)) continue;
             var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
-            if (status != TxStatus.Committed) continue;
-            if (pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) continue;
+            if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.SurfacePrepared) continue;
             result.Add(new LwwEntry(key, pending.value));
         }
         return result;
