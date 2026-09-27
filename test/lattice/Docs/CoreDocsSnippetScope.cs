@@ -32,9 +32,12 @@ internal static class CoreDocsSnippetScope
     internal static readonly string[] ClaimedPackageDocsRoots =
     {
         "docs/lattice.api.abstractions",
+        "docs/lattice.api.apps",
+        "docs/lattice.api.apps.grpc",
         "docs/lattice.api.backup.grpc",
         "docs/lattice.api.data",
         "docs/lattice.api.mcp",
+        "docs/lattice.api.mcp.apps",
         "docs/lattice.api.mcp.repocontext",
         "docs/lattice.api.mcp.repocontext.replication",
         "docs/lattice.api.mcp.telemetry",
@@ -43,6 +46,7 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.api.state.grpc",
         "docs/lattice.api.telemetry",
         "docs/lattice.api.telemetry.grpc",
+        "docs/lattice.apps",
         "docs/lattice.auth",
         "docs/lattice.backup",
         "docs/lattice.backup.azureblob",

@@ -52,11 +52,11 @@ var rule = new LatticeAuthorizationRule(
 ```
 
 - **Subject selector** (`LatticeSubjectSelector`) targets a `User(id)` or a `Group(id)`.
-- **Operations** (`LatticeOperation`, a `[Flags]` set) name the capability classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, `Admin`, `Backup`, `Restore`, `SchemaAdmin`, `Telemetry`, `Replication`, and `TreeLifecycle`. Grants do not imply each other unless the enum member explicitly says so: for example, `Write` does not confer `Delete`, `Admin` does not confer `Telemetry`, and `Restore` authorizes populating the target scope from a backup without a separate `Write` or `BulkLoad` grant. A rule matches a request only when its mask contains every operation bit the request carries.
+- **Operations** (`LatticeOperation`, a `[Flags]` set) name the capability classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, `Admin`, `Backup`, `Restore`, `SchemaAdmin`, `Telemetry`, `Replication`, `TreeLifecycle`, and `AppInstall`. Grants do not imply each other unless the enum member explicitly says so: for example, `Write` does not confer `Delete`, `Admin` does not confer `Telemetry`, and `Restore` authorizes populating the target scope from a backup without a separate `Write` or `BulkLoad` grant. A rule matches a request only when its mask contains every operation bit the request carries.
 - **Effect** (`LatticeEffect`) is `Allow` or `Deny`.
 - **Condition** is an optional, opaque string reserved for a future claim / attribute predicate language. Nothing evaluates it in this version: a rule carrying a condition matches exactly as an unconditional rule would, so never rely on one to narrow a grant.
 
-`LatticeAuthOperations.All` is a convenience mask of every tree-scoped data-plane operation, `Read` through `SchemaAdmin`. It deliberately excludes `Telemetry`, `Replication`, and `TreeLifecycle`, so a whole-data-plane grant never confers them; each must be granted explicitly.
+`LatticeAuthOperations.All` is a convenience mask of every tree-scoped data-plane operation, `Read` through `SchemaAdmin`. It deliberately excludes `Telemetry`, `Replication`, `TreeLifecycle`, and `AppInstall`, so a whole-data-plane grant never confers them; each must be granted explicitly. `AppInstall` is a scopeless, cluster-wide capability granted over `LatticeScope.ClusterWide()` exactly as `Telemetry` is; it authorizes installing, enabling, disabling, and uninstalling [installable apps](../lattice.apps/README.md) and confers nothing else.
 
 Rules are authored through the policy store, resolved from the silo's service provider:
 

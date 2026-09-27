@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Apps - Installable apps.** An app declares its trees, roles, subscriptions and MCP tools in a manifest; enabling it compiles its roles into ordinary authorization rules within an operator-consented ceiling. See [Installable apps](docs/lattice.apps/README.md). ([#2235](https://github.com/NSTA1/Orleans.Lattice/issues/2235)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer`)
+
 - **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Retrieval - Latency and readiness.** Retrieval latency is measured end to end and by stage, readiness and its 503 are attributable on the wire, a suppressed exact fallback is its own retrieval path, and both ladder guards report their operating state. ([#2253](https://github.com/NSTA1/Orleans.Lattice/issues/2253), [#2624](https://github.com/NSTA1/Orleans.Lattice/issues/2624), [#2720](https://github.com/NSTA1/Orleans.Lattice/issues/2720), [#2936](https://github.com/NSTA1/Orleans.Lattice/issues/2936), [#2962](https://github.com/NSTA1/Orleans.Lattice/issues/2962)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
