@@ -1129,6 +1129,7 @@ internal sealed partial class ShardRootGrain(
             LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
                 Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeMetrics.OperationSetManyTag,
                 LatticeTenantLabel.ForTree(TreeId));
 
             if (localFailure is null)
@@ -1532,6 +1533,7 @@ internal sealed partial class ShardRootGrain(
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeMetrics.OperationSetManyTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
@@ -1542,6 +1544,7 @@ internal sealed partial class ShardRootGrain(
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeMetrics.OperationSetManyTag,
                     LatticeTenantLabel.ForTree(TreeId));
             }
         }
@@ -1589,6 +1592,7 @@ internal sealed partial class ShardRootGrain(
             LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
                 Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeMetrics.OperationSetManyWherePredicateTag,
                 LatticeTenantLabel.ForTree(TreeId));
 
             if (localFailure is null)
@@ -1770,6 +1774,7 @@ internal sealed partial class ShardRootGrain(
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeMetrics.OperationSetManyWherePredicateTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
@@ -1780,6 +1785,7 @@ internal sealed partial class ShardRootGrain(
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeMetrics.OperationSetManyWherePredicateTag,
                     LatticeTenantLabel.ForTree(TreeId));
             }
         }

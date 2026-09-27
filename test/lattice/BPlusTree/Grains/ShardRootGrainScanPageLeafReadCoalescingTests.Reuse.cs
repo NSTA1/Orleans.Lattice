@@ -46,6 +46,7 @@ public partial class ShardRootGrainScanPageLeafReadCoalescingTests
         {
             RegistryForTest().TryRemove(leafId, out _);
             HorizonRegistryForTest().TryRemove(leafId, out _);
+            TransactionalReadRegistryForTest().TryRemove(leafId, out _);
         }
 
         _publishedRevisions.Clear();
