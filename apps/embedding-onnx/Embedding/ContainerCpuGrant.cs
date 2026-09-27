@@ -132,11 +132,7 @@ internal static class ContainerCpuGrant
         }
 
         var trimmedQuota = quota.Trim();
-        if (string.Equals(trimmedQuota, "max", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
+        // cgroup v2's "max" fails numeric parsing; v1's -1 is non-positive.
         if (!long.TryParse(trimmedQuota, out var quotaValue) || quotaValue <= 0)
         {
             return null;
@@ -147,8 +143,9 @@ internal static class ContainerCpuGrant
             return null;
         }
 
-        var cpus = (int)Math.Ceiling((double)quotaValue / periodValue);
-        return Math.Max(1, cpus);
+        // Positive inputs make the ceiling at least one; .NET 10 saturates
+        // the conversion at int.MaxValue for a quota larger than it can hold.
+        return (int)Math.Ceiling((double)quotaValue / periodValue);
     }
 
     private static string? TryReadAllText(string path)
