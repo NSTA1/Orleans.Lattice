@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Tests.Docs;
 /// </summary>
 [TestFixture]
 [Category("Docs")]
-public sealed class AgentDocsConsistencyTests
+public sealed partial class AgentDocsConsistencyTests
 {
     private const string ManifestSchema = "lattice.agents/index/v1";
 

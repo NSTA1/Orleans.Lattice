@@ -35,7 +35,18 @@
     ],
     "grpc_method": "/<service>/<Method>",
     "validation": "test/lattice/Docs/AgentDocsConsistencyTests.cs",
-    "empty_list": "the entity sources, read in full, state none"
+    "empty_list": "the entity sources, read in full, state none",
+    "error_reference": "operations[].errors[].error_id resolves to an id in the error_taxonomy of the same file",
+    "decision_tree": {
+      "node": "{id, check, on_true, on_false, source}; the first node is the root",
+      "terminal": "{id, outcome}; every on_true/on_false target is a node id or a terminal id; terminals sorted by id"
+    },
+    "mcp_tool": {
+      "tool_annotations": "{read_only, destructive, source} mirror the ReadOnly and Destructive hints of the MCP tool registration",
+      "facade_operation": "null, 'api/<surface>.json#<operation-id>', or a list when a request parameter selects between facade operations",
+      "inheritance": "with a single facade_operation string, retry, idempotency and concurrency are copied verbatim from that facade operation",
+      "read_only": "a read_only tool is idempotent and safe to retry"
+    }
   },
   "coverage": {
     "api_surfaces_covered": [
@@ -96,14 +107,14 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext): registration, authorization gate, every tool with parameters, results, errors and annotations."
+      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext): registration, authorization gate, every tool with parameters, results, errors, tool annotations and the facade operation it delegates to."
     },
     {
       "path": "api/replication.json",
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Replication facade (Orleans.Lattice.Api.Replication, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Replication facade (Orleans.Lattice.Api.Replication, .Grpc) and operator re-seed admin (Orleans.Lattice.Replication): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "api/schema.json",
@@ -173,7 +184,7 @@
       "kind": "governance-authorization",
       "format": "json",
       "schema": "lattice.agents/governance-authorization/v1",
-      "summary": "Authorization decision trees for facades, access gate, auth rules, tenancy admission and membership, with fail-closed outcomes."
+      "summary": "Authorization decision trees for facades, access gate, auth rules, MCP discovery and telemetry tools, tenancy admission and membership, with declared terminal outcomes."
     },
     {
       "path": "governance/identity-propagation.json",
