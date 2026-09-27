@@ -185,7 +185,7 @@ untrusted input: a manifest larger than 1 MiB (characters of text, or bytes of a
 stream) is refused before it is deserialized with code `too-large`, each section and
 the scopes of each role hold at most 256 entries, keys, prefixes, adopted ids, schema
 families and provenance fields are at most 1024 characters, and a tool description is
-at most 4096. An exceeded bound is reported with code `limit`, and an oversized section
+at most 4096. An exceeded bound is reported with code `limit` (an over-long adopted id fails the `adoption` check instead), and an oversized section
 is rejected before any per-entry work.
 
 ## Install, consent and the ceiling
@@ -210,7 +210,7 @@ and the lifecycle state.
   ceiling was consented for a different version fails.
 - **Compare on version.** `AppRegistryInstallRequest.ExpectedVersion`, when set,
   applies an upgrade only while that version is still installed and otherwise returns
-  `ConcurrencyConflict`. The control facade always sets it to the version it read, so a
+  `ConcurrencyConflict`. The control facade sets it to the version it read on every upgrade and consent update, so a
   consent update racing an upgrade is refused instead of rolling the upgrade back. An
   upgrade made directly through `IAppRegistry` does not re-apply an enabled app's
   grants; call `IAppActivationPipeline.ReconcileAsync` afterwards.
@@ -249,6 +249,12 @@ trees are never deleted. Physical purge is not part of uninstall.
 
 **Reconcile** re-applies an enabled app, for example after a consent change or an
 upgrade. A manifest upgrade that drops a tree soft-deletes that tree.
+
+Every run records its outcome, and the manifest whose trees and rules are currently
+applied, as the app's `AppActivationStatus` in a second reserved system tree,
+`sys-app-activation`, keyed like the registry. That record is the evidence the
+control facade reports as a `Failed` state; a disabled registry state alone is never
+read as a failure.
 
 Two prerequisites are enforced fail-closed. Without membership, every caller
 resolves to the anonymous subject with no groups and every app rule would be

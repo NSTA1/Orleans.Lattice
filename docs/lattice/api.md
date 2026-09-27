@@ -986,8 +986,9 @@ A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` fl
 | `Telemetry` | 4096 | Cluster-wide telemetry reads. |
 | `Replication` | 8192 | Runtime replication-management operations. |
 | `TreeLifecycle` | 16384 | Destructive or structural whole-tree lifecycle operations: drop, recover, and purge (`DeleteTreeAsync`, `RecoverTreeAsync`, `PurgeTreeAsync`), resize and undo-resize, reshard, or WAL-placement moves. |
+| `AppInstall` | 32768 | Changing the cluster's installed app set: installing, upgrading, enabling, disabling, and uninstalling an [installable app](../lattice.apps/README.md). Scopeless and cluster-wide, like `Telemetry`. |
 
-`SchemaAdmin`, `Telemetry`, `Replication`, and `TreeLifecycle` are deliberately separate from `Admin`; granting one does not imply any other capability.
+`SchemaAdmin`, `Telemetry`, `Replication`, `TreeLifecycle`, and `AppInstall` are deliberately separate from `Admin`; granting one does not imply any other capability.
 
 ### Reading an empty range read under a gate
 

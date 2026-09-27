@@ -184,7 +184,7 @@ flowchart TD
     App["Applications<br/>knowledge systems, AI memory, digital twins, search,<br/>control planes, multi-tenant SaaS, collaboration"]
 
     App --> Explorer["Explorer console<br/>(in progress)"]
-    App --> Apis["API facades<br/>state, data, auth, schema, backup, replication,<br/>telemetry, tree admin, tenant admin"]
+    App --> Apis["API facades<br/>state, data, auth, schema, backup, replication,<br/>telemetry, tree admin, tenant admin, apps"]
     App --> Mcp["MCP server<br/>tools for AI agents"]
 
     Explorer --> Core

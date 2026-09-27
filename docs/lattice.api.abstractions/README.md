@@ -1,14 +1,14 @@
 # Orleans.Lattice.Api.Abstractions
 
-The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, and tenant administration) and their request / response models, and nothing else.
+The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration, and installable-app control) and their request / response models, and nothing else.
 
 ## What is it?
 
-The Orleans.Lattice API surface is built in layers. Each **facade** package (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`, `.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.Telemetry`, `.Api.TreeAdmin`, `.Api.TenantAdmin`) exposes a transport-agnostic service interface over plain request / response records; each **binding** (`...Grpc`) and the `Orleans.Lattice.Api.Mcp` server projects that same surface onto a wire protocol or tool set.
+The Orleans.Lattice API surface is built in layers. Each **facade** package (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`, `.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.Telemetry`, `.Api.TreeAdmin`, `.Api.TenantAdmin`, `.Api.Apps`) exposes a transport-agnostic service interface over plain request / response records; each **binding** (`...Grpc`) and the `Orleans.Lattice.Api.Mcp` server projects that same surface onto a wire protocol or tool set.
 
 `Orleans.Lattice.Api.Abstractions` is the seam between the facades and their consumers. It carries only the contract:
 
-- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` (tenant administration); and `ILatticeRegionCatalog` (region discovery).
+- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` (tenant administration); `ILatticeAppsControl` (installable-app control); and `ILatticeRegionCatalog` (region discovery).
 - **Their request / response models** - the results, pages, records, and requests those interfaces exchange, each with its stable Orleans serialization alias.
 
 ### Region contract
@@ -26,7 +26,7 @@ The package has no implementation, no registration extension, and no background 
 
 Before this package the facade service interfaces were `internal` to each facade package, so every consumer that needed the contract - the gRPC bindings and the co-hosted MCP server - had to be granted `InternalsVisibleTo` into the facade assembly (and, for the MCP server, into the core assembly as well). That coupled a consumer to a producer's private surface across several assemblies.
 
-Publishing the contract as a real, versioned public package removes those cross-package internal-visibility grants: a binding evolves against a stable public contract rather than another package's internals, and `internal` inside each facade goes back to meaning "safe to change". The interfaces keep their original `Orleans.Lattice.Api.{State,Data,Auth,Backup,Schema}` namespaces, so existing consumers compile unchanged; the later contracts follow the same one-namespace-per-facade pattern (`Orleans.Lattice.Api.Replication`, `.Telemetry`, `.TreeAdmin`, `.TenantAdmin`, and the region-discovery `.Region`).
+Publishing the contract as a real, versioned public package removes those cross-package internal-visibility grants: a binding evolves against a stable public contract rather than another package's internals, and `internal` inside each facade goes back to meaning "safe to change". The interfaces keep their original `Orleans.Lattice.Api.{State,Data,Auth,Backup,Schema}` namespaces, so existing consumers compile unchanged; the later contracts follow the same one-namespace-per-facade pattern (`Orleans.Lattice.Api.Replication`, `.Telemetry`, `.TreeAdmin`, `.TenantAdmin`, `.Apps`, and the region-discovery `.Region`).
 
 ## Core properties
 
@@ -67,4 +67,5 @@ For a remote surface, add the matching binding (which consumes the same contract
 - [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) / [`.Grpc`](../lattice.api.telemetry.grpc/README.md)
 - [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) / [`.Grpc`](../lattice.api.treeadmin.grpc/README.md)
 - [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) / [`.Grpc`](../lattice.api.tenantadmin.grpc/README.md)
+- [`Orleans.Lattice.Api.Apps`](../lattice.api.apps/README.md) / [`.Grpc`](../lattice.api.apps.grpc/README.md)
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)

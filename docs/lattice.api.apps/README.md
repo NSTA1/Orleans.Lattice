@@ -48,10 +48,15 @@ before `AddLatticeApps` fails fast.
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
 
 Lifecycle results report the slug, version, resulting `AppLifecycleState` and whether
-anything changed. The wire state adds two inspection-only values to the engine's
-`Installed`, `Enabled`, `Disabled` and `Uninstalled`: `NotInstalled`, returned only by
-`DescribeAsync` for an app available from its source but not installed, and `Failed`,
-reported when the last recorded activation of a live install failed.
+anything changed. A lifecycle mutation only ever returns `Installed`, `Enabled`,
+`Disabled` or `Uninstalled`; a failed mutation throws (see
+[No physical ids on the wire](#no-physical-ids-on-the-wire)) rather than returning a
+failure state. The wire state adds two inspection-only values: `NotInstalled`,
+returned only by `DescribeAsync` for an app available from its source but not
+installed, and `Failed`, reported by `DescribeAsync` and `ListAsync` when the
+recorded outcome of a live install's last activation run failed (a caller error such
+as an invalid transition does not count). A disabled install
+is never reported as `Failed` merely because it is disabled.
 
 ## Authorization
 

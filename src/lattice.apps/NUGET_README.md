@@ -36,8 +36,12 @@ scopes. The ceiling is pinned per app id and version; the compiler must intersec
 every rule with it. `ApprovedExceptionScopes` records explicit operator approval
 outside the app namespace, including cross-app or adopted legacy trees. Adoption
 must fail activation without that approval; these contracts do not implement
-activation or grant authority themselves. Adopted ids are unique within a manifest
-and cannot use the `a/`, `_lattice_`, `sys-`, or `t/` prefixes.
+activation or grant authority themselves. Adopted ids are unique within a manifest,
+cannot use the `a/`, `_lattice_`, `sys-`, or `t/` prefixes or be the cluster-wide
+sentinel `*`, and are at most 1024 characters with no surrounding white space or
+control characters. No exception can approve a scope on `*` or on a `_lattice_`,
+`sys-` or `t/` tree, and manifests are size-bounded (1 MiB, 256 entries per
+section) before any per-entry work.
 
 Tree sizing fields are optional pins; omission inherits host defaults.
 `VirtualShardCount` is fixed at creation and cannot change in an upgrade;
