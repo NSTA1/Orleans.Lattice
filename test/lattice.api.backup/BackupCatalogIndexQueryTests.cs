@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.Backup.Tests;
 /// only the view path can exhibit.
 /// </summary>
 [TestFixture]
-public sealed class BackupCatalogIndexQueryTests
+public sealed partial class BackupCatalogIndexQueryTests
 {
     private static readonly Func<BackupScopeSelector, CancellationToken, ValueTask<bool>> AllowAll =
         (_, _) => new ValueTask<bool>(true);
@@ -320,11 +320,16 @@ public sealed class BackupCatalogIndexQueryTests
     {
         private readonly List<BackupManifest> _manifests = manifests.ToList();
 
+        public int GetCalls { get; private set; }
+
         public Task RegisterAsync(BackupManifest manifest, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<BackupManifest?> GetAsync(string backupId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(_manifests.FirstOrDefault(m => m.Id == backupId));
+        public Task<BackupManifest?> GetAsync(string backupId, CancellationToken cancellationToken = default)
+        {
+            GetCalls++;
+            return Task.FromResult(_manifests.FirstOrDefault(m => m.Id == backupId));
+        }
 
         public Task<bool> RemoveAsync(string backupId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

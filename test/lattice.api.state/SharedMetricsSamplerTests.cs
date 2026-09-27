@@ -216,6 +216,11 @@ public partial class SharedMetricsSamplerTests
 
         public Dictionary<string, int> ShardCounts { get; } = new(StringComparer.Ordinal);
 
+        // Views the catalog reports, used only by the view-lag roll-up tests. Left
+        // empty the catalog stays unsupported, so a test that does not opt in still
+        // fails loudly if the sampler reaches for it.
+        public List<ViewStateSummary> Views { get; } = new();
+
         public int TreeSummaryCalls { get; private set; }
 
         public int ShardSummaryCalls { get; private set; }
@@ -249,7 +254,9 @@ public partial class SharedMetricsSamplerTests
             => throw new NotSupportedException();
 
         public Task<ViewCatalogPage> ListViewsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+            => Views.Count == 0
+                ? throw new NotSupportedException()
+                : Task.FromResult(new ViewCatalogPage { Entries = Views, NextPageToken = null });
 
         public Task<ClusterInfo> GetClusterInfoAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
