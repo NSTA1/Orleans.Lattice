@@ -56,6 +56,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Vector - An ingest checkpoint after a replacement rewrote the whole index.** Once a vector was replaced or removed mid-build, every checkpoint wrote a complete image of the untrained cell, and one that timed out retried it from scratch. It now writes only the chunks that changed. ([#3669](https://github.com/NSTA1/Orleans.Lattice/issues/3669)) (`Orleans.Lattice.Vector`)
+
 - **Vector - A fully resident search still allocated an async frame.** A resident SearchAsync never suspends, yet entered an async state machine anyway - heap-allocated in a debug build, 168 bytes a call. The resident case is now answered before any async frame is entered, with probes on the stack. ([#2450](https://github.com/NSTA1/Orleans.Lattice/issues/2450)) (`Orleans.Lattice.Vector`)
 
 - **Memory - Entry expiry was lost across a snapshot round trip.** A repository-context snapshot carried no expiry, so a restore revived entries that had already lapsed and left durable and expiring entries indistinguishable. The record now carries an absolute expiry and the format version advances. ([#2825](https://github.com/NSTA1/Orleans.Lattice/issues/2825)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

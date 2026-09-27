@@ -175,6 +175,7 @@ public sealed partial class DurableVectorIndex
         _persistedChunkHashes = chunkHashes;
         _resident = resident;
         _persistedPartitions = partitionSlots;
+        _committedCount = manifest.IndexedCount;
         _restored = true;
 
         // The append-only ingest prefix is addressed by chunk index: a checkpoint
@@ -195,7 +196,8 @@ public sealed partial class DurableVectorIndex
         //
         // A prefix laid out at THIS item count but ending mid-chunk is the
         // ordinary output of the two writers that commit a true count rather than
-        // a rounded one: a completed ingest checkpoint, and a full rewrite. It
+        // a rounded one: a completed ingest checkpoint, and the checkpoint's
+        // incremental re-flush after a replacement or removal (#3669). It
         // needs no re-lay. Treating it as one is what made this unbounded: the
         // re-lay itself commits a true count, so it lands right back in this state
         // and re-arms the condition on the very next load. Every activation then
@@ -207,8 +209,10 @@ public sealed partial class DurableVectorIndex
         //
         // The repair is to stop counting the partial tail chunk as committed. The
         // vectors in it are already restored in memory, so lowering the committed
-        // count to the whole chunks lets the next checkpoint rewrite that tail in
-        // place and commit a boundary-aligned prefix, which clears the condition
+        // count to the whole chunks lets the next checkpoint that crosses a chunk
+        // boundary rewrite that tail and commit a boundary-aligned prefix, and
+        // one that crosses none leaves the committed prefix standing rather than
+        // commit a shorter one. Either way this clears the condition
         // for good. The interval below is what separates the two states: a count
         // laid out at a different item size misses it by more than one chunk.
         if (manifest.Header.PartitionCount == 0 && chunkCounts[0] > 0)
@@ -547,6 +551,7 @@ public sealed partial class DurableVectorIndex
         _persistedChunkHashes = [];
         _resident = [];
         _persistedPartitions = 0;
+        _committedCount = 0;
         _generation = 0;
         _centroidEpoch = 0;
         _centroidsPersisted = false;

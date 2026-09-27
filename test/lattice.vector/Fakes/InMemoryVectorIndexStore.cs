@@ -27,6 +27,13 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     /// </summary>
     internal Func<string, bool>? FailDeletePrefix { get; set; }
 
+    /// <summary>
+    /// Fails every <see cref="WriteAsync"/> whose batch it matches, while set, and
+    /// lets every other call through, so a test can cut a flush short at a chosen
+    /// write rather than at a write count it would have to predict.
+    /// </summary>
+    internal Func<IReadOnlyList<KeyValuePair<string, byte[]>>, bool>? FailWrite { get; set; }
+
     /// <summary>Every prefix <see cref="DeletePrefixAsync"/> has deleted, in order.</summary>
     internal List<string> DeletedPrefixes { get; } = [];
 
@@ -171,6 +178,11 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
         {
             throw new SimulatedStoreFailureException(
                 $"The store was configured to fail after {FailAfterWrites} writes.");
+        }
+
+        if (FailWrite is { } failWrite && failWrite(entries))
+        {
+            throw new SimulatedStoreFailureException("The store was configured to fail this write.");
         }
 
         Writes++;

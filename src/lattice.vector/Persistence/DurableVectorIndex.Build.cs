@@ -330,7 +330,7 @@ public sealed partial class DurableVectorIndex
                     {
                         // A replacement is not an append, so the committed chunk prefix
                         // is no longer a prefix of the cell and the checkpoint has to
-                        // rewrite it wholesale.
+                        // re-flush it, writing the chunks that changed (#3669).
                         _ingestAppendOnly = false;
                     }
                     else if ((position + 1) % chunkSize == 0)

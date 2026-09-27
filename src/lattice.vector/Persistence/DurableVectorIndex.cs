@@ -535,7 +535,8 @@ public sealed partial class DurableVectorIndex
             // A removal vacates a position and backfills it from the tail, so a
             // committed chunk that held either of them no longer matches the
             // cell. Unlike an append, there is no position at which this is
-            // harmless, so the next checkpoint has to rewrite the cell whole.
+            // harmless, so the next checkpoint has to re-flush the cell rather
+            // than append to it, writing the chunks that changed (#3669).
             // A removal that found nothing shifted nothing and must not pay it.
             _ingestAppendOnly = false;
         }
@@ -598,17 +599,18 @@ public sealed partial class DurableVectorIndex
     /// <para>
     /// Only a <b>replacement</b> can. It vacates a position and backfills it from
     /// the tail, so a committed chunk holding either no longer matches the cell
-    /// and the next checkpoint has to rewrite the cell whole. This is the rule the
-    /// build's own ingest loop already applies to the vectors it streams - a
-    /// replacement is not an append - and it holds just the same for a write that
-    /// arrived from outside the build.
+    /// and the next checkpoint has to re-flush the cell instead of appending to
+    /// it. This is the rule the build's own ingest loop already applies to the
+    /// vectors it streams - a replacement is not an append - and it holds just
+    /// the same for a write that arrived from outside the build.
     /// </para>
     /// <para>
     /// A <b>plain append</b> is indistinguishable from one the build would have
     /// made itself: it lands at the tail and leaves every committed chunk exactly
-    /// as it was. Charging it a rewrite makes the next checkpoint rewrite the
-    /// whole cell, which over a build whose writer hands a batch over once per slice is
-    /// quadratic in corpus size rather than linear. That is the amplification
+    /// as it was. Charging it a re-flush makes the next checkpoint render and hash
+    /// the whole cell rather than append to it. When that re-flush was a full
+    /// rewrite, a build whose writer hands a batch over once per slice cost write
+    /// volume quadratic in corpus size rather than linear. That is the amplification
     /// behind issue #2691, where one tree reached 25 GB of write-ahead log while
     /// its largest sibling reached 185 MB.
     /// </para>
