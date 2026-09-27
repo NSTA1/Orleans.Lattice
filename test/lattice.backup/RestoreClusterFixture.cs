@@ -71,6 +71,19 @@ public sealed class RestoreClusterFixture
     /// gate can drive the fail-closed path.
     /// </summary>
     internal ILatticeBackupRestoreService CreateRestoreServiceWith(BackupAccessAuthorizer authorizer) =>
+        CreateRestoreServiceWith(authorizer, dispatcher: null);
+
+    /// <summary>
+    /// Builds a restore service as <see cref="CreateRestoreServiceWith(BackupAccessAuthorizer)"/>
+    /// does, but with the coordinated-restore saga dispatcher overridden, so a test
+    /// can observe whether dispatch was reached. The restore service resolves the
+    /// dispatcher lazily from the service provider (to break a construction-time
+    /// cycle), so the override is applied by decorating the silo's provider rather
+    /// than by a constructor parameter.
+    /// </summary>
+    internal ILatticeBackupRestoreService CreateRestoreServiceWith(
+        BackupAccessAuthorizer authorizer,
+        IRestoreSagaDispatcher? dispatcher) =>
         new LatticeBackupRestoreService(
             GrainFactory,
             Sink,
@@ -78,9 +91,19 @@ public sealed class RestoreClusterFixture
             authorizer,
             Serializer,
             SiloServices.GetRequiredService<ITagIndexReconcileTrigger>(),
-            SiloServices,
+            dispatcher is null
+                ? SiloServices
+                : new DispatcherOverrideServiceProvider(SiloServices, dispatcher),
             SiloServices.GetRequiredService<ILatticeBackupTenantScope>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupRestoreService>());
+
+    private sealed class DispatcherOverrideServiceProvider(
+        IServiceProvider inner,
+        IRestoreSagaDispatcher dispatcher) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) =>
+            serviceType == typeof(IRestoreSagaDispatcher) ? dispatcher : inner.GetService(serviceType);
+    }
 
     /// <summary>
     /// Builds a cold-restore service over the supplied restore engine, wired to the

@@ -87,10 +87,19 @@ internal sealed class RestoreSagaDispatcher(
         // peer). Participant clusters re-check their own headroom in prepare.
         if (!await capacity.CanHostAsync(report, cancellationToken))
         {
+            // The caller-facing message names the refusal, never the measurements
+            // behind it: the byte length and shard count are the target tree's
+            // stored size and topology, which a caller reaching an infeasible
+            // admission has no entitlement to read. They are logged instead, where
+            // an operator can act on them.
+            logger.LogWarning(
+                "Coordinated restore of backup '{BackupId}' into replicated tree '{TargetTree}' is infeasible " +
+                "on the coordinator cluster: {Bytes} byte(s) over {Shards} shard(s).",
+                request.BackupId, targetTree, report.TotalByteLength, report.ShardCount);
+
             throw new LatticeRestoreValidationException(
                 $"Coordinated restore of backup '{request.BackupId}' into replicated tree '{targetTree}' " +
-                $"is infeasible on the coordinator cluster: {report.TotalByteLength} byte(s) over " +
-                $"{report.ShardCount} shard(s).");
+                $"is infeasible on the coordinator cluster.");
         }
 
         var self = options.CurrentValue.ClusterId;

@@ -80,6 +80,24 @@ public sealed class LatticeBackupControlColdRestoreTests
     }
 
     [Test]
+    public async Task ColdRestoreAsync_denied_permission_fails_closed_when_the_target_is_unresolvable()
+    {
+        await _fixture.InitializeAsync();
+
+        // The gate used to sit inside `if (targetTreeId is not null)`, so a request
+        // naming no target whose backup id the sink manifest lookup misses skipped
+        // the check entirely and reached the cold-restore engine ungated.
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.ColdRestoreAsync(
+                new LatticeRestoreRequest("bk-absent-from-sink", targetTreeId: null)),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>(),
+            "an unresolvable cold-restore target must deny, never skip the gate");
+    }
+
+    [Test]
     public async Task ColdRestoreAsync_null_request_throws()
     {
         await _fixture.InitializeAsync();
