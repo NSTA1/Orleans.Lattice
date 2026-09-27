@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree;
 using Orleans.TestingHost;
+using System.Diagnostics;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -215,10 +216,15 @@ public class TreeSnapshotIntegrationTests
         var destTree = $"snap-ttl-dest-{Guid.NewGuid():N}";
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(sourceTree);
 
-        // Mix of TTL'd and non-TTL entries.
+        // Mix of TTL'd and non-TTL entries. The short TTL must outlive the
+        // write + offline snapshot + first read below with room to spare - a
+        // cold snapshot path takes well over the 300 ms this entry used to be
+        // given, so the "live immediately after snapshot" check raced it.
+        var shortTtl = TimeSpan.FromSeconds(3);
         await tree.SetAsync("long-ttl", Encoding.UTF8.GetBytes("L"), TimeSpan.FromHours(1));
         await tree.SetAsync("no-ttl", Encoding.UTF8.GetBytes("N"));
-        await tree.SetAsync("short-ttl", Encoding.UTF8.GetBytes("S"), TimeSpan.FromMilliseconds(300));
+        var shortWrittenAt = Stopwatch.GetTimestamp();
+        await tree.SetAsync("short-ttl", Encoding.UTF8.GetBytes("S"), shortTtl);
 
         var snapshot = _cluster.GrainFactory.GetGrain<ITreeSnapshotGrain>(sourceTree);
         await snapshot.SnapshotAsync(destTree, SnapshotMode.Offline);
@@ -237,12 +243,96 @@ public class TreeSnapshotIntegrationTests
         // After the short TTL elapses: short-ttl must disappear from reads
         // on the destination, proving its absolute expiry was carried over.
         // Long-ttl and no-ttl must remain live.
-        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        var untilExpired = shortTtl + TimeSpan.FromMilliseconds(500) - Stopwatch.GetElapsedTime(shortWrittenAt);
+        if (untilExpired > TimeSpan.Zero)
+            await Task.Delay(untilExpired);
         Assert.That(await dest.GetAsync("short-ttl"), Is.Null,
             "short-TTL entry should have expired on destination (expiry survived snapshot)");
         Assert.That(await dest.GetAsync("long-ttl"), Is.Not.Null,
             "long-TTL entry should still be live on destination");
         Assert.That(await dest.GetAsync("no-ttl"), Is.Not.Null,
             "non-TTL entry should still be live on destination");
+    }
+
+    [Test]
+    public async Task Online_snapshot_stops_mirroring_source_writes_once_complete()
+    {
+        // Regression: a completed standalone online snapshot left every source
+        // shard shadow-forwarding to the destination, so the "snapshot" kept
+        // changing with the source long after it was taken.
+        var sourceTree = $"snap-release-{Guid.NewGuid():N}";
+        var destTree = $"snap-release-dest-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(sourceTree);
+        for (int i = 0; i < 6; i++)
+            await tree.SetAsync($"key-{i:D4}", Encoding.UTF8.GetBytes($"v{i}"));
+
+        await RunOnlineSnapshotAsync(sourceTree, destTree);
+
+        await tree.SetAsync("written-after-snapshot", Encoding.UTF8.GetBytes("late"));
+        await tree.SetAsync("key-0000", Encoding.UTF8.GetBytes("changed-after-snapshot"));
+        await tree.DeleteAsync("key-0001");
+
+        var dest = _cluster.GrainFactory.GetGrain<ILattice>(destTree);
+        Assert.That(await dest.GetAsync("written-after-snapshot"), Is.Null,
+            "a source write after the snapshot completed must not reach the destination");
+        Assert.That(Encoding.UTF8.GetString((await dest.GetAsync("key-0000"))!), Is.EqualTo("v0"),
+            "a source overwrite after the snapshot completed must not reach the destination");
+        Assert.That(await dest.GetAsync("key-0001"), Is.Not.Null,
+            "a source delete after the snapshot completed must not reach the destination");
+    }
+
+    [Test]
+    public async Task A_second_online_snapshot_of_the_same_source_succeeds()
+    {
+        // Regression: a shard takes part in one shadow-forward operation at a
+        // time, so the forward the first online snapshot never released
+        // refused every later online snapshot (and online resize) of the source.
+        var sourceTree = $"snap-twice-{Guid.NewGuid():N}";
+        var firstDest = $"snap-twice-a-{Guid.NewGuid():N}";
+        var secondDest = $"snap-twice-b-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(sourceTree);
+        await tree.SetAsync("key", Encoding.UTF8.GetBytes("first"));
+
+        await RunOnlineSnapshotAsync(sourceTree, firstDest);
+        await tree.SetAsync("key", Encoding.UTF8.GetBytes("second"));
+        await RunOnlineSnapshotAsync(sourceTree, secondDest);
+
+        var first = _cluster.GrainFactory.GetGrain<ILattice>(firstDest);
+        var second = _cluster.GrainFactory.GetGrain<ILattice>(secondDest);
+        Assert.That(Encoding.UTF8.GetString((await first.GetAsync("key"))!), Is.EqualTo("first"));
+        Assert.That(Encoding.UTF8.GetString((await second.GetAsync("key"))!), Is.EqualTo("second"));
+    }
+
+    [Test]
+    public async Task Deleting_an_online_snapshot_destination_does_not_break_source_writes()
+    {
+        // Regression: with the shadow-forward still installed, every source
+        // write was forwarded into the deleted destination's shards, which
+        // throw, and the forward failure failed the source write itself.
+        var sourceTree = $"snap-deldest-{Guid.NewGuid():N}";
+        var destTree = $"snap-deldest-dest-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(sourceTree);
+        for (int i = 0; i < 6; i++)
+            await tree.SetAsync($"key-{i:D4}", Encoding.UTF8.GetBytes($"v{i}"));
+
+        await RunOnlineSnapshotAsync(sourceTree, destTree);
+        await _cluster.GrainFactory.GetGrain<ILattice>(destTree).DeleteTreeAsync();
+
+        for (int i = 0; i < 6; i++)
+            await tree.SetAsync($"key-{i:D4}", Encoding.UTF8.GetBytes($"after-delete-{i}"));
+
+        for (int i = 0; i < 6; i++)
+        {
+            var value = await tree.GetAsync($"key-{i:D4}");
+            Assert.That(Encoding.UTF8.GetString(value!), Is.EqualTo($"after-delete-{i}"));
+        }
+    }
+
+    private async Task RunOnlineSnapshotAsync(string sourceTree, string destTree)
+    {
+        var snapshot = _cluster.GrainFactory.GetGrain<ITreeSnapshotGrain>(sourceTree);
+        await snapshot.SnapshotAsync(destTree, SnapshotMode.Online);
+        await snapshot.RunSnapshotPassAsync();
+        Assert.That(await snapshot.IsIdleAsync(), Is.True, "online snapshot should be complete");
     }
 }

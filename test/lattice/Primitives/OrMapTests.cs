@@ -462,4 +462,80 @@ public class OrMapTests
         var entry = new OrMapEntry<OrSet> { ReplicaId = "r1", Counter = 1, Value = new OrSet() };
         Assert.That(entry.Value, Is.Not.Null);
     }
+    [Test]
+    public void SnapshotLiveEntriesUnordered_matches_the_Keys_then_Get_projection()
+    {
+        // The single-walk snapshot exists only to avoid resolving every key
+        // twice, so its contract is that it is indistinguishable from the
+        // two-walk shape it replaces: same live keys, same merged values.
+        var map = new OrMap<string, OrSet>();
+        map.Set("alpha", "r1", SetOf("a"));
+        map.Set("beta", "r1", SetOf("b", "c"));
+        map.Set("gamma", "r2", SetOf("d"));
+
+        var snapshot = map.SnapshotLiveEntriesUnordered();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.Select(static e => e.Key), Is.EquivalentTo(map.Keys()));
+            foreach (var (key, value) in snapshot)
+            {
+                Assert.That(Elements(value), Is.EqualTo(Elements(map.Get(key))).AsCollection);
+            }
+        });
+    }
+
+    [Test]
+    public void SnapshotLiveEntriesUnordered_drops_keys_whose_dots_are_all_tombstoned()
+    {
+        // A removed key keeps its causal history in Adds, so the survivor test
+        // cannot be "has entries" - it is the merge folding to null, which is
+        // precisely what the snapshot uses instead of a separate probe.
+        var map = new OrMap<string, OrSet>();
+        map.Set("live", "r1", SetOf("a"));
+        map.Set("dead", "r1", SetOf("b"));
+        map.Remove("dead");
+
+        var snapshot = map.SnapshotLiveEntriesUnordered();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(map.Adds.ContainsKey("dead"), Is.True);
+            Assert.That(snapshot.Select(static e => e.Key), Is.EquivalentTo(new[] { "live" }));
+        });
+    }
+
+    [Test]
+    public void SnapshotLiveEntriesUnordered_is_exactly_sized_to_the_live_count()
+    {
+        var never = new OrMap<string, OrSet>();
+        var map = new OrMap<string, OrSet>();
+        map.Set("a", "r1", SetOf("x"));
+        map.Set("b", "r1", SetOf("y"));
+        map.Set("c", "r1", SetOf("z"));
+        map.Remove("b");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(never.SnapshotLiveEntriesUnordered(), Is.Empty);
+            Assert.That(map.SnapshotLiveEntriesUnordered(), Has.Length.EqualTo(map.Count));
+        });
+    }
+
+    [Test]
+    public void SnapshotLiveEntriesUnordered_merges_every_live_entry_for_a_concurrently_written_key()
+    {
+        // Two replicas wrote the same key concurrently, so the key carries two
+        // live dots. The snapshot must fold both, exactly as Get does, rather
+        // than returning whichever entry it met first.
+        var a = new OrMap<string, OrSet>();
+        var b = new OrMap<string, OrSet>();
+        a.Set("k", "r1", SetOf("alpha"));
+        b.Set("k", "r2", SetOf("beta"));
+        var merged = OrMap<string, OrSet>.Merge(a, b);
+
+        var snapshot = merged.SnapshotLiveEntriesUnordered();
+
+        Assert.That(Elements(snapshot.Single().Value), Is.EquivalentTo(new[] { "alpha", "beta" }));
+    }
 }

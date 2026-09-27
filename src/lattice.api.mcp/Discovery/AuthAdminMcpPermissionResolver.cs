@@ -164,17 +164,45 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
 
         // Carry the caller's own Allow-granted operations so the discovery core can
         // apply a per-tool minimum inside a group it already admitted. Denies stay
-        // the call-time gate's job, exactly as GroupIsGranted documents.
+        // the call-time gate's job, exactly as GroupIsGranted documents. A
+        // scopeless operation is carried only from a cluster-wide rule, for the
+        // same reason GroupIsGranted requires it: otherwise a tree-scoped grant
+        // would satisfy a per-tool minimum it does not confer.
         for (var i = 0; i < rules.Count; i++)
         {
             if (rules[i].Effect == LatticeEffect.Allow)
             {
-                access = access.WithOperations(rules[i].Operations);
+                access = access.WithOperations(CarriedOperations(rules[i]));
             }
         }
 
         return access;
     }
+
+    /// <summary>
+    /// The operations that name no tree and are therefore conferred only by a
+    /// cluster-wide grant.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="LatticeOperation.Telemetry"/> addresses no single tree - the
+    /// telemetry facade authorizes it over <see cref="LatticeScope.ClusterWideTreeId"/>,
+    /// and <see cref="LatticeScope"/> documents that a data-plane rule on a tree
+    /// "can never grant the scopeless capability". Discovery must honour the same
+    /// rule or it advertises a capability the caller does not hold.
+    /// </remarks>
+    private const LatticeOperation ClusterWideOnlyOperations = LatticeOperation.Telemetry;
+
+    /// <summary>
+    /// The operations an Allow rule contributes, with any cluster-wide-only bit
+    /// masked out unless the rule is itself written at cluster-wide scope.
+    /// </summary>
+    private static LatticeOperation CarriedOperations(LatticeAuthorizationRule rule)
+        => IsClusterWide(rule)
+            ? rule.Operations
+            : rule.Operations & ~ClusterWideOnlyOperations;
+
+    private static bool IsClusterWide(LatticeAuthorizationRule rule)
+        => string.Equals(rule.Scope?.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal);
 
     private static bool GroupIsGranted(
         IReadOnlyList<LatticeAuthorizationRule> rules,
@@ -183,10 +211,18 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
         // A group is discoverable when the caller holds at least one Allow grant
         // covering any operation the group exercises. Denies are honoured at
         // call time by the access gate; discovery advertises on grant presence.
+        //
+        // Scope is consulted for one reason only: a scopeless capability (see
+        // ClusterWideOnlyOperations) is conferred by a cluster-wide rule alone, so
+        // a rule naming a real tree has its cluster-wide-only bits masked out
+        // before the match. Every other operation stays scope-blind as before -
+        // discovery is not an authorization decision, and the gate re-checks the
+        // tree at call time.
         for (var i = 0; i < rules.Count; i++)
         {
             var rule = rules[i];
-            if (rule.Effect == LatticeEffect.Allow && (rule.Operations & mask) != LatticeOperation.None)
+            if (rule.Effect == LatticeEffect.Allow
+                && (CarriedOperations(rule) & mask) != LatticeOperation.None)
             {
                 return true;
             }

@@ -41,8 +41,8 @@ namespace Orleans.Lattice.Replication;
 ///     pause, a producer-side reactivation, or simply a busy
 ///     producer that lets the per-call enumerator state expire while
 ///     the receiver is still consuming. The receiver's retry path
-///     reopens the stream from <c>LastAppliedHlc</c>, so resuming
-///     after an enumerator session expiry is correctness-preserving.
+///     re-opens the full stream, so resuming after an enumerator
+///     session expiry is correctness-preserving.
 ///     Matched by type name so the replication package does not
 ///     take a runtime dependency on Orleans internals.</description></item>
 /// </list>

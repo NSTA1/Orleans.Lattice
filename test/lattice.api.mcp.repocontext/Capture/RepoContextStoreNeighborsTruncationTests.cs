@@ -65,6 +65,42 @@ public sealed class RepoContextStoreNeighborsTruncationTests
         });
     }
 
+    [TestCase(0)]
+    [TestCase(-1)]
+    public async Task Neighbors_with_a_non_positive_budget_applies_the_documented_default(int maxNodes)
+    {
+        // repocontext_neighbors documents maxNodes as "clamped to [1, 100]; defaults to
+        // 50". A non-positive budget used to fall back to the 100 ceiling instead, so a
+        // caller passing 0 walked twice the documented default. Seed more dangling
+        // memory links than the default admits (a dangling target is still returned as
+        // a neighbor) and assert the walk stops at the default, not at the ceiling.
+        const int linkCount = RepoContextStore.DefaultNeighborNodes + 10;
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var store = Store(harness);
+
+        var targets = Enumerable.Range(0, linkCount)
+            .Select(i => RepoContextKeys.Memory(RepoId, "concepts", $"t{i:D3}"))
+            .ToArray();
+        var links = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["related"] = targets,
+        };
+        var seed = await store.RememberAsync(
+            RepoId, "concepts", id: $"default-{maxNodes}", MemoryKind.Note, title: "seed", body: "b",
+            author: null, provenance: null, tags: null, addLinks: links, removeLinks: null, ttlSeconds: null, Ct);
+
+        var result = await store.NeighborsAsync(seed.Key, relation: null, depth: 1, maxNodes, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Neighbors, Has.Count.EqualTo(RepoContextStore.DefaultNeighborNodes),
+                "A non-positive budget applies the documented default of 50, not the 100 ceiling.");
+            Assert.That(result.Truncated, Is.True,
+                "More links than the default budget remain, so the walk reports truncation.");
+        });
+    }
+
     [Test]
     public async Task Neighbors_with_a_budget_at_the_link_count_does_not_truncate()
     {

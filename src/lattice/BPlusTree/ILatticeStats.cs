@@ -25,4 +25,12 @@ internal interface ILatticeStats : IGrainWithStringKey
     /// so diagnostics never block the split hot path.
     /// </summary>
     Task RecordSplitAsync(int shardIndex, DateTime atUtc);
+
+    /// <summary>
+    /// Drops both cached reports so the next <see cref="GetReportAsync"/> builds a
+    /// fresh shard fan-out. Used by callers that must base a correctness decision on
+    /// the report, such as the bulk-load emptiness precondition, which a report cached
+    /// before the tree was written would otherwise answer with a stale zero.
+    /// </summary>
+    Task InvalidateAsync();
 }

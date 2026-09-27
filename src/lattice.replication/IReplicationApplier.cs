@@ -61,7 +61,11 @@ public interface IReplicationApplier
     /// The aggregate <see cref="ApplyResult.HighWaterMark"/> is the
     /// pointwise maximum across every entry processed; <see cref="ApplyResult.Applied"/>
     /// is <see langword="true"/> if at least one entry was newly merged
-    /// (a fully-deduped batch returns <see langword="false"/>). Per-entry
+    /// (a fully-deduped batch returns <see langword="false"/>);
+    /// <see cref="ApplyResult.Deferred"/> is <see langword="true"/> if at
+    /// least one entry was deferred, so the receive path keeps the sender's
+    /// cursor and the batch is re-shipped rather than acknowledged past the
+    /// deferred entry. Per-entry
     /// failures are surfaced as exceptions only when the implementation
     /// has no recoverable per-entry failure handling - the
     /// <c>LatticeReplicationGrpcService</c>
@@ -87,6 +91,7 @@ public interface IReplicationApplier
         ArgumentNullException.ThrowIfNull(entries);
 
         var applied = false;
+        var deferred = false;
         var highest = Orleans.Lattice.HybridLogicalClock.Zero;
         for (var i = 0; i < entries.Count; i++)
         {
@@ -96,11 +101,15 @@ public interface IReplicationApplier
             {
                 applied = true;
             }
+            if (result.Deferred)
+            {
+                deferred = true;
+            }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = result.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = applied, HighWaterMark = highest };
+        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = deferred };
     }
 }

@@ -329,10 +329,14 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'topic' parameter is required and must be a non-empty identifier.");
         }
 
+        // MemoryKind.Unspecified is the "never classified" default, not a kind a caller
+        // may choose: accepting it would file an entry under a kind the documented
+        // contract (Decision, Note, Memory) does not offer.
         var memoryKind = MemoryKind.Note;
         if (!string.IsNullOrWhiteSpace(kind)
             && (!Enum.TryParse(kind, ignoreCase: true, out memoryKind)
                 || !Enum.IsDefined(memoryKind)
+                || memoryKind == MemoryKind.Unspecified
                 || !string.Equals(memoryKind.ToString(), kind, StringComparison.OrdinalIgnoreCase)))
         {
             throw new McpException(

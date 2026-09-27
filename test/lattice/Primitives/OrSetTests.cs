@@ -321,4 +321,54 @@ public class OrSetTests
         Assert.That(abab.Adds[keyB64][0].Counter, Is.EqualTo(75));
         Assert.That(ab.Contains(Apple), Is.True);
     }
+    [Test]
+    public void SnapshotElements_matches_the_Elements_projection_element_for_element()
+    {
+        // The single-scan snapshot exists only to avoid walking the survivor
+        // set twice, so its sole contract is that it is indistinguishable from
+        // the lazy projection - same survivors, same order, same bytes.
+        var set = new OrSet();
+        set.Add([0x00], "r1", 1);
+        set.Add([0x34], "r1", 2);
+        set.Add([0xFF], "r1", 3);
+        set.Add(Apple, "r1", 4);
+        set.Add(Banana, "r1", 5);
+        set.Remove(Banana);
+
+        var snapshot = set.SnapshotElements();
+
+        Assert.That(snapshot, Is.EqualTo(set.Elements().ToList()).AsCollection);
+    }
+
+    [Test]
+    public void SnapshotElements_is_empty_when_no_element_survives()
+    {
+        // The two distinct empty outcomes: nothing was ever added, and
+        // everything added was removed. The second is the one that only shows
+        // up after the survivor scan, so the snapshot must size from survivors
+        // rather than from the add count.
+        var never = new OrSet();
+        var allRemoved = new OrSet();
+        allRemoved.Add(Apple, "r1", 1);
+        allRemoved.Remove(Apple);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(never.SnapshotElements(), Is.Empty);
+            Assert.That(allRemoved.Adds, Is.Not.Empty);
+            Assert.That(allRemoved.SnapshotElements(), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void SnapshotElements_is_exactly_sized_to_the_live_count()
+    {
+        var set = new OrSet();
+        set.Add(Apple, "r1", 1);
+        set.Add(Banana, "r1", 2);
+        set.Add("cherry"u8.ToArray(), "r1", 3);
+        set.Remove(Banana);
+
+        Assert.That(set.SnapshotElements(), Has.Length.EqualTo(set.Count));
+    }
 }

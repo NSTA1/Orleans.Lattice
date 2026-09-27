@@ -16,17 +16,33 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// <remarks>
 /// <para>
 /// The <see cref="IPrometheusQueryClient"/>, <see cref="TelemetryMetricAccessPolicy"/>,
-/// and (for the range tool) <see cref="IOptions{TOptions}"/> parameters are
+/// <see cref="TelemetryAccessAuthorizer"/>, and (for the range tool)
+/// <see cref="IOptions{TOptions}"/> parameters are
 /// resolved from the tool invocation's request service provider by the MCP SDK
 /// (they are excluded from each tool's input schema); the
 /// <see cref="CancellationToken"/> is bound to the invocation's token. The
 /// remaining, schema-visible arguments carry the query text and range budget.
 /// </para>
 /// <para>
+/// <b>Every handler opens with the same call-time capability check.</b> Discovery
+/// decides which tools a caller is <i>offered</i>; it is not an authorization
+/// decision, and a tool name is guessable, so a tool that is only gated at
+/// discovery is not gated at all. Each handler therefore consults
+/// <see cref="TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"/> - the
+/// same cluster-wide <c>LatticeOperation.Telemetry</c> seam the transport-neutral
+/// <c>ILatticeTelemetry</c> facade consults - before any backend call, so both
+/// telemetry transports enforce the identical capability. The check short-circuits
+/// to allow when no access gate is registered, leaving an authorization-off cluster
+/// byte-for-byte unchanged.
+/// </para>
+/// <para>
 /// The range guardrails and the deny-all authorization gate are not restated here:
 /// they live in the transport-neutral <see cref="TelemetryRangeGuardrails"/> and
 /// <see cref="TelemetryQueryAuthorizer"/>, so this binding and every other
 /// telemetry transport reject an identical request with an identical message.
+/// The metric-access policy is a <i>narrowing</i> filter applied after the
+/// capability check, never a substitute for it: its default
+/// <c>ReadAll</c> posture admits every metric name.
 /// </para>
 /// <para>
 /// A genuine caller cancellation propagates; a backend timeout, HTTP failure,
@@ -45,6 +61,7 @@ internal static class TelemetryToolHandlers
     public static async Task<TelemetryQueryResult> QueryAsync(
         IPrometheusQueryClient client,
         TelemetryMetricAccessPolicy policy,
+        TelemetryAccessAuthorizer access,
         CancellationToken cancellationToken,
         [Description("The PromQL expression to evaluate at a single instant, for example 'up' or 'rate(lattice_wal_append_total[5m])'.")]
         string query,
@@ -53,7 +70,13 @@ internal static class TelemetryToolHandlers
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(access);
         ArgumentNullException.ThrowIfNull(query);
+
+        if (!await IsAuthorizedAsync(access, cancellationToken).ConfigureAwait(false))
+        {
+            return TelemetryQueryResult.Failure(CapabilityDeniedMessage);
+        }
 
         if (!TelemetryQueryAuthorizer.TryAuthorizeQuery(policy, query, out var denialMessage))
         {
@@ -80,6 +103,7 @@ internal static class TelemetryToolHandlers
     public static async Task<TelemetryQueryResult> QueryRangeAsync(
         IPrometheusQueryClient client,
         TelemetryMetricAccessPolicy policy,
+        TelemetryAccessAuthorizer access,
         IOptions<LatticeApiMcpTelemetryOptions> options,
         CancellationToken cancellationToken,
         [Description("The PromQL expression to evaluate across the range.")]
@@ -93,8 +117,17 @@ internal static class TelemetryToolHandlers
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(access);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(query);
+
+        // The capability check precedes the range guardrails deliberately: an
+        // unauthorized caller must not be able to read the configured range budget
+        // back out of a guardrail rejection message.
+        if (!await IsAuthorizedAsync(access, cancellationToken).ConfigureAwait(false))
+        {
+            return TelemetryQueryResult.Failure(CapabilityDeniedMessage);
+        }
 
         if (!TelemetryRangeGuardrails.TryValidateRange(
                 options.Value, start, end, step, out var violationMessage))
@@ -127,10 +160,17 @@ internal static class TelemetryToolHandlers
     public static async Task<TelemetryMetricListResult> ListMetricsAsync(
         IPrometheusQueryClient client,
         TelemetryMetricAccessPolicy policy,
+        TelemetryAccessAuthorizer access,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(access);
+
+        if (!await IsAuthorizedAsync(access, cancellationToken).ConfigureAwait(false))
+        {
+            return TelemetryMetricListResult.Failure(CapabilityDeniedMessage);
+        }
 
         try
         {
@@ -166,12 +206,19 @@ internal static class TelemetryToolHandlers
     public static async Task<TelemetryMetricMetadataResult> MetricMetadataAsync(
         IPrometheusQueryClient client,
         TelemetryMetricAccessPolicy policy,
+        TelemetryAccessAuthorizer access,
         CancellationToken cancellationToken,
         [Description("Optional metric name to look up; null returns metadata for every metric the caller may see.")]
         string? metric = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(access);
+
+        if (!await IsAuthorizedAsync(access, cancellationToken).ConfigureAwait(false))
+        {
+            return TelemetryMetricMetadataResult.Failure(CapabilityDeniedMessage);
+        }
 
         if (metric is not null && !policy.IsAdmitted(metric))
         {
@@ -224,6 +271,33 @@ internal static class TelemetryToolHandlers
         {
             // The exception text is not propagated to the caller: see BackendErrorMessage.
             return TelemetryMetricMetadataResult.Failure(BackendErrorMessage);
+        }
+    }
+
+    /// <summary>
+    /// Runs the cluster-wide <c>LatticeOperation.Telemetry</c> capability check,
+    /// translating a denial into <see langword="false"/> so every handler surfaces
+    /// it as a structured result rather than a thrown exception.
+    /// </summary>
+    /// <remarks>
+    /// The denial is reported with a fixed message. The exception carries the
+    /// resolved subject id and the gate's own reason text, neither of which is a
+    /// caller-owned value, so echoing it back would turn a refusal into a
+    /// subject-identity and policy-shape disclosure channel - the same reasoning
+    /// that keeps <see cref="BackendErrorMessage"/> non-interpolated.
+    /// </remarks>
+    private static async ValueTask<bool> IsAuthorizedAsync(
+        TelemetryAccessAuthorizer access,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await access.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
         }
     }
 
@@ -420,6 +494,15 @@ internal static class TelemetryToolHandlers
     /// </remarks>
     private const string BackendErrorMessage =
         "The telemetry backend request failed. See the server-side telemetry proxy logs for the detail.";
+
+    /// <summary>
+    /// The fixed caller-facing text for a refused cluster-telemetry capability
+    /// check. Distinct from the metric-access denial text, so a caller can tell
+    /// "you may not read cluster telemetry at all" apart from "that metric is not
+    /// in the allow-list".
+    /// </summary>
+    private const string CapabilityDeniedMessage =
+        "Reading cluster telemetry requires the Telemetry capability granted cluster-wide.";
 
     private static string DeniedMessage(string metric)
         => TelemetryQueryAuthorizer.DeniedMessage(metric);

@@ -223,6 +223,13 @@ public sealed class LatticeMcpTenantRegionWorkflowEndToEndTests
         builder.Services.AddSingleton<ILatticeTenantRegionAdmin>(new WorkflowRegionAdmin(state));
         builder.Services.AddSingleton<ITenantRegionVisibilityResolver>(new WorkflowVisibilityResolver(state));
 
+        // The tenancy add-on Replace-registers its validating ITenantContextResolver
+        // alongside the visibility resolver, and the region catalog honours an
+        // asserted tenant only when that seam confirms the caller may act as it.
+        // This harness wires tenancy by hand, so it must model both halves; the
+        // workflow's caller is a member of the single tenant it asserts.
+        builder.Services.AddSingleton<ITenantContextResolver>(new WorkflowTenantContext());
+
         builder.Services.AddSingleton<ILatticeApiMcpRegionRouter>(
             new LatticeApiMcpRegionRouter(CurrentRegion, new[]
             {
@@ -458,6 +465,27 @@ public sealed class LatticeMcpTenantRegionWorkflowEndToEndTests
     private sealed class WorkflowTenantBridge : ILatticeApiMcpActiveTenantBridge
     {
         public TenantId? Resolve(HttpContext context) => TenantId.Parse(Tenant);
+    }
+
+    /// <summary>
+    /// Stands in for the tenancy package's validating resolver: the workflow's
+    /// caller is a member of <see cref="Tenant"/>, so an assertion of it resolves
+    /// and any other assertion does not.
+    /// </summary>
+    private sealed class WorkflowTenantContext : ITenantContextResolver
+    {
+        public ValueTask<TenantId> ResolveCurrentAsync(CancellationToken cancellationToken = default)
+        {
+            TryResolveCurrent(out var tenant);
+            return ValueTask.FromResult(tenant);
+        }
+
+        public bool TryResolveCurrent(out TenantId tenant)
+        {
+            var asserted = LatticeActiveTenantContext.Current;
+            tenant = asserted is { } t && t.Value == Tenant ? t : default;
+            return true;
+        }
     }
 
     private sealed class WorkflowPermissionResolver(LatticeApiMcpAccessSet access) : ILatticeApiMcpPermissionResolver

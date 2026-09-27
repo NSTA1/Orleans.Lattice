@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -177,6 +177,13 @@ if (string.Equals(suite, "replayadmission", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> replayadmission (ReplayPermitAdmissionBenchmarks)");
     var replayAdmissionSummary = BenchmarkRunner.Run<ReplayPermitAdmissionBenchmarks>(config);
     return replayAdmissionSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "replayownership", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> replayownership (LeafReplayOwnershipBenchmarks)");
+    var replayOwnershipSummary = BenchmarkRunner.Run<LeafReplayOwnershipBenchmarks>(config);
+    return replayOwnershipSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "mergefold", StringComparison.OrdinalIgnoreCase))
@@ -456,6 +463,20 @@ if (string.Equals(suite, "alloctrio", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> alloctrio (HotPathAllocationTrioBenchmarks)");
     var allocTrioSummary = BenchmarkRunner.Run<HotPathAllocationTrioBenchmarks>(config);
     return allocTrioSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "crdtreadtrio", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> crdtreadtrio (CrdtReadPathAllocationTrioBenchmarks)");
+    var crdtReadTrioSummary = BenchmarkRunner.Run<CrdtReadPathAllocationTrioBenchmarks>(config);
+    return crdtReadTrioSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "dataapicrdtreads", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> dataapicrdtreads (DataApiCrdtReadTrimBenchmarks)");
+    var dataApiCrdtReadsSummary = BenchmarkRunner.Run<DataApiCrdtReadTrimBenchmarks>(config);
+    return dataApiCrdtReadsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "tagrowtrims", StringComparison.OrdinalIgnoreCase))

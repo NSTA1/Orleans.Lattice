@@ -245,6 +245,52 @@ public sealed class OrSet : ICrdt<OrSet>
         }
     }
 
+    /// <summary>
+    /// The eager counterpart to <see cref="Elements"/>: the identical
+    /// deterministic projection, materialised once into an exactly-sized array
+    /// after a <em>single</em> survivor scan.
+    /// <para>
+    /// Prefer this over <c>set.Elements().ToArray()</c> or
+    /// <c>[.. set.Elements()]</c> on a read path that materialises the whole
+    /// set. <see cref="Elements"/> is a <c>yield return</c> iterator, so it
+    /// hides its element count from the materialiser: the builder cannot size
+    /// the destination, and instead fills a chain of segments and copies the
+    /// whole projection once more into the final array - on top of the iterator
+    /// state machine itself. Presizing from <see cref="Count"/> instead would be
+    /// no better, because <see cref="Count"/> re-runs the very same survivor
+    /// scan, so the whole tombstone probe would be paid twice. This form pays
+    /// neither: one scan, one exactly-sized destination.
+    /// </para>
+    /// </summary>
+    internal byte[][] SnapshotElements()
+    {
+        if (Adds.Count == 0) return Array.Empty<byte[]>();
+
+        // No element has ever been removed: every stored dot is live, so skip
+        // the per-key tombstone probe when collecting survivors.
+        var noTombstones = Tombstones.Count == 0;
+        var live = new List<string>(Adds.Count);
+        foreach (var (key, dots) in Adds)
+        {
+            if (noTombstones)
+            {
+                if (dots.Count > 0) live.Add(key);
+                continue;
+            }
+            Tombstones.TryGetValue(key, out var tomb);
+            if (LiveDotCount(dots, tomb) > 0) live.Add(key);
+        }
+        if (live.Count == 0) return Array.Empty<byte[]>();
+
+        live.Sort(StringComparer.Ordinal);
+        var values = new byte[live.Count][];
+        for (var i = 0; i < live.Count; i++)
+        {
+            values[i] = Convert.FromBase64String(live[i]);
+        }
+        return values;
+    }
+
     /// <summary>Returns the number of live elements (those with at least one un-tombstoned dot).</summary>
     public int Count
     {
