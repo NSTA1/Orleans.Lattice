@@ -156,6 +156,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
 
+- **Core - A resized tree lost its registration, configuration and snapshots.** Purging a first resize's retired copy unregistered the live tree, the alias swap reset its PublishEvents, history and retention-ceiling overrides, and a snapshot copied the retired shards. Each now acts on the live copy. ([#3741](https://github.com/NSTA1/Orleans.Lattice/issues/3741), [#3742](https://github.com/NSTA1/Orleans.Lattice/issues/3742), [#3743](https://github.com/NSTA1/Orleans.Lattice/issues/3743)) (`Orleans.Lattice`)
+
 - **Atomic - Reads fail closed when the transaction registry is unreachable.** A read meeting a prepare whose outcome the registry cannot supply throws the retryable `LatticeTransactionOutcomeUnavailableException`, and a multi-key or streaming read no longer accepts an unverifiable probe as stable. ([#2215](https://github.com/NSTA1/Orleans.Lattice/issues/2215), [#3641](https://github.com/NSTA1/Orleans.Lattice/issues/3641)) (`Orleans.Lattice`)
 
 - **Leaf - A faulted cache refresh hid keys the leaf holds.** A registry fault mid-refresh left a cleared or unmerged leaf-cache mirror still marked fresh, so same-silo reads answered absent for held keys until the leaf wrote again. A faulted refresh no longer marks it fresh. ([#2412](https://github.com/NSTA1/Orleans.Lattice/issues/2412)) (`Orleans.Lattice`)

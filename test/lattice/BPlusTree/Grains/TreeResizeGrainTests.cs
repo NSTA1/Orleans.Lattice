@@ -204,7 +204,7 @@ public partial class TreeResizeGrainTests
     // --- CleanupOldTreeAsync ---
 
     [Test]
-    public async Task Cleanup_soft_deletes_old_physical_tree()
+    public async Task Cleanup_retires_a_first_resizes_old_physical_tree_that_carries_the_logical_id()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
 
@@ -214,8 +214,31 @@ public partial class TreeResizeGrainTests
 
         await grain.CleanupOldTreeAsync();
 
-        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .Received(1).DeleteTreeAsync();
+        // The old physical id is the logical id, whose registry entry now
+        // aliases the resized copy: an ordinary delete would unregister it on
+        // purge, so the copy must be retired instead.
+        var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
+        await deletion.Received(1).DeleteRetiredPhysicalTreeAsync();
+        await deletion.DidNotReceive().DeleteTreeAsync();
+    }
+
+    [Test]
+    public async Task Cleanup_soft_deletes_a_later_resizes_old_physical_tree()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var previousCopy = $"{TreeId}/resized/op0";
+
+        state.State.InProgress = true;
+        state.State.Phase = ResizePhase.Cleanup;
+        state.State.OldPhysicalTreeId = previousCopy;
+
+        await grain.CleanupOldTreeAsync();
+
+        // A later resize retires a previous resize's copy, a registered tree of
+        // its own whose entry must go when it is purged.
+        var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(previousCopy);
+        await deletion.Received(1).DeleteTreeAsync();
+        await deletion.DidNotReceive().DeleteRetiredPhysicalTreeAsync();
     }
 
     // --- CompleteResizeAsync ---

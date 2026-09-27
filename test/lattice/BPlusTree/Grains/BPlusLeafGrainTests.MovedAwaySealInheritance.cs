@@ -251,6 +251,32 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
+    /// A key ordered after <paramref name="key"/> whose virtual slot differs from it
+    /// under <paramref name="virtualShardCount"/>. The union under test is only
+    /// observable across two distinct slots, and the alternative - skipping the test
+    /// when a hard-coded pair happens to collide - would silently retire the coverage
+    /// if the hash ever changed, with nothing failing to say so. Searching instead
+    /// keeps the assertion live for any hash, and fails loudly if no such key exists.
+    /// </summary>
+    private static string DistinctSlotKey(string key, int virtualShardCount)
+    {
+        var slot = ShardMap.GetVirtualSlot(key, virtualShardCount);
+        for (var i = 0; i < 1000; i++)
+        {
+            var candidate = $"{key}-{i}";
+            if (ShardMap.GetVirtualSlot(candidate, virtualShardCount) != slot)
+            {
+                return candidate;
+            }
+        }
+
+        Assert.Fail(
+            $"No key within the probe budget lands in a slot other than '{key}' under " +
+            $"{virtualShardCount} virtual shards, so slot assignment is degenerate.");
+        return string.Empty;
+    }
+
+    /// <summary>
     /// Inheritance is a union rather than an assignment, because a seal is sticky: a
     /// leaf that has already recorded a migration of its own must not have it dropped
     /// by the seeding step, which would resurface the orphan the leaf had already
@@ -262,15 +288,12 @@ public partial class BPlusLeafGrainTests
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
 
+        var secondKey = DistinctSlotKey("k1", 16);
         var own = ShardMap.GetVirtualSlot("k1", 16);
-        var seeded = ShardMap.GetVirtualSlot("k2", 16);
-        if (own == seeded)
-        {
-            Assert.Ignore("k1 and k2 share a slot under this hash; the union is untestable here");
-        }
+        var seeded = ShardMap.GetVirtualSlot(secondKey, 16);
 
         await grain.SetAsync("k1", Encoding.UTF8.GetBytes("1"));
-        await grain.SetAsync("k2", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync(secondKey, Encoding.UTF8.GetBytes("2"));
         await grain.MarkSlotsMovedAwayAsync(new[] { own }, 16);
 
         await grain.InitializeSiblingAsync(new SiblingInitialization
@@ -286,7 +309,7 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(async () =>
         {
             Assert.That(await grain.GetAsync("k1"), Is.Null, "the leaf's own seal must survive");
-            Assert.That(await grain.GetAsync("k2"), Is.Null, "and the seeded one must take effect");
+            Assert.That(await grain.GetAsync(secondKey), Is.Null, "and the seeded one must take effect");
             Assert.That(state.State.MovedAwaySlots, Is.EqualTo(new[] { own, seeded }.Order().ToArray()));
         });
     }

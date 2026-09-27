@@ -118,8 +118,8 @@ public partial class ReplicationShipperGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(state.State.ConsecutiveFailures, Is.GreaterThan(0),
-                "a mid-tick merge throw must apply backoff");
+            Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1),
+                "a mid-tick merge throw must apply backoff exactly once for the tick");
             Assert.That(SendAsyncCallCount(transport), Is.Zero,
                 "the tick must fail before any batch ships");
         });
@@ -137,8 +137,8 @@ public partial class ReplicationShipperGrainTests
 
         await grain.PumpForTestingAsync(CancellationToken.None);
 
-        Assert.That(state.State.ConsecutiveFailures, Is.GreaterThan(0),
-            "a synchronous SendAsync throw must be treated as a transport failure and back off");
+        Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1),
+            "a synchronous SendAsync throw must be treated as a transport failure and back off exactly once for the tick");
     }
 
     [Test]
@@ -160,8 +160,8 @@ public partial class ReplicationShipperGrainTests
         {
             Assert.That(SendAsyncCallCount(transport), Is.GreaterThanOrEqualTo(2),
                 "both window slots must have launched a send before the drain observed the fault");
-            Assert.That(state.State.ConsecutiveFailures, Is.GreaterThan(0),
-                "a faulted in-flight send must back off");
+            Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1),
+                "a faulted in-flight send must back off once for the tick, not once per faulted window slot");
         });
     }
 

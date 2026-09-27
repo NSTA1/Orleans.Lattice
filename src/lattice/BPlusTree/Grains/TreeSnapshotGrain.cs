@@ -35,6 +35,16 @@ internal sealed class TreeSnapshotGrain(
     private string SourceTreeId => Context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(SourceTreeId);
 
+    /// <summary>
+    /// The physical tree whose shards the snapshot reads, pinned when it
+    /// started (see <see cref="TreeSnapshotState.SourcePhysicalTreeId"/>).
+    /// Every source-shard address goes through this rather than
+    /// <see cref="SourceTreeId"/>, which after a resize names the retired copy.
+    /// </summary>
+    private string SourcePhysicalTreeId => string.IsNullOrEmpty(state.State.SourcePhysicalTreeId)
+        ? SourceTreeId
+        : state.State.SourcePhysicalTreeId;
+
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "snapshot-keepalive";
 
@@ -152,6 +162,18 @@ internal sealed class TreeSnapshotGrain(
         };
         await registry.RegisterAsync(destinationTreeId, entry);
 
+        // Pin the physical tree the copy reads. A resized tree's logical id
+        // aliases its live data to the resized copy, while the shards under the
+        // logical id itself are the retired copy (in its rejecting phase, then
+        // soft-deleted and purged), so copying those would snapshot stale or
+        // empty data. A resize coordinator addresses this grain by an already
+        // resolved physical id, which resolves to itself. System trees never
+        // resolve aliases: the registry is itself a system tree.
+        var sourcePhysicalTreeId = SourceTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            ? SourceTreeId
+            : await registry.ResolveAsync(SourceTreeId);
+        if (string.IsNullOrEmpty(sourcePhysicalTreeId)) sourcePhysicalTreeId = SourceTreeId;
+
         // Snapshot every field the mutation set touches so a failing
         // WriteStateAsync leaves the activation observably equal to what
         // disk (and any future reactivation) see. Without this, the
@@ -177,6 +199,7 @@ internal sealed class TreeSnapshotGrain(
         var prevComplete = state.State.Complete;
         var prevLogicalTreeId = state.State.LogicalTreeId;
         var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
+        var prevSourcePhysicalTreeId = state.State.SourcePhysicalTreeId;
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
@@ -198,6 +221,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.Complete = false;
         state.State.LogicalTreeId = logicalTreeId ?? "";
         state.State.ReleasesShadowForwardOnCompletion = releasesShadowForwardOnCompletion;
+        state.State.SourcePhysicalTreeId = sourcePhysicalTreeId;
         try
         {
             await state.WriteStateAsync();
@@ -218,6 +242,7 @@ internal sealed class TreeSnapshotGrain(
             state.State.Complete = prevComplete;
             state.State.LogicalTreeId = prevLogicalTreeId;
             state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
+            state.State.SourcePhysicalTreeId = prevSourcePhysicalTreeId;
             throw;
         }
     }
@@ -233,7 +258,7 @@ internal sealed class TreeSnapshotGrain(
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{i}");
             tasks[i] = shard.MarkDeletedAsync();
         }
         await Task.WhenAll(tasks);
@@ -533,7 +558,7 @@ internal sealed class TreeSnapshotGrain(
         string? resumeFromInclusive,
         LeafWalkBudget budget)
     {
-        var sourceShardKey = $"{SourceTreeId}/{shardIndex}";
+        var sourceShardKey = $"{SourcePhysicalTreeId}/{shardIndex}";
         var sourceShard = grainFactory.GetGrain<IShardRootGrain>(sourceShardKey);
         var offline = state.State.Mode != SnapshotMode.Online;
 
@@ -627,7 +652,7 @@ internal sealed class TreeSnapshotGrain(
 
     private async Task UnmarkSourceShardAsync(int shardIndex)
     {
-        var shardKey = $"{SourceTreeId}/{shardIndex}";
+        var shardKey = $"{SourcePhysicalTreeId}/{shardIndex}";
         var shard = grainFactory.GetGrain<IShardRootGrain>(shardKey);
         await shard.UnmarkDeletedAsync();
     }
@@ -658,7 +683,7 @@ internal sealed class TreeSnapshotGrain(
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{i}");
             tasks[i] = shard.BeginShadowForwardAsync(destinationTreeId, opId, logicalTreeId);
         }
         await Task.WhenAll(tasks);
@@ -760,7 +785,7 @@ internal sealed class TreeSnapshotGrain(
         var opId = state.State.OperationId
             ?? throw new InvalidOperationException(
                 $"Snapshot state for tree '{SourceTreeId}' has no OperationId; cannot mark shard drained.");
-        var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{shardIndex}");
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{shardIndex}");
         await shard.MarkDrainedAsync(opId);
     }
 
@@ -856,7 +881,7 @@ internal sealed class TreeSnapshotGrain(
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourceTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{i}");
             tasks[i] = shard.ClearShadowForwardAsync(opId);
         }
         await Task.WhenAll(tasks);
