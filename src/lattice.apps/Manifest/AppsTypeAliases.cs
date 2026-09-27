@@ -15,4 +15,6 @@ internal static class AppsTypeAliases
     internal const string AppSubscriptionDeclaration = "oap.su";
     internal const string AppMcpToolDeclaration = "oap.mt";
     internal const string AppManifestError = "oap.er";
+    internal const string AppRoleBinding = "oap.rb";
+    internal const string AppCapabilityCeiling = "oap.cc";
 }

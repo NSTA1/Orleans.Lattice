@@ -85,11 +85,23 @@ public static class AppManifestValidator
                 Error("reference", path + ".tree", "The local tree must be declared by this app.");
         }
 
+        HashSet<string>? adoptedTrees = null;
         if (manifest.Trees is not null)
             for (var i = 0; i < manifest.Trees.Length; i++)
             {
                 if (manifest.Trees[i] is not { } tree) continue;
                 var path = $"$.trees[{i}]";
+                if (tree.AdoptedTreeId is { } adopted)
+                {
+                    if (string.IsNullOrWhiteSpace(adopted) ||
+                        adopted.StartsWith("a/", StringComparison.Ordinal) ||
+                        adopted.StartsWith("_lattice_", StringComparison.Ordinal) ||
+                        adopted.StartsWith("sys-", StringComparison.Ordinal) ||
+                        adopted.StartsWith("t/", StringComparison.Ordinal))
+                        Error("adoption", path + ".adoptedTreeId", "Expected a non-empty pre-app physical tree id outside structural and reserved namespaces.");
+                    else if (!(adoptedTrees ??= new(StringComparer.Ordinal)).Add(adopted))
+                        Error("duplicate", path + ".adoptedTreeId", "A physical tree may be adopted only once per manifest.");
+                }
                 if (tree.ShardCount is < 1 or > 4096)
                     Error("shape", path + ".shardCount", "Physical shard count must be between 1 and 4096.");
                 if (tree.VirtualShardCount is < 1)

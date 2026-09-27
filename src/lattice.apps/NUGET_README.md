@@ -20,7 +20,8 @@ are declarations only: they do not run migrations or validate stored values.
 
 Scope templates contain a local tree name and an optional other-app slug.
 Omitting the slug means the manifest's own app. A compiler composes these as
-`a/{app}/{tree}` before tenant composition; no arbitrary path interpolation or
+`a/{app}/{tree}` before tenant composition unless the declaration adopts a legacy
+physical tree through `AdoptedTreeId`; no arbitrary path interpolation or
 role inheritance is supported. A declaration is a request, not authorization:
 provenance is descriptive, and cross-app access still requires operator consent.
 JSON operations are readable name arrays, such as `["Read", "RangeRead"]`,
@@ -28,6 +29,15 @@ not numbers. Unknown, repeated, composite and `None` names are rejected.
 Scopeless `Telemetry` and `AppInstall` do not belong in a tree-scoped role.
 Tree-scoped administration, backup, restore, schema, replication and lifecycle
 requests remain explicit and require the corresponding installation ceiling.
+
+`AppRoleBinding.Create` binds a role to a membership group id.
+`AppCapabilityCeiling.Structural` records allowed operations with no exception
+scopes. The ceiling is pinned per app id and version; the compiler must intersect
+every rule with it. `ApprovedExceptionScopes` records explicit operator approval
+outside the app namespace, including cross-app or adopted legacy trees. Adoption
+must fail activation without that approval; these contracts do not implement
+activation or grant authority themselves. Adopted ids are unique within a manifest
+and cannot use the `a/`, `_lattice_`, `sys-`, or `t/` prefixes.
 
 Tree sizing fields are optional pins; omission inherits host defaults.
 `VirtualShardCount` is fixed at creation and cannot change in an upgrade;

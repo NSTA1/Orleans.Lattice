@@ -27,4 +27,12 @@ public sealed record AppTreeDeclaration
 
     /// <summary>Whether app-scoped recovery may rederive this tree instead of restoring its bytes.</summary>
     [Id(7)] public bool Rebuildable { get; init; }
+
+    /// <summary>
+    /// Existing physical tree adopted instead of <c>a/{app}/{name}</c>, intended for first-party
+    /// migration of pre-app trees. Adoption is never structurally granted: the install ceiling
+    /// must contain operator-approved exception scopes for this tree or activation must fail.
+    /// Scope templates continue to reference <see cref="Name"/>, not this physical id.
+    /// </summary>
+    [Id(8)] public string? AdoptedTreeId { get; init; }
 }

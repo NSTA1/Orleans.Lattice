@@ -36,7 +36,7 @@ public sealed partial class AppManifestTests
         var aliases = typeof(AppsTypeAliases).GetFields(BindingFlags.Static | BindingFlags.NonPublic)
             .Where(f => f.IsLiteral).Select(f => (string)f.GetRawConstantValue()!).ToArray();
         var owners = assembly.GetTypes().Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null).ToArray();
-        Assert.That(aliases, Has.Length.EqualTo(13));
+        Assert.That(aliases, Has.Length.EqualTo(15));
         Assert.That(aliases.Distinct().Count(), Is.EqualTo(aliases.Length));
         foreach (var alias in aliases)
         {
