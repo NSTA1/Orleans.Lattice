@@ -1,11 +1,11 @@
 ---
-applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.auth/**,src/lattice.api.replication/**,src/lattice.api.replication.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**"
+applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.apps/**,src/lattice.api.mcp.repocontext/**,src/lattice.api.mcp.repocontext.replication/**,src/lattice.api.mcp.telemetry/**,src/lattice.api.mcp.telemetry.azure/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.explorer.entra.web/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**,src/lattice.auth/**,src/lattice.api.replication/**,src/lattice.api.replication.grpc/**,src/lattice.api.telemetry/**,src/lattice.api.telemetry.grpc/**,src/lattice.apps/**,src/lattice.api.apps/**,src/lattice.api.apps.grpc/**"
 ---
 
 # Security Boundaries and Invariants
 
 These are load-bearing security invariants for the auth, membership, replication,
-telemetry, MCP, and Explorer surfaces. They were established by the v8 security
+telemetry, MCP, Explorer, and installable-app control surfaces. They were established by the v8 security
 hardening epic (#1270, sub-issues #1264-#1269). Do not regress them, and apply the
 cross-cutting principles below to any new code on these surfaces. When you touch a
 seam named here, re-read the invariant before changing it.

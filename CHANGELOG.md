@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Apps - Installable apps.** An app declares its trees, roles, subscriptions and MCP tools in a manifest; enabling it compiles its roles into ordinary authorization rules within an operator-consented ceiling. See [Installable apps](docs/lattice.apps/README.md). ([#2235](https://github.com/NSTA1/Orleans.Lattice/issues/2235)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer.Access`)
+
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
 
 - **Leaf - Deactivation barriers are timed.** `orleans.lattice.leaf.deactivation.barrier.duration` times each graceful-deactivation barrier whatever its outcome, so a drain's cost splits across checkpoint flush, snapshot capture, frontier pin and digest publish, charted on CommitPath. ([#3628](https://github.com/NSTA1/Orleans.Lattice/issues/3628)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)

@@ -1,0 +1,35 @@
+{
+  "identity": {
+    "slug": "sample-crm",
+    "version": "1.0.0",
+    "provenance": {
+      "source": "in-image",
+      "publisher": "Orleans.Lattice samples",
+      "reference": "embedded:Orleans.Lattice.Samples.InstallableApps.AppManifest.json"
+    }
+  },
+  "trees": [
+    {
+      "name": "records",
+      "softDeleteDuration": "00:30:00",
+      "rebuildable": false
+    }
+  ],
+  "roles": [
+    {
+      "name": "writer",
+      "operations": ["Read", "Write"],
+      "scopes": [
+        { "tree": "records" }
+      ]
+    }
+  ],
+  "subscriptions": [],
+  "mcpTools": [
+    {
+      "name": "lookup",
+      "description": "Look up a contact record in the sample app tree.",
+      "role": "writer"
+    }
+  ]
+}

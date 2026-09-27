@@ -10,7 +10,7 @@ work.
 
 The API facades (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`,
 `.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.Telemetry`,
-`.Api.TreeAdmin`, and `.Api.TenantAdmin`) each expose a transport-agnostic
+`.Api.TreeAdmin`, `.Api.TenantAdmin`, and `.Api.Apps`) each expose a transport-agnostic
 service surface that a transport binding projects onto a wire protocol. Two
 families of package consume those surfaces: the code-first gRPC bindings and
 the `Orleans.Lattice.Api.Mcp` server.
@@ -23,8 +23,8 @@ This package is the seam between them. It carries:
   `ILatticeReplicationControl`, `ILatticeTelemetry`, `ILatticeTreeAdmin`,
   `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`,
   `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`,
-  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, and the
-  region-discovery `ILatticeRegionCatalog`.
+  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, the app-control
+  `ILatticeAppsControl`, and the region-discovery `ILatticeRegionCatalog`.
 - **Their request / response models** - the results, pages, records, and
   requests those interfaces exchange, with their stable Orleans serialization
   aliases.

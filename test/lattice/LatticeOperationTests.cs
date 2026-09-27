@@ -33,6 +33,7 @@ public class LatticeOperationTests
             Assert.That((int)LatticeOperation.Telemetry, Is.EqualTo(4096));
             Assert.That((int)LatticeOperation.Replication, Is.EqualTo(8192));
             Assert.That((int)LatticeOperation.TreeLifecycle, Is.EqualTo(16384));
+            Assert.That((int)LatticeOperation.AppInstall, Is.EqualTo(32768));
         });
     }
 
@@ -46,6 +47,7 @@ public class LatticeOperationTests
             LatticeOperation.AtomicWrite, LatticeOperation.BulkLoad, LatticeOperation.Admin,
             LatticeOperation.Backup, LatticeOperation.Restore, LatticeOperation.SchemaAdmin,
             LatticeOperation.Telemetry, LatticeOperation.Replication, LatticeOperation.TreeLifecycle,
+            LatticeOperation.AppInstall,
         };
 
         var union = LatticeOperation.None;
@@ -114,6 +116,27 @@ public class LatticeOperationTests
             Assert.That(everythingElse.HasFlag(LatticeOperation.TreeLifecycle), Is.False);
             Assert.That(LatticeOperation.TreeLifecycle.HasFlag(LatticeOperation.Admin), Is.False);
             Assert.That((everythingElse & LatticeOperation.TreeLifecycle), Is.EqualTo(LatticeOperation.None));
+        });
+    }
+
+    [Test]
+    public void AppInstall_does_not_overlap_any_other_operation()
+    {
+        // AppInstall is a cluster-wide, scopeless capability like Telemetry: no
+        // other operation (including Admin and TreeLifecycle) may confer it, and
+        // holding it confers nothing else.
+        var everythingElse =
+            LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete
+            | LatticeOperation.RangeRead | LatticeOperation.RangeDelete | LatticeOperation.CrdtApply
+            | LatticeOperation.AtomicWrite | LatticeOperation.BulkLoad | LatticeOperation.Admin
+            | LatticeOperation.Backup | LatticeOperation.Restore | LatticeOperation.SchemaAdmin
+            | LatticeOperation.Telemetry | LatticeOperation.Replication | LatticeOperation.TreeLifecycle;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(everythingElse.HasFlag(LatticeOperation.AppInstall), Is.False);
+            Assert.That(LatticeOperation.AppInstall.HasFlag(LatticeOperation.Admin), Is.False);
+            Assert.That((everythingElse & LatticeOperation.AppInstall), Is.EqualTo(LatticeOperation.None));
         });
     }
 }

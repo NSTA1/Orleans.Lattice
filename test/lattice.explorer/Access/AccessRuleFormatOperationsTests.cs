@@ -32,6 +32,20 @@ public sealed class AccessRuleFormatOperationsTests
     }
 
     [Test]
+    public void Operations_labels_app_install_as_app_install()
+    {
+        var option = AccessRuleFormat.Operations.Single(o => o.Flag == LatticeOperation.AppInstall);
+
+        Assert.That(option.Label, Is.EqualTo("App install"));
+    }
+
+    [Test]
+    public void OperationsLabel_app_install_alone_renders_friendly_label()
+    {
+        Assert.That(AccessRuleFormat.OperationsLabel(LatticeOperation.AppInstall), Is.EqualTo("App install"));
+    }
+
+    [Test]
     public void Operations_covers_every_non_none_lattice_operation_flag()
     {
         var represented = AccessRuleFormat.Operations.Select(o => o.Flag).ToHashSet();

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Orleans.Lattice.Samples.InstallableApps</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.InstallableApps</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="AppManifest.json" LogicalName="Orleans.Lattice.Samples.InstallableApps.AppManifest.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.apps\Orleans.Lattice.Apps.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.apps\Orleans.Lattice.Api.Apps.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

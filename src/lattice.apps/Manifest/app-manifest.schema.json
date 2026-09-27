@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orleans.Lattice app manifest",
+  "description": "Structural contract. The runtime validator additionally checks uniqueness by name, references, operation bits, positive retention and upgrade invariants.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["identity", "trees", "roles", "subscriptions", "mcpTools"],
+  "properties": {
+    "identity": { "$ref": "#/$defs/identity" },
+    "trees": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/tree" } },
+    "roles": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/role" } },
+    "replication": { "type": ["array", "null"], "maxItems": 256, "items": { "$ref": "#/$defs/replication" } },
+    "schema": { "type": ["array", "null"], "maxItems": 256, "items": { "$ref": "#/$defs/schema" } },
+    "subscriptions": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/subscription" } },
+    "mcpTools": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/tool" } }
+  },
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(?![\\s\\S])", "minLength": 1, "maxLength": 128 },
+    "slug": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}(?![\\s\\S])", "minLength": 2, "maxLength": 31 },
+    "text": { "type": "string", "pattern": "\\S" },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(?![\\s\\S])"
+    },
+    "identity": {
+      "type": "object", "additionalProperties": false, "required": ["slug", "version"],
+      "properties": {
+        "slug": { "$ref": "#/$defs/slug" },
+        "version": { "$ref": "#/$defs/version" },
+        "provenance": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "source": { "$ref": "#/$defs/text", "maxLength": 1024, "default": "in-image" },
+            "publisher": { "$ref": "#/$defs/text", "maxLength": 1024, "default": "first-party" },
+            "reference": { "anyOf": [{ "$ref": "#/$defs/text", "maxLength": 1024 }, { "type": "null" }] }
+          }
+        }
+      }
+    },
+    "tree": {
+      "type": "object", "additionalProperties": false, "required": ["name"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "adoptedTreeId": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024, "pattern": "^(?!a/|_lattice_|sys-|t/|\\*(?![\\s\\S]))[^\\s\\x00-\\x1F\\x7F-\\x9F](?:[^\\x00-\\x1F\\x7F-\\x9F]*[^\\s\\x00-\\x1F\\x7F-\\x9F])?(?![\\s\\S])", "description": "Existing pre-app physical tree, never the cluster-wide sentinel, without surrounding white space or control characters. Requires operator-approved exception scopes in the install ceiling; never structurally granted. Adopted ids must be unique within the manifest." },
+        "shardCount": { "type": ["integer", "null"], "minimum": 1, "maximum": 4096 },
+        "virtualShardCount": { "type": ["integer", "null"], "minimum": 1, "description": "Fixed at creation. Cannot change during manifest upgrade." },
+        "maxLeafKeys": { "type": ["integer", "null"], "minimum": 2 },
+        "maxInternalChildren": { "type": ["integer", "null"], "minimum": 3 },
+        "walPartitions": { "type": ["integer", "null"], "minimum": 1 },
+        "softDeleteDuration": { "type": ["string", "null"], "pattern": "^([0-9]+\\.)?[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,7})?$", "description": "Positive .NET TimeSpan constant format." },
+        "rebuildable": { "type": "boolean", "default": false }
+      }
+    },
+    "scope": {
+      "type": "object", "additionalProperties": false, "required": ["tree"],
+      "properties": {
+        "tree": { "$ref": "#/$defs/name" },
+        "app": { "anyOf": [{ "$ref": "#/$defs/slug" }, { "type": "null" }] },
+        "kind": { "enum": ["Tree", "Key", "Prefix"], "default": "Tree" },
+        "keyOrPrefix": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024 }
+      },
+      "if": { "required": ["kind"], "properties": { "kind": { "enum": ["Key", "Prefix"] } } },
+      "then": { "required": ["keyOrPrefix"], "properties": { "keyOrPrefix": { "type": "string" } } },
+      "else": { "properties": { "keyOrPrefix": { "type": "null" } } }
+    },
+    "role": {
+      "type": "object", "additionalProperties": false, "required": ["name", "operations", "scopes"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "operations": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "enum": ["Read", "Write", "Delete", "RangeRead", "RangeDelete", "CrdtApply", "AtomicWrite", "BulkLoad", "Admin", "Backup", "Restore", "SchemaAdmin", "Replication", "TreeLifecycle"] }
+        },
+        "scopes": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/scope" } }
+      }
+    },
+    "replication": {
+      "type": "object", "additionalProperties": false, "required": ["tree", "mergeMode"],
+      "properties": {
+        "tree": { "$ref": "#/$defs/name" },
+        "mergeMode": { "enum": ["LwwRegister", "OrSet", "PnCounter", "VersionVector", "MvRegister", "OrMap", "Sequence", "OrFlag", "RwFlag", "GCounter", "GSet", "RwSet", "MaxRegister", "MinRegister"] }
+      }
+    },
+    "schema": {
+      "type": "object", "additionalProperties": false, "required": ["tree", "family", "version"],
+      "properties": {
+        "tree": { "$ref": "#/$defs/name" },
+        "family": { "$ref": "#/$defs/text", "maxLength": 1024 },
+        "version": { "type": "integer", "minimum": 1 },
+        "strictIngest": { "type": "boolean", "default": false }
+      }
+    },
+    "subscription": {
+      "type": "object", "additionalProperties": false, "required": ["name", "tree"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "tree": { "$ref": "#/$defs/name" },
+        "app": { "anyOf": [{ "$ref": "#/$defs/slug" }, { "type": "null" }] },
+        "keyPrefix": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "tool": {
+      "type": "object", "additionalProperties": false, "required": ["name", "description", "role"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name", "maxLength": 96 },
+        "description": { "$ref": "#/$defs/text", "maxLength": 4096 },
+        "role": { "$ref": "#/$defs/name" }
+      }
+    }
+  }
+}

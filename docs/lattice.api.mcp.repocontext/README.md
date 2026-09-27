@@ -46,6 +46,14 @@ The host must also map the MCP endpoint (`app.MapLatticeMcp()`) and, for `repoco
 
 For a ready-to-run, restart-durable local deployment - "codebase memory in a box" - see the [container quickstart](container.md) and the [container sample](../../samples/RepoContextContainer/README.md).
 
+## As an installable app (opt-in)
+
+RepoContext is the pilot [installable app](../lattice.apps/README.md). Passing `registerAsApp: true` to `AddRepoContextTools` additionally registers it as the app `repo-context`; it defaults to `false`, in which case nothing changes - the `repocontext_*` tool group, its advertised tools and the `lattice_capabilities` report are exactly as before.
+
+When the flag is on, the package registers its embedded manifest with the in-image app source (making the app installable, not installed), adds the [app MCP surface](../lattice.api.mcp.apps/README.md), and contributes the group's always-on read-only tools to it, so an installed and enabled app advertises them as `repo-context_{tool}` alongside - never instead of - the group tools. Write and path-taking tools stay group-only, because they depend on the host's `enableWrites`, `workspaceMode` and workspace-root opt-ins, which a fixed manifest cannot follow. The host remains responsible for `AddLatticeApps`, and for an MCP authorizer that admits the namespaced names.
+
+The manifest declares every RepoContext tree under an app-local name that **adopts** the existing physical tree (`repo-context-structural`, `repo-context-memory`, and so on), so no data moves. Adopted trees are never granted structurally: an operator installing the app must approve each of them as an exception scope in the install ceiling, and uninstalling the app never deletes them. The manifest marks the derived vector trees (membership, metadata, index and coverage) `rebuildable`, which is what an app-scoped backup uses to choose restore versus re-derive; every other tree, including the vector payload tree, is declared not rebuildable, so it is restored rather than re-derived. It declares two roles, `reader` (`Read`, `RangeRead`) and `curator` (adding `Write`, `Delete`, `RangeDelete`), over every tree. A regression test asserts the manifest's trees and rebuildable flags agree with the package's tree constants, so renaming a tree without updating the manifest fails CI.
+
 ## Reference
 
 - [Architecture](architecture.md) - a map of the constituent parts, the ingest, retrieval, and convergence flows, and the store-of-record versus rebuildable-projection distinction the design rests on.

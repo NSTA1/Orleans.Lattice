@@ -22,6 +22,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Membership.Entra.Graph` | `src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj` |
 | `Orleans.Lattice.Membership.Oidc` | `src/lattice.membership.oidc/Orleans.Lattice.Membership.Oidc.csproj` |
 | `Orleans.Lattice.Auth` | `src/lattice.auth/Orleans.Lattice.Auth.csproj` |
+| `Orleans.Lattice.Apps` | `src/lattice.apps/Orleans.Lattice.Apps.csproj` |
 | `Orleans.Lattice.Api.Auth` | `src/lattice.api.auth/Orleans.Lattice.Api.Auth.csproj` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj` |
 | `Orleans.Lattice.Api.Data` | `src/lattice.api.data/Orleans.Lattice.Api.Data.csproj` |
@@ -37,10 +38,13 @@ The package family ships from this repository:
 | `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | `src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj` |
 | `Orleans.Lattice.Api.Mcp.RepoContext` | `src/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.csproj` |
 | `Orleans.Lattice.Api.Mcp.RepoContext.Replication` | `src/lattice.api.mcp.repocontext.replication/Orleans.Lattice.Api.Mcp.RepoContext.Replication.csproj` |
+| `Orleans.Lattice.Api.Mcp.Apps` | `src/lattice.api.mcp.apps/Orleans.Lattice.Api.Mcp.Apps.csproj` |
 | `Orleans.Lattice.Api.Schema` | `src/lattice.api.schema/Orleans.Lattice.Api.Schema.csproj` |
 | `Orleans.Lattice.Api.Schema.Grpc` | `src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin` | `src/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin.Grpc` | `src/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.csproj` |
+| `Orleans.Lattice.Api.Apps` | `src/lattice.api.apps/Orleans.Lattice.Api.Apps.csproj` |
+| `Orleans.Lattice.Api.Apps.Grpc` | `src/lattice.api.apps.grpc/Orleans.Lattice.Api.Apps.Grpc.csproj` |
 | `Orleans.Lattice.Api.TenantAdmin` | `src/lattice.api.tenantadmin/Orleans.Lattice.Api.TenantAdmin.csproj` |
 | `Orleans.Lattice.Api.TenantAdmin.Grpc` | `src/lattice.api.tenantadmin.grpc/Orleans.Lattice.Api.TenantAdmin.Grpc.csproj` |
 | `Orleans.Lattice.Api.Telemetry` | `src/lattice.api.telemetry/Orleans.Lattice.Api.Telemetry.csproj` |
@@ -93,6 +97,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Membership.Entra.Graph` | `lattice.membership.entra.graph-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership.Oidc` | `lattice.membership.oidc-v<X.Y.Z>` |
 | `Orleans.Lattice.Auth` | `lattice.auth-v<X.Y.Z>` |
+| `Orleans.Lattice.Apps` | `lattice.apps-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth` | `lattice.api.auth-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `lattice.api.auth.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Data` | `lattice.api.data-v<X.Y.Z>` |
@@ -108,10 +113,13 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | `lattice.api.mcp.telemetry.azure-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.RepoContext` | `lattice.api.mcp.repocontext-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.RepoContext.Replication` | `lattice.api.mcp.repocontext.replication-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Mcp.Apps` | `lattice.api.mcp.apps-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Schema` | `lattice.api.schema-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Schema.Grpc` | `lattice.api.schema.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin` | `lattice.api.treeadmin-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin.Grpc` | `lattice.api.treeadmin.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Apps` | `lattice.api.apps-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Apps.Grpc` | `lattice.api.apps.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TenantAdmin` | `lattice.api.tenantadmin-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TenantAdmin.Grpc` | `lattice.api.tenantadmin.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Telemetry` | `lattice.api.telemetry-v<X.Y.Z>` |

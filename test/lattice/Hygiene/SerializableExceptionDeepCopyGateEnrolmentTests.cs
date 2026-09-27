@@ -65,6 +65,8 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
     private static readonly string[] PackagesDeclaringNoSerializableException =
     [
         "lattice.api.abstractions",
+        "lattice.api.apps",
+        "lattice.api.apps.grpc",
         "lattice.api.auth",
         "lattice.api.auth.grpc",
         "lattice.api.backup",
@@ -72,6 +74,7 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
         "lattice.api.data",
         "lattice.api.data.grpc",
         "lattice.api.mcp",
+        "lattice.api.mcp.apps",
         "lattice.api.mcp.repocontext",
         "lattice.api.mcp.repocontext.replication",
         "lattice.api.mcp.telemetry",
@@ -88,6 +91,7 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
         "lattice.api.tenantadmin.grpc",
         "lattice.api.treeadmin",
         "lattice.api.treeadmin.grpc",
+        "lattice.apps",
         "lattice.auth",
         "lattice.backup.azureblob",
         "lattice.caching.azureblob",

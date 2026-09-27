@@ -41,6 +41,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
     private readonly IServiceProvider _services;
     private readonly ILatticeApiMcpGroupEndpointSource? _endpointSource;
     private readonly ILatticeApiMcpUnsupportedToolSource? _unsupportedToolSource;
+    private readonly ILatticeApiMcpAppToolSource[] _appToolSources;
     private readonly ILogger<LatticeApiMcpSessionConfigurator> _logger;
 
     /// <summary>Initialises the session configurator from the registered discovery collaborators.</summary>
@@ -51,8 +52,10 @@ internal sealed class LatticeApiMcpSessionConfigurator
         IServiceProvider services,
         ILogger<LatticeApiMcpSessionConfigurator> logger,
         ILatticeApiMcpGroupEndpointSource? endpointSource = null,
-        ILatticeApiMcpUnsupportedToolSource? unsupportedToolSource = null)
+        ILatticeApiMcpUnsupportedToolSource? unsupportedToolSource = null,
+        IEnumerable<ILatticeApiMcpAppToolSource>? appToolSources = null)
     {
+        _appToolSources = appToolSources?.ToArray() ?? [];
         _credentialBridge = credentialBridge ?? throw new ArgumentNullException(nameof(credentialBridge));
         _permissionResolver = permissionResolver ?? throw new ArgumentNullException(nameof(permissionResolver));
         ArgumentNullException.ThrowIfNull(toolGroups);
@@ -136,6 +139,11 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 tools, access, httpContext, cancellationToken).ConfigureAwait(false);
             await AddPermittedGroupToolsAsync(tools, access, httpContext, cancellationToken)
                 .ConfigureAwait(false);
+            if (_appToolSources.Length > 0)
+            {
+                await AddPermittedAppToolsAsync(tools, credential.Value, httpContext, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
 
         return new LatticeApiMcpSessionPlan(
@@ -287,6 +295,51 @@ internal sealed class LatticeApiMcpSessionConfigurator
                         "MCP tool '{ToolName}' from group '{Group}' collides with an existing tool and was skipped.",
                         toolName,
                         group.Group);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds the app tools each registered <see cref="ILatticeApiMcpAppToolSource"/>
+    /// permits for the caller, after the group tools, through the same coarse
+    /// authorizer gate and <see cref="CredentialStampingTool"/> wrapper, so
+    /// advertisement and invocation stay in lock-step exactly as for a group tool.
+    /// </summary>
+    /// <remarks>
+    /// App tools are served in-process by the app that contributed them, so the
+    /// wrapper accepts only the current region as a <c>region</c> target. A name
+    /// that collides with a tool already present (a built-in meta-tool or a group
+    /// tool) is skipped with a warning: an app can never shadow a built-in tool.
+    /// </remarks>
+    private async Task AddPermittedAppToolsAsync(
+        McpServerPrimitiveCollection<McpServerTool> tools,
+        LatticeCredential credential,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < _appToolSources.Length; i++)
+        {
+            var appTools = await _appToolSources[i]
+                .GetPermittedToolsAsync(httpContext, credential, cancellationToken)
+                .ConfigureAwait(false);
+            for (var j = 0; j < appTools.Count; j++)
+            {
+                var tool = appTools[j];
+                var toolName = tool.ProtocolTool.Name;
+                var authorized = await McpToolAuthorizationGate
+                    .IsAuthorizedAsync(_services, httpContext, toolName, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!authorized)
+                {
+                    continue;
+                }
+
+                if (!tools.TryAdd(new CredentialStampingTool(tool)))
+                {
+                    _logger.LogWarning(
+                        "MCP app tool '{ToolName}' collides with an existing tool and was skipped.",
+                        toolName);
                 }
             }
         }
