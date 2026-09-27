@@ -14,6 +14,10 @@
 //                                           mastered to the series loudness: the
 //                                           track the composition plays (needs ffmpeg)
 //
+// Every clip is also copied to the clip cache in the per-user state directory
+// (tools/lib/layout.js, stateDir), and a checkout that lacks a clip copies it
+// back from there, so a fresh worktree reuses what an earlier one spoke.
+//
 // Usage: npm run narrate -- <episode-slug>     (reads episodes/<slug>/SCRIPT.md)
 // Then:  npm run timeline -- <episode-slug>    (stamps the timeline into the composition)
 //
@@ -30,6 +34,7 @@ import { spawnSync } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { workspaceRoot } from "./lib/hyperframes.js";
+import { restoreClip, saveClip } from "./lib/cache.js";
 import { episodePaths } from "./lib/layout.js";
 import { loadLexicon } from "./lib/lexicon.js";
 import { DELIVERED_AS, gainFor, LIMITER_CEILING_DB, LOUDNESS_TARGET, masteringFilter, onTarget, parseEbur128 } from "./lib/loudness.js";
@@ -87,6 +92,9 @@ const chatterbox = voice.chatterbox ?? {};
 const clipHash = clipNamer(voice, { cli });
 const spokenCues = spokenForms(cues, lexicon, engine);
 const files = spokenCues.map((spoken) => `clips/${clipHash(spoken)}.wav`);
+const clipNames = files.map((file) => path.basename(file, ".wav"));
+const restored = clipNames.filter((name) => restoreClip(paths, name)).length;
+if (restored > 0) console.log(`narrate: ${restored} clip(s) copied in from the clip cache, ${paths.clipCache}`);
 const checks = new Array(cues.length).fill(null);
 const missing = files.map((file, index) => (existsSync(path.join(outDir, file)) ? -1 : index)).filter((index) => index >= 0);
 
@@ -115,6 +123,7 @@ if (engine === "kokoro") {
       process.exit(1);
     }
     renameSync(partial, target);
+    saveClip(paths, clipNames[index]);
     spoken++;
     changes.set(index, "a new take");
     console.log(`cue ${index + 1}/${cues.length}: ${wavDuration(readFileSync(target)).toFixed(2)}s`);
@@ -147,6 +156,7 @@ if (engine === "kokoro") {
       if (reply.repaired) renameSync(partial, target);
       const check = { ...(readSidecar(index) ?? {}), inspected: true, repaired: reply.repaired, artefacts: reply.artefacts, seconds: reply.seconds };
       writeFileSync(sidecarOf(index), `${JSON.stringify(check, null, 2)}\n`);
+      saveClip(paths, clipNames[index]);
       const found = reply.artefacts.map((a) => `${a.kind} at ${a.start}-${a.end}s`);
       if (reply.repaired) {
         changes.set(index, `a sound after the last word cut off at ${reply.repaired.cutAt}s`);
@@ -198,6 +208,7 @@ if (engine === "kokoro") {
         artefacts: kept.reply.artefacts,
       };
       writeFileSync(sidecarOf(index), `${JSON.stringify(check, null, 2)}\n`);
+      saveClip(paths, name);
       if (!check.verified) {
         console.log(`cue ${index + 1}/${cues.length}: kept attempt ${check.attempt}, which did not pass every check; listen to it`);
       }

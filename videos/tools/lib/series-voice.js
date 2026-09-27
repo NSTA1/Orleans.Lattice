@@ -4,9 +4,10 @@
 // tools/audition.js share it, so a take made for an audition is exactly the
 // clip narration would make.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { workspaceRoot } from "./hyperframes.js";
+import { stateDir } from "./layout.js";
 import { applyLexicon, readingFor } from "./lexicon.js";
 import { fileDigest } from "./publication.js";
 import { judgeAttempt, seedFor } from "./verify.js";
@@ -92,14 +93,27 @@ export function chatterboxArgs(voice, { threads = "8", root = workspaceRoot } = 
 }
 
 /**
- * Starts the voice worker in the Python environment VIDEOS_VOICE_PYTHON names
- * (see voice/requirements.txt); throws, saying so, when it is not set.
+ * The interpreter of the series voice's Python environment: VIDEOS_VOICE_PYTHON
+ * when it is set, or else the one `npm run voice:setup` makes in the state
+ * directory (tools/lib/layout.js, stateDir), if it is there. Null when there
+ * is neither.
  */
-export function startChatterbox(voice, { log, env = process.env } = {}) {
-  const python = env.VIDEOS_VOICE_PYTHON;
+export function voicePython(env = process.env, platform = process.platform, state = stateDir) {
+  if (env.VIDEOS_VOICE_PYTHON) return env.VIDEOS_VOICE_PYTHON;
+  const made = platform === "win32" ? path.join(state, "voice", "Scripts", "python.exe") : path.join(state, "voice", "bin", "python");
+  return existsSync(made) ? made : null;
+}
+
+/**
+ * Starts the voice worker in the series voice's Python environment (see
+ * voicePython and voice/requirements.txt); throws, saying how to make one,
+ * when there is none.
+ */
+export function startChatterbox(voice, { log, env = process.env, state = stateDir } = {}) {
+  const python = voicePython(env, process.platform, state);
   if (!python) {
     throw new Error(
-      "set VIDEOS_VOICE_PYTHON to the Python 3.11 interpreter of an environment with voice/requirements.txt installed (README.md, 'The series voice')",
+      "the series voice has no Python environment: run 'npm run voice:setup', or set VIDEOS_VOICE_PYTHON to the Python 3.11 interpreter of an environment with voice/requirements.txt installed (README.md, 'The series voice')",
     );
   }
   return startVoiceWorker(python, chatterboxArgs(voice, { threads: env.VIDEOS_VOICE_THREADS ?? "8" }), { log });

@@ -136,7 +136,7 @@ export function openingTags(html) {
  * replaced where it stands; a new one follows its last attribute, on a line of
  * its own when the tag's attributes are one per line.
  */
-function attributeEdits(html, tag, updates) {
+function attributeEdits(html, tag, updates, newline = "\n") {
   const edits = [];
   const additions = [];
   for (const [name, { value, quote }] of Object.entries(updates)) {
@@ -153,7 +153,7 @@ function attributeEdits(html, tag, updates) {
     const anchor = last ? last.end : tag.start + 1 + tag.name.length;
     const lineStart = html.lastIndexOf("\n", last ? last.start : tag.start) + 1;
     const multiline = last && html.slice(lineStart, last.start).trim() === "" && lineStart > tag.start;
-    const separator = multiline ? `\n${html.slice(lineStart, last.start)}` : " ";
+    const separator = multiline ? `${newline}${html.slice(lineStart, last.start)}` : " ";
     edits.push({ start: anchor, end: anchor, text: additions.map((text) => separator + text).join("") });
   }
   return edits;
@@ -172,17 +172,20 @@ const seconds = (value) => String(Math.round(value * 1000) / 1000);
 
 /**
  * The composition with the narration's timeline stamped in. `clipRoot` is the
- * root-relative folder the clip paths in the manifest are relative to.
+ * root-relative folder the clip paths in the manifest are relative to. What it
+ * adds is written in the composition's own line endings (a Windows checkout
+ * has CRLF), so a composition already stamped is left byte-for-byte as it is.
  * Throws when the composition and the narration disagree: a scene the
  * composition does not show, a clip for a scene the script does not have, a
  * beat the scene does not reach, or missing narration markers.
  */
 export function stampComposition(html, manifest, { clipRoot, trackIndex = 1 }) {
+  const newline = html.includes("\r\n") ? "\r\n" : "\n";
   const tags = openingTags(html);
   const edits = [];
   const root = tags.find((tag) => tag.get("data-composition-id") !== undefined);
   if (!root) throw new Error("timeline: the composition has no root element with data-composition-id");
-  edits.push(...attributeEdits(html, root, { "data-duration": { value: seconds(manifest.duration), quote: '"' } }));
+  edits.push(...attributeEdits(html, root, { "data-duration": { value: seconds(manifest.duration), quote: '"' } }, newline));
 
   const scenes = new Map(manifest.scenes.map((scene) => [scene.id, scene]));
   const shown = new Set();
@@ -216,7 +219,7 @@ export function stampComposition(html, manifest, { clipRoot, trackIndex = 1 }) {
       variables.end = Number(seconds(duration));
       updates["data-variable-values"] = { value: JSON.stringify(variables), quote: "'" };
     }
-    edits.push(...attributeEdits(html, tag, updates));
+    edits.push(...attributeEdits(html, tag, updates, newline));
   }
   const unshown = [...scenes.keys()].filter((id) => !shown.has(id));
   if (unshown.length > 0) {
@@ -239,6 +242,6 @@ export function stampComposition(html, manifest, { clipRoot, trackIndex = 1 }) {
     `${indent}<audio id="narration" src="${clipRoot}/${manifest.narration}" data-start="0" ` +
     `data-duration="${seconds(manifest.duration)}" data-track-index="${trackIndex}"></audio>`;
   const bodyStart = begin + "<!-- narration:begin -->".length;
-  edits.push({ start: bodyStart, end, text: `\n${audio}\n${indent}` });
+  edits.push({ start: bodyStart, end, text: `${newline}${audio}${newline}${indent}` });
   return applyEdits(html, edits);
 }

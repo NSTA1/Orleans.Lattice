@@ -66,6 +66,14 @@ test("an id that no page defines is reported and left untouched", () => {
   assert.equal(result.output, html);
 });
 
+test("a snippet is written in the composition's own line endings, so a Windows checkout is left as it is", () => {
+  const snippets = collectSnippets([{ source: "page.md", text: "<!-- video-snippet: s -->\n```csharp verify\nvar a = 1;\nvar b = 2;\n```" }]);
+  const crlf = '<html>\r\n<code data-snippet="s">var a = 1;\r\nvar b = 2;</code>\r\n</html>\r\n';
+  assert.equal(applySnippets(crlf, snippets).output, crlf, "an unchanged CRLF composition does not read as drift");
+  const lf = crlf.replace(/\r\n/g, "\n");
+  assert.equal(applySnippets(lf, snippets).output, lf);
+});
+
 test("escapeHtml escapes the characters that matter in element content", () => {
   assert.equal(escapeHtml("<a & b>"), "&lt;a &amp; b&gt;");
 });

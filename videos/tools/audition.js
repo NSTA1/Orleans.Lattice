@@ -18,9 +18,12 @@
 // picked, so it stands whatever the recognisers heard; then run
 // 'npm run narrate -- <slug>' to master the track again. Takes live under
 // renders/takes/ and picks in the clip cache: neither is ever committed. What
-// is committed is the published cut.
+// is committed is the published cut. Both are also copied to the per-user
+// state directory (tools/lib/cache.js), so a fresh checkout finds the takes
+// made and the picks chosen in an earlier one.
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { restoreClip, restoreTakes, saveClip, saveTake } from "./lib/cache.js";
 import { workspaceRoot } from "./lib/hyperframes.js";
 import { episodePaths, rendersDir } from "./lib/layout.js";
 import { loadLexicon } from "./lib/lexicon.js";
@@ -73,12 +76,14 @@ if (picking) {
     const [cueWord, takeWord] = word.split("=");
     const index = cueOf(cueWord);
     const take = Number(takeWord);
+    restoreTakes(paths, names[index]);
     const source = takeFile(index, take);
     if (!existsSync(source)) fail(`cue ${index + 1} has no take ${takeWord}; make it with 'npm run audition -- ${slug} ${index + 1} --takes ${take}'`);
     const record = JSON.parse(readFileSync(source.replace(/\.wav$/, ".json"), "utf8"));
     const target = path.join(clipsDir, `${names[index]}.wav`);
     copyFileSync(source, target);
     writeFileSync(target.replace(/\.wav$/, ".json"), `${JSON.stringify({ ...record, picked: true }, null, 2)}\n`);
+    saveClip(paths, names[index]);
     console.log(`audition: cue ${index + 1} now uses take ${take}`);
   }
   console.log(`audition: run 'npm run narrate -- ${slug}' to master the track with the picked take(s)`);
@@ -92,6 +97,8 @@ const wanted = [...new Set(words.map(cueOf))].sort((a, b) => a - b);
 const toMake = [];
 for (const index of wanted) {
   mkdirSync(takeDir(index), { recursive: true });
+  restoreTakes(paths, names[index]);
+  restoreClip(paths, names[index]);
   const clip = path.join(clipsDir, `${names[index]}.wav`);
   const clipRecord = existsSync(clip.replace(/\.wav$/, ".json")) ? JSON.parse(readFileSync(clip.replace(/\.wav$/, ".json"), "utf8")) : null;
   for (let take = 1; take <= takeCount; take++) {
@@ -99,6 +106,7 @@ for (const index of wanted) {
     if (clipRecord && !clipRecord.picked && !clipRecord.repaired && clipRecord.attempt === take) {
       copyFileSync(clip, takeFile(index, take));
       writeFileSync(takeFile(index, take).replace(/\.wav$/, ".json"), `${JSON.stringify(clipRecord, null, 2)}\n`);
+      saveTake(paths, names[index], take);
       console.log(`cue ${index + 1}, take ${take}: the take narration kept`);
       continue;
     }
@@ -136,6 +144,7 @@ if (toMake.length > 0) {
       };
       writeFileSync(takeFile(index, take).replace(/\.wav$/, ".json"), `${JSON.stringify(record, null, 2)}\n`);
       renameSync(output, takeFile(index, take));
+      saveTake(paths, names[index], take);
       console.log(`cue ${index + 1}, take ${take}: ${made.reply.seconds.toFixed(2)}s in ${made.reply.generateSeconds}s, ${verdictOf(made)}`);
     }
   } catch (error) {

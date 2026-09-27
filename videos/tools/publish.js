@@ -25,6 +25,7 @@ import { workspaceRoot } from "./lib/hyperframes.js";
 import { episodePaths, rendersDir } from "./lib/layout.js";
 import { captionCues, toWebVtt } from "./lib/narration.js";
 import {
+  companionsDir,
   compositionDuration,
   cutOf,
   fileDigest,
@@ -122,7 +123,22 @@ if (meta.published?.cut !== cut || meta.published?.bytes !== bytes) {
 }
 const { page, original, updated } = companionUpdate(slug);
 if (updated !== original) writeFileSync(page, updated);
+// Publishing changes which episodes are out, so a page whose Where next names
+// this episode now links to it.
+const linked = [];
+for (const name of readdirSync(companionsDir).filter((file) => file.endsWith(".md") && file !== `${slug}.md`)) {
+  try {
+    const other = companionUpdate(name.slice(0, -".md".length));
+    if (other.updated !== other.original) {
+      writeFileSync(other.page, other.updated);
+      linked.push(`docs/videos/${name}`);
+    }
+  } catch (error) {
+    console.log(`publish: left docs/videos/${name} as it is (${error.message}); 'npm run companions:check' will report it`);
+  }
+}
 console.log(
   `publish: '${slug}' is cut ${cut} (poster at ${at}s, ${(bytes / 1e6).toFixed(1)} MB) in ${fromRepo(siteMediaDir)}/; ` +
-    `commit it with episodes/${slug}/episode.json and docs/videos/${slug}.md`,
+    `commit it with episodes/${slug}/episode.json and docs/videos/${slug}.md` +
+    (linked.length > 0 ? `, and ${linked.join(", ")}, which now link to it` : ""),
 );

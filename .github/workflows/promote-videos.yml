@@ -1,0 +1,155 @@
+name: Promote videos
+
+# Publishes the video series' approved episodes to the documentation site.
+#
+# An episode is approved when its pull request merges into main. The site is
+# built from the newest release line, never from main (docs.yml), so an
+# approved episode waits on main until a person dispatches this workflow. It
+# then copies the approved episodes onto that line (videos/tools/promote.js),
+# checks the result, builds the site as a gate, pushes to the line, and
+# dispatches the Docs workflow there to deploy. It copies rather than
+# cherry-picks: an episode's files are whole files, and a cherry-pick of its
+# pull request conflicts wherever main has moved since the line was cut.
+#
+# It promotes a gapless run of the production order - every approved item up
+# to and including `through`, or every approved item when that is empty - so
+# the site always shows each path from its start (videos/series.md,
+# "Production order"). The next release wave publishes every approved episode
+# anyway, because a line is cut from main.
+#
+# Only a person dispatches it: dispatching it is what releases approved
+# episodes to the site. The video automation never does
+# (.github/agents/video-producer.agent.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      through:
+        description: 'Promote the approved items up to and including this one (a code from videos/series.json, such as B1). Empty: every approved item.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Copy, check and build the site, but push nothing and deploy nothing.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+# One promotion at a time, and never cancelled part-way through a push.
+concurrency:
+  group: promote-videos
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Refuse any ref but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Dispatch this workflow on main: it promotes what main has approved."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          # Main's commit, and the release line fetched below, both need
+          # their history for the copy.
+          fetch-depth: 0
+
+      # The same rule docs.yml's guard applies: the site is published only
+      # from the newest released line.
+      - name: Find the newest release line
+        id: line
+        run: |
+          set -euo pipefail
+          newest_version="$(git ls-remote --tags origin 'refs/tags/lattice-v*' \
+            | sed -e 's#.*refs/tags/lattice-v##' -e 's/\^{}$//' \
+            | sort -V | tail -1)"
+          if [ -z "$newest_version" ]; then
+            echo "::error::Could not find a released line (no lattice-v* tag)."
+            exit 1
+          fi
+          line="release/$(printf '%s' "$newest_version" | cut -d. -f1,2)"
+          if ! git ls-remote --exit-code --heads origin "$line" >/dev/null; then
+            echo "::error::The newest released line, $line, has no branch."
+            exit 1
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "Promoting onto $line (the newest tag is lattice-v$newest_version)."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # Main's copy of the tools does the copying, so the line needs none of
+      # its own; the checks after it run the line's copy, now main's too.
+      - name: Copy the approved episodes onto the line
+        env:
+          THROUGH: ${{ inputs.through }}
+          LINE: ${{ steps.line.outputs.line }}
+        run: |
+          set -euo pipefail
+          main_sha="$(git rev-parse HEAD)"
+          git worktree add --detach "$RUNNER_TEMP/main" "$main_sha"
+          git fetch origin "$LINE"
+          git checkout --detach FETCH_HEAD
+          node "$RUNNER_TEMP/main/videos/tools/promote.js" \
+            --from "$main_sha" --through "$THROUGH" --message "$RUNNER_TEMP/message.txt" \
+            | tee "$RUNNER_TEMP/summary.txt"
+          {
+            echo "### Promoting onto $LINE"
+            echo
+            sed 's/^/    /' "$RUNNER_TEMP/summary.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the line's workspace
+        working-directory: videos
+        run: |
+          set -euo pipefail
+          node tools/series.js check
+          node tools/companions.js --check
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install DocFX
+        run: dotnet tool install --global docfx --version 2.78.5
+
+      # The gate the deploy itself applies, run before anything is pushed, so
+      # a promotion that would break the site never reaches the line.
+      - name: Build the site (fails on any broken link or anchor)
+        run: pwsh -File docs-site/build.ps1 -MaxWarnings 0
+
+      - name: Commit and push onto the line
+        id: push
+        if: ${{ !inputs.dry_run }}
+        env:
+          LINE: ${{ steps.line.outputs.line }}
+        run: |
+          set -euo pipefail
+          if git diff --cached --quiet; then
+            echo "Nothing to promote: $LINE already has every approved episode."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --quiet -F "$RUNNER_TEMP/message.txt"
+          git push origin "HEAD:refs/heads/$LINE"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # A push made with this workflow's token starts no workflow, but a
+      # dispatch does.
+      - name: Deploy the site
+        if: ${{ !inputs.dry_run && steps.push.outputs.pushed == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINE: ${{ steps.line.outputs.line }}
+        run: gh workflow run Docs --ref "$LINE"

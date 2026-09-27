@@ -40,6 +40,15 @@ test("metadata off the path vocabulary, out of order, or with a bad poster or cu
   assert.deepEqual(episodeProblems([]), ["expected a JSON object"]);
 });
 
+test("an episode lists the series items its published cut completes, each once", () => {
+  assert.deepEqual(episodeProblems({ ...valid, items: ["F", "F2"] }), []);
+  const message = 'items must list the codes of the series items the episode completes, such as "B1"';
+  assert.deepEqual(episodeProblems({ ...valid, items: [] }), [message]);
+  assert.deepEqual(episodeProblems({ ...valid, items: "F" }), [message]);
+  assert.deepEqual(episodeProblems({ ...valid, items: ["F", "b1"] }), [message]);
+  assert.deepEqual(episodeProblems({ ...valid, items: ["F", "F"] }), ["items must list each code once"]);
+});
+
 test("the paths are listed in the order the site shows them, front door first", () => {
   assert.equal(PATHS[0], "front-door");
   assert.deepEqual(PATHS.slice(1, 4), ["build", "evaluate", "operate"]);
