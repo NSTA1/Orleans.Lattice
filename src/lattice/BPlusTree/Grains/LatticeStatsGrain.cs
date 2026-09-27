@@ -195,8 +195,12 @@ internal sealed class LatticeStatsGrain(
         }
         catch (Exception ex)
         {
+            // Contained per shard so one faulting shard does not fail the whole
+            // report, but flagged: an all-zero report is otherwise
+            // indistinguishable from a genuinely empty shard, which lets any
+            // count-based decision (the bulk-load emptiness probe) fail open.
             logger.LogWarning(ex, "Diagnostics fan-out failed for shard {ShardIndex} in tree {TreeId}", shardIndex, TreeId);
-            return new ShardDiagnosticReport { ShardIndex = shardIndex };
+            return new ShardDiagnosticReport { ShardIndex = shardIndex, SampleFailed = true };
         }
     }
 }

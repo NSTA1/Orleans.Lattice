@@ -15,8 +15,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="InitializeAsync(CancellationToken)"/>; subsequent reads
 /// (<see cref="Count"/> / <see cref="Peek"/> / <see cref="Snapshot"/>) are
 /// served from memory and mutations write through to the system tree. The
-/// monotonic id is recomputed as <c>max(stored id) + 1</c> on load so
-/// monotonicity survives silo restart.
+/// monotonic id is recomputed as <c>max(stored id) + 1</c> on load, and - when
+/// the head cursor is persisted - never below the next id the cursor row
+/// records, so monotonicity survives silo restart, including a crash after the
+/// queue drained (see <see cref="HeadCursorKey"/>).
 /// </para>
 /// <para>
 /// Every parameter the two consumers differ on is injected: the
@@ -42,21 +44,36 @@ internal sealed class LatticeQueueCore(
     /// <summary>
     /// Fixed system-tree key that records the lowest live entry id so a
     /// cold start can begin its range scan past already-dequeued ids
-    /// rather than re-walking from the head of the prefix. Chosen to sort
-    /// strictly before any entry key (a leading <c>_</c> is below the
-    /// printable digits and letters every <c>keyPrefix</c> uses), so
-    /// it is never swept up by the entry range scan.
+    /// rather than re-walking from the head of the prefix, followed by the
+    /// next id to assign. Chosen to sort strictly before any entry key (a
+    /// leading <c>_</c> is below the printable digits and letters every
+    /// <c>keyPrefix</c> uses), so it is never swept up by the entry range scan.
     /// </summary>
+    /// <remarks>
+    /// The row is <see cref="HeadCursorLength"/> bytes: the floor, then the
+    /// next id. A legacy row carries the floor alone and is still read. The
+    /// next id matters only once the row holding the highest issued id has
+    /// been deleted, because until then the entry scan recovers it as
+    /// <c>max(stored id) + 1</c>. The engine therefore makes it durable
+    /// immediately before deleting that tail row, rather than waiting for the
+    /// coalesced flush: a crash after the queue drained would otherwise cold
+    /// start from a stale cursor and issue already-issued ids again.
+    /// </remarks>
     internal const string HeadCursorKey = "__head";
+
+    /// <summary>Byte length of a current <see cref="HeadCursorKey"/> row: the floor id then the next id, each an <see cref="long"/>.</summary>
+    internal const int HeadCursorLength = 2 * sizeof(long);
 
     /// <summary>
     /// Number of head-advancing operations coalesced before the
-    /// <see cref="HeadCursorKey"/> row is rewritten. The cursor is a pure
-    /// cold-start optimisation hint, never the source of truth, so it is
+    /// <see cref="HeadCursorKey"/> row is rewritten. The cursor's floor is a
+    /// pure cold-start optimisation hint, never the source of truth, so it is
     /// safe to let it lag the true head by up to this many dequeues - a
     /// stale (lower) cursor only costs a re-walk of already-deleted rows on
     /// the next activation, never a skipped or double-served entry. Keeping
     /// it off the per-dequeue hot path avoids a write to one shard per op.
+    /// The cursor's next id is not allowed to lag: it is written ahead of any
+    /// delete of the tail row, independently of this interval.
     /// </summary>
     internal const int HeadCursorFlushInterval = 32;
 
@@ -71,6 +88,10 @@ internal sealed class LatticeQueueCore(
     private readonly List<Node> _cache = [];
     private int _head;
     private long _nextEntryId = 1;
+
+    // The next id the persisted head cursor records: every id below it is
+    // known durable-issued even with no entry row left to prove it.
+    private long _durableNextEntryId;
     private int _pendingCursorWrites;
 
     /// <summary>A single parked row: its monotonic id and opaque payload bytes.</summary>
@@ -92,25 +113,27 @@ internal sealed class LatticeQueueCore(
         _cache.Clear();
         _head = 0;
         _nextEntryId = 1;
+        _durableNextEntryId = 0;
 
         var start = _prefix;
         if (persistHeadCursor)
         {
             var cursor = await store.GetAsync(HeadCursorKey, cancellationToken).ConfigureAwait(true);
-            if (cursor is { Length: sizeof(long) })
+            if (TryDecodeHeadCursor(cursor, out var floor, out var durableNext))
             {
-                var floor = BitConverter.ToInt64(cursor);
                 start = FormatEntryKey(_prefix, floor);
 
-                // Seed the id sequence from the persisted floor so a queue
-                // that drained to empty (its cursor records the next id to
-                // assign) never regresses below it on cold start. The entry
-                // scan below still wins via max(stored id) + 1 whenever live
-                // rows exist; this only matters when the scan finds nothing.
-                if (floor > _nextEntryId)
+                // Seed the id sequence from the persisted next id so a queue
+                // that drained to empty never regresses below it on cold start,
+                // even when the crash beat the coalesced cursor flush. The entry
+                // scan below still wins via max(stored id) + 1 whenever a higher
+                // row exists; this only matters once the tail row is gone.
+                var seed = Math.Max(floor, durableNext);
+                if (seed > _nextEntryId)
                 {
-                    _nextEntryId = floor;
+                    _nextEntryId = seed;
                 }
+                _durableNextEntryId = durableNext;
             }
         }
 
@@ -153,6 +176,7 @@ internal sealed class LatticeQueueCore(
             while (Count >= cap)
             {
                 var oldest = _cache[_head];
+                await EnsureNextEntryIdDurableBeforeDeletingAsync(_head, cancellationToken).ConfigureAwait(true);
                 await store.DeleteAsync(FormatEntryKey(_prefix, oldest.Id), cancellationToken).ConfigureAwait(true);
                 AdvanceHead();
                 onEvicted?.Invoke(oldest.Id);
@@ -182,6 +206,7 @@ internal sealed class LatticeQueueCore(
         }
 
         var head = _cache[_head];
+        await EnsureNextEntryIdDurableBeforeDeletingAsync(_head, cancellationToken).ConfigureAwait(true);
         await store.DeleteAsync(FormatEntryKey(_prefix, head.Id), cancellationToken).ConfigureAwait(true);
         AdvanceHead();
         await NoteHeadAdvancedAsync(cancellationToken).ConfigureAwait(true);
@@ -226,6 +251,7 @@ internal sealed class LatticeQueueCore(
             return false;
         }
 
+        await EnsureNextEntryIdDurableBeforeDeletingAsync(index, cancellationToken).ConfigureAwait(true);
         await store.DeleteAsync(FormatEntryKey(_prefix, entryId), cancellationToken).ConfigureAwait(true);
         if (index == _head)
         {
@@ -289,7 +315,9 @@ internal sealed class LatticeQueueCore(
     /// lost. A no-op when the head cursor is disabled or no advance has been
     /// coalesced since the last flush. Losing this flush is still safe: a
     /// missing or stale cursor only makes the next cold start re-walk
-    /// already-deleted rows, never skip or double-serve a live entry.
+    /// already-deleted rows, never skip or double-serve a live entry, and it
+    /// cannot regress the id sequence, because the next id was already made
+    /// durable before the tail row was last deleted.
     /// </summary>
     public async Task FlushHeadCursorAsync(CancellationToken cancellationToken)
     {
@@ -299,8 +327,75 @@ internal sealed class LatticeQueueCore(
         }
 
         var floor = Count == 0 ? _nextEntryId : _cache[_head].Id;
-        await store.SetAsync(HeadCursorKey, BitConverter.GetBytes(floor), cancellationToken).ConfigureAwait(true);
+        await WriteHeadCursorAsync(floor, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Makes the next id durable in the <see cref="HeadCursorKey"/> row before
+    /// the row at <paramref name="index"/> is deleted, when that row is the
+    /// tail - the one holding the highest issued id, and so the only thing a
+    /// cold start could otherwise recover the sequence from. A no-op when the
+    /// head cursor is disabled, when a later row survives the delete, or when
+    /// the cursor already records the current next id, so a queue holding a
+    /// backlog pays nothing and one that drains to empty pays one cursor write
+    /// per drain.
+    /// </summary>
+    /// <remarks>
+    /// The floor written is the current head, which is still live: were the
+    /// delete to fail or the silo to crash before it, the cold-start scan still
+    /// finds and serves that row, so ordering the write first can neither skip
+    /// nor lose an entry.
+    /// </remarks>
+    private Task EnsureNextEntryIdDurableBeforeDeletingAsync(int index, CancellationToken cancellationToken)
+    {
+        if (!persistHeadCursor || index != _cache.Count - 1 || _durableNextEntryId >= _nextEntryId)
+        {
+            return Task.CompletedTask;
+        }
+
+        return WriteHeadCursorAsync(_cache[_head].Id, cancellationToken);
+    }
+
+    private async Task WriteHeadCursorAsync(long floor, CancellationToken cancellationToken)
+    {
+        var next = _nextEntryId;
+        await store.SetAsync(HeadCursorKey, EncodeHeadCursor(floor, next), cancellationToken).ConfigureAwait(true);
+        _durableNextEntryId = next;
         _pendingCursorWrites = 0;
+    }
+
+    /// <summary>Encodes a <see cref="HeadCursorKey"/> row as the floor id followed by the next id.</summary>
+    internal static byte[] EncodeHeadCursor(long floor, long nextEntryId)
+    {
+        var bytes = new byte[HeadCursorLength];
+        BitConverter.TryWriteBytes(bytes.AsSpan(0, sizeof(long)), floor);
+        BitConverter.TryWriteBytes(bytes.AsSpan(sizeof(long)), nextEntryId);
+        return bytes;
+    }
+
+    /// <summary>
+    /// Decodes a <see cref="HeadCursorKey"/> row. A legacy row carrying only
+    /// the floor reports the floor as its next id too, which is a sound lower
+    /// bound: it was written as either the head id or, once drained, the next
+    /// id. Any other length is rejected, so the caller falls back to a full scan.
+    /// </summary>
+    internal static bool TryDecodeHeadCursor(byte[]? cursor, out long floor, out long nextEntryId)
+    {
+        switch (cursor)
+        {
+            case { Length: sizeof(long) }:
+                floor = BitConverter.ToInt64(cursor);
+                nextEntryId = floor;
+                return true;
+            case { Length: HeadCursorLength }:
+                floor = BitConverter.ToInt64(cursor.AsSpan(0, sizeof(long)));
+                nextEntryId = BitConverter.ToInt64(cursor.AsSpan(sizeof(long)));
+                return true;
+            default:
+                floor = 0;
+                nextEntryId = 0;
+                return false;
+        }
     }
 
     private static string ValidatePrefix(string keyPrefix, bool persistHeadCursor)

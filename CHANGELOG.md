@@ -104,7 +104,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Scan - An uncapped point-in-time cursor pin expired after 60 seconds.** Setting `MaxCursorSnapshotPinTtl` to `Timeout.InfiniteTimeSpan` floored the pin to `TxDecisionRetention`, or expired it at once with retention off; it now disables the cap as documented. ([#3631](https://github.com/NSTA1/Orleans.Lattice/issues/3631)) (`Orleans.Lattice`)
 
-- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s, so a session opened just after a chunk was grafted saw a stale empty report. The probe now drops the cached reports and samples the shards afresh. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Core - Bulk-load begin admitted a populated tree.** Its emptiness probe read diagnostics cached for up to 5 s and counted a shard it failed to sample as empty. It now drops the cached reports, samples the shards afresh, and refuses to begin while any shard is unsampled. ([#3650](https://github.com/NSTA1/Orleans.Lattice/issues/3650), [#3680](https://github.com/NSTA1/Orleans.Lattice/issues/3680)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Abstractions`)
 
 - **Memory - Tool arguments honour their documented contract.** `repocontext_remember` rejects `kind: Unspecified` like any other unrecognised kind, and `repocontext_neighbors` applies its documented default of 50 to a non-positive `maxNodes` instead of the 100 ceiling. ([#3651](https://github.com/NSTA1/Orleans.Lattice/issues/3651), [#3652](https://github.com/NSTA1/Orleans.Lattice/issues/3652)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -113,6 +113,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice`)
 
 - **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
+
+- **Core - Queue ids could be reissued after a crash.** A queue that drained, or lost its newest entry, before its coalesced head-cursor flush cold-started below ids it had already issued. The next id is now made durable before the newest entry's row is deleted. ([#3681](https://github.com/NSTA1/Orleans.Lattice/issues/3681)) (`Orleans.Lattice`)
+
+- **Config - Reference autoscaler rules could never scale out.** The shipped KEDA and ACA rules set `targetValue` 1, which asks for at most the current replica count, and the reference architecture queried a series nothing exports. The rules now use 0.5 and the exported series. ([#3679](https://github.com/NSTA1/Orleans.Lattice/issues/3679)) (`Orleans.Lattice.Scaling`)
 
 ### Security
 

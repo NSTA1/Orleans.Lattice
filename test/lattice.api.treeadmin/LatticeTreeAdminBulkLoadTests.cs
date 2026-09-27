@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 /// Driven purely with substitutes and a hand-written access gate - no cluster.
 /// </summary>
 [TestFixture]
-public sealed class LatticeTreeAdminBulkLoadTests
+public sealed partial class LatticeTreeAdminBulkLoadTests
 {
     private const string Tree = "orders";
     private const string Op = "load-2024";

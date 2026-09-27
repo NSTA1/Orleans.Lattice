@@ -182,6 +182,12 @@ public sealed class LatticeStatsGrainFanOutTests
             Assert.That(report.Shards[0].LiveKeys, Is.Zero);
             Assert.That(report.Shards[0].Tombstones, Is.Zero);
 
+            // The placeholder must say it measured nothing: an unflagged all-zero
+            // entry is indistinguishable from a genuinely empty shard, which let
+            // the bulk-load emptiness probe fail open on a faulting shard.
+            Assert.That(report.Shards[0].SampleFailed, Is.True);
+            Assert.That(report.Shards[1].SampleFailed, Is.False);
+
             // The healthy shard must still be reported in full: a fan-out that
             // failed whole rather than per-shard would lose these.
             Assert.That(report.Shards[1].LiveKeys, Is.EqualTo(42));
@@ -207,6 +213,22 @@ public sealed class LatticeStatsGrainFanOutTests
             // shard.
             Assert.That(report.Shards.Single().LiveKeys, Is.Zero);
             Assert.That(report.TotalLiveKeys, Is.Zero);
+            Assert.That(report.Shards.Single().SampleFailed, Is.True, "a truncated walk is flagged, not passed off as empty");
+        });
+    }
+
+    [Test]
+    public async Task A_genuinely_empty_shard_is_not_flagged_as_a_failed_sample()
+    {
+        var (grain, shards) = CreateGrain();
+        shards[0].GetDiagnosticsBoundedAsync(true, null).Returns(Page(0, 0, null));
+
+        var report = await grain.GetReportAsync(deep: true, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Shards.Single().LiveKeys, Is.Zero);
+            Assert.That(report.Shards.Single().SampleFailed, Is.False);
         });
     }
 }

@@ -38,9 +38,10 @@ Each `ShardDiagnosticReport` carries structural, volume, and hotness fields:
 | `TombstoneRatio` | `Tombstones / (LiveKeys + Tombstones)`; `0` when the shard is empty or `deep: false`. |
 | `OpsPerSecond` | `(Reads + Writes) / HotnessWindow.TotalSeconds` since shard activation. |
 | `Reads` / `Writes` | Volatile counters; reset on shard-grain deactivation. |
-| `HotnessWindow` | Wall-clock duration over which `Reads` and `Writes` accumulated - the time since the shard activated. Exactly `TimeSpan.Zero` only on the placeholder entry of a shard whose fan-out failed. |
+| `HotnessWindow` | Wall-clock duration over which `Reads` and `Writes` accumulated - the time since the shard activated. Exactly `TimeSpan.Zero` only on the placeholder entry of a shard whose fan-out failed (`SampleFailed`). |
 | `SplitInProgress` | Whether the shard is the source of an in-flight split, adaptive or driven by an online reshard. |
 | `BulkOperationPending` | Whether a bulk-load graft is pending on this shard. |
+| `SampleFailed` | Whether the fan-out failed to sample this shard (the shard grain faulted or timed out). When `true` the entry is a placeholder: only `ShardIndex` is meaningful, and its zero counts mean *not measured*, not *empty*. |
 
 ## Shallow vs deep
 

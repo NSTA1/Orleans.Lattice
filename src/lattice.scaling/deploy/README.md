@@ -21,11 +21,11 @@ rules) reads it via `valueLocation: "scaleValue"` and, with the default
 compute pressure (`0.0` to `1.0`) times the current replica count, so it never
 exceeds that count except at the `MinReplicas` floor or while the scale-in gate
 holds an earlier value. `targetValue` is therefore the per-replica pressure the
-autoscaler holds the pool at, and it must be below `1` for the pool to grow. All
-three files here set `targetValue: "1"`, which asks for at most the current
-replica count and so can only hold or shrink the pool. The
-[`ClusterScaling` sample](../../../samples/ClusterScaling/README.md) deploys
-`0.5`, which asks for twice the current count at full saturation.
+autoscaler holds the pool at, and it must be below `1` for the pool to grow: a
+`targetValue` of `1` asks for at most the current replica count and so can only
+hold or shrink the pool. All three files here set `targetValue: "0.5"`, as the
+[`ClusterScaling` sample](../../../samples/ClusterScaling/README.md) does, which
+asks for twice the current count at full saturation.
 
 ## Important operator notes
 

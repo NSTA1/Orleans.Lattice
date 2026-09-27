@@ -11,7 +11,7 @@
 //       * the admin password hash as a container-app SECRET surfaced through the
 //         LATTICE_DATA_USER_admin env var (never plaintext, never an image layer),
 //       * a KEDA custom metrics-api scale rule that scrapes /lattice/scale and
-//         reads the top-level scaleValue (targetValue '1', min/max guardrails).
+//         reads the top-level scaleValue (targetValue '0.5', min/max guardrails).
 //
 // deploy.ps1 fills the parameters (it hashes the operator's plaintext password
 // before passing adminPasswordHash). Live deployment is validated by the
@@ -251,8 +251,9 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             custom: {
               type: 'metrics-api'
               metadata: {
-                // scaleValue is in replica-units, so targetValue '1' tracks it
-                // directly (desiredReplicas = ceil(scaleValue / targetValue)).
+                // scaleValue never exceeds the current replica count, so
+                // desiredReplicas = ceil(scaleValue / targetValue) grows the
+                // pool only while targetValue is below 1 (default '0.5').
                 url: scaleSignalUrl
                 valueLocation: 'scaleValue'
                 targetValue: scaleTargetValue
