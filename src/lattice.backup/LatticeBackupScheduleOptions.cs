@@ -2,13 +2,17 @@ namespace Orleans.Lattice.Backup;
 
 /// <summary>
 /// Per-scope configuration for scheduled backup triggering and backup-chain
-/// retention. Register a named instance - keyed by the scope key returned by
-/// <see cref="BackupScopeKey.For(BackupScopeSelector)"/> - to override settings
-/// for a specific scope; the unnamed (default) instance applies to every scope
-/// that does not have a named override. The scheduler grain resolves the
-/// per-scope instance via
-/// <c>IOptionsMonitor&lt;LatticeBackupScheduleOptions&gt;.Get(scopeKey)</c>,
-/// mirroring the per-tree <see cref="LatticeOptions"/> pattern.
+/// retention. The scheduler grain resolves the per-scope named instance via
+/// <c>IOptionsMonitor&lt;LatticeBackupScheduleOptions&gt;.Get(scopeKey)</c>, keyed
+/// by the scope key returned by <see cref="BackupScopeKey.For(BackupScopeSelector)"/>,
+/// mirroring the per-tree <see cref="LatticeOptions"/> pattern. The global
+/// <c>ConfigureLatticeBackupSchedule(configure)</c> overload registers its
+/// delegate with <c>ConfigureAll</c>, so it reaches every scope; the
+/// <c>ConfigureLatticeBackupSchedule(scopeKey, configure)</c> overload reaches
+/// one scope. For a given scope the delegates run in registration order, so a
+/// per-scope override wins only when registered after the global delegate. The
+/// unnamed (default) instance is never read by the scheduler, so a plain unnamed
+/// <c>Configure</c> call reaches no scope.
 /// <para>
 /// Every knob defaults to disabled: scheduling and retention are strictly
 /// operator opt-in, so registering the backup package never starts capturing or

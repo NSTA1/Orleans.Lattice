@@ -28,7 +28,11 @@ public sealed record TreeCatalogEntry
     /// </summary>
     [Id(2)] public string? PhysicalTreeId { get; init; }
 
-    /// <summary>The tree's lifecycle state (active / soft-deleted / purging).</summary>
+    /// <summary>
+    /// The tree's lifecycle state: <see cref="TreeLifecycleState.Active"/>, or
+    /// <see cref="TreeLifecycleState.SoftDeleted"/> once the tree has been
+    /// soft-deleted. The catalog never reports <see cref="TreeLifecycleState.Purging"/>.
+    /// </summary>
     [Id(3)] public TreeLifecycleState Lifecycle { get; init; }
 
     /// <summary>The number of physical shards configured for the tree.</summary>

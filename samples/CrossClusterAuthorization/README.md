@@ -40,9 +40,11 @@ Every subject's operations run under an ambient credential
 (`LatticeCredentialContext.Use`) that flows to the grains on the Orleans request
 context; a small custom `ILatticeCredentialAuthenticator` maps a demo token to a
 subject id, and the membership directory expands the subject's group
-memberships. Administrative seeding runs as the configured bootstrap
-administrator so the reserved system trees can be provisioned before any rule
-exists.
+memberships. The groups, memberships, and rules are written through the
+silo-side membership directory and policy store, which run under system origin
+and never consult the gate, so they need no prior grant; the tree's data keys
+are seeded as the configured bootstrap administrator, which the gate allows
+before any rule exists.
 
 ## Run it
 
@@ -130,9 +132,11 @@ converged either way - the rule is gone from `site-b`.
   endpoints and leave receiver authentication on.
 - The gRPC ports default to `17001` / `17002`; change them in `Program.cs` if
   those are taken on your machine.
-- The bootstrap administrator (`root-admin`) is declared before initialization so
-  it can provision the reserved system trees. Production should keep the
-  bootstrap set as small as possible and grant everything else through rules.
+- The bootstrap administrator (`root-admin`) seeds the demo data before any rule
+  grants access; the reserved membership and policy trees are written by the
+  silo-side directory and policy store under system origin, not through it.
+  Production should keep the bootstrap set as small as possible and grant
+  everything else through rules.
 
 ## Feature docs
 

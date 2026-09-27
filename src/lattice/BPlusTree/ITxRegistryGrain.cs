@@ -3,8 +3,11 @@ using Orleans.Concurrency;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Per-tree saga decision registry. Acts as the single tree-wide
-/// linearization point for atomic-write saga commit/abort decisions.
+/// Saga decision registry for a tree: a single grain, or one grain per registry
+/// shard when transaction ids are sharded (see the key format below). For each
+/// atomic-write saga it is the single tree-wide linearization point for the
+/// commit/abort decision: the decision lives on exactly one registry grain, the
+/// one the saga's transaction id routes to.
 /// <para>
 /// During an atomic-write saga the per-leaf prepared mutations sit in
 /// each touched leaf's pending-tx bucket and are hidden from readers
@@ -22,8 +25,11 @@ namespace Orleans.Lattice.BPlusTree;
 /// requested key has an entry in the leaf's pending-tx bucket: a
 /// <see cref="TxStatus.Committed"/> outcome surfaces the prepared
 /// (post-saga) value, while both <see cref="TxStatus.Aborted"/> and
-/// <see cref="TxStatus.InFlight"/> fall through to the pre-saga value
-/// in <c>LeafNodeState.Entries</c>. Treating <c>InFlight</c> as
+/// <see cref="TxStatus.InFlight"/> fall through to the pre-saga value - the
+/// committed per-key state the leaf holds in its per-activation entry cache,
+/// outside the pending bucket - and <see cref="TxStatus.Indeterminate"/>
+/// (the registry can no longer say whether the saga committed) hides the
+/// key. Treating <c>InFlight</c> as
 /// equivalent to <c>Aborted</c> at read time is the strict-isolation
 /// rule that gives the saga its all-or-nothing visibility: until the
 /// registry has flipped to <c>Committed</c>, the prepared bucket is
@@ -40,7 +46,17 @@ namespace Orleans.Lattice.BPlusTree;
 /// tree-wide snapshots and <see cref="ObserveCrossTreeInFlightAsync"/> stay
 /// non-interleaved and apply the same barrier.
 /// </para>
-/// Key format: <c>{treeId}</c>.
+/// <para>
+/// Key format: <c>{treeId}</c> for the legacy (unsharded) registry, and
+/// <c>_lattice_txshard_{shard}_{treeId}</c> for registry shard
+/// <c>{shard}</c> (canonical decimal, <c>0</c> to <c>255</c>). Routing is a
+/// pure function of the transaction id: an id minted while
+/// <see cref="LatticeOptions.TxRegistryShardCount"/> is above one carries its
+/// shard index and routes to that shard's key, and any other id routes to the
+/// legacy key. Tree-wide operations (snapshots, the decisions revision, the
+/// cross-tree in-flight observation, cursor pins) cover every shard key below
+/// the tree's durable shard high-water mark, plus the legacy key.
+/// </para>
 /// </summary>
 [Alias(TypeAliases.ITxRegistryGrain)]
 internal interface ITxRegistryGrain : IGrainWithStringKey
@@ -305,9 +321,13 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// Drops the recorded outcome for <paramref name="txid"/>. Called
     /// after every touched leaf has applied its terminal so the
     /// registry's persisted footprint stays bounded. The decision is tombstoned
-    /// for <see cref="LatticeOptions.TxDecisionRetention"/> so ordinary status
-    /// reads return <see cref="TxStatus.Indeterminate"/> until the tombstone ages
-    /// out; with zero retention the row is removed immediately.
+    /// for <see cref="LatticeOptions.TxDecisionRetention"/>: ordinary status
+    /// reads keep returning the recorded decision until that window ends, then
+    /// <see cref="TxStatus.Indeterminate"/> until the row is pruned (lazily, by
+    /// a later forget or an admission-time reclaim), and once it is pruned the
+    /// txid reads as absent (<see cref="TxStatus.InFlight"/> unless it resolves
+    /// through a cross-tree delegation). With zero retention the row is removed
+    /// immediately.
     /// </summary>
     [AlwaysInterleave]
     Task ForgetAsync(Guid txid);

@@ -6,7 +6,7 @@ Two mutually exclusive authentication modes are supported. By default the resolv
 
 ## `LatticeEntraGraphOptions`
 
-Bind it through `AddEntraGraphGroupResolver(configure)`.
+Bind it through `AddEntraGraphGroupResolver(configure)`. The registration validates the options immediately, before it registers anything, and throws `OptionsValidationException` listing every violation: no authentication mode, or an incomplete one (a `ClientSecret` without `TenantId` or `ClientId`), a `Credential` combined with a `ClientSecret`, an empty `Scopes` list or a blank scope, or a negative `TokenRefreshSkew`.
 
 ### Constants
 

@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The structured result of the <c>lattice_list_regions</c> discovery tool: the
-/// regions the server can route to (the current cluster plus any reachable,
-/// credentialed peer), each with per-group reachability, and the id of the
+/// regions the server can route to (the current cluster plus each configured
+/// peer), each with per-group reachability, and the id of the
 /// current region a call targets when no <c>region</c> selector is supplied.
 /// </summary>
 /// <remarks>
@@ -25,7 +25,10 @@ public sealed record LatticeApiMcpRegionsToolResult
 
     /// <summary>
     /// The regions the server can route to, current region first, each with its
-    /// per-group reachability. A region with no route is omitted (fail-closed).
+    /// per-group reachability. Every configured region is listed except a peer
+    /// that opt-in region-identity verification finds unreachable or answering as
+    /// a different cluster, and - for a call asserting a tenant - a peer outside
+    /// that tenant's allowed or resident set.
     /// </summary>
     public IReadOnlyList<LatticeRegionDescriptor> Regions { get; init; }
         = Array.Empty<LatticeRegionDescriptor>();

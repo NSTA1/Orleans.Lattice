@@ -105,7 +105,6 @@ tree=orders shards=4/4096 live=812433 tombstones=196022 deep=True sampledAt=2025
   shard 1: depth=3 live=198740 tombstones=1190  ratio=0.6%  ops/s=51.7  split=False bulk=False
   shard 2: depth=4 live=210301 tombstones=192455 ratio=47.8% ops/s=44.9  split=False bulk=False
   shard 3: depth=3 live=202282 tombstones=1173  ratio=0.6%  ops/s=502.4 split=True  bulk=False
-  recent split: shard 3 at 2025-...
 ```
 
 Read it in this order:
@@ -114,8 +113,9 @@ Read it in this order:
    whatever is wrong is not a hashing problem.
 2. **Shard 3 carries roughly ten times its peers' `OpsPerSecond`.** That is a
    hot shard: even load by key count, very uneven load by request rate. Its
-   `SplitInProgress` is `true` and it appears in `RecentSplits`, so the
-   autonomic splitter has already noticed and is acting. Nothing to do unless
+   `SplitInProgress` is `true`, so the autonomic splitter has already noticed
+   and is acting. The split is not in `RecentSplits` yet: a split is recorded
+   there only when it finalises, after the flag clears. Nothing to do unless
    the flag stays set - go to [Concurrent split activity](#concurrent-split-activity).
 3. **Shard 2 has a `TombstoneRatio` of 47.8 percent** while its peers sit under
    one percent. Nearly half of what a scan of that shard walks is deleted rows.
@@ -231,12 +231,25 @@ Two things this is *not*:
   can act on it without parsing a message.
 - It is **not** Orleans's `InconsistentStateException`, which signals an etag
   conflict - a concurrent writer to the same state row - not a size problem.
+  An atomic write reports that conflict as a `LatticeStateWriteFailedException`
+  with `Conflict` set instead (see below), and is safe to retry with the same
+  operation id.
 
 ### How to confirm
 
-1. Read the provider exception itself. It names the limit it enforced. Lattice
-   does not translate a provider size failure into a Lattice exception type,
-   so the provider's own error is the primary evidence.
+1. Read the provider exception itself. It names the limit it enforced. On the
+   ordinary write path Lattice does not translate a provider size failure into
+   a Lattice exception type, so the provider's own error is the primary
+   evidence. An atomic write is the exception: when the atomic-write saga or
+   the cross-tree coordinator fails to persist its own state with a fault
+   raised by a storage provider, the caller receives
+   `LatticeStateWriteFailedException` instead, because the provider's
+   exception type need not be loadable on the client (a fault of a type every
+   client can load, such as `TimeoutException`, propagates unchanged). Its
+   message and `FaultType` summarise the provider fault, `GrainType` and
+   `GrainKey` name the grain whose write failed, and `Conflict` is `false` for
+   a failure that is not an optimistic-concurrency conflict. See
+   [Atomic writes](atomic-writes.md#sharded-decision-registry).
 2. Take a storage-usage report and compare the surfaces against the provider's
    limit from [Tree storage](tree-storage.md):
 
@@ -615,6 +628,7 @@ Two secondary checks:
 |---|---|
 | Provider exception from a WAL append or `WriteStateAsync` | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) |
 | `LatticeQuotaExceededException` on write | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) (admission control, not a provider limit) |
+| `LatticeStateWriteFailedException` from an atomic write | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) - `FaultType` names the provider fault; with `Conflict` set, retry with the same operation id |
 | Repeating "Proactive snapshot capture ... failed" warning | [Storage-provider exceptions on write](#storage-provider-exceptions-on-write) |
 | One shard far hotter than its peers | [Concurrent split activity](#concurrent-split-activity) |
 | `SplitInProgress` stuck on for a long time | [Concurrent split activity](#concurrent-split-activity) |

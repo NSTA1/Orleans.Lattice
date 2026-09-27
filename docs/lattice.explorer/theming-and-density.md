@@ -41,7 +41,10 @@ Windows High Contrast is respected without the user configuring anything.
 
 Density is set on `<body>` rather than `<html>` deliberately: the token layer
 declares each density preset at attribute specificity, and the breakpoint layer
-must still be able to win.
+declares the compact band's own density on `:root` at that same specificity from
+a later stylesheet, so a choice stamped on `<html>` would be silently overridden
+on a narrow viewport. Nothing declares density on `<body>`, so an explicit choice
+made there wins at every width.
 
 ## Density
 

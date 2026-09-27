@@ -28,7 +28,7 @@ queries slice history by component.
   judge a path segment by its shape - "looks like a package name" is not evidence.
 
   To see why that matters, these second-segment directories under `test/` and
-  `docs/` are not packages, and at the time of writing there are seven of them:
+  `docs/` are not packages:
 
   | Not a package | Where | What it actually is |
   | --- | --- | --- |
@@ -39,6 +39,7 @@ queries slice history by component.
   | `lattice.explorer.uitests` | `test/` | Explorer UI tests |
   | `crdt` | `docs/` | a docs-only conceptual topic, no `src/` counterpart |
   | `videos` | `docs/` | the video series' companion pages, no `src/` counterpart |
+  | `agents` | `docs/` | the agent-readable specification layer (YAML and JSON), no `src/` counterpart |
 
   Read that table as a demonstration that eyeballing fails, **not as a list to
   memorise** - it is a snapshot and it will drift. `shared` and `crdt` are the
@@ -46,8 +47,8 @@ queries slice history by component.
   `lattice.explorer.uitests` are dotted and `lattice.`-prefixed and would be
   accepted on sight by a reader applying the shape heuristic. Any rule derived
   from only the obvious cases protects against the instances that need no
-  protection. The membership test against `$packages` is what covers all seven, and
-  the eighth that gets added after this paragraph is written.
+  protection. The membership test against `$packages` is what covers all of them, and
+  the next one that gets added after this paragraph is written.
 
 - When a change **adds a new package** (`src/<name>/`), create the matching
   label in the same PR:
@@ -95,8 +96,8 @@ package.
 entries, with no warning, no error, and no truncation flag. You get a
 plausible-looking list of exactly 100 paths that reads as an answer.
 
-Measured on this repository, PR #2482: `--json files` returned 100 where
-`changedFiles` declared 436. Labels derived from the truncated list gave 4
+Measured on this repository, on PR #2482 while it was still open: `--json files`
+returned 100 where `changedFiles` declared 436. Labels derived from the truncated list gave 4
 packages where 12 were warranted, silently omitting eight - including
 `lattice.auth`, and `lattice.membership` and `lattice.replication`, whose security
 instructions auto-attach.

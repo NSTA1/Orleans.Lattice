@@ -12,7 +12,10 @@ This sample:
   `Country`. Only the properties named with `Include` are projected.
 - Writes five users. Each grain enrols itself on its own write path, because its
   state is annotated with `[Indexed]` - there is no index maintenance code in
-  the grain.
+  the grain. (`UserGrain` also derives from the optional
+  `IndexedGrain<UserState>` base class for `Grain<TState>`-style `State` /
+  `WriteStateAsync` ergonomics; it carries no enrolment logic, so `[Indexed]`
+  alone is the opt-in.)
 - Runs a **single-property comparison** (`Age >= 18`), which becomes one
   contiguous range scan over the order-preserving key encoding rather than a
   full scan plus a filter.
@@ -55,8 +58,9 @@ Done.
 ```
 
 Result order follows the index's key ordering, not insertion order: entries are
-ordered by the encoded property value, and a conjunction's order comes from the
-scan it intersects.
+ordered by the encoded property value, then by grain key, and a conjunction
+follows the scan of its most selective clause, which seeds the grain keys the
+other clauses narrow.
 
 ## Key points
 

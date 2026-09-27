@@ -195,9 +195,9 @@ Console.WriteLine($"  offered        : {offeredFinal:N0} ops ({offeredFinal / Ma
 Console.WriteLine($"  completed      : {completedFinal:N0} ops ({completedFinal / Math.Max(0.001, totalElapsed):N0}/s avg)");
 Console.WriteLine($"  failed         : {failedFinal:N0} ops");
 Console.WriteLine();
-Console.WriteLine("Sustained offered load past the KEDA polling + cooldown + EWMA window means");
-Console.WriteLine("ACA should have added replicas during the run. drive-load.ps1 prints the");
-Console.WriteLine("replica-count timeline from `az` so you can see the scale-out and scale-in.");
+Console.WriteLine("Offered load sustained past the KEDA polling interval should have made ACA add");
+Console.WriteLine("replicas during the run (the KEDA cooldown and EWMA smoothing only slow scale-in).");
+Console.WriteLine("drive-load.ps1 prints the `az` replica-count timeline: scale-out during the run, then two poll intervals of scale-in.");
 
 return 0;
 

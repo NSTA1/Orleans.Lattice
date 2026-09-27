@@ -96,7 +96,8 @@ further in combination with the silo's other concurrency knobs:
    the storage account responds with `429 TooManyRequests` carrying a
    `Retry-After` header, the Azure.Data.Tables SDK back-off engages,
    per-flush provider duration spikes from ~50 ms to ~8 s, the
-   per-flush `WalAppendDispatchTimeout` (default 30 s) exhausts,
+   writer's `WalAppendDispatchTimeout` (default 30 s), which bounds both
+   the admission wait and each shard dispatch, exhausts,
    and `[wal-admission-timeout]` lines fire on the slowest
    partition.
 
@@ -107,7 +108,8 @@ further in combination with the silo's other concurrency knobs:
    succeed server-side on the first attempt, and the SDK's retry
    then races into a `409 Conflict` ("The specified entity already
    exists") on the second attempt - or the per-attempt deadline
-   (defaults to 100 s on the SDK) exhausts and surfaces as
+   (`AzureTableWalStorageOptions.RetryNetworkTimeout`, 10 s by default;
+   `null` restores the SDK's ~100 s) exhausts and surfaces as
    `"Operation could not be completed within the specified time"`
    (a 504-style provider timeout). Both fault paths surface to the
    silo's foreground commit path as
@@ -232,9 +234,11 @@ Four instruments tell you which regime you are in:
   is throttling. Lifting `WalMaxPendingBatches` will not help; the
   recovery is `WalPartitions` fan-out across accounts.
 
-- **`wal.writer.partition.pending_appends`** - the live in-flight
-  count, capped at `WalMaxPendingBatches` by construction. If p99 is
-  consistently pinned at the cap, the cap is the binding constraint
+- **`wal.writer.partition.pending_appends`** - the number of dispatches
+  already in flight on the partition when each append was admitted, so it
+  tops out at `WalMaxPendingBatches - 1` by construction (the 7 and 15 in
+  the table above). If p99 is consistently pinned there, one below the
+  cap, the cap is the binding constraint
   and there may be headroom to lift it (subject to the storage
   envelope). If p99 sits well below the cap, the cap is not binding
   and lifting it is a no-op.

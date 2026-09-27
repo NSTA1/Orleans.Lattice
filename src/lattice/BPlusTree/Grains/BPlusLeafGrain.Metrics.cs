@@ -459,16 +459,16 @@ internal sealed partial class BPlusLeafGrain
     /// runs unconditionally in the disposed scope so an exception
     /// midway through the commit cannot leak depth.
     /// <para>
-    /// Under the shipping non-reentrant scheduling of
-    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/> /
-    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/> the recorded value
-    /// is always <c>0</c>: Orleans serialises grain calls and the
-    /// next commit cannot enter until the current one returns. The
-    /// histogram is a falsifiability instrument for the U9m benchmark
-    /// probe: a steady pin at <c>0</c> proves
-    /// the leaf turn queue is not the binding constraint and routes
-    /// the next probe to WAL-side fan-in (U9n); a steady lift above
-    /// <c>0</c> identifies the leaf grain as the binding constraint.
+    /// The leaf write methods
+    /// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/>) are
+    /// marked <c>[AlwaysInterleave]</c>, so a new commit can enter while earlier
+    /// commits on this activation are parked at an await, typically their WAL
+    /// append; the recorded value counts those overlapping commits and is
+    /// expected to lift above <c>0</c> under concurrent load. The histogram is
+    /// the U9m leaf-side commit-concurrency probe: a steady pin at <c>0</c>
+    /// means commits are not overlapping on the leaf, while a sustained lift
+    /// shows how many commits each leaf activation carries at once.
     /// </para>
     /// </summary>
     private int _commitInFlight;

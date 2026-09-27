@@ -53,9 +53,13 @@ public static class BackupMetrics
             description: "In-flight cross-tree sagas a backup-set fence waited to drain.");
 
     /// <summary>
-    /// Counter incremented once per additional fence attempt beyond the first,
-    /// i.e. once each time a cross-tree saga registered during the capture window
-    /// and forced the fence to retry.
+    /// Counter incremented once per discarded fence attempt: each time the
+    /// post-capture re-observation found that a cross-tree saga registered on a
+    /// set tree during the capture window (or is still in flight). The final
+    /// discarded attempt counts too, so a capture that exhausts
+    /// <see cref="LatticeBackupOptions.MaxCrossTreeFenceAttempts"/> and then fails
+    /// with <see cref="LatticeBackupCrossTreeFenceException"/> adds one per attempt.
+    /// A drain timeout adds nothing.
     /// </summary>
     public static readonly Counter<long> CrossTreeFenceRetries =
         Meter.CreateCounter<long>("orleans.lattice.backup.cross_tree_fence.retries", unit: "{retry}",

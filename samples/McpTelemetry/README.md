@@ -40,17 +40,17 @@ The sample needs a Prometheus to talk to, so start it first with Docker, then ru
 the sample:
 
 ```
-docker compose up -d
+docker compose -f samples/McpTelemetry/docker-compose.yml up -d
 dotnet run --project samples/McpTelemetry/McpTelemetry.csproj
 ```
 
 The sample seeds an `agent` subject with a cluster-wide telemetry grant, drives a
-burst of writes and reads to populate the `orleans.lattice` metrics, waits for
-Prometheus to scrape the silo, then:
+burst of writes and reads to populate the `orleans.lattice` metrics, then:
 
 - prints the four telemetry tools the agent discovered (and confirms it sees zero
   state tools),
-- runs `lattice_telemetry_query` for the silo's scrape-health (`up`),
+- waits for Prometheus to scrape the silo, then runs `lattice_telemetry_query` for
+  the silo's scrape-health (`up`),
 - lists the Lattice metric names Prometheus discovered and queries one (in
   Prometheus form, `orleans_lattice_*`: the OpenTelemetry exporter turns the
   dots into underscores and appends unit words such as `_milliseconds` and
@@ -60,7 +60,7 @@ Prometheus to scrape the silo, then:
 and exits. Tear Prometheus down afterwards with:
 
 ```
-docker compose down
+docker compose -f samples/McpTelemetry/docker-compose.yml down
 ```
 
 Prometheus scrapes the host process at `host.docker.internal:5290`; on Docker

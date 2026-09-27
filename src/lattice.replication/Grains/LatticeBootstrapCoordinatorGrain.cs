@@ -793,10 +793,11 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             frontier.Entries[sourceClusterId] = cut;
         }
 
-        // Idempotent: PinSnapshotAsync raises the snapshot floor and merges the
-        // frontier, so a crash between this call and the WriteStateAsync
-        // below replays safely on reactivation - the second pin with
-        // identical (asOfHlc, frontier) is a no-op.
+        // Idempotent: PinSnapshotAsync replaces both the per-origin
+        // high-water-mark vector and the pinned floor with the supplied frontier
+        // (it does not consult asOfHlc), so a crash between this call and the
+        // WriteStateAsync below replays safely on reactivation - a second pin
+        // with an identical frontier is a no-op.
         await hwm
             .PinSnapshotAsync(asOfHlc, frontier, CancellationToken.None)
             .ConfigureAwait(true);

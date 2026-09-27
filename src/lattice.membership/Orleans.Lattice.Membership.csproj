@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Membership</PackageId>
     <Version>9.8.0</Version>
-    <Description>Identity, authorization and enforcement add-on for Orleans.Lattice. Resolves a propagated caller credential into a LatticeSubject via a pluggable, independent-IDP authenticator seam (JWT built in and designed to be specialized), backed by an introspectable user/group directory dogfooded onto reserved sys-membership-* Lattice trees with durable per-key history and per-silo resolution caching.</Description>
+    <Description>Identity and subject-resolution add-on for Orleans.Lattice. Resolves a propagated caller credential into a LatticeSubject (a stable subject id plus its transitively expanded group closure) via a pluggable, IDP-independent authenticator seam (a JWT authenticator built in and designed to be specialized, plus an anonymous fallback), with configurable merging of token-asserted and directory groups. Backed by an introspectable group and membership-edge directory dogfooded onto reserved sys-membership-* Lattice trees with durable per-key history and per-silo resolution caching, and provides the identity-directory seam (a no-op default and a static roster built in) that admin surfaces use to search and validate principal ids. Enforces nothing on its own: authorization and enforcement come from Orleans.Lattice.Auth.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

@@ -115,6 +115,10 @@ Run in that order, a cohort **measures the deployed image and labels the results
 as the candidate**. `rig.ps1 tag` re-applies the record and is the workaround
 used for this evaluation. Tracked as #1902.
 
+> **Fixed since (#1905).** `prepare-master.ps1` now applies the rig tag to the
+> recorded build source when one exists, exactly as `rig.ps1 tag` does, so this
+> ordering no longer mislabels a cohort.
+
 ## Safety
 
 The live deployment was never touched. Its container pin and the

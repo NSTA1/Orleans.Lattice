@@ -2,11 +2,11 @@ namespace Orleans.Lattice.Backup;
 
 /// <summary>
 /// The public reserved-namespace guard for <c>Orleans.Lattice.Backup</c>. The
-/// backup catalog will persist its manifests into reserved <c>sys-backup-*</c>
-/// trees; an application tree that shadowed that namespace could corrupt the
-/// catalog. This helper lets an application validate its own tree ids (for
-/// example when creating trees) against the reserved namespace, mirroring the
-/// sibling <c>LatticeAuthReservedTrees</c> guard.
+/// backup package persists its catalog, manifest store and health records into
+/// reserved <c>sys-backup-*</c> trees; an application tree that shadowed that
+/// namespace could corrupt them. This helper lets an application validate its own
+/// tree ids (for example when creating trees) against the reserved namespace,
+/// mirroring the sibling <c>LatticeAuthReservedTrees</c> guard.
 /// </summary>
 public static class LatticeBackupReservedTrees
 {

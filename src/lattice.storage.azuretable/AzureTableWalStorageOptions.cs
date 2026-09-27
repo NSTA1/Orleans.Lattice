@@ -424,13 +424,14 @@ public sealed class AzureTableWalStorageOptions
     /// <c>PhaseTwoWorker</c> drain loop deliberately waits, after the
     /// first arrival but before submitting the coalesced phase-2
     /// transaction, so additional pending commits can accumulate.
-    /// Default <see cref="TimeSpan.Zero"/> preserves the historical
+    /// The default is 5 ms (see <b>Default</b> below);
+    /// <see cref="TimeSpan.Zero"/> restores the historical
     /// drain-on-first-signal behaviour (one phase-2 commit per
     /// transaction whenever per-shard arrival inter-spacing exceeds
     /// the commit's own duration).
     /// <para>
-    /// <b>Why a coalescing window.</b> Phase A observations (see
-    /// <c></c>) showed <c>provider.phase2.batch_size</c>
+    /// <b>Why a coalescing window.</b> Phase A observations showed
+    /// <c>provider.phase2.batch_size</c>
     /// pinned at exactly <c>1.00</c> across hundreds of thousands of
     /// samples even when producer-side knobs
     /// (<c>WalMaxPendingBatches</c>, <c>WalPartitions</c>) were swept
@@ -438,8 +439,8 @@ public sealed class AzureTableWalStorageOptions
     /// per-partition arrival rate slower than the phase-2 commit's
     /// own latency, the channel is empty at the moment the previous
     /// commit returns, so the next <c>WaitToReadAsync</c> wakes on
-    /// the very first arrival and commits a one-item batch. A small,
-    /// opt-in window between the first arrival and the commit gives
+    /// the very first arrival and commits a one-item batch. A small
+    /// window between the first arrival and the commit gives
     /// the worker an opportunity to coalesce additional arrivals
     /// into the same Azure Tables transaction without weakening the
     /// strict offset-FIFO invariant.
@@ -712,7 +713,8 @@ public sealed class AzureTableWalStorageOptions
     /// <see cref="DefaultPhaseOneTransientRetryMaxDelay"/>. The jitter desynchronises the
     /// re-drive paths of multiple hot shards so they do not retry in lockstep (a touch of
     /// backoff damping complementing the offset-preserving retry). Default 25 ms. Set to
-    /// <see cref="TimeSpan.Zero"/> to retry without delay. Must be non-negative.
+    /// <see cref="TimeSpan.Zero"/> to retry without delay. Not validated: any non-positive
+    /// value retries without delay.
     /// </summary>
     public TimeSpan PhaseOneTransientRetryBaseDelay { get; set; } = DefaultPhaseOneTransientRetryBaseDelay;
 

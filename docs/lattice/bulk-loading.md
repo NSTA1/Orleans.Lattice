@@ -71,10 +71,11 @@ It is a **one-shot initial-import primitive**: every shard must be empty when
 it is called. The call fans out to every physical shard, including shards this
 load has no entries for, and a shard that already has a root node rejects it
 with `InvalidOperationException` while the shards without one still load their
-share. A shard gains its root node the first time any operation reaches it - a
-read, a count or a warm-up as well as a write - and keeps it even after every
-key has been deleted, so a tree that has only ever been read from can already
-refuse a bulk load. It is **not** re-drivable: each call mints a
+share. A shard gains its root node the first time a data operation reaches
+it - a read, a count or a warm-up as well as a write (a `DiagnoseAsync` report
+does not create one) - and keeps it even after every key has been deleted, so
+a tree that has only ever been read from can already refuse a bulk load. It is
+**not** re-drivable: each call mints a
 fresh operation id, so re-issuing a load after it (or part of it) has
 completed fails on the shards that already hold data. Only the per-shard retry
 inside a single call is idempotent, so after a crash mid-import restart
@@ -158,7 +159,8 @@ no-op that returns `0`.
 For a loader that runs out of process, the tree-administration facade wraps
 this primitive in a `BeginBulkLoadAsync` / `AppendBulkLoadAsync` /
 `CommitBulkLoadAsync` session that adds an emptiness probe counting tombstones
-as well as live keys, within-chunk order validation, and a server-acknowledged
+as well as live keys (sampled fresh from the shards, never answered from the
+diagnostics cache), within-chunk order validation, and a server-acknowledged
 chunk index; see
 [Migrating from an External Store](external-store-migration.md#choosing-an-ingest-path).
 

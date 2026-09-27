@@ -11,10 +11,11 @@ namespace Orleans.Lattice.Backup;
 /// scan. Suitable for tests and single-node use; a durable off-cluster provider
 /// (for example Azure append-blob) implements the same interface for production.
 /// <para>
-/// Artifact ids are expected to be content-addressed, so a retried write of
-/// identical content is idempotent. To stay correct even when a retry re-chunks
-/// the same bytes differently, a write first clears any existing chunk rows for
-/// the id, then streams the new run.
+/// Artifact ids are minted per capture by the capture engine, not derived from
+/// the bytes. A write first clears any existing chunk rows for the id, then
+/// streams the new run, so a retried write under the same id - even one that
+/// re-chunks the bytes differently or streams a shorter run - never leaves stale
+/// trailing chunks behind.
 /// </para>
 /// </summary>
 internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : ILatticeBackupSink

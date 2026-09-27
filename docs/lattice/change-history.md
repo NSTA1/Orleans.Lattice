@@ -47,7 +47,10 @@ live stream lets a reader follow new revisions as they happen:
 `ILattice.ScanEntryHistoryAsync` returns one key's timeline as a page of
 `EntryRevision` records, oldest first, paged with a continuation token. The read is
 side-effect-free and never perturbs a maintainer or its source WAL pin. See
-[Durable per-key history views](history-views.md) for the full field reference.
+[Durable per-key history views](history-views.md) for how the page is served and
+what its `Source`, `Truncated` and `EarliestAvailable` fields mean, and the
+[API reference](api.md#change-history-events-and-diagnostics) for every
+`EntryRevision` field.
 
 ```csharp verify
 // Read the first page of a key's revision timeline (oldest first).

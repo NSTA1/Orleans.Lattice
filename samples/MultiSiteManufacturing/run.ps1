@@ -15,10 +15,8 @@
 
   Individual silo HTTP ports (:8080), Orleans silo (:11111) and gateway
   (:30000) ports, and Azurite endpoints live on internal Compose
-  networks only (us-net, eu-net, wan). See docker-compose.yml
-  for the topology, and plan.md §14 for rationale.
-
-  For the legacy host-process launcher (no Docker), use run-legacy.ps1.
+  networks only (us-net and eu-net; Prometheus and Grafana share obs-net).
+  See docker-compose.yml for the topology and its rationale.
 
 .PARAMETER Down
   Stop and remove all containers, networks, and named volumes.

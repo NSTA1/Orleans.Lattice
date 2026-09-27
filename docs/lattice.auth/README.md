@@ -52,7 +52,7 @@ var rule = new LatticeAuthorizationRule(
 ```
 
 - **Subject selector** (`LatticeSubjectSelector`) targets a `User(id)` or a `Group(id)`.
-- **Operations** (`LatticeOperation`, a `[Flags]` set) name the capability classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, `Admin`, `Backup`, `Restore`, `SchemaAdmin`, `Telemetry`, `Replication`, and `TreeLifecycle`. Grants do not imply each other unless the enum member explicitly says so: for example, `Write` does not confer `Delete`, `Admin` does not confer `Telemetry`, and `Restore` authorizes populating the target scope from a backup without a separate `Write` or `BulkLoad` grant.
+- **Operations** (`LatticeOperation`, a `[Flags]` set) name the capability classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, `Admin`, `Backup`, `Restore`, `SchemaAdmin`, `Telemetry`, `Replication`, and `TreeLifecycle`. Grants do not imply each other unless the enum member explicitly says so: for example, `Write` does not confer `Delete`, `Admin` does not confer `Telemetry`, and `Restore` authorizes populating the target scope from a backup without a separate `Write` or `BulkLoad` grant. A rule matches a request only when its mask contains every operation bit the request carries.
 - **Effect** (`LatticeEffect`) is `Allow` or `Deny`.
 - **Condition** is an optional, opaque string reserved for a future claim / attribute predicate language. Nothing evaluates it in this version: a rule carrying a condition matches exactly as an unconditional rule would, so never rely on one to narrow a grant.
 
@@ -86,7 +86,7 @@ A `LatticeScope` names how broadly a rule applies within a tree, from broadest t
 | Tree | `LatticeScope.Tree(treeId)` | Every key in the tree. |
 | Prefix | `LatticeScope.Prefix(treeId, prefix)` | Every key that starts with the prefix. |
 | Key | `LatticeScope.Key(treeId, key)` | Exactly one key. |
-| Cluster-wide | `LatticeScope.ClusterWide()` | A scopeless, all-trees grant over the `*` sentinel tree id, used for a capability not attached to any single tree (notably `LatticeOperation.Telemetry`). |
+| Cluster-wide | `LatticeScope.ClusterWide()` | A whole-tree scope over the `*` sentinel tree id, used for a capability not attached to any single tree (notably `LatticeOperation.Telemetry`) and, once `AllTreesGrantsEnabled` is set, for a data-plane grant or deny across every application tree (see [Precedence](#precedence)). |
 
 ### Precedence
 
@@ -95,7 +95,8 @@ When more than one rule matches, the decision engine resolves them deterministic
 1. **Most-specific scope wins.** A hit at a more specific tier (exact key, then longest matching prefix, then tree-wide) is never overridden by a less specific one. A key-scoped allow carves an exception out of a tree-scoped deny, and a key-scoped deny carves a hole out of a tree-scoped allow.
 2. **Within a single scope tier, deny overrides allow.** Two sibling rules at the same specificity that disagree resolve to deny (deny-override).
 3. **A user rule outranks a group rule at equal scope** (configurable through `UserRuleBeatsGroupRuleAtEqualScope`, default on), so a user-specific allow can lift an individual out of a group-level deny.
-4. **Default-deny.** With no matching rule, the configured `DefaultEffect` applies. The recommended and default posture is `Deny`, so anything not explicitly granted is refused.
+4. **Default-deny.** With no matching rule, the configured `DefaultEffect` applies. The recommended and default posture is `Deny`, so anything not explicitly granted is refused. `DefaultEffect` never applies to a control-plane request - the reserved `sys-auth-*` and `sys-tenant-*` namespaces, the tenant-administration capability ids, and a cluster-wide capability request on the `*` sentinel (such as `Telemetry`): there only an explicit matched allow grants access, so an unmatched request is denied even under `DefaultEffect = Allow`.
+5. **All-trees tier (opt-in).** With `AllTreesGrantsEnabled` set, `Tree:*` rules also govern every application tree: an all-trees deny wins outright, otherwise the tree's own most-specific verdict applies, otherwise an all-trees allow grants, otherwise `DefaultEffect` applies. The tier never reaches a control-plane namespace; see [Configuration](configuration.md).
 
 ### Bootstrap administrators
 
@@ -107,7 +108,7 @@ The policy store and the membership directory are ordinary `ILattice` trees. In 
 
 ### Consistency modes
 
-Policy propagation is **eventually consistent** by default: a rule change is visible once the destination's compiled snapshot rebuilds off the updated policy tree, which happens continuously in the background. A tree that needs a caller to observe a policy change before its next operation can opt into a **strict epoch fence** by naming the tree in `StrictConsistencyTrees`; while a fenced tree's local compiled policy epoch is below the required floor, opted-in user writes to it are rejected (denied) rather than made to wait. Reads, system-origin writes, and replication-applied writes are never fenced.
+Policy propagation is **eventually consistent** by default: a rule change is visible once the destination's compiled snapshot rebuilds off the updated policy tree, which happens continuously in the background. A tree that needs a caller to observe a policy change before its next operation can opt into a **strict epoch fence** by naming the tree in `StrictConsistencyTrees`; while the locally compiled policy epoch is below the floor a caller stamped with `LatticePolicyEpochFenceContext.RequireAtLeast`, user writes to that tree are rejected (denied) rather than made to wait; a write with no floor stamped takes the eventual path. Reads, system-origin writes, and replication-applied writes are never fenced.
 
 ```csharp verify
 siloBuilder.AddLatticeAuth(options =>
@@ -127,7 +128,7 @@ The authorization layer is opt-in. The core `AddLattice(...)` registration insta
 
 ## Observability
 
-Every authorization decision, the decision latency, and the compiled-snapshot epoch / age are published on a single meter, and an optional audit sink records a durable decision trail. See [Observability](observability.md) for the full instrument catalogue, the audit-sink seam, and the reserved subject-resolution-cache counters.
+Every authorization decision, the decision latency, the compiled-snapshot rebuild count, and the snapshot epoch / age / policy-coverage gauges are published on a single meter, and an optional audit sink records a durable decision trail. See [Observability](observability.md) for the full instrument catalogue and the audit-sink seam; the subject-resolution-cache counters live on the membership meter (see [Membership observability](../lattice.membership/observability.md)).
 
 ## Public API
 

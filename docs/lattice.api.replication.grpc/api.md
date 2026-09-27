@@ -9,6 +9,8 @@ The package exposes a public typed client, two registration entry points, public
 | `AddLatticeReplicationApiGrpc` | `IServiceCollection AddLatticeReplicationApiGrpc(this IServiceCollection services, Action<LatticeReplicationApiGrpcOptions>? configure = null)` | Registers the server-side binding: the method definitions, the service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. |
 | `MapLatticeReplicationApiGrpc` | `IEndpointRouteBuilder MapLatticeReplicationApiGrpc(this IEndpointRouteBuilder endpoints)` | Maps the gRPC service onto the ASP.NET Core endpoint routing. |
 
+Both are extension methods on the public static `LatticeReplicationApiGrpcServiceCollectionExtensions` class.
+
 ## Client
 
 `LatticeReplicationApiGrpcClient` is the public typed client.

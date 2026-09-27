@@ -68,7 +68,7 @@ public readonly record struct RwFlagAccessor
     /// </summary>
     /// <param name="replicaId">The replica authoring the enable. Must be non-empty.</param>
     /// <param name="cancellationToken">Cancels the read and write hops.</param>
-    /// <param name="maxAttempts">Maximum number of CAS retries before giving up.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
     public Task EnableAsync(string replicaId, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
@@ -104,7 +104,7 @@ public readonly record struct RwFlagAccessor
     /// </summary>
     /// <param name="replicaId">The replica authoring the disable. Must be non-empty.</param>
     /// <param name="cancellationToken">Cancels the read and write hops.</param>
-    /// <param name="maxAttempts">Maximum number of CAS retries before giving up.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
     public Task DisableAsync(string replicaId, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);

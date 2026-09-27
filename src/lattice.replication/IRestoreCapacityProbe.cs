@@ -12,8 +12,10 @@ namespace Orleans.Lattice.Replication;
 /// offline peer - rather than after fencing the fleet and building most of a
 /// large shadow.
 /// <para>
-/// The default <see cref="UnboundedRestoreCapacityProbe"/> always admits; a host
-/// that enforces a storage or memory budget registers its own singleton before
+/// The default <see cref="UnboundedRestoreCapacityProbe"/> always admits and is
+/// registered with <c>TryAdd</c>. The seam is internal, so an application host
+/// cannot implement it; only this assembly's friend assemblies (such as its test
+/// projects) can register a replacement singleton before
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>
 /// runs.
 /// </para>

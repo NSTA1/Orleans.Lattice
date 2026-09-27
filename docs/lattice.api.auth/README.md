@@ -4,7 +4,7 @@ A configuration and control facade for the [Orleans.Lattice](../../README.md) au
 
 ## What is it?
 
-`Orleans.Lattice.Api.Auth` is the **control plane** of a lattice cluster's authorization system. The core data plane is reached through .NET grain interfaces; the [`Orleans.Lattice.Auth`](../lattice.auth/README.md) package adds the membership directory, the policy store, and the enforcing access gate. This package adds the administrative surface an operator dashboard, a language-agnostic control tool, or an internal admin service needs to **manage** membership and policy and to **explain** authorization decisions - without embedding the Orleans client.
+`Orleans.Lattice.Api.Auth` is the **control plane** of a lattice cluster's authorization system. The core data plane is reached through .NET grain interfaces; the [`Orleans.Lattice.Membership`](../lattice.membership/README.md) package adds the membership directory, and the [`Orleans.Lattice.Auth`](../lattice.auth/README.md) package adds the policy store and the enforcing access gate. This package adds the administrative surface an operator dashboard, a language-agnostic control tool, or an internal admin service needs to **manage** membership and policy and to **explain** authorization decisions - without embedding the Orleans client.
 
 It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and the read-write [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) packages, and is built the same way, in two layers:
 
@@ -15,12 +15,12 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeAuthApi()` on the silo. A cluster that does not add the package has no admin surface, and once added the facade performs **no background work** until a method is called.
 - **Administrator-gated, fail-closed.** This is a control plane, so **every** operation - read or write - first authorizes the caller as an administrator through the **same enforcement primitive the in-cluster data path uses**, anchored on the authorization package's bootstrap root-of-trust. A non-administrator or anonymous caller is refused, and nothing is mutated. The facade adds no bespoke, un-authorized write path to the membership or policy trees.
-- **Explain parity by construction.** `ExplainAsync` produces its verdict by consulting the **same access gate** the data plane consults, so an explanation can never disagree with the decision that would actually be enforced. The reported matched rules are advisory debugging detail layered on top of that authoritative verdict.
+- **Explain parity with the gate.** `ExplainAsync` produces its verdict by consulting the **same access gate** the data plane consults, so for the subject it evaluates the verdict is the decision enforcement would reach. That subject is rebuilt from the membership directory - the named id plus its transitive directory group closure - so groups a caller's token asserts (or that `LatticeMembershipOptions.ClaimToGroups` projects) are not part of it, and under the `TokenOnly` group-merge mode, where enforcement ignores directory groups, the explained closure can differ from a live caller's. The reported matched rules are advisory debugging detail layered on top of that verdict.
 - **Transport-agnostic.** The facade is the contract; a gRPC binding is one adapter. The same records flow to an in-process consumer and a remote one.
 
 ## Ordering
 
-`AddLatticeAuthApi()` must be called **after** `AddLatticeAuth(...)`: the authorization registration is the source of truth for the policy store, the membership directory, and the access gate this facade administers and introspects. Calling it first fails fast at registration with an actionable message rather than failing obscurely at silo start.
+`AddLatticeAuthApi()` must be called **after** `AddLatticeAuth(...)`: the authorization registration is the source of truth for the policy store and the access gate this facade administers and introspects, and it in turn requires `AddLatticeMembership()`, which supplies the membership directory. Calling it first fails fast at registration with an actionable message rather than failing obscurely at silo start.
 
 ## Surface (v1)
 
@@ -36,6 +36,8 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | Remove a membership edge | `RemoveMemberAsync` |
 | List a group's direct members | `ListGroupMembersAsync` |
 | List a subject's transitive groups | `ListSubjectGroupsAsync` |
+
+When `LatticeIdentityDirectoryOptions.ValidationRequired` is set and a real identity-directory provider is active, `UpsertGroupAsync` and `AddMemberAsync` resolve every id they reference after the administrator check and before any write, and reject an unresolvable or mis-kinded id with `LatticeDirectoryValidationException` (an `ArgumentException`); see [Fail-closed create validation](../lattice.membership/identity-directory-providers.md#fail-closed-create-validation-validationrequired).
 
 ### Policy administration
 
@@ -66,7 +68,7 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 
 ### Access administration delegation
 
-By default the only subjects who can administer access (manage groups, membership, and policy rules) are the cluster's **bootstrap administrators** - the statically-configured `LatticeAuthOptions.BootstrapAdministrators` root of trust. "Access administration" is the `Admin` capability on the reserved policy tree `sys-auth-policy` (its id is the public constant `LatticeAuthReservedTrees.PolicyTreeId`); the enforcement gate requires whole-tree `Admin` on that tree to authorize every control-plane call.
+By default the only subjects who can administer access (manage groups, membership, and policy rules) are the cluster's **bootstrap administrators** - the statically-configured `LatticeAuthOptions.BootstrapAdministrators` root of trust. "Access administration" is the `Admin` capability on the reserved policy tree `sys-auth-policy` (its id is the public constant `LatticeAuthReservedTrees.PolicyTreeId`); every call to this facade requires a whole-tree `Admin` verdict on that tree from the enforcement gate.
 
 You can **delegate** access administration to another user or group by authoring one narrow rule: a whole-tree `Admin` rule on the `sys-auth-policy` tree for that subject. The effect is unconstrained: an `Allow` delegates access administration to the subject, and the store equally permits a `Deny` of the same shape (a whole-tree `Admin` `Deny` on `sys-auth-policy`) to revoke a delegated subject through policy. Bootstrap administrators are the root of trust and are never affected either way. This is off by default and must be enabled per deployment:
 
@@ -98,7 +100,7 @@ From the Explorer Access tab, the rule form has an **All trees (cluster-wide)** 
 
 ## Wire model
 
-Every request / response record is Orleans-serialized with a stable, compact alias (the `oli.` prefix). Group records are the package's own serializable DTOs (`AuthGroup`); rules are surfaced as the durable `LatticeAuthorizationRule` policy model directly, so a binding sees the same rule shape the store persists. Only the **catalog** list endpoints - `ListGroupsAsync`, `ListRulesAsync`, and `ListRulesForTreeAsync` - page with an exclusive continuation-token cursor (`AuthPageRequest` / `Auth*Page`), mirroring the `Orleans.Lattice.Api.State` catalog paging convention. The membership lookups `ListGroupMembersAsync` and `ListSubjectGroupsAsync` are **not** paged: each returns the full `IReadOnlyList<string>` of member (or group) ids in a single call.
+Every request / response record is Orleans-serialized with a stable, compact alias (the `oli.` prefix). Group records are the facade's own serializable DTOs (`AuthGroup`, which like every facade DTO ships in the shared `Orleans.Lattice.Api.Abstractions` package); rules are surfaced as the durable `LatticeAuthorizationRule` policy model directly, so a binding sees the same rule shape the store persists. Only the **catalog** list endpoints - `ListGroupsAsync`, `ListRulesAsync`, and `ListRulesForTreeAsync` - page with an exclusive continuation-token cursor (`AuthPageRequest` / `Auth*Page`, see [Paging and group DTOs](#paging-and-group-dtos)), mirroring the `Orleans.Lattice.Api.State` catalog paging convention. The membership lookups `ListGroupMembersAsync` and `ListSubjectGroupsAsync` are **not** paged: each returns the full `IReadOnlyList<string>` of member (or group) ids in a single call.
 
 ## Facade method signatures
 
@@ -137,7 +139,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | `RulesEnforced` | `bool` | Whether the access gate actually enforces authorization rules. |
 | `DirectoryAvailable` | `bool` | Whether an identity directory is configured for validating candidate ids. |
 | `DirectoryProviderId` | `string` | The configured directory provider's stable id (for example `"entra"` or `"static"`); the no-op provider's `"null"` when no directory is configured. |
-| `DirectoryExplanation` | `string` | Operator-facing explanation of the directory availability, for create-form guidance. |
+| `DirectoryExplanation` | `string` | The active provider's operator-facing description of what a valid principal id is (its `DescribeEntry` text for a group), rendered as create-form guidance; the no-op provider's text says ids are accepted without validation. |
 | `LocalMembershipEffective` | `bool` | Whether locally-administered group membership (the groups and member edges this facade manages) contributes to a subject's effective groups at authorization time; `false` under the token-only group-merge mode, where groups come solely from the identity-provider token and local membership administration is inert. |
 | `AllTreesGrantsEnabled` | `bool` | The live all-trees-grants tier flag. |
 | `AccessAdministrationDelegationEnabled` | `bool` | The live access-administration-delegation tier flag. |
@@ -147,7 +149,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | Field | Type | Meaning |
 |---|---|---|
 | `SubjectId` | `string` | The subject the verdict was resolved for. |
-| `GroupIds` | `IReadOnlyList<string>` | The subject's full transitively-expanded group closure, ascending. |
+| `GroupIds` | `IReadOnlyList<string>` | The subject's transitively-expanded group closure as the membership directory resolves it, ascending (for a `Group` subject it includes the named group itself). Token-asserted and claim-projected groups are not included. |
 | `Operation` | `LatticeOperation` | The operation the verdict was resolved for. |
 | `Scope` | `LatticeScope` | The scope the verdict was resolved for. |
 | `Allowed` | `bool` | The gate's verdict (possibly partial - see `Filtered`). |
@@ -162,7 +164,7 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 | Field | Type | Meaning |
 |---|---|---|
 | `SubjectId` | `string` | The subject the permissions were resolved for. |
-| `GroupIds` | `IReadOnlyList<string>` | The subject's transitive group closure, ascending. |
+| `GroupIds` | `IReadOnlyList<string>` | The subject's transitive directory group closure, ascending, resolved exactly as for `AuthExplanation.GroupIds`. |
 | `Rules` | `IReadOnlyList<LatticeAuthorizationRule>` | Every authored rule whose subject is the subject itself or one of its groups, allow and deny alike, read from the live policy store, capped at `MaxExplanationRules`, and ordered by `(governed tree id, rule id)`. A listing rather than a verdict; see `EffectivePermissionsAsync` above. |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags). |
 
@@ -172,6 +174,29 @@ All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.L
 |---|---|---|
 | `AllTreesGrantsEnabled` | `bool` | The live all-trees-grants tier flag. |
 | `AccessAdministrationDelegationEnabled` | `bool` | The live access-administration-delegation tier flag. |
+
+### Paging and group DTOs
+
+`AuthPageRequest` (input to `ListGroupsAsync`, `ListRulesAsync`, and `ListRulesForTreeAsync`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `PageSize` | `int` | Maximum entries per page. Defaults to `AuthPageRequest.DefaultPageSize` (100); a value below 1 falls back to that default and a value above `AuthPageRequest.MaxPageSize` (1000) is clamped to it. `EffectivePageSize` reports the size actually applied. |
+| `PageToken` | `string?` | The exclusive continuation cursor - the previous page's `NextPageToken` - or `null` to start from the beginning. |
+
+`AuthGroupPage` (returned by `ListGroupsAsync`) and `AuthRulePage` (returned by `ListRulesAsync` and `ListRulesForTreeAsync`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `Entries` | `IReadOnlyList<AuthGroup>` / `IReadOnlyList<LatticeAuthorizationRule>` | The page's groups, ordered by group id, or its rules, ordered by `(governed tree id, rule id)`. |
+| `NextPageToken` | `string?` | The cursor to pass back as the next request's `PageToken`, or `null` on the final page. |
+
+`AuthGroup` (input to `UpsertGroupAsync`; returned by `GetGroupAsync` and inside `AuthGroupPage`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `GroupId` | `string` | The stable group id (the directory key). |
+| `DisplayName` | `string?` | An optional human-readable display name. |
 
 ### Identity-directory DTOs
 
@@ -225,6 +250,6 @@ The following are **not** in v1 and are deliberately left out so a caller cannot
 
 ## See also
 
-- [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the membership directory, policy store, and enforcing access gate this facade administers.
+- [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store and enforcing access gate this facade administers.
 - [`Orleans.Lattice.Membership`](../lattice.membership/README.md) - the user / group directory backing subject resolution.
 - [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) - the read-only and read-write data-plane facades this control facade is modelled on.

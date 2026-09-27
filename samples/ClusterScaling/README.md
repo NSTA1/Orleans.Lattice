@@ -20,19 +20,21 @@ under Deploy).
 
 Orleans.Lattice's scaling signal reports two axes:
 
-- **Compute axis** - activation and dispatch pressure (CPU, activation counts).
-  This is the **only** axis wired to replica count. When compute pressure rises,
-  `scaleValue` climbs and the autoscaler adds replicas.
+- **Compute axis** - grain-activation, host-resource (CPU and memory) and
+  WAL-dispatch pressure. This is the **only** axis wired to replica count.
+  When compute pressure rises, `scaleValue` climbs and the autoscaler adds
+  replicas.
 - **Storage axis** - retained WAL bytes. This is **advisory**: it feeds
   observability and the health check, and it never inflates replica count.
   Relieving storage pressure is an operational action (rebalancing WAL
   partitions), not an autoscaling one.
 
 **This sample drives the compute axis.** The load driver issues a high op rate
-across many distinct trees and keys with a tiny fixed payload, so it grows
-activation + dispatch pressure without growing retained bytes. Bulk-loading
-large values would move the storage axis and KEDA would never scale - so the
-driver keeps payloads deliberately small.
+across many distinct trees and keys with a small fixed payload (256 bytes by
+default), so it grows activation and dispatch pressure while keeping retained-byte
+growth small. Bulk-loading large values at a low op rate would move mostly the
+storage axis, which never feeds `scaleValue`, so KEDA would not scale - which is
+why the driver keeps payloads deliberately small.
 
 ## Architecture
 

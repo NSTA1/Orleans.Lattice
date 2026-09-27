@@ -3,10 +3,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Decision returned by <see cref="ILatticeFallOffLogDetector"/> at
 /// leaf activation time. The leaf consults the detector before
-/// driving <c>ILeafProjection.Apply</c> over the WAL slice; the
-/// returned decision selects between a tail replay (the WAL still
-/// covers the gap), a snapshot-then-WAL recovery, a full WAL rebuild,
-/// or surfacing <see cref="LeafProjectionStaleException"/>.
+/// driving <c>ILeafProjection.Apply</c> over the WAL slice. Every
+/// non-loss outcome (<see cref="TailReplay"/>, <see cref="SnapshotPending"/>,
+/// <see cref="TailReplayOverBudget"/>) tail-replays; genuine loss (the WAL
+/// trimmed past the checkpoint) maps the configured
+/// <see cref="ProjectionRebuildPolicy"/> to <see cref="SnapshotThenWal"/>,
+/// <see cref="FullRebuildFromWal"/> or <see cref="Fail"/>, each of which the
+/// leaf currently surfaces as <see cref="LeafProjectionStaleException"/>.
 /// </summary>
 internal enum FallOffLogDecision
 {
@@ -15,29 +18,30 @@ internal enum FallOffLogDecision
     /// portion of the WAL and the gap is within
     /// <see cref="LatticeOptions.MaxLeafReplayEntries"/>. The leaf
     /// drives <c>ILeafProjection.Apply</c> over the slice
-    /// <c>(checkpoint, head]</c> directly.
+    /// <c>(checkpoint, head)</c> directly, the head being the next offset
+    /// the WAL will assign.
     /// </summary>
     TailReplay = 0,
 
     /// <summary>
-    /// A fall-off-log trigger fired (WAL trimmed past checkpoint,
-    /// replay budget exceeded, or projection older than
-    /// <see cref="LatticeOptions.LeafProjectionRetention"/>) and the
-    /// configured policy is the snapshot-then-WAL recovery path; genuine WAL loss currently surfaces <see cref="LeafProjectionStaleException"/>.
+    /// Genuine loss - the WAL has been trimmed past the leaf's persisted
+    /// checkpoint (<c>tail &gt; checkpoint + 1</c>) - and the configured policy
+    /// is the snapshot-then-WAL recovery path. The leaf currently surfaces
+    /// <see cref="LeafProjectionStaleException"/>. The cost triggers
+    /// (replay budget, projection age) never produce this value.
     /// </summary>
     SnapshotThenWal = 1,
 
     /// <summary>
-    /// A fall-off-log trigger fired and the configured policy is
-    /// <see cref="ProjectionRebuildPolicy.FullRebuildFromWal"/>. The
-    /// leaf rebuilds from the absolute WAL tail, failing fast with
-    /// <see cref="LeafProjectionStaleException"/> if the WAL has been
-    /// trimmed.
+    /// Genuine loss and the configured policy is
+    /// <see cref="ProjectionRebuildPolicy.FullRebuildFromWal"/>. The WAL has
+    /// been trimmed, so a complete history is unavailable and the leaf
+    /// surfaces <see cref="LeafProjectionStaleException"/>.
     /// </summary>
     FullRebuildFromWal = 2,
 
     /// <summary>
-    /// A fall-off-log trigger fired and the configured policy is
+    /// Genuine loss and the configured policy is
     /// <see cref="ProjectionRebuildPolicy.Fail"/>. The leaf surfaces
     /// <see cref="LeafProjectionStaleException"/> immediately and
     /// requires an operator-driven rebuild.
@@ -64,9 +68,12 @@ internal enum FallOffLogDecision
     /// still covers every offset the leaf needs, so a tail replay
     /// converges to exactly the same projection.
     /// <para>
-    /// The leaf replays as it would for <see cref="TailReplay"/>. The
-    /// distinct value exists so the activation path can warn and meter
-    /// the over-budget replay rather than silently absorbing it.
+    /// The leaf replays as it would for <see cref="TailReplay"/>; nothing
+    /// warns or meters on this value (issue #2149). The over-budget warning
+    /// and counter are raised during the replay itself, off the entries the
+    /// leaf actually applies. Its one incidental effect is that it is
+    /// returned before the <see cref="SnapshotPending"/> check, so an
+    /// over-budget or over-age leaf never yields that advisory.
     /// </para>
     /// <para>
     /// This decision must never be fatal. A cost signal is not data loss:

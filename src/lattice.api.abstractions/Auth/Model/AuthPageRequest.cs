@@ -1,8 +1,10 @@
 namespace Orleans.Lattice.Api.Auth;
 
 /// <summary>
-/// Paging request for the admin facade's list endpoints (groups, member edges,
-/// and rules). Mirrors the <c>Orleans.Lattice.Api.State</c> catalog paging
+/// Paging request for the admin facade's paged list endpoints (the group
+/// catalog, and the rule catalog whole or per tree; group-member lists are
+/// returned whole and take no paging request). Mirrors the
+/// <c>Orleans.Lattice.Api.State</c> catalog paging
 /// convention: entries are enumerated in a deterministic, stable ascending
 /// order and <see cref="PageToken"/> is the exclusive cursor - pass the
 /// <c>NextPageToken</c> returned by the previous page to fetch the next one.

@@ -40,7 +40,7 @@ internal static class TreeAdminDiagnosticsToolHandlers
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree to diagnose. Must not be null or empty.")]
         string treeId,
-        [Description("When true, walk leaf state for authoritative counts (more expensive); when false (the default), use the cheap shard-root projection.")]
+        [Description("When true, each leaf also counts its tombstoned and expired entries (more expensive); when false (the default), the leaf walk counts live keys only and tombstone counts read zero.")]
         bool deep = false,
         CancellationToken cancellationToken = default)
     {

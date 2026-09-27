@@ -574,6 +574,7 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                         + $"{nameof(LatticeMergeMode.PnCounter)}, "
                         + $"{nameof(LatticeMergeMode.VersionVector)}, "
                         + $"{nameof(LatticeMergeMode.MvRegister)}, "
+                        + $"{nameof(LatticeMergeMode.OrMap)}, "
                         + $"{nameof(LatticeMergeMode.Sequence)}, "
                         + $"{nameof(LatticeMergeMode.OrFlag)}, "
                         + $"{nameof(LatticeMergeMode.RwFlag)}, "

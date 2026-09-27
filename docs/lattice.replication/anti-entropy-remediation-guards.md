@@ -61,7 +61,7 @@ siloBuilder.AddLatticeReplication(o =>
 | `orleans.lattice.replication.digest_remediation.disabled` | `tree`, `peer`, `reason`, `tenant` | Observable gauge, value `1` for each `(tree, peer)` whose remediation is currently disabled. No series means remediation is permitted. |
 | `orleans.lattice.replication.digest_remediation.skipped` | `tree`, `peer`, `reason`, `tenant` | Counter, once per remediation pass skipped before sending repair traffic. |
 
-Reasons: `opt_out` (the host has not set `AutoRemediateOnDigestMismatch`), `budget_exhausted` (the per-window rate cap is spent), and `circuit_open` (the breaker tripped on consecutive failures).
+Reasons: `opt_out` (the host has not set `AutoRemediateOnDigestMismatch`), `budget_exhausted` (the per-window rate cap is spent), and `circuit_open` (the breaker tripped on consecutive failures). A pair's gauge series is cleared only when a later remediation pass for that pair completes without failing, so until then it keeps reporting its last reason - for example after the rate-cap window has rolled over, or after `AutoRemediateOnDigestMismatch` has been turned on.
 
 The metric-name constants and the reason mapping are exposed for dashboards built from the public surface:
 

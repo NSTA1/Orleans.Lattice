@@ -96,10 +96,13 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was short-circuited by
-    /// the receiver before merge - either the per-origin high-water-mark
-    /// already covers <see cref="WalRecord.Timestamp"/>, the receiver-side
-    /// local-origin gate rejected an entry authored by this cluster, or the
-    /// snapshot-pinned causal floor already covers the point write.
+    /// the receiver before merge - the snapshot-pinned causal floor already
+    /// covers the point write, the receiver-side local-origin gate rejected an
+    /// entry authored by this cluster, the entry is a tombstone-reap envelope
+    /// (local structural cleanup, never applied), or, on the per-entry apply
+    /// path only, a coordinated restore's receive fence deferred it (a deferred
+    /// multi-entry run records no sample). The per-origin high-water-mark is not
+    /// a point-write drop threshold.
     /// </summary>
     public const string OutcomeDedup = "dedup";
 
@@ -1014,13 +1017,13 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// Counter of successful point applies whose source HLC was strictly
-    /// less than the most recently applied source HLC for the same
-    /// <c>(treeId, originClusterId)</c> pair. Pins the per-origin FIFO
-    /// contract as observed by the receiver. Per-leaf HLCs mean cross-shard
-    /// arrival can legitimately be out of HLC order, so this is a diagnostic
-    /// signal rather than an invariant violation by itself; sustained nonzero
-    /// rates identify sender, transport, or workload patterns that defeat the
-    /// causal-apply buffer's occupancy assumptions.
+    /// less than the highest source HLC already applied for the same
+    /// <c>(treeId, originClusterId)</c> pair - an ordering diagnostic, not a
+    /// correctness alarm. Per-leaf HLCs and key-hashed WAL partitions mean one
+    /// origin's arrivals are routinely out of HLC order, so a non-zero rate is
+    /// not by itself a fault; sustained high rates identify sender, transport, or
+    /// workload patterns that defeat the causal-apply buffer's occupancy
+    /// assumptions.
     /// <para>
     /// The counter is recorded after a successful apply (direct or drained)
     /// - never on park - so the underlying invariant tracks "what has
@@ -1037,7 +1040,7 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public static readonly Counter<long> ApplyFifoViolations =
         Meter.CreateCounter<long>("orleans.lattice.replication.apply.fifo_violations", unit: "{entry}",
-            description: "Successful applies whose source HLC was strictly less than the previous apply for the same (tree, origin), tagged by tree and origin.");
+            description: "Successful applies whose source HLC was strictly less than the highest source HLC already applied for the same (tree, origin) - an ordering diagnostic - tagged by tree and origin.");
 
     /// <summary>
     /// Canonical name of the <see cref="ApplyFifoViolations"/> counter.
@@ -1049,8 +1052,9 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Histogram of the effective degree of parallelism the receiver-side
     /// batch-apply path used for a single inbound batch - the number of
-    /// independent <c>(treeId, originClusterId)</c> run-groups applied
-    /// concurrently. Recorded once per multi-entry batch. A value of
+    /// independent per-tree groups applied concurrently (each tree's
+    /// <c>(originClusterId, mode)</c> runs still apply sequentially, in WAL
+    /// order, within its group). Recorded once per multi-entry batch. A value of
     /// <c>1</c> denotes fully-sequential apply (the default posture, or a
     /// single-tree batch where cross-tree parallelism does not apply); a
     /// value greater than <c>1</c> reports the achieved concurrency, which
@@ -1064,7 +1068,7 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public static readonly Histogram<int> ApplyParallelRuns =
         Meter.CreateHistogram<int>("orleans.lattice.replication.apply.parallel_runs", unit: "{run}",
-            description: "Effective number of independent run-groups applied concurrently per inbound batch.");
+            description: "Effective number of independent per-tree groups applied concurrently per inbound batch.");
 
     /// <summary>
     /// Canonical name of the <see cref="ApplyParallelRuns"/> histogram.
@@ -1636,7 +1640,8 @@ public static class LatticeReplicationMetrics
     /// the fallback is disabled
     /// (<see cref="LatticeReplicationOptions.BootstrapFallbackEnabled"/> is
     /// <see langword="false"/>) even though a leaf re-replay reported the WAL
-    /// was trimmed past the divergence point. Corresponds to
+    /// trimmed past the divergence point or no eligible entry in the localised
+    /// ranges. Corresponds to
     /// <see cref="BootstrapFallbackSkipReason.Disabled"/>.
     /// </summary>
     public const string BootstrapFallbackSkipDisabled = "disabled";

@@ -5,37 +5,46 @@
 
 .DESCRIPTION
 	Inner-loop deploy script. On each run:
-	  1. Reads VM coords + storage outputs from the last Bicep deployment.
-	  2. Renders lattice-silo.service from the template (substitutes storage
-		 endpoints + admin user) and SCPs it into place. Idempotent.
-	  3. rsyncs src/, benchmark/, *.sln, global.json, Directory.* files to
-		 /opt/lattice/src on the VM. --delete keeps the tree in lockstep.
-	  4. SSH-runs dotnet publish for the azure-throughput Silo, output to
-		 /opt/lattice/publish.
-	  5. systemctl restart lattice-silo (or start if first run).
+	  1. Reads VM coords + storage outputs (every WAL table endpoint
+		 included) from the last successful Bicep deployment, and runs
+		 infra/bootstrap.sh on the VM when the dotnet SDK is missing.
+	  2. Renders lattice-silo.service and lattice-producer.service from the
+		 templates (substitutes storage endpoints, extra WAL account URIs +
+		 admin user), SCPs them into place and enables both. Idempotent.
+	  3. Streams the tracked file set (git ls-files) to /opt/lattice/src on
+		 the VM as a tar archive over ssh. Files are added or overwritten,
+		 never deleted, so a file removed from the repository stays on the
+		 VM.
+	  4. SSH-runs dotnet publish for the azure-throughput Silo (output to
+		 /opt/lattice/publish) and Producer (output to
+		 /opt/lattice/publish-producer).
+	  5. Stops the producer (if running) and restarts lattice-silo.
 
-	First-run extras (idempotent): copies the unit file to
-	/etc/systemd/system/, enables it, ensures dotnet SDK is present (the
+	First-run extras (idempotent): copies the unit files to
+	/etc/systemd/system/, enables them, ensures dotnet SDK is present (the
 	cloud-init step usually handles this, but we re-check in case the
 	bootstrap hadn't finished when the VM first became reachable).
 
 .PARAMETER NoBuild
-	Skip rsync + build; just restart the existing /opt/lattice/publish.
+	Skip the source sync + build; just restart the existing
+	/opt/lattice/publish (the units are still re-synced unless
+	-SkipUnitSync).
 
 .PARAMETER NoRestart
 	Skip the restart at the end (e.g. you want to inspect before starting).
 
 .PARAMETER Clean
-	Wipe /opt/lattice/publish before publishing (force a full rebuild).
+	Wipe /opt/lattice/publish and /opt/lattice/publish-producer before
+	publishing.
 
 .PARAMETER SkipUnitSync
-	Don't re-render or re-copy the systemd unit (faster inner loop when
+	Don't re-render or re-copy the systemd units (faster inner loop when
 	only source changed and unit + env are already correct).
 
 .EXAMPLE
-	./update-vm.ps1                  # full sync + build + restart
-	./update-vm.ps1 -NoBuild         # just bounce the service
-	./update-vm.ps1 -Clean           # force clean publish
+	./update.ps1                     # full sync + build + restart
+	./update.ps1 -NoBuild            # just bounce the service
+	./update.ps1 -Clean              # clean publish output
 #>
 [CmdletBinding()]
 param(

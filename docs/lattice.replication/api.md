@@ -74,7 +74,7 @@ See [Change Feed](change-feed.md).
 | `IChangeFeed` | interface | Cursor-driven, pull-based read of locally-authored WAL entries for a tree. | `Subscribe(string, HybridLogicalClock, bool, CancellationToken)`, `Subscribe(string, ChangeFeedCursor, bool, CancellationToken)`, `GetCurrentCursorAsync` |
 | `ChangeFeedCursor` | readonly struct | Per-partition offset cursor for lossless WAL consumption. | `Initial`, constructor from offsets, `GetOffsetForPartition`, `PartitionOffsets` |
 
-The feed is for locally-authored writes. Entries installed by inbound apply are visible in local state but are not re-emitted through this feed; consumers that need to observe receiver-side installs should decorate `IReplicationApplier`.
+The feed is for locally-authored writes. Entries installed by inbound apply are visible in local state but are not re-emitted through this feed; consumers that need to observe receiver-side installs should decorate `IReplicationApplier`. The `HybridLogicalClock` overload is a source-compatible shim: the default implementation ignores its cursor and reads every partition from the start, so resume with the `ChangeFeedCursor` overload.
 
 ## Transport and wire envelope
 
@@ -102,7 +102,7 @@ See [Replication Apply](replication-apply.md) and [Deltas](deltas.md).
 | `IReplicationLocalVcSeeder` | interface | Rebuilds a tree's local vector clock from the vector-clock slots on its values after an intra-cluster snapshot restore, so inbound dependency checks do not run against a zeroed vector. A no-op for a non-replicated tree. | `SeedFromTreeAsync(string, CancellationToken)` returning `LocalVcSeedReport` |
 | `LocalVcSeedReport` | readonly record struct | Observable result of local version-vector seeding. | `TreeName`, `Frontier`, `EntriesScanned`, `SeedApplied` |
 
-`ApplyAsync` preserves the source cluster HLC and origin id. `ApplyBatchAsync` is the preferred batch seam because implementations can collapse high-water-mark updates and drain causal buffers once per batch.
+`ApplyAsync` preserves the source cluster HLC and origin id. `ApplyBatchAsync` is the preferred batch seam because implementations can collapse high-water-mark updates and drain causal buffers once per batch. Its default interface implementation applies each entry through `ApplyAsync` in order and aggregates the results - `Applied` when any entry applied, the pointwise-maximum `HighWaterMark`, and `Deferred` when any entry was deferred - so a custom applier that implements only `ApplyAsync` still has a receive-fence deferral re-shipped by the sender rather than acknowledged past.
 
 ## Bootstrap and snapshots
 

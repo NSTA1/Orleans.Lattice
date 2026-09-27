@@ -14,8 +14,9 @@ using Orleans.Lattice;
 // that already holds data is ResizeAsync, which runs ONLINE: it drains the
 // source into a freshly-sized destination tree (shadow-forwarding live writes)
 // and atomically swaps the alias. Reads and writes stay available throughout and
-// every entry is preserved verbatim. This sample populates a tree past a single
-// leaf, resizes it, and confirms the data survived.
+// every entry is preserved verbatim. This sample populates a tree with 500
+// entries (hashed across the default 64 shards, so each shard's root is still a
+// single leaf), resizes it, and confirms the data survived.
 // ---------------------------------------------------------------------------
 
 using var host = Host.CreateDefaultBuilder(args)
@@ -39,8 +40,10 @@ var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
 Console.WriteLine("== Resize sample ==");
 Console.WriteLine();
 
-// Populate the tree with more entries than the default 128 keys-per-leaf so the
-// tree must split into multiple leaves and the resize has real structure to rebuild.
+// Populate the tree with 500 entries - more than one leaf's default 128 keys, but
+// hashed across the default 64 shards, so each shard's root stays a single leaf
+// of about 8 keys. The resize still drains every entry into the freshly-sized
+// destination tree.
 const int count = 500;
 var tree = grainFactory.GetGrain<ILattice>("catalog");
 var entries = new List<KeyValuePair<string, byte[]>>(count);

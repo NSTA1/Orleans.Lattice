@@ -8,7 +8,7 @@
     <PackageId>Orleans.Lattice.Explorer.Plugins.Selection</PackageId>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Version>9.4.0</Version>
-    <Description>The shared kernel every Orleans.Lattice Explorer per-selection plugin builds on: the view base that carries the selected catalog entry and the cancellation token tied to a view's lifetime, the stable plugin ids the shipped surfaces are keyed under, the switcher a surface uses to hand off to a sibling surface, and the change-history guidance card. It carries no reader and no cluster client, so a plugin takes it without taking a data dependency.</Description>
+    <Description>The shared kernel every Orleans.Lattice Explorer per-selection plugin builds on: the view base that carries the selected catalog entry and the cancellation token tied to a view's lifetime, the stable plugin ids the shipped surfaces are keyed under, the nested-surface registry and keys a surface uses to render a view another package contributes inline (such as the Data surface's per-key History panel), the shared empty-state and badge-list components, and the change-history guidance card. It carries no reader and no cluster client, so a plugin takes it without taking a data dependency.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

@@ -277,8 +277,9 @@ scenarios/<slug>.env  <  benchmark/.fleet-size.config  <  benchmark.ps1 -FleetSi
 The values in `scenarios/<slug>.env` are kept as documentary defaults but are
 overridden by the calibrated config at run time. `-FleetSizeOverride` is used
 internally by `initialise.ps1` to walk the ladder and is also available for
-ad-hoc one-off probes (pair it with `-SkipFleetSizeCheck` to bypass the
-config-existence check).
+ad-hoc one-off probes. A positive `-FleetSizeOverride` skips the config-existence
+check on its own; `-SkipFleetSizeCheck` skips it for a run that keeps the `.env`
+value.
 
 If the config file is missing, `benchmark.ps1` exits early with a friendly
 message pointing at `./initialise.ps1`. The microbench scenario does not drive
@@ -361,7 +362,7 @@ returns, so it never precedes `run_id`:
     "replication_apply_lag_p95_ms":                            6.1,
     "dotnet_gc_gen2_collections_increase":                     0,
     "orleans_lattice_replication_apply_duration_milliseconds_p99": null,
-    "...": "~52 auto-discovered keys + the curated extras"
+    "...": "the auto-discovered keys + the curated extras"
   },
   "fleetStats": { "total": 2000, "driving": 2000, "...": "..." }
 }
@@ -436,14 +437,14 @@ question without templating-var juggling:
 | Persona dashboard         | Aggregates                                                          | Asks                                                           |
 |---------------------------|---------------------------------------------------------------------|----------------------------------------------------------------|
 | `lat-hist-overview`       | every persona below, one row each                                   | Is anything red right now? (single-page roll-up of all KPIs.)  |
-| `lat-hist-replication`    | the six replication scenarios                                       | Has ship/apply latency or commit-overhead-under-replication regressed? |
+| `lat-hist-replication`    | `current-state-single-peer`, `bidirectional-replication`, `observer-no-peer`, `replication-key-filter`, `replication-backpressure`, `receiver-crash` | Has ship/apply latency or commit-overhead-under-replication regressed? |
 | `lat-hist-write-heavy-random`  | `current-state-no-replication`, `skewed-key-shard-splits`      | Has the steady-state write hot path regressed?                |
 | `lat-hist-write-heavy-ordered` | `event-log-with-ttl`                                           | Has the append-only + TTL-eviction path regressed?            |
 | `lat-hist-read-heavy`     | `read-heavy-random`, `read-heavy-ordered`                           | Has GetAsync-dominant load (cache/prefetch) regressed?        |
 | `lat-hist-read-write-mix` | `read-write-mix-random`, `read-write-mix-ordered`                   | Has the YCSB-A-shaped balanced workload regressed?            |
 | `lat-hist-microbench`     | `microbench`                                                        | Has the `ILattice` algorithm cost (no Orleans dispatch) regressed? |
-| `lat-hist-wal-performance` | the five replication-enabled silo scenarios                         | Has WAL-append or in-memory Apply latency regressed? The legacy shadow-write tile is retained for backwards comparison and reads zero on every recent run. |
-| `lat-hist-atomic-writes`  | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | Has the `SetManyAtomicAsync` saga cost regressed? Hand-maintained, not generated (see below). |
+| `lat-hist-wal-performance` | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Has WAL-append or in-memory Apply latency regressed? The legacy shadow-write tile is retained for backwards comparison; the commit step it reads no longer exists, so it shows no value for any recent run. |
+| `lat-hist-atomic-writes`  | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga-health panels | Has the `SetManyAtomicAsync` saga cost regressed? Hand-maintained, not generated (see below). Its saga-health panels query a raw `orleans_lattice_*` series that the history push never writes, so they render empty; see [`history/README.md`](./history/README.md#dashboards). |
 
 The Overview dashboard is the recommended landing page: it shows every
 persona's headline KPIs in a single view (one row per persona, scoped to
@@ -457,7 +458,10 @@ Each persona dashboard has the same **3-band** layout, top-to-bottom:
    backgrounds binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
    `bench_replication_ship_p95_ms`). The stable-alias layer is curated in
    `benchmark.ps1`'s `$ScalarPanelExtra` and `$ScalarAliases`; KPI metric-name resolution is
-   validated at dashboard-generation time, so a typo or rename fails fast.
+   validated at dashboard-generation time, so a typo or rename fails fast. As
+   committed, the Replication and WAL Performance dashboards show this band as bar
+   charts instead: they were edited by hand after generation, and regenerating
+   restores the stat tiles.
 2. **Trends across runs** - one timeseries per metric family (commit, cache,
    sink, replication, read, wal, process, microbench), points-mode with one line per
    `{__name__, scenario, git_sha}` so a regression appears as a visible step
@@ -565,7 +569,7 @@ A single invocation:
 2. Runs **Layer 1** - `Bench.Microbench` cohorts on the VM (in-process BDN; no
    Orleans dispatch, no I/O) - to produce the per-call algorithmic ceilings.
 3. Runs **Layer 2** - silo + producer cohorts via `azure-throughput/scripts/run-cohort.ps1`,
-   one per workload mode (`get-point`, `set-point`, `set-point-mv`, `get-many`,
+   `-N` per workload mode (`get-point`, `set-point`, `set-point-mv`, `get-many`,
    `set-many`, `set-many-atomic`, `set-many-atomic-2`, `cross-tree-atomic-2`,
    `cross-tree-atomic-64`) - to produce the sustained-throughput numbers under
    real Azure Tables latency.
@@ -579,8 +583,8 @@ A single invocation:
 it provisions an Azure Container Apps rig through
 `azure-throughput/scripts/deploy-aca.ps1` (or reuses one with `-ReuseAca <prefix>`),
 sweeps the same nine workloads across the silo counts in `-SiloCounts` (default
-`1, 2, 4, 6, 8`) with `run-cohort-aca.ps1`, and rewrites the `perf-table:layer3`
-block of
+`1, 2, 4, 6, 8`) with `run-cohort-aca.ps1`, and rewrites the `perf-table:layer3` and
+`perf-chart:layer3` blocks (plus the `> Measured ...` note after the table) of
 [`docs/lattice/performance-multi-silo.md`](../docs/lattice/performance-multi-silo.md)
 rather than the single-silo doc. The rig scripts and their parameters are described in
 [`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps).

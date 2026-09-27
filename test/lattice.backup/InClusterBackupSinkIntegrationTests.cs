@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// <summary>
 /// Integration coverage for the default in-cluster <see cref="ILatticeBackupSink"/>:
 /// artifact and manifest round-trips over the streaming surface, and idempotent
-/// re-writes of content-addressed artifacts and manifests.
+/// re-writes of artifacts and content-addressed manifests.
 /// </summary>
 [Category("Integration")]
 public sealed class InClusterBackupSinkIntegrationTests

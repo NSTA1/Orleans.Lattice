@@ -513,8 +513,10 @@ This runs for the whole of phases 5 through 7. It is the standing obligation tha
 makes principle 1 survivable.
 
 - **Renew at roughly half the remaining lease**, using
-  `repocontext_renew_claim(key, fencingToken, leaseSeconds?)`. The token does not
-  change on renewal.
+  `repocontext_renew_claim(key, fencingToken, leaseSeconds)`, and **always pass
+  `leaseSeconds`**: an omitted length requests the cluster's short default, so it
+  shortens a longer claim while still reporting `granted: true` (flagged only by
+  `leaseShortened: true`). The token does not change on renewal.
 - **Renew before any long operation that could outlast the lease**, not after: a
   full cross-package test run, a CI wait, a large build. Waking up to discover
   you were fenced out an hour ago wastes the whole run.
@@ -821,7 +823,7 @@ sequenceDiagram
         C-->>W: fencingToken + clamped lease
         W->>GH: claim marker comment (counted as an attempt)
         loop while working
-            W->>C: renew_claim(key, token)
+            W->>C: renew_claim(key, token, leaseSeconds)
             alt superseded
                 C-->>W: granted = false, reason superseded
                 W->>W: HARD STOP - no write, no release, no comment

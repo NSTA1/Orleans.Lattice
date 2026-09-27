@@ -671,13 +671,10 @@ internal sealed class BenchIngestEngine(
     // least that long; a producer-stop that lands within 30 s of the
     // last Saturated transition abandons the residual batch rather
     // than dispatching it into a queue that would trip the deadline.
-    // Matches LatticeOptions.DefaultWalAppendDispatchTimeout (the
-    // bench inherits the library default unless an operator overrides
-    // it via BENCH_WAL_APPEND_DISPATCH_TIMEOUT_SEC, in which case the
-    // bench's behaviour here may slightly over- or under-shoot the
-    // optimal window - acceptable for a benchmark whose entire point
-    // is measuring steady-state throughput, not residual-batch
-    // accounting precision).
+    // Matches LatticeOptions.DefaultWalAppendDispatchTimeout (30 s). The
+    // bench always runs on that library default - no BENCH_* variable
+    // overrides WalAppendDispatchTimeout - so this window only drifts from
+    // it if the library default changes without this constant following.
     private static readonly TimeSpan RecentSaturationWindow = TimeSpan.FromSeconds(30);
 
     // FX-032 Symptom 2 / FX-038: hard ceiling on the in-flight-tail

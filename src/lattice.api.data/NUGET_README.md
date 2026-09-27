@@ -21,10 +21,11 @@ of its own.
 
 - **Opt-in and absent by default.** Nothing is registered unless the host calls
   `AddLatticeDataApi()`.
-- **Fail-closed.** An unresolved / anonymous caller is default-denied by the
-  access gate: mutations throw `LatticeAuthorizationDeniedException`, a point
-  read of a hidden key reports absent, and a range read prunes to the
-  authorized subset.
+- **Fail-closed.** With the `Orleans.Lattice.Auth` add-on registered, an
+  unresolved / anonymous caller is default-denied by the access gate:
+  mutations throw `LatticeAuthorizationDeniedException`, a point read of a
+  hidden key reports absent, and a range read prunes to the authorized
+  subset. Without that add-on the core no-op gate admits every call.
 
 ## Registration
 

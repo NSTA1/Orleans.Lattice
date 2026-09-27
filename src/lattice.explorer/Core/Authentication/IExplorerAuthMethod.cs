@@ -20,9 +20,10 @@ public interface IExplorerAuthMethod
 
     /// <summary>
     /// Decides whether this method can satisfy the endpoint's
-    /// <paramref name="advertisedScheme"/>. The default matching is an
-    /// ordinal-ignore-case comparison against <see cref="SchemeId"/>; a method
-    /// may accept aliases or a family of scheme names.
+    /// <paramref name="advertisedScheme"/>. The interface supplies no default
+    /// implementation; the built-in methods compare ordinal-ignore-case against
+    /// <see cref="SchemeId"/> (the Basic method also accepts an empty advertised
+    /// scheme), and a custom method may accept aliases or a family of scheme names.
     /// </summary>
     /// <param name="advertisedScheme">The scheme the endpoint advertised.</param>
     /// <returns><see langword="true"/> when this method handles the scheme.</returns>

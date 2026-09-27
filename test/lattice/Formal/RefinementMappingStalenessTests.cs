@@ -105,10 +105,10 @@ public sealed class RefinementMappingStalenessTests
     }
 
     /// <summary>
-    /// Keeps the partial-class file branch honest. Two of the note's
+    /// Keeps the partial-class file branch honest. Several of the note's
     /// references are file suffixes rather than members, and that branch is the
-    /// one a naive rewrite of this gate would drop - producing two confident
-    /// false positives on a note that is entirely correct.
+    /// one a naive rewrite of this gate would drop - producing confident false
+    /// positives on a note that is entirely correct.
     /// </summary>
     [Test]
     public void The_partial_class_file_form_is_exercised_by_the_mapping()
@@ -123,8 +123,9 @@ public sealed class RefinementMappingStalenessTests
             Is.Not.Empty,
             "no symbol in spec/Refinement.md resolves as a partial-class file suffix, so that branch of "
             + "the resolver is now unexercised by the real mapping. If the note legitimately stopped "
-            + "naming one (ShardRootGrain.TxTerminal and BPlusLeafGrain.PendingTx were the two), delete "
-            + "this test together with the branch rather than leaving an untested path behind.");
+            + "naming one (ShardRootGrain.TxTerminal, ShardRootGrain.Split and BPlusLeafGrain.PendingTx "
+            + "are the ones it names today), delete this test together with the branch rather than "
+            + "leaving an untested path behind.");
     }
 
     /// <summary>

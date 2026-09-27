@@ -10,17 +10,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Zero-observable-writes snapshot-cursor partial. Hosts the
 /// <see cref="ILatticeCursorGrain.OpenSnapshotAsync"/> entry point, the
 /// snapshot-aware <c>Next*Async</c> page paths that fan out across per-shard
-/// <see cref="ISnapshotLeafGrain"/> activations, and the WAL retention pin
-/// lifecycle that registers/refreshes/releases the snapshot cursor's
-/// consumer entry on <see cref="IWalCursorRegistry"/>.
+/// <see cref="ISnapshotLeafGrain"/> activations, and the lifecycle of the
+/// snapshot cursor's consumer entry on <see cref="IWalCursorRegistry"/>
+/// (registered, refreshed and released with the cursor). That entry is
+/// reported at the coordinate's registry-snapshot HLC - currently always
+/// <see cref="HybridLogicalClock.Zero"/> - with no blocked floor, so it holds
+/// back no WAL trimming: the cursor serves its frozen per-shard baselines
+/// rather than replaying the WAL (only a legacy coordinate that predates the
+/// frozen-baseline store replays it), and the entry feeds the live
+/// snapshot-pin census.
 /// </summary>
 internal sealed partial class LatticeCursorGrain
 {
     /// <summary>
-    /// Per-silo census of live snapshot WAL retention pins, and the source of
-    /// the <see cref="LatticeMetrics.SnapshotPinsGaugeName"/> observable gauge.
-    /// <see langword="null"/> on a host that did not register one; the pin
-    /// itself is unaffected, only its metering.
+    /// Per-silo census of live snapshot-cursor registry entries (which hold
+    /// back no WAL trimming; see the class summary), and the source of the
+    /// <see cref="LatticeMetrics.SnapshotPinsGaugeName"/> observable gauge.
+    /// <see langword="null"/> on a host that did not register one; the
+    /// registry entry itself is unaffected, only its metering.
     /// </summary>
     private SnapshotPinCensus? SnapshotPins => services.GetService<SnapshotPinCensus>();
 
@@ -152,10 +159,13 @@ internal sealed partial class LatticeCursorGrain
     }
 
     /// <summary>
-    /// Re-reports this cursor's WAL retention pin against the
-    /// registry. Best-effort: a registry failure is logged and
-    /// swallowed; the snapshot continues to read locally and trim
-    /// safety degrades to the GC's other predicate branches.
+    /// Re-reports this cursor's consumer entry against the registry, at the
+    /// coordinate's registry-snapshot HLC with a blocked floor only when that
+    /// HLC is positive. The HLC is currently always
+    /// <see cref="HybridLogicalClock.Zero"/>, so the entry carries no blocked
+    /// floor and holds back no WAL trimming. Best-effort: a registry failure
+    /// is logged and swallowed; the snapshot keeps serving its frozen
+    /// baselines, and only the pin census misses the entry.
     /// </summary>
     private async Task TryReportSnapshotPinAsync()
     {
@@ -187,9 +197,9 @@ internal sealed partial class LatticeCursorGrain
     }
 
     /// <summary>
-    /// Unregisters this cursor's WAL retention pin. Called from
-    /// the close path and TTL expiry so the pin does not outlive
-    /// the cursor.
+    /// Unregisters this cursor's consumer entry from the WAL cursor registry.
+    /// Called from the close path and TTL expiry so the entry does not
+    /// outlive the cursor.
     /// </summary>
     private async Task TryUnregisterSnapshotPinAsync()
     {

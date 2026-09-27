@@ -28,6 +28,12 @@ ceiling) behind a latency-injecting storage provider, three ways:
 - **`LeafQueue_BatchedAppend`** - one `AppendBatchAsync(N)`. Models the
   existing `SetManyAsync` coalescing path already on the public surface.
 
+> **Note on current code.** The leaf grain's write methods (both point `SetAsync`
+> overloads, `SetManyAsync` and `DeleteAsync`) are marked `[AlwaysInterleave]`, so
+> concurrent writes to one leaf do not wait for each other's WAL ack inside a single
+> grain turn. `LeafQueue_SerializedAppends` measures the fully serialized shape
+> #418 asked about; it is not what the leaf does with concurrent writes.
+
 The probe uses a single `WalShardGrain` so the measured contention is
 the single hot-leaf case the issue describes, not the post-split
 fanned-out steady state.

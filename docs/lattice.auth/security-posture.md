@@ -50,7 +50,7 @@ The layer assumes the following trust model:
 | Control plane (external) | The admin API (`ILatticeAuthAdmin`) | Every auth-admin call, reads included, is authorized against the reserved authorization namespace, which is fail-closed (see [Fail-closed guarantees](#fail-closed-guarantees)). |
 | Read catalog (external) | State-API catalog and structure endpoints | Existence of a tree/view/key is hidden from a caller who cannot read the underlying source (see [Fail-closed guarantees](#fail-closed-guarantees)). |
 | Explorer (operator tool) | The Explorer's gRPC client to the state API | Credentials only attach over a transport gRPC can confirm is secure (see [Transport-security (TLS) expectations](#transport-security-tls-expectations)). |
-| Internal grain calls | Direct in-cluster calls to the shard, leaf, and write-ahead-log shard grains | Defense-in-depth internal-origin assertion (see [Trust boundary for internal grain calls](#trust-boundary-for-internal-grain-calls)). |
+| Internal grain calls | Direct in-cluster calls to the shard, leaf, and write-ahead-log shard grains, to the internal coordinator and saga grains, and to the facade grain's internal-only system-tree and replication-apply interfaces | Defense-in-depth internal-origin assertion (see [Trust boundary for internal grain calls](#trust-boundary-for-internal-grain-calls)). |
 | Credential smuggling | Reserved `RequestContext` capability keys | The capability-stripping incoming call filter re-derives every internal capability from the real caller identity on each hop (see below). |
 
 ## Fail-closed guarantees
@@ -64,7 +64,10 @@ path:
   Even when the data-plane default effect is configured to allow, an unmatched
   decision in the reserved authorization namespace resolves to deny, so only a
   bootstrap administrator (or an explicitly modelled grant) is ever an
-  administrator.
+  administrator. The same isolation governs the tenant-registry (`sys-tenant-*`)
+  namespace, the tenant-administration capability ids, and a cluster-wide
+  capability request on the `*` sentinel (such as `Telemetry`): each is granted
+  only by an explicit matched allow rule.
 - **Denied mutations leave no partial state.** A denied single-key write,
   delete, range delete, CRDT apply, batch write, atomic multi-key write, or bulk
   load throws before any leg of the operation is applied. The adversarial
@@ -115,9 +118,14 @@ Two mechanisms harden this boundary:
    points, that the current turn carries the internal-origin marker
    (established only inside the trust boundary). A direct external client call
    carries no such marker - any forged one having been stripped by the filter -
-   and is refused. The assertion is keyed on the presence of the filter (a
-   sentinel the authorization layer registers beside it), so it activates exactly
-   when the filter that establishes the marker is present. A no-auth cluster, or
+   and is refused. The same assertion guards the other internal surfaces that
+   skip the gate: the atomic-write saga, the cross-tree receiver, the structural
+   lifecycle coordinators (tree deletion, merge, reshard, resize, snapshot, and
+   shard split and consolidation), and the facade grain's internal-only
+   system-tree and replication-apply interfaces. The assertion is keyed on the
+   presence of the filter (a sentinel the authorization layer registers beside
+   it), so it activates exactly when the filter that establishes the marker is
+   present. A no-auth cluster, or
    a cluster that registers a custom access gate without the filter, never sets
    the marker and pays nothing.
 
@@ -160,7 +168,7 @@ plainly:
   example a Microsoft Entra `oid` from a signed token) means impersonating it
   requires forging a signed token. Binding it to an identity minted by a
   trusted-token authenticator that maps a plaintext token verbatim to a subject
-  id (as the shipped samples do for brevity) turns the bootstrap id into an
+  id (as several shipped samples do for brevity) turns the bootstrap id into an
   unsigned bearer secret - acceptable for an in-process demo, **never** for a
   deployment reachable by anything untrusted.
 - **The bypass is cluster-wide god mode, not just policy repair.** A bootstrap

@@ -27,8 +27,9 @@ Isolation is achieved by filling in seams that core declares as inert no-ops:
   closed with a `LatticeTenantAccessDeniedException` rather than falling back to
   a shared tree.
 - `ITenantEnumerationFilter` prunes every tree-id enumeration to the trees the
-  active tenant owns, so a catalog read can never disclose another tenant's
-  tree names - or the tenant roster itself.
+  active tenant owns (platform-owned system ids stay in, governed separately), so a
+  catalog read can never disclose another tenant's tree names - or the tenant
+  roster itself.
 - `ITenantRegionVisibilityResolver` scopes region discovery to the regions a
   tenant is actually authorized into or resident in, so a tenant caller is not
   handed the cluster's whole routing topology.
@@ -51,9 +52,11 @@ metering tick.
 ## Region residency and observability
 
 An optional per-tenant residency policy confines a tenant's data to a residency
-set within an operator-authorized set of regions, refusing a replicated write for a
-region the tenant is not resident in; a separate placement binding on the tenant
-record can pin its trees to a dedicated WAL provider. Every
+set within an operator-authorized set of regions, refusing a replicated write in any
+region where the tenant is not `Online`. No shipped component advances a region past
+the first status a residency change gives it, so read the region-residency guide
+before configuring one. A separate placement binding on the tenant record can pin its
+trees to a dedicated WAL provider. Every
 tenant is observable through the `orleans.lattice.tenancy` OpenTelemetry meter,
 which publishes per-tenant usage, quota, and overage gauges tagged by tenant.
 

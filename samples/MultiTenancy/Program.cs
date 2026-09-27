@@ -54,10 +54,12 @@ using var host = Host.CreateDefaultBuilder(args)
         silo.AddLatticeMembership();
 
         // Auth installs the enforcement gate. Default-deny (the production
-        // posture): tenant-lifecycle operations authorize the cluster-wide Admin
-        // capability, which only a bootstrap administrator (or an explicitly
-        // authored cluster-wide Admin rule) holds - so the operator seam is
-        // fail-closed against every other caller.
+        // posture): tenant-lifecycle operations authorize Admin on the reserved
+        // authorization policy tree, which only a bootstrap administrator (or a
+        // subject explicitly granted whole-tree Admin on that tree through the
+        // access-administration delegation) holds - a cluster-wide all-trees rule
+        // does not reach it - so the operator seam is fail-closed against every
+        // other caller.
         silo.AddLatticeAuth(options =>
         {
             options.DefaultEffect = LatticeEffect.Deny;

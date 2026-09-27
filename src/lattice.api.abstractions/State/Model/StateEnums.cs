@@ -9,14 +9,17 @@ public enum TreeLifecycleState
     Active = 0,
 
     /// <summary>
-    /// The tree has been soft-deleted and is within its retention window;
-    /// its data is still readable but it is logically removed.
+    /// The tree has been soft-deleted and is within its retention window. Its
+    /// data is retained so the tree can be recovered, but it is not readable:
+    /// reads and writes on a soft-deleted tree throw until it is recovered.
     /// </summary>
     SoftDeleted = 1,
 
     /// <summary>
     /// The tree's retention window has elapsed and a purge is in progress
-    /// (or pending) that will physically remove its data.
+    /// (or pending) that will physically remove its data. The current state API
+    /// never reports this value: the tree catalog reports a tree as
+    /// <see cref="SoftDeleted"/> until the purge removes it.
     /// </summary>
     Purging = 2,
 }

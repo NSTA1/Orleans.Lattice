@@ -6,16 +6,16 @@ The probe **detects** divergence; it does not repair it. Localisation and repair
 
 ## What it compares
 
-Every shard maintains a `LeafProjectionDigest` - a content hash plus an entry count, a checkpoint offset, and a contribution-function `Version` - read through the core library's `ILattice.GetLeafProjectionDigestAsync(shardIndex)`. The probe asks each peer for the same shard's digest over a dedicated read-only RPC and classifies the pair:
+Every shard maintains a `LeafProjectionDigest` - a hash that folds the shard's content, entry count, and highest checkpoint offset, carried alongside that entry count, that checkpoint offset, and a contribution-function `Version` - read through the core library's `ILattice.GetLeafProjectionDigestAsync(shardIndex)`. The probe asks each peer for the same shard's digest over a dedicated read-only RPC and classifies the pair:
 
 | Outcome | Meaning | Mismatch counted? |
 |---|---|---|
-| `Match` | Versions agree and the hashes are byte-identical - the two clusters have applied the same prefix of the same WAL for this shard. | No |
-| `Mismatch` | Versions agree but the hashes differ - the two clusters have diverged for this shard. | **Yes** |
+| `Match` | Versions agree and the hashes are byte-identical - the shard's content, entry count, and highest checkpoint offset agree on both clusters. | No |
+| `Mismatch` | Versions agree but the hashes differ - the shard's content has diverged, or the two clusters' checkpoint offsets differ. The hash folds each cluster's own WAL replay position, so a mismatch is a conservative trigger rather than proof of divergence. | **Yes** |
 | `VersionSkew` | The digests carry different contribution-function `Version` values, so the hashes are not comparable (e.g. a rolling upgrade in flight). | No |
 | `RemoteUnavailable` | The peer could not produce a digest (projection-digest maintenance disabled or latched off remotely). | No |
 
-Only `Mismatch` represents real divergence, so only `Mismatch` increments the dedicated mismatch counter. Every comparison - including the three non-comparable outcomes - increments the per-comparison counter tagged with its `outcome`, so a dashboard can distinguish genuine divergence from a peer that simply has digesting turned off.
+Only `Mismatch` can signal divergence, so only `Mismatch` increments the dedicated mismatch counter. Every comparison - including the three non-mismatch outcomes - increments the per-comparison counter tagged with its `outcome`, so a dashboard can distinguish a hash mismatch from a peer that simply has digesting turned off. A probe RPC that faults (for example a peer the transport cannot reach) produces no comparison and no counter increment: it is logged and retried on the next cadence.
 
 The classification itself is exposed as the pure, stateless `DigestProbeComparer`:
 
@@ -75,7 +75,7 @@ The cadence is deliberately low: the probe is a slow background safety net, not 
 
 ### Interaction with projection-digest maintenance
 
-The probe respects the core library's `MaintainProjectionDigest` opt-out. A tree with `MaintainProjectionDigest = false` (including the system-tree default) has no digest to read, so the scheduler skips it - but still advances its cadence so the skip is cheap and quiet. If a tree's digest registry latches off permanently (a local digest read faults), the probe latches the skip for the activation lifetime rather than retrying on every pass. Remotely, a peer with digesting disabled returns a response whose `DigestAvailable` is `false`, which the comparer classifies as `RemoteUnavailable` rather than a mismatch.
+The probe respects the core library's `MaintainProjectionDigest` opt-out. A tree with `MaintainProjectionDigest = false` (including the system-tree default) has no digest to read, so the scheduler skips it - but still advances its cadence so the skip is cheap and quiet. If the local digest read throws `InvalidOperationException` (digest maintenance is disabled or latched off for the tree), the probe stops probing for the activation lifetime rather than retrying on every pass; any other local read fault skips only that shard for the current pass. Remotely, a peer with digesting disabled returns a response whose `DigestAvailable` is `false`, which the comparer classifies as `RemoteUnavailable` rather than a mismatch.
 
 ## Observability
 
@@ -86,7 +86,7 @@ Counters on the `orleans.lattice.replication` meter chart cross-cluster divergen
 | `orleans.lattice.replication.digest_probe.compared` | `tree`, `shard`, `peer`, `outcome`, `tenant` | Once per shard/peer comparison, every pass. |
 | `orleans.lattice.replication.digest_probe.mismatch` | `tree`, `shard`, `peer`, `tenant` | Only when the outcome is `Mismatch`. |
 
-A non-zero, *sustained* mismatch rate for a `(tree, shard, peer)` triple is the signal that those two clusters have genuinely diverged for that shard and need remediation. A burst of `outcome=version_skew` during a rolling upgrade is expected and self-clears once both sides run the same contribution-function version. A steady `outcome=remote_unavailable` simply means the peer has digesting turned off for that tree.
+A non-zero, *sustained* mismatch rate for a `(tree, shard, peer)` triple is the signal to localise that shard and, if you have opted in, repair it. Because the digest also folds each cluster's own checkpoint offset, a mismatch is a conservative trigger rather than proof of divergence; see [Cross-cluster comparison basis](anti-entropy-merkle-walk.md#cross-cluster-comparison-basis). A burst of `outcome=version_skew` during a rolling upgrade is expected and self-clears once both sides run the same contribution-function version. A steady `outcome=remote_unavailable` means the peer has digesting turned off for that tree, or that no real probe transport is registered (the default no-op transport answers every probe as unavailable).
 
 The metric name constants are exposed for dashboards that build queries from the public surface: `LatticeReplicationMetrics.DigestProbeComparedName` and `LatticeReplicationMetrics.DigestProbeMismatchName`.
 

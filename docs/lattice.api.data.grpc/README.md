@@ -10,14 +10,14 @@ It provides:
 
 - **A code-first gRPC service.** Ten unary RPCs - point read, range read, set, delete, range delete, non-atomic bulk upsert, the two atomic multi-key writes (single-tree and cross-tree), typed CRDT write, and typed CRDT read - bound from C# definitions rather than a `.proto`. The service is exposed under the fully-qualified gRPC service name `orleans.lattice.api.data`, so each method's full path is `/orleans.lattice.api.data/<Rpc>`.
 - **A public typed client.** `LatticeDataApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
-- **Shared Orleans marshalling.** Wire messages are the package's `[GenerateSerializer]` request / response records, serialized with the Orleans binary serializer and wrapping facade DTOs where needed, so client and server stay in lock-step by construction.
+- **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer, so client and server stay in lock-step by construction. Most RPCs use this package's own request / response records, wrapping facade DTOs where needed; `Get` answers with the facade's `DataReadResult`, and `ReadRange` and `DeleteRange` carry the facade's `DataRangeRequest` / `DataRangePage` and `DataRangeDeleteRequest` / `DataRangeDeleteResult` unchanged.
 - **Fail-closed authorization.** A per-call `ILatticeDataApiAuthorizer` seam gates every RPC; the default denies all traffic until a host configures one.
 
 The package has no external broker and no `.proto` file to maintain.
 
 ## Core Properties
 
-- **Write-capable, opt-in.** The binding exposes reads plus mutating verbs (set, delete, range delete, non-atomic bulk upsert, atomic single-tree and cross-tree writes, and typed CRDT writes); every mutation runs through the same fail-closed access gate as a read.
+- **Write-capable, opt-in.** The binding exposes reads plus mutating verbs (set, delete, range delete, non-atomic bulk upsert, atomic single-tree and cross-tree writes, and typed CRDT writes); every mutation runs through the same core access gate as a read, which fails closed once `Orleans.Lattice.Auth` is registered.
 - **Public client, internal service.** Callers consume `LatticeDataApiGrpcClient`; the service, marshallers, and method definitions are internal.
 - **No transport policy in the client.** Address, TLS, retries, deadlines, and credentials live on the caller's `GrpcChannel` / `CallInvoker`.
 - **Fail-closed.** Unconfigured, the binding denies every call: the default `DenyAllDataApiAuthorizer` is registered via `TryAdd`, so a host must register a real `ILatticeDataApiAuthorizer` (or turn enforcement off) before any call succeeds.
@@ -74,6 +74,24 @@ A write refused by admission control - a per-tree ceiling ([`LatticeOptions.MaxL
 
 The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No tenant id is echoed back: the caller asserted its own active tenant, so returning a server-side attribution adds nothing it did not already send. As with every trailer this binding emits, a key and a value are never disclosed.
 
+## Status mapping
+
+The service maps every facade outcome onto an explicit gRPC status rather than letting it fall through to a generic fault:
+
+| Exception | gRPC status | Why |
+|---|---|---|
+| `LatticeAuthorizationDeniedException` | `PermissionDenied` | The core gate denied the call. The `lattice-denied-tree`, `lattice-denied-operation`, `lattice-denied-subject`, and `lattice-denied-reason` trailers carry the non-sensitive fields of the denial, never a value. A refusal by the transport authorizer is also `PermissionDenied`, without trailers. |
+| `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the call (see [Per-tenant selection](#per-tenant-selection)). |
+| `ArgumentException` | `InvalidArgument` | A malformed request, including a `ReadRange` continuation token that names an unknown, drained, or closed cursor. |
+| `LatticeReservedTreeNamespaceException` | `InvalidArgument` | The call named a tree in a reserved, internally-composed namespace (`_lattice_`, `sys-`, or `t/`). |
+| `LatticeCrdtShapeNotRegisteredException` | `FailedPrecondition` | A typed OR-Map verb targeted a tree whose host never registered the map shape. |
+| `LatticeIdempotencyKeyMismatchException` | `FailedPrecondition` | An atomic batch reused an `OperationId` with a different key or tree set; nothing was applied. |
+| `LatticeReplicationModeMismatchException` | `FailedPrecondition` | A write used a shape that differs from the single merge mode the replicated tree is declared with. |
+| `LatticeSaturatedException` | `ResourceExhausted` | The tree is WAL-saturated and shed the call; back off and retry. |
+| `LatticeQuotaExceededException` | `ResourceExhausted` | An admission cap refused the write; see [Quota refusals](#quota-refusals) for its trailers. |
+| `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
+| anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
+
 ## Options
 
 `LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, has four properties: `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics are in the [data API configuration reference](../lattice.api.data/configuration.md#latticedataapigrpcoptions).
@@ -91,7 +109,7 @@ The dimension is what decides the client's next move: `ops-per-second` is **tran
 | `LatticeDataApiOperation` | The operation behind each RPC: `SetPoint`, `DeletePoint`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `GetPoint`, `ReadRange`, `DeleteRange`, `SetMany`, `CrdtWrite`, `CrdtRead`, and `Unknown` for an unmapped method. |
 | `ILatticeDataApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context; the default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix. |
 | `ILatticeDataApiActiveTenantBridge` | Active-tenant seam (`TenantId? Resolve(ServerCallContext context)`) that lifts the caller's asserted tenant onto the ambient scope; the default reads `ActiveTenantHeaderName`. |
-| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the ten RPCs - including the `CrdtWriteOp` selector (the twenty typed-CRDT mutations) a `CrdtWriteRequest` carries, the `CrdtKind` selector (the thirteen CRDT types) a `CrdtReadRequest` carries, and the nested `CrdtMapField` / `CrdtVectorEntry` rows - with their stable aliases in `GrpcDataTypeAliases`. |
+| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the ten RPCs - including the `CrdtWriteOp` selector (the twenty typed-CRDT mutations) a `CrdtWriteRequest` carries, the `CrdtKind` selector (the thirteen CRDT types) a `CrdtReadRequest` carries, and the nested `CrdtMapField` / `CrdtVectorEntry` rows - with their stable aliases in `GrpcDataTypeAliases`; the facade DTOs that `Get`, `ReadRange`, and `DeleteRange` reuse keep their `DataApiTypeAliases` aliases from `Orleans.Lattice.Api.Abstractions`. |
 | `AddLatticeDataApiGrpc` / `MapLatticeDataApiGrpc` | Registration and endpoint-routing extensions. |
 
 ## Reference

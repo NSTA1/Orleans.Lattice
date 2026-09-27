@@ -1445,11 +1445,13 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="starvationDrive">
     /// Who requested the starvation drive being admitted, or
     /// <see langword="null"/> for an activation replay. Drives share the replay
-    /// gate but never queue, and hold at most half its configured permits
-    /// (rounded down, with a floor of one). Per-tree GC touch limits do not
-    /// bound their aggregate demand on this process-wide gate (issue #3480).
-    /// Within that share a coverage-lag timer drive never takes the last free
-    /// slot, which is kept for WAL GC sweep drives (issue #3575).
+    /// gate but never queue, and hold at most half the permits in circulation -
+    /// the configured ceiling less any currently withheld (rounded down, with a
+    /// floor of one; issue #3610). Per-tree GC touch limits do not bound their
+    /// aggregate demand on this process-wide gate (issue #3480). Within that
+    /// share a coverage-lag timer drive never takes the last free slot, which is
+    /// kept for WAL GC sweep drives, and where the share is a single slot it
+    /// yields that slot while a refused sweep drive is waiting (issue #3575).
     /// </param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
@@ -3822,7 +3824,7 @@ internal sealed partial class BPlusLeafGrain
             // the checkpoint is already applied and harmless to lose. tail is the
             // oldest still-readable offset (ICommitLogReader.GetTailOffsetAsync).
             // When tail == checkpoint + 1 only the already-applied prefix was
-            // trimmed and the entire needed (checkpoint, head] window survives -
+            // trimmed and the entire needed (checkpoint, head) window survives -
             // this is the legitimate "durable floor kept the live tail" shape
             // (issue #919), which must replay cleanly, not throw. Loss is real
             // only when the first needed offset itself fell off the log, i.e.

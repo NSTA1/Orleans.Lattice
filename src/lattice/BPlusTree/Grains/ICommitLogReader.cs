@@ -105,11 +105,14 @@ internal interface ICommitLogReader
     /// the result of <see cref="GetHeadOffsetAsync"/>.
     /// <para>
     /// Used by the leaf-grain replay path to detect a fall-off-log
-    /// condition: if the persisted projection checkpoint is strictly
-    /// less than the tail offset, the WAL no longer contains the
-    /// entries needed to bring the projection forward by tail-replay
-    /// and the leaf must take the recovery path indicated by
-    /// <see cref="ProjectionRebuildPolicy"/>.
+    /// condition: when the tail offset is greater than the persisted
+    /// projection checkpoint plus one, the first entry the projection still
+    /// needs has been trimmed, tail-replay cannot bring it forward, and the
+    /// leaf takes the recovery path indicated by
+    /// <see cref="ProjectionRebuildPolicy"/> (every value currently surfaces
+    /// <see cref="LeafProjectionStaleException"/>). A tail of exactly
+    /// checkpoint plus one lost only the already-applied checkpoint entry
+    /// and replays cleanly.
     /// </para>
     /// </summary>
     /// <param name="treeId">The logical tree id. Must not be null or empty.</param>

@@ -91,7 +91,7 @@ Write tests following the conventions in `.github/instructions/testing.instructi
 Update documentation in the same change:
 
 1. **`docs/lattice/api.md`** - Add or update tables, signatures, and examples for any new or changed public API.
-2. **`.github/copilot-instructions.md`** - Update the namespace table, serializable types table, or any other section affected by the change.
+2. **`.github/skills/naming-conventions/SKILL.md`** - Update the public API type-name registry for any new, renamed, or removed public type or namespace. `.github/copilot-instructions.md` carries no tables of its own (its Naming Conventions section points at that registry), so update only the convention sections of it that the change affects.
 3. **`.github/instructions/*.instructions.md`** - Update grain key conventions, primitives tables, or testing instructions if affected.
 4. **`docs/lattice/*.md`** - Update any topic-specific doc that covers changed behavior. Add new docs to the matching group of the `README.md` `## Documentation` list if applicable.
 
@@ -149,7 +149,7 @@ Every gate below is invoked through `tools/Invoke-RepositoryWideGates.ps1`, neve
    pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture MojibakeHygieneTests -Project test/lattice
    ```
 
-6. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureStorageEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
+6. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureStorageEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a thin subclass in every test project (`IntegrationCategoryGateEnrolmentTests` fails the build for a project without one); run it in each project whose source you touched:
 
    ```powershell
    pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice
@@ -158,17 +158,17 @@ Every gate below is invoked through `tools/Invoke-RepositoryWideGates.ps1`, neve
    pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture IntegrationCategoryHygieneTests -Project test/lattice.storage.azuretable
    ```
 
-   If a fixture is flagged, either tag it (`[Category("Integration")]` is the default) or, if the detection is a false positive (the fixture stores a `*ClusterFixture`-suffixed type for an unrelated reason), rename the field type so it does not match the detection signal. Do not weaken the detection list to accommodate a single fixture.
+   If a fixture is flagged, either tag it (`[Category("Integration")]` is the default) or, if the detection is a false positive (the fixture stores a `*ClusterFixture`-suffixed type for an unrelated reason), rename the field type so it does not match the detection signal. A fixture that builds only an in-process host and has been measured under 5 seconds is exempted instead with `[FastInProcessHostFixture("...")]` carrying that measurement, per the testing master. Do not weaken the detection list to accommodate a single fixture.
 
 If any 6b gate is red, **do not run 6c**.
 
 #### 6c - Test suite (changed project, non-chaos)
 
-Only after 6a and 6b are green, run the non-chaos test suite. **The scope rule, the source-to-test-project mapping, the pre-PR run policy, and the "full cross-solution sweep is CI's job" rationale all live in the master, [`.github/instructions/testing.instructions.md`](../instructions/testing.instructions.md) (Tiers 2-4) - follow it; do not restate it here.** In short: run only the test project(s) covering the source project you changed (core library -> `test/lattice/Orleans.Lattice.Tests.csproj`; a downstream package -> that package's own test project; both only for a public-API change in the core that ripples into a downstream project). Exclude chaos, wrap with a two-minute hang blame, and report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
+Only after 6a and 6b are green, run the non-chaos test suite. **The scope rule, the source-to-test-project mapping, the pre-PR run policy, and the "full cross-solution sweep is CI's job" rationale all live in the master, [`.github/instructions/testing.instructions.md`](../instructions/testing.instructions.md) (Tiers 2-4) - follow it; do not restate it here.** In short: run only the test project(s) covering the source project you changed (core library -> `test/lattice/Orleans.Lattice.Tests.csproj`; a downstream package -> that package's own test project; both only for a public-API change in the core that ripples into a downstream project). Exclude `Chaos` (and `AzureStorageEmulator` unless Azurite is running), wrap with the master's three-minute hang blame, and report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
 
 ```powershell
 # Example: a change scoped to src/lattice/
-dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos" --nologo --blame-hang-timeout 2m --blame-hang-dump-type none
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" --nologo --blame-hang-timeout 3m --blame-hang-dump-type none
 ```
 
 Before Phase 8 deliver - once the user has explicitly asked for commit/push/PR - repeat that scoped run across **every** package the PR touches (again per the master's mapping; for a PR that touches only repo-level files such as `docs/` or `CHANGELOG.md` with no `src/lattice/` code, the master's targeted hygiene-gate filter suffices instead of the whole core suite). A full cross-solution `dotnet test` (no project arg) is **not** a required local step - CI runs the full cross-solution non-chaos suite on every PR, so cross-project breakage in projects you did not touch is caught there.
@@ -206,8 +206,8 @@ Only when the user explicitly asks:
 4. **Push** the branch.
 5. **Create a PR** using `gh pr create` with:
    - A title matching the commit convention: `feat: <description>`
-   - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking`
-   - A body written to a tracked scratch file (`.scratch/pr-body.md` - `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
+   - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking` - plus the package label of every package the PR touches under `src/`, `test/`, or `docs/` (see the `pr-labels` skill)
+   - A body written to a fixed scratch file (`.scratch/pr-body.md` - `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
    - **An issue-closing keyword for every tracked issue the PR resolves.** When the work ships a tracked item, the PR body **must** contain a GitHub closing keyword (`Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`) referencing the issue number, so the issue auto-closes when the PR squash-merges into `main`. A bare mention of the issue number in prose does **not** trigger auto-close - only the keyword forms do, and only when the PR targets the default branch (`main`, which is always the case here). Put the keyword in the `## Summary` section. This is the only reliable way the GitHub issue is closed on merge rather than requiring a manual `gh issue close`.
 6. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
 
@@ -259,10 +259,10 @@ Closes #NNN
 
 #### PR body file write path
 
-The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-ASCII characters (em-dashes `-`, checkmarks `✓`, arrows `→`, less-than-or-equal `≤`) has produced files that `gh` ingests as empty/identical-to-current with no error surfaced. Use this path instead:
+The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-ASCII characters (em-dashes (U+2014), checkmarks `✓`, arrows `→`, less-than-or-equal `≤`) has produced files that `gh` ingests as empty/identical-to-current with no error surfaced. Use this path instead:
 
-1. **Write to a tracked scratch path**, not `New-TemporaryFile`. The repo's `.gitignore` covers `.scratch/`; the file stays inspectable and survives across terminal calls if a step fails.
-2. **Restrict body content to ASCII** where practical: `-` instead of `-`, `to` instead of `→`, `[x]` text instead of `✓`, `<=` instead of `≤`. Markdown tables, code spans, and bullets are fine.
+1. **Write to a fixed, gitignored scratch path**, not `New-TemporaryFile`. The repo's `.gitignore` covers `.scratch/`; the file stays inspectable and survives across terminal calls if a step fails.
+2. **Restrict body content to ASCII** where practical: `-` instead of an em-dash, `to` instead of `→`, `[x]` text instead of `✓`, `<=` instead of `≤`. Markdown tables, code spans, and bullets are fine.
 3. **Build the file via `edit_file` after seeding it with a one-line `New-Item`**, not via a single PowerShell heredoc. Heredocs of more than ~15 lines containing backticks, pipes, and quotes have triggered silent parser failures where `Add-Content` returns nothing and the file is unchanged. `edit_file` operates outside the shell and is reliable. **Use `replace_string_in_file` with verbatim anchors - not `edit_file` with similarity-matched `// ...existing code...` placeholders - when modifying a long instructions/markdown file, because similarity matching has clobbered adjacent sections in this repo before.**
 4. **Confirm file size before invoking `gh`**: `(Get-Item .scratch/pr-body.md).Length` must match what you intended (e.g. 5kB+ for a typical feature PR).
 5. **Leaving the scratch file in place is fine** - it's gitignored, so it doesn't pollute the working tree. Keeping it aids debugging if the next PR-edit silently fails.
@@ -287,6 +287,7 @@ When the user explicitly asks to release one or more packages:
 
    - The wave never ships from `main`. Capture the chore PR's merge commit, push the inert family anchor tag `v<X.Y.Z>` at it, and cut the release line branch `release/<X.Y>` from the same commit. Every per-package tag is cut from that branch, so `main` moving mid-wave cannot change what ships.
    - Push per-package tags **one at a time**, polling `gh run list` for the matching `Publish` run between each - GitHub coalesces a bulk tag push into one event, so all but one tag would silently ship nothing.
+   - Push the core `lattice-v<X.Y.Z>` tag **last**. It is the only tag that also triggers the `Docs` workflow, which republishes the documentation site, so it follows every other tag in the wave once each has reached `completed/success`.
    - Verify every publish run reaches `completed/success`.
    - A **patch** is a cherry-pick onto the existing `release/<X.Y>` line, never a tag on `main`. A **held-back** package is patched from its own older line branch.
 
@@ -299,11 +300,11 @@ When the user explicitly asks to release one or more packages:
 - **The Phase 6b hygiene gates are unskippable and run *before* the unit-test suite.** Each gate must be invoked verbatim and its output transcript pasted into the chat reply. "I checked and it's clean" without the transcript is a protocol violation. These gates have caught real CI failures during this agent's own past PRs - running them locally costs seconds; discovering a failure in CI costs a force-push and a wasted CI run.
 - **The Phase 7 memory-allocation pass is mandatory and must produce a written classification.** "I checked and it looks fine" is not a memory-allocation review. Enumerate the hot-path allocations, classify each (✅ / ⚠️ / 📝), and apply every ⚠️ fix before declaring work complete. The user has had to ask for this retrospectively in the past - never assume it can be folded into the correctness pass.
 - **When a tracked item ships, close its GitHub issue as part of delivery.** Dependency / sequencing information lives in the issue threads, not in markdown annotations.
-- **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body - it has produced silent failures with non-ASCII content.
+- **Always use `--body-file` with a gitignored `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body - it has produced silent failures with non-ASCII content.
 - **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied - it is printed in the failure case too.
-- **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"` - never the whole solution on every inner-loop iteration. The scope rule and its rationale are owned by the master, `.github/instructions/testing.instructions.md`; the full cross-solution non-chaos sweep is CI's job, run on every PR.
+- **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator"` - never the whole solution on every inner-loop iteration. The scope rule and its rationale are owned by the master, `.github/instructions/testing.instructions.md`; the full cross-solution non-chaos sweep is CI's job, run on every PR.
 - **Always run tests in the foreground with failure output immediately visible.** Never launch `dotnet test` as a background command (`run_command_in_terminal` with `background=true`) and never redirect or suppress its output stream - failure messages, assertion diffs, and stack traces must land in the chat transcript on the first run. Re-running a test suite purely to capture the failure output you already had but discarded is a protocol violation: it doubles wall-clock cost and, on flaky or environment-sensitive tests, can mask the original failure entirely. If a `dotnet test` invocation reports `Failed: N > 0`, the very next thing in the chat reply must be the offending test name(s) and their stack trace, quoted verbatim from the run that produced them.
-- **Always wrap dotnet test with a two-minute hang blame.**
+- **Always wrap dotnet test with a three-minute hang blame** (`--blame-hang-timeout 3m`, the testing master's Tier 4 value).
 - **Build must be clean** - zero errors, zero warnings - before declaring work complete.
 - **One feature per branch.** Branch name: `feat/<short-description>`, per the `<type>/<kebab-case-description>` convention in `.github/copilot-instructions.md` that the CI branch-name guard enforces (a `feature/` prefix fails it).
 - **Never use inline PowerShell `-Command` (or `run_command_in_terminal` heredocs) to edit file content with multi-line strings.** Semicolon-joined inline commands have leaked variable-assignment text into target files (the `README.md` `ath = 'README.md'` incident - the literal text `ath = 'README.md'` ended up inside a csharp code block in the Quick Start). For any edit that involves a multi-line string literal, use one of: (a) `edit_file` / `replace_string_in_file` directly, or (b) seed an empty `.scratch/<edit>.ps1` via `New-Item -Force`, populate it with `edit_file`, then dot-source it. Inline `run_command_in_terminal` is fine for single-line, no-string-content commands like `dotnet build` or `git status`.

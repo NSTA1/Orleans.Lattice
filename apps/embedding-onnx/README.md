@@ -123,9 +123,10 @@ An unknown `EMBED_PROVIDER`, or an unparseable `EMBED_PORT`, `EMBED_DEVICE_ID`, 
 startup: a container that boots on the CPU is strictly more useful than one that
 refuses to boot. Two things **are** fatal. A missing or unreadable model or
 vocabulary is, because serving wrong vectors is worse than serving none. So is an
-`EMBED_INTRA_THREADS` that is present but is neither `auto` nor a non-negative
-integer (issue #2887): that knob selects an operating mode, and deriving silently
-from a typo would be indistinguishable from leaving it unpinned on purpose.
+`EMBED_INTRA_THREADS` set to a non-blank value that is neither `auto` nor a
+non-negative integer (issue #2887; a blank value derives, exactly like an unset
+one): that knob selects an operating mode, and deriving silently from a typo
+would be indistinguishable from leaving it unpinned on purpose.
 
 ### Why the intra-op thread count is not left to ONNX Runtime
 

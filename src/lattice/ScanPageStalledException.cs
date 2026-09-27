@@ -6,8 +6,10 @@ namespace Orleans.Lattice;
 /// Thrown by <c>ShardRootGrain</c> when a single range-scan page fill exceeds
 /// the per-tree
 /// <see cref="Orleans.Lattice.LatticeOptions.MaxScanPageStallDuration"/>
-/// ceiling (default 30 seconds) measured end to end from the first statement of
-/// the grain call.
+/// ceiling (by default derived as the silo's Orleans response timeout minus
+/// <see cref="Orleans.Lattice.LatticeOptions.DefaultMaxScanPageStallHeadroom"/>)
+/// measured end to end from the first statement of the grain call, with no
+/// completed work it can return.
 /// <para>
 /// <see cref="Orleans.Lattice.LatticeOptions.MaxScanPageDuration"/> is the
 /// primary, cooperative bound, but it can only be sampled <em>between</em> leaf
@@ -28,16 +30,20 @@ namespace Orleans.Lattice;
 /// rather than racing them.
 /// </para>
 /// <para>
-/// <b>Since issue 2585 the ceiling only throws when it caught the walk holding
-/// nothing.</b> A page fill whose sortable rows had already accumulated banks
-/// them as an ordinary short page (<c>HasMore = true</c>, no
-/// <c>ResumeFromKey</c>) instead of faulting, so the work is not discarded and
-/// the caller's next request starts past it. This exception therefore names the
-/// strictly narrower case where the ceiling fired before any row was read, or
-/// on a path (counts, deletes, diagnostics) whose result carries no
-/// continuation to bank into. That is why a repeated stall used to be a
-/// livelock - every attempt re-walked and re-discarded the same leaves - and no
-/// longer is.
+/// <b>Since issues 2585 and 2807 the ceiling only throws when it caught the
+/// walk holding nothing it can bank.</b> A page fill whose sortable rows had
+/// already accumulated banks them as an ordinary short page
+/// (<c>HasMore = true</c>, no <c>ResumeFromKey</c>), and an aggregate walk (for
+/// example counts, diagnostics, storage usage, projection rebuild or
+/// materialiser lag) banks the partial page it published at its last leaf
+/// boundary, instead of faulting, so the work is not discarded and the caller's
+/// next request starts past it. This exception therefore names the strictly
+/// narrower case where the ceiling fired before any leaf had contributed, or on
+/// one of the two operations that deliberately never bank - the snapshot
+/// baseline capture (a partial baseline is not a baseline) and the bounded
+/// range delete (its replication notification is published after the walk).
+/// That is why a repeated stall used to be a livelock - every attempt re-walked
+/// and re-discarded the same leaves - and no longer is.
 /// </para>
 /// <para>
 /// The typed slots carry the per-occurrence attribution that makes the
@@ -99,7 +105,9 @@ public sealed class ScanPageStalledException : TimeoutException, ILatticeDomainF
     /// <summary>
     /// How far the page fill had got when the ceiling fired: <c>prologue</c>
     /// (preparing the shard for the operation), <c>descent</c> (traversing to
-    /// the start leaf), or <c>leaf-walk</c> (reading the leaf chain).
+    /// the start leaf), <c>leaf-walk</c> (reading the leaf chain), or
+    /// <c>baseline-fold</c> (a snapshot baseline capture folding its frozen
+    /// leaves' WAL tails, a fanned-out pass).
     /// <para>
     /// This is the field that makes a recurrence self-diagnosing.
     /// <c>MaxScanPageDuration</c> alone cannot distinguish "the prologue never
@@ -113,7 +121,9 @@ public sealed class ScanPageStalledException : TimeoutException, ILatticeDomainF
     /// <summary>
     /// Leaves the walk had completed when the ceiling fired. Zero in the
     /// prologue and descent phases; in the leaf-walk phase it identifies the
-    /// in-flight leaf read as the next one after this count.
+    /// in-flight leaf read as the next one after this count. In the
+    /// baseline-fold phase it counts the leaves in the chain being folded; the
+    /// fold pass is fanned out, so several leaf folds may have been in flight.
     /// </summary>
     [Id(4)] public int LeavesVisited { get; set; }
 

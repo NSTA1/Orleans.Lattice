@@ -15,8 +15,8 @@ and the cross-tenant grant operations (**list**, **offer**, **approve**,
 **reject**, and **revoke**), alongside the unauthenticated auth-scheme discovery RPC. A read-only
 `LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted self-service reads -
 **current tenant**, **list accessible tenants**, and **get tenant** - which any
-authenticated caller may invoke and which the facade scopes fail-closed to that
-caller. Every wire message rides the Orleans serializer, so the contract stays
+caller, including an anonymous one, may invoke and which the facade scopes
+fail-closed to that caller. Every wire message rides the Orleans serializer, so the contract stays
 versioned and additive-only.
 
 Wiring on the co-hosting silo:

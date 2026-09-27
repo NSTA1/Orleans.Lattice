@@ -266,7 +266,7 @@ Do not use this tier for anything else - any non-WAL-path hypothesis is exercise
 
 ```powershell
 # Copy parameters template and edit SubscriptionId (Location defaults to westus3).
-Copy-Item benchmark/azure-throughput/scripts/parameters.ps1 ``
+Copy-Item benchmark/azure-throughput/scripts/parameters.ps1 `
           benchmark/azure-throughput/scripts/parameters.local.ps1
 az login
 ./benchmark/azure-throughput/scripts/deploy.ps1
@@ -281,17 +281,17 @@ az login
 ./benchmark/azure-throughput/scripts/update.ps1
 
 # Baseline arm.
-./benchmark/azure-throughput/scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 ``
-    -ExtraSiloEnv @{ BENCH_TREE_ID = 'azure-throughput-baseline'; BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'false' }
+./benchmark/azure-throughput/scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 `
+    -ExtraSiloEnv @{ BENCH_TREE_ID = 'azure-throughput-baseline-r1'; BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'false' }
 
 # Candidate arm.
-./benchmark/azure-throughput/scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 ``
-    -ExtraSiloEnv @{ BENCH_TREE_ID = 'azure-throughput-candidate'; BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'true' }
+./benchmark/azure-throughput/scripts/run-cohort.ps1 -Vehicles 4000 -TickHz 5 -DurationSec 45 `
+    -ExtraSiloEnv @{ BENCH_TREE_ID = 'azure-throughput-candidate-r1'; BENCH_WAL_ELIMINATE_CANDIDATE_ROW = 'true' }
 ```
 
 Each `run-cohort.ps1` call stops any leftover silo/producer, restarts the silo with the cohort's env drop-in, runs the producer for `DurationSec`, stops the silo to trigger drain + FINAL, then extracts both unit journals and a per-second CPU/RSS sampler CSV into `benchmark/.run/azure-throughput/`. It prints a self-contained summary block (host, throughput, CPU, RSS, diagnostics, HEALTHY/WEDGE verdict) to stdout.
 
-**Keep every variable identical between arms except the option under test.** That includes `Vehicles`, `TickHz`, `DurationSec`, and any `BENCH_*` env vars not directly named by the hypothesis. `BENCH_TREE_ID` is the one exception: `run-cohort.ps1` defaults it to a per-cohort UTC-stamped id (`cohort-<cohort-name>`) so every cohort gets a fresh manifest-key namespace and the first ~10s of throughput samples are not biased by manifest replay of a previous cohort. Setting `BENCH_TREE_ID` explicitly per arm (as in the example above) is useful for tagging the cohort sample in the silo log, but is not required for correctness - the default rotation is what guarantees a fresh tree. **Never** pin `BENCH_TREE_ID` to the same value across arms or across runs of the same arm: that re-introduces stale manifest history into the cohort and the per-run variance becomes a function of "which run inherited the largest replay" rather than of the option under test.
+**Keep every variable identical between arms except the option under test.** That includes `Vehicles`, `TickHz`, `DurationSec`, and any `BENCH_*` env vars not directly named by the hypothesis. `BENCH_TREE_ID` is the one exception: `run-cohort.ps1` defaults it to a per-cohort UTC-stamped id (`cohort-<cohort-name>`) so every cohort gets a fresh manifest-key namespace and the first ~10s of throughput samples are not biased by manifest replay of a previous cohort. Setting `BENCH_TREE_ID` explicitly per arm (as in the example above, with a fresh `-r<n>` suffix on every run, because an explicit value is used verbatim) is useful for tagging the cohort sample in the silo log, but is not required for correctness - the default rotation is what guarantees a fresh tree. **Never** pin `BENCH_TREE_ID` to the same value across arms or across runs of the same arm: that re-introduces stale manifest history into the cohort and the per-run variance becomes a function of "which run inherited the largest replay" rather than of the option under test.
 
 **Reading the result.** `run-cohort.ps1` prints a structured summary block at the end of every cohort:
 

@@ -530,9 +530,10 @@ if (packageReplicationConfigured)
     //      receiver-side authenticator accepts batches whose
     //      x-lattice-replication-secret header matches.
     //
-    //   2. If no secret is configured (the legacy `run-legacy.ps1` /
-    //      single-host quick-start path), authentication is disabled
-    //      so the sample still works out-of-the-box. This is safe for
+    //   2. If no secret is configured (a host process started directly on
+    //      one machine with the per-cluster appsettings.cluster.{us,eu}.json,
+    //      whose localhost peer endpoints carry no secret), authentication is
+    //      disabled so the sample still works out-of-the-box. This is safe for
     //      a dev sample bound to loopback; production deployments
     //      must supply a secret and leave RequireAuthentication at
     //      its secure default.
@@ -638,12 +639,13 @@ builder.Services.AddSingleton<PartCrdtStore>();
 // prefix when the simulated inter-silo partition heals.
 builder.Services.AddHostedService<PartitionHealHostedService>();
 
-// Keeps a lightweight B+ tree index of {site}/{stage}/{serial}
-// entries so the "Parts by site" page can render a live per-site
-// inventory via a range scan on ILattice. The index subscribes to
-// FederationRouter.FactRouted and writes one entry per Fact - every
-// fact type carries a Site, so inspection-only sites (Stuttgart CMM
-// Lab) appear alongside process-step sites.
+// Keeps a "which parts are at site X?" view for the "Parts by site"
+// page: a part-major {serial}/{site} tree whose rows are tagged with
+// their site, so the page answers through the tag index rather than a
+// range scan. The index subscribes to FederationRouter.FactRouted and
+// upserts one row per (part, site) - every fact type carries a Site, so
+// inspection-only sites (Stuttgart CMM Lab) appear alongside
+// process-step sites.
 builder.Services.AddSingleton<SiteActivityIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SiteActivityIndex>());
 

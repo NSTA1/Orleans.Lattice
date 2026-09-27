@@ -75,20 +75,20 @@ internal sealed class AtomicWriteGrain(
     private bool _terminalRetentionEnsured;
 
     /// <summary>
-    /// Sentinel prefix stamped onto
-    /// <see cref="State.AtomicWriteState.FailureMessage"/> when the
-    /// saga's batched <c>SetManyAsync</c> dispatch raised an
-    /// <see cref="InvalidOperationException"/> whose message named
-    /// <see cref="LatticeOptions.WalDrainBudget"/> (the writer-side
-    /// shutdown-refusal shape from
-    /// <c>WalCommitLogWriter.DrainAsync</c>). The saga short-circuits
-    /// the retry loop and the compensate-broadcast pass on this shape
-    /// because both paths would route through the same drained writer
-    /// and fail identically, burning saga-retry budget against a
-    /// writer that is provably not coming back this lifetime. The
-    /// No current path stamps this prefix, so the <c>shutdown_refused</c>
-    /// outcome arm on <see cref="LatticeMetrics.AtomicWriteCompleted"/> is a
-    /// retained compatibility arm rather than a live producer.
+    /// Sentinel prefix that marks a shutdown-refused saga in
+    /// <see cref="State.AtomicWriteState.FailureMessage"/>: the shape where
+    /// the saga's batched <c>SetManyAsync</c> dispatch hit the writer-side
+    /// shutdown refusal (<see cref="LatticeOptions.WalDrainBudget"/>, raised
+    /// from <c>WalCommitLogWriter.DrainAsync</c>). No current path stamps this
+    /// prefix: the shutdown fast-path in <see cref="ExecutePhaseAsync"/> throws
+    /// <see cref="LatticeShuttingDownException"/> without persisting, leaving
+    /// the saga to resume on the next activation. The prefix is still read - it
+    /// skips the terminal broadcast, surfaces
+    /// <see cref="LatticeShuttingDownException"/> to the caller, and selects
+    /// the <c>shutdown_refused</c> outcome arm on
+    /// <see cref="LatticeMetrics.AtomicWriteCompleted"/> - so a failure message
+    /// that already carries it keeps its meaning; that arm is a retained
+    /// compatibility arm rather than a live producer.
     /// </summary>
     private const string ShutdownRefusedFailurePrefix = "[shutdown-refused] ";
 
@@ -751,19 +751,25 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Captures pre-saga values for every key via
-    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetRawEntryAsync"/> so <c>ExpiresAtTicks</c>
-    /// metadata is preserved for compensation. Already-expired entries are
-    /// treated as absent (matching public read semantics) so compensation
-    /// will restore an "absent" outcome rather than resurrect a stale value.
+    /// Captures pre-saga values for every key through the batched
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetRawEntriesAsync"/>
+    /// (one call per touched shard), recording each key's value, expiry,
+    /// origin and version vector. Already-expired and tombstoned entries are
+    /// treated as absent (matching public read semantics). The captured values
+    /// feed the guard evaluation of a guarded atomic batch: a non-matching key,
+    /// or one with no live pre-saga value, fails the whole batch before any
+    /// write. No compensation path reads them - an abort drops the prepared
+    /// writes rather than restoring pre-values.
     /// <para>
     /// Routing is resolved once via the public <see cref="ILattice.GetRoutingAsync"/>
     /// hook (which returns routing metadata only, no CRDT internals) and the
     /// saga then addresses <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> directly. This keeps
     /// the raw <see cref="LwwEntry"/> traffic on guarded internal grain
     /// interfaces - it never crosses the public <see cref="ILattice"/> surface.
-    /// A <see cref="StaleShardRoutingException"/> from an adaptive shard split
-    /// triggers a one-shot routing refresh and retry for the affected key.
+    /// A <see cref="StaleShardRoutingException"/> or
+    /// <see cref="StaleTreeRoutingException"/> from a topology change forces a
+    /// routing refresh and a retry (re-bucketing the affected keys onto their
+    /// new owners), bounded by <see cref="StaleRoutingRetryBudget"/>.
     /// </para>
     /// </summary>
     private async Task PrepareAsync(string treeId, List<KeyValuePair<string, byte[]>> entries)
@@ -2684,14 +2690,16 @@ internal sealed class AtomicWriteGrain(
                     // still-throttled account (the single-account
                     // 409-Conflict amplification regime documented
                     // in benchmark/azure-throughput/throughput.md
-                    // section 32). The standard batchFailure catch
-                    // path absorbs the exception and either retries
-                    // (which re-runs the quiesce gate, giving the
-                    // tree another full budget to recover) or pivots
-                    // to Compensate when the per-step retry budget
-                    // exhausts - both branches are far cheaper than
-                    // a re-dispatched batched SetManyAsync against
-                    // a throttled account.
+                    // section 32). The batchFailure catch below
+                    // records it and the saturation fast-path then
+                    // skips both the retry and the compensate-pivot:
+                    // it leaves the saga's persisted state at Execute
+                    // with the current NextIndex and rethrows
+                    // LatticeSaturatedException, so the caller backs
+                    // off and re-issues the saga (same operationId)
+                    // to resume - far cheaper than a re-dispatched
+                    // batched SetManyAsync against a throttled
+                    // account.
                     var quiesceOutcome = await QuiesceOnSaturatedAsync(state.State.TreeId).ConfigureAwait(true);
                     if (quiesceOutcome == SagaQuiesceOutcome.StillSaturated)
                     {
@@ -2810,10 +2818,12 @@ internal sealed class AtomicWriteGrain(
                 // against the same drained writer wastes the retry
                 // budget and eventually races grain deactivation
                 // into an OrleansMessageRejectionException cascade.
-                // Skip the retry, stamp a sentinel-prefixed
-                // FailureMessage, and pivot straight to compensation
-                // so the saga settles with the distinct
-                // "shutdown_refused" outcome tag instead of "failed".
+                // The shutdown fast-path below therefore skips the
+                // retry and the compensate-pivot and throws
+                // LatticeShuttingDownException without persisting
+                // anything: the saga stays at Execute and resumes on
+                // the next silo activation. No sentinel is stamped and
+                // no outcome counter is emitted on this path.
                 var isShutdownRefused = IsTerminalShutdownRefusal(batchFailure);
 
                 // Saga-coordinator predicate: detect the saturation
@@ -3052,17 +3062,18 @@ internal sealed class AtomicWriteGrain(
         _terminalRetentionEnsured = true;
 
         // Emit a terminal outcome counter for operators. "committed" = all
-        // writes applied; "failed" = compensation ran after a Prepare/Execute
-        // failure surrogate was recorded; "compensated" = rolled back for a
+        // writes applied; "failed" = the saga aborted (recorded the abort
+        // decision and broadcast the abort terminals) after a Prepare/Execute
+        // failure surrogate was recorded; "compensated" = aborted for a
         // reason that was not captured as a surrogate failure (e.g. explicit
-        // caller cancellation path); "shutdown_refused" = the saga's batched
-        // dispatch raised the writer-side WalDrainBudget refusal (the host
-        // is shutting down) and the saga short-circuited the retry loop and
-        // the compensate-broadcast pass rather than burning retry budget
-        // against a writer that is provably not coming back. Lets operators
-        // distinguish saga failures caused by shutdown coincidence from
-        // saga failures caused by genuine commit conflicts on the same
-        // operator dashboard.
+        // caller cancellation path); "shutdown_refused" = the persisted
+        // FailureMessage carries ShutdownRefusedFailurePrefix. No current
+        // path stamps that prefix - the shutdown fast-path in
+        // ExecutePhaseAsync throws without settling the saga - so the arm is
+        // retained for compatibility rather than produced by current code.
+        // Lets operators distinguish saga failures caused by shutdown
+        // coincidence from saga failures caused by genuine commit conflicts
+        // on the same operator dashboard.
         var failureMessage = state.State.FailureMessage;
         var outcome = success
             ? "committed"
@@ -3148,9 +3159,9 @@ internal sealed class AtomicWriteGrain(
     /// <see cref="AtomicWriteState.KeyFingerprint"/> and
     /// <see cref="AtomicWriteState.TransactionId"/>. None of those need the
     /// byte[]-bearing staged batch, and every consumer that does
-    /// (compensation's pre-value restore, the per-leaf terminal broadcast, the
-    /// batch-size metric) has already run by the time this checkpoint is
-    /// reached.
+    /// (the batched execute dispatch, the guard evaluation over the pre-saga
+    /// snapshots, the per-leaf terminal broadcast, the batch-size metric) has
+    /// already run by the time this checkpoint is reached.
     /// <para>
     /// Left in place, the batch - the new values in
     /// <see cref="AtomicWriteState.Entries"/>, the pre-saga snapshots in
@@ -3200,9 +3211,8 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Stamps the saga's persisted transaction id onto Orleans
-    /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
-    /// <c>DeleteAsync</c> call the saga makes - including compensation
-    /// rewrites - surfaces with the same
+    /// <see cref="RequestContext"/> so every write the saga issues (the
+    /// batched execute-phase dispatch) surfaces with the same
     /// <see cref="LatticeMutation.TransactionId"/>. Lazily mints an id
     /// when persisted state is empty (e.g. legacy persisted state or a
     /// reactivation after a crash that pre-dated this field) so resumed
@@ -3219,9 +3229,8 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Re-establishes the saga's persisted author-delta carry on Orleans
-    /// <see cref="RequestContext"/> so every per-key <c>SetAsync</c> /
-    /// <c>DeleteAsync</c> the saga issues - including compensation
-    /// rewrites - surfaces with the same
+    /// <see cref="RequestContext"/> so every write the saga issues (the
+    /// batched execute-phase dispatch) surfaces with the same
     /// <see cref="LatticeMutation.Delta"/> as the original batch.
     /// No-op when the caller did not supply a delta context on the first
     /// <see cref="ExecuteAsync"/> call.
@@ -3234,15 +3243,10 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Re-establishes the saga's persisted vector-clock frontier on
-    /// Orleans <see cref="RequestContext"/> so every per-key
-    /// <c>SetAsync</c> the saga issues during the
-    /// <see cref="AtomicWritePhase.Execute"/> phase emits a
+    /// Orleans <see cref="RequestContext"/> so every write in the saga's
+    /// batched <see cref="AtomicWritePhase.Execute"/>-phase dispatch emits a
     /// <see cref="LatticeMutation"/> carrying the identical
     /// <see cref="LatticeMutation.VectorClock"/> across the batch.
-    /// Compensation rolls override this per-key with each
-    /// <see cref="AtomicPreValue.VectorClock"/> via
-    /// <see cref="LatticeVectorClockContext.With"/>; the saga-wide
-    /// stamp is restored when each rollback's scope disposes.
     /// Setting <see langword="null"/> explicitly clears any stale
     /// ambient context inherited from the reminder-driven activation
     /// so a saga that captured a null frontier emits null verbatim.
@@ -3257,12 +3261,12 @@ internal sealed class AtomicWriteGrain(
     /// <see cref="RequestContext"/> via
     /// <see cref="LatticeAtomicBatchContext"/> as a saga-wide
     /// <c>(Size, Index=0)</c> default at the head of every
-    /// <see cref="RunSagaAsync"/> entry. The execute and compensate
-    /// per-key loops override the index inside their own
-    /// <see cref="LatticeAtomicBatchContext.With"/> scopes; the
-    /// saga-wide stamp is what reminder-driven re-entry observes
-    /// before the per-key loop runs and what an uncaught throw out
-    /// of a per-key scope leaves visible to any post-saga publish
+    /// <see cref="RunSagaAsync"/> entry. The execute phase overrides it
+    /// inside its own <see cref="LatticeAtomicBatchContext.With"/> scope
+    /// around each batched dispatch (adding the key-to-global-index map);
+    /// the saga-wide stamp is what reminder-driven re-entry observes
+    /// before that dispatch runs and what an uncaught throw out of the
+    /// scope leaves visible to any post-saga publish
     /// helper. Persisted-zero (legacy state from before this field
     /// existed, or a saga that never entered Prepare) clears the
     /// ambient explicitly so a single-key non-saga write running on
@@ -3298,22 +3302,22 @@ internal sealed class AtomicWriteGrain(
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
-    /// Cached per-activation metric tags. The two histograms
+    /// Cached per-activation metric tags. The five histograms
     /// (<see cref="LatticeMetrics.SagaFanoutSize"/>,
     /// <see cref="LatticeMetrics.SagaPerKeyDuration"/>,
     /// <see cref="LatticeMetrics.SagaPrepareDuration"/>,
     /// <see cref="LatticeMetrics.SagaTerminalDecisionDuration"/>,
     /// <see cref="LatticeMetrics.SagaBroadcastDuration"/>) all share
-    /// the same <c>(tree, walPartitions)</c> tag pair. The pair is
+    /// the same <c>(tree, walPartitions, tenant)</c> tags. The tags are
     /// constructed once per activation (per-saga lifetime, since
     /// AtomicWriteGrain uses per-operation grain keys) and reused
-    /// across every <c>Record</c> call. This avoids allocating two
-    /// fresh <see cref="KeyValuePair{TKey, TValue}"/> boxes (the
+    /// across every <c>Record</c> call. This avoids allocating fresh
+    /// <see cref="KeyValuePair{TKey, TValue}"/> boxes (the
     /// int <c>walPartitions</c> is boxed into <c>object?</c>) per
     /// histogram observation. The cache also closes the
     /// pre-instrumentation duplication where both
     /// <see cref="RunSagaAsync"/> and <see cref="ExecutePhaseAsync"/>
-    /// independently rebuilt the same pair per saga.
+    /// independently rebuilt the same tags per saga.
     /// </summary>
     private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions, KeyValuePair<string, object?> Tenant)? _sagaMetricTags;
 

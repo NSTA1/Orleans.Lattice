@@ -38,15 +38,15 @@ sequenceDiagram
 ## Example
 
 ```csharp verify
-var blocklist = tree.RwSet("tenant:7:blocklist");
+var members = tree.RwSet("tenant:7:members");
 
 // Cluster A re-admits a user; cluster B concurrently revokes them.
-await blocklist.AddAsync(Encoding.UTF8.GetBytes("user:88"), "cluster-A", cancellationToken);
-await blocklist.RemoveAsync(Encoding.UTF8.GetBytes("user:88"), "cluster-B", cancellationToken);
+await members.AddAsync(Encoding.UTF8.GetBytes("user:88"), "cluster-A", cancellationToken);
+await members.RemoveAsync(Encoding.UTF8.GetBytes("user:88"), "cluster-B", cancellationToken);
 
 // The revoke was not observed by the add, so it survives and the element
 // converges OUT of the set - a revocation is never lost to a concurrent add.
-bool blocked = await blocklist.ContainsAsync(Encoding.UTF8.GetBytes("user:88"), cancellationToken);
+bool stillMember = await members.ContainsAsync(Encoding.UTF8.GetBytes("user:88"), cancellationToken); // false
 ```
 
 See also: its add-wins mirror [OR-Set](orset.md), the single-element

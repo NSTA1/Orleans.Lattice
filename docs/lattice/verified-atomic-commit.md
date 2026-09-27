@@ -99,11 +99,11 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 
 | Model | Core(s) exercised | Phase |
 |-------|-------------------|-------|
-| `AtomicCommitVisibilityModel` | `AtomicVisibilityGate`, `TxDecisionView`, `ReaderStabilityGate` - including registry call failures injected on the pre-fan-out snapshot, the revision probe, and the disambiguation snapshot (#3641) | Level B |
+| `AtomicCommitVisibilityModel` | `AtomicVisibilityGate`, `TxDecisionView`, `TxRegistryDecisionCore`, `ReaderStabilityGate` - including registry call failures injected on the pre-fan-out snapshot, the revision probe, and the disambiguation snapshot (#3641) | Level B |
 | `SagaCoordinatorModel` | `SagaCoordinatorCore` | Phase 1 |
-| `ReshardMigrationModel` | `MigrationTerminalCore`, `ShadowedMigrationReadGuard`, `SplitBoundary` | Phase 3 |
+| `ReshardMigrationModel` | `MigrationTerminalCore`, `AtomicVisibilityGate`, `TxRegistryDecisionCore` | Phase 3 |
 | `AtomicCommitLivenessModel` | The full saga under bounded fault injection | Phase 4 |
-| `AtomicCommitInvariantModel` | The full single-saga lifecycle across every core | Phase 6 |
+| `AtomicCommitInvariantModel` | The full single-saga lifecycle: `SagaCoordinatorCore`, `TxRegistryDecisionCore`, `TerminalDecisionGuard`, `AtomicVisibilityGate` | Phase 6 |
 | `ReshardForwardWindowModel` | `AtomicVisibilityGate` - the reshard forward window, where a destination leaf holds a drain-migrated pre-saga value before it carries the concurrent saga's shadow marker | #3117 |
 | `SplitPivotAdmissionModel` | `SplitBoundary` - a leaf may only be divided at a key strictly inside its own declared range | #3117 |
 | `SpanAdmissionMigrationModel` | `SplitBoundary` - a cross-shard migration import is subject to the same declared-span admission as any other commit | #3117 |
@@ -131,8 +131,10 @@ deterministic CI step. Every model and guard test is tagged `[Category("Coyote")
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj -c Release --filter "Category=Coyote"
 ```
 
-CI runs the tiers in the order normal -> coyote -> chaos; the Coyote tier is
-excluded from the deterministic build step and from coverage. See the
+In CI each tier is its own test run, and the runs are packed onto parallel
+legs; a leg that carries several runs them deterministic, then Coyote, then
+chaos. The Coyote tier is excluded from the deterministic tier and from
+coverage. See the
 "Coyote concurrency tier" section of
 [`.github/instructions/testing.instructions.md`](../../.github/instructions/testing.instructions.md)
 for the tier policy and the procedure for adding a new model.

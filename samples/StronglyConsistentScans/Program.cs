@@ -8,16 +8,19 @@ using Orleans.Lattice;
 // =============================================================================
 // StronglyConsistentScans
 // -----------------------------------------------------------------------------
-// Demonstrates that CountAsync / ScanKeysAsync / ScanEntriesAsync return the
-// EXACT live key set - never a torn, partial, or double-counted view - even
-// while foreground writes are landing concurrently.
+// Demonstrates that CountAsync / ScanKeysAsync / ScanEntriesAsync count every
+// live key exactly once - none missed or double-counted because a shard split
+// or rebalanced underneath the call, and a concurrent SetManyAtomicAsync seen
+// all-or-nothing - even while foreground writes are landing concurrently.
 //
 // Why this matters: in many sharded stores an aggregate like "count" is a
-// best-effort fan-out that can observe some shards before a write and others
-// after it, yielding a number that never actually existed. Lattice scans are
-// strongly consistent: every reading corresponds to a real committed state of
-// the tree, so a stream of concurrent readings is monotonic and every value is
-// a count the tree genuinely held at some instant.
+// best-effort fan-out that can miss or double-count keys a concurrent split or
+// rebalance moves between shards. Lattice scans are strongly consistent, but
+// each shard is read at its own moment, so a reading taken while ordinary
+// writes land is exact shard by shard rather than one instant's image of the
+// whole tree. For an add-only stream like this sample's, that still makes
+// every reading a count the tree genuinely held at some instant, and a stream
+// of readings is monotonic.
 // =============================================================================
 
 // Single-silo in-process Orleans cluster with Lattice on in-memory storage.

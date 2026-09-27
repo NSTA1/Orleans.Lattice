@@ -14,7 +14,11 @@ public sealed record TreeMetrics
     /// <summary>Logical tree identifier.</summary>
     [Id(0)] public required string TreeId { get; init; }
 
-    /// <summary>Lifecycle state of the tree.</summary>
+    /// <summary>
+    /// Lifecycle state of the tree. The metrics feed always reports
+    /// <see cref="TreeLifecycleState.Active"/>; read a tree's soft-deletion state
+    /// from its catalog entry (<see cref="TreeCatalogEntry.Lifecycle"/>).
+    /// </summary>
     [Id(1)] public TreeLifecycleState Lifecycle { get; init; }
 
     /// <summary>Number of physical shards currently owning virtual slots.</summary>
@@ -62,11 +66,12 @@ public sealed record TreeMetrics
     /// live counts (<see cref="LiveKeys"/>, <see cref="Tombstones"/>,
     /// <see cref="MinDepth"/>/<see cref="MaxDepth"/>,
     /// <see cref="ShardsSplitting"/>) and <see cref="ShardHotness"/> are paused
-    /// and reported as zero / empty rather than sampled. Registry-sourced fields
-    /// (<see cref="Lifecycle"/>, <see cref="ShardCount"/>) and any requested view
-    /// lag are still populated. The detail returns automatically once the tree
-    /// settles; a consumer should surface this as a transient "paused - busy"
-    /// state, not an error.
+    /// and reported as zero / empty rather than sampled. <see cref="ShardCount"/>
+    /// (read from the tree's shard map in one call) and any requested view lag are
+    /// still populated, and <see cref="Lifecycle"/> reads
+    /// <see cref="TreeLifecycleState.Active"/> as it always does. The detail returns
+    /// automatically once the tree settles; a consumer should surface this as a
+    /// transient "paused - busy" state, not an error.
     /// </summary>
     [Id(11)] public bool DetailPaused { get; init; }
 }

@@ -36,8 +36,10 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <para>
 /// <b>Fail-closed.</b> A tenant-asserted call whose standing cannot be established
 /// (no tenancy engine reachable, the registry read failed, or the assertion did not
-/// validate) degrades to the current region alone, with no <c>tenantScope</c>
-/// annotation - so a refused assertion is never echoed back to its author. It never
+/// validate) degrades to the current region alone. An assertion that did not
+/// validate carries no <c>tenantScope</c> annotation, so a refused assertion is
+/// never echoed back to its author; a validated tenant whose standing could not be
+/// read is annotated with the default not-allowed, non-resident standing. It never
 /// falls back to the full routing topology, which is the disclosure this scoping
 /// exists to close.
 /// </para>

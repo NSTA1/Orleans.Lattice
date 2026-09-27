@@ -48,7 +48,8 @@ public interface IEmbeddingProvider
     /// <param name="texts">The texts to embed, in the order the vectors are wanted
     /// back. May be empty (an empty batch yields an empty successful result).</param>
     /// <param name="textType">Whether the texts are stored passages or search
-    /// queries, so the model applies the correct asymmetric prefix.</param>
+    /// queries, so a provider backed by an asymmetric model can apply the matching
+    /// prefix.</param>
     /// <param name="cancellationToken">Cancels the embedding call.</param>
     /// <returns>A successful <see cref="EmbeddingResult"/> carrying the vectors, or
     /// a fail-closed unsuccessful result carrying a clear error and no vectors.</returns>

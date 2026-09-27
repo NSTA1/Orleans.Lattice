@@ -6,7 +6,8 @@ namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
 /// Runs the once-per-silo tenant-registry bootstrap under system-origin: sets the
-/// durable per-key history retention on each <c>sys-tenant-*</c> tree, creates the
+/// durable per-key history retention on the <c>sys-tenant-registry</c> definition
+/// tree (the usage and overage trees are left without durable history), creates the
 /// durable history materialised view when enabled, and seeds the reserved
 /// <see cref="TenantId.Default"/> tenant with an unbounded quota when it is absent.
 /// The default seed is <b>create-if-absent</b>, so a restart never clobbers an

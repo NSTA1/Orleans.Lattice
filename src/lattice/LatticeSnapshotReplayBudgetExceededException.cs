@@ -2,20 +2,23 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Thrown by <see cref="ILattice.OpenSnapshotKeyCursorAsync"/> /
-/// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/> when the
-/// projected WAL-replay cost of materialising the snapshot's leaves
-/// would exceed <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>
-/// on any of the shards the cursor would touch. The budget is sized
-/// upfront using <see cref="ILattice.GetMaterialiserLagAsync"/> as
-/// the per-shard lag signal, so operators can cap snapshot open
-/// cost without waiting for the first <c>Next*Async</c> call to
-/// surface the same problem mid-page.
+/// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/> when the frozen
+/// baseline captured for the deepest shard the cursor would touch - the rows
+/// that shard's snapshot leaf would serve - holds more rows than
+/// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>. The open captures
+/// every touched shard's baseline first and applies the gate to the largest
+/// row count before the cursor is opened, so operators can cap snapshot open
+/// cost without waiting for the first <c>Next*Async</c> call to surface the
+/// same problem mid-page. The backup package's capture engine raises it too,
+/// before it opens a snapshot, when a backup scope's live entry count exceeds
+/// the same budget.
 /// <para>
-/// The exception aborts the open: no snapshot leaves are
-/// materialised and no WAL retention pin is taken. Callers either
-/// raise <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>, fall
-/// back to a registry-snapshot point-in-time cursor, or wait for
-/// the per-shard materialiser to catch up before retrying.
+/// The exception aborts the open: no cursor is opened or registered, and the
+/// captured baselines, seeded only in memory into transient per-shard snapshot
+/// leaves, are never persisted. Callers either raise
+/// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>, narrow the range,
+/// trigger a leaf-projection rebuild, or fall back to a registry-snapshot
+/// point-in-time cursor.
 /// </para>
 /// </summary>
 public sealed class LatticeSnapshotReplayBudgetExceededException : InvalidOperationException, ILatticeDomainFault

@@ -320,7 +320,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "Every hit carries a "
                     + "machine-readable 'reasons' list (server-derived, deterministic, ordinal-ordered, bounded, and "
                     + "never null) explaining why it ranked: a semantic hit lists 'semantic', the matched chunk kind "
-                    + "('chunk:symbol' or 'chunk:file'), and 'symbol:<fqName>' for a symbol vector; a keyword hit "
+                    + "('chunk:symbol', 'chunk:file', or 'chunk:memory'), and 'symbol:<fqName>' for a symbol vector "
+                    + "or 'topic:<topic>' for a memory vector; a keyword hit "
                     + "lists 'path-name-match', 'symbol:<fqName>', 'tag:<tag>', 'topic-match', 'content-match', and "
                     + "'key-match' for whichever projected fields the query terms hit. Read-only.",
                 ReadOnly = true,
@@ -337,8 +338,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Title = "Inspect a repository indexing job",
                 Description =
                     "Reports the progress of a repository's asynchronous indexing job: its status (none, "
-                    + "running, completed, or failed), the phase it is executing (walking, reconciling, "
-                    + "applying, or vectorising), the running file and chunk counters, the cumulative "
+                    + "running, completed, or failed), the phase it is executing (pending, walking, reconciling, "
+                    + "applying, vectorising, or done - or resetting while a repocontext_reset_index sweep tears "
+                    + "the index down), the running file and chunk counters, the cumulative "
                     + "index-run count (a run-start tally that rises on every reconcile and back-fill, not a "
                     + "retry counter), and "
                     + "timing. Because onboarding runs in the background and survives a client disconnect or a "
@@ -470,8 +472,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "the richest level that yields a non-empty bundle and reports the concrete level in 'detail'. "
                     + "Every entry carries its match 'reasons', its exact BPE 'tokenCount', and the whole-file "
                     + "'fullReadTokenCount'. The bundle's 'responseTokens' estimates what the response actually "
-                    + "costs you - delivered content plus each entry's JSON envelope, doubled because the MCP SDK "
-                    + "serializes every result twice - and never exceeds 'budgetTokens'; 'totalTokens' reports the "
+                    + "costs you - delivered content plus each entry's JSON envelope and the bundle's own "
+                    + "scaffolding, scaled by 3.5 because the MCP SDK serializes every result twice and the "
+                    + "second copy is escaped JSON text that tokenizes worse - and never exceeds 'budgetTokens'; "
+                    + "'totalTokens' reports the "
                     + "narrower BPE sum of the packed source text alone. A unit is a descriptor, not a second copy "
                     + "of the text: an entry's 'content' is the join of its units, so the text ships exactly once. "
                     + "When even the cheapest entry does not fit, it FAILS CLOSED: 'entries' is "
@@ -503,8 +507,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Reports an aggregate summary of the repository-context surface's own usage over a bounded "
                     + "recent window, so a team can see whether the surface actually reduces context cost. Returns "
-                    + "only summed token figures: how many calls were answered ('calls'), the exact response tokens "
-                    + "they spent ('responseTokens'), the whole-file read tokens they conservatively replaced "
+                    + "only summed token figures over the answered repocontext_context bundles, the one call it "
+                    + "records: how many were answered ('calls'), the estimated response tokens they spent "
+                    + "('responseTokens', each bundle's own wire-cost estimate), the whole-file read tokens they "
+                    + "conservatively replaced "
                     + "('readsReplacedTokens' - credited only for delivered whole-file-equivalent content, never for "
                     + "discovery or partial detail or content the caller already held), the net tokens saved "
                     + "('netSavedTokens'), and the window length ('windowSeconds'). It carries no body, query, path, "
@@ -788,8 +794,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "the record's claim as no longer live so unfenced writes are admitted again. It never "
                     + "lowers the fencing high-water mark, so a released token stays refused: write every result "
                     + "you owe the record BEFORE releasing, because a write presenting a released token is "
-                    + "rejected. Idempotent and safe to retry - releasing a token that no longer holds the lock "
-                    + "is a no-op reported as 'released=false' with reason 'stale' or 'missing', never an error. "
+                    + "rejected. Idempotent and safe to retry - releasing a token the record's claim has moved "
+                    + "past is a no-op reported as 'released=false' with reason 'stale', as is a release against "
+                    + "a key with no record ('missing') or a record that was never claimed ('unclaimed'), never "
+                    + "an error. "
                     + "Fails closed: offered only to a caller who cleared the authorization gate and for whom "
                     + "the host opted writes in. Destructive.",
                 ReadOnly = false,

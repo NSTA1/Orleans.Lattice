@@ -57,7 +57,10 @@ internal static class SiteFactory
 
             // Auth installs the enforcement gate. Default-deny: only explicit
             // allow rules grant access. "root-admin" is a bootstrap administrator
-            // so the sample can seed users/groups/rules before any rule exists.
+            // so the sample can seed the tree's data keys before any rule grants
+            // a write. (Groups and rules need no grant: the membership directory
+            // and the policy store write their reserved trees under system
+            // origin.)
             silo.AddLatticeAuth(options =>
             {
                 options.DefaultEffect = LatticeEffect.Deny;

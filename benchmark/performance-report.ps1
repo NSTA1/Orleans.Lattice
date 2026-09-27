@@ -3,7 +3,9 @@
 <#
 .SYNOPSIS
 	Regenerate every cell of docs/lattice/performance-single-silo.md against
-	a freshly-provisioned VM in the operator's Azure subscription.
+	a freshly-provisioned VM in the operator's Azure subscription (Layers 1
+	and 2), or - with -Layer 3 - docs/lattice/performance-multi-silo.md
+	against an Azure Container Apps rig.
 
 .DESCRIPTION
 	End-to-end perf-report orchestration:
@@ -24,13 +26,26 @@
 	perf-optimiser agent doc; this is for the user-facing reference numbers,
 	not the per-cycle A/B trend).
 
-.PARAMETER Layer
-	Which layer(s) to regenerate. One of: all (default), 1, 2.
-	-Layer all == both layers.
+	Layer 3 is opt-in and runs alone. It provisions an Azure Container Apps
+	rig through benchmark/azure-throughput/scripts/deploy-aca.ps1 (or reuses
+	the one -ReuseAca names), runs at least -N cohorts per (workload, silo
+	count) cell across -SiloCounts through run-cohort-aca.ps1, checkpoints
+	state.json after every cell, rewrites the perf-table:layer3 and
+	perf-chart:layer3 marker blocks (and the provenance note after the
+	table) in docs/lattice/performance-multi-silo.md, then parks the silos
+	at zero and tears the rig down unless -KeepAca or -ReuseAca keeps it.
+	Its knobs are the parameters marked "Layer 3 only" below.
 
-	Convenience: the -Layer1 / -Layer2 switches are equivalent to -Layer 1 /
-	-Layer 2 (so '-Layer1' as a single token works). Setting both switches
-	together is equivalent to -Layer all. Mixing -Layer with a disagreeing
+.PARAMETER Layer
+	Which layer(s) to regenerate. One of: all (default), 1, 2, 3.
+	-Layer all == Layers 1 and 2. Layer 3 is never part of 'all': it stands
+	up its own Container Apps rig and writes a different document, so it
+	runs only when named and cannot be combined with another layer.
+
+	Convenience: the -Layer1 / -Layer2 / -Layer3 switches are equivalent to
+	-Layer 1 / -Layer 2 / -Layer 3 (so '-Layer1' as a single token works).
+	Setting -Layer1 and -Layer2 together is equivalent to -Layer all, and
+	-Layer3 alongside either is rejected. Mixing -Layer with a disagreeing
 	-LayerN switch is rejected.
 
 .PARAMETER Layer1
@@ -38,6 +53,9 @@
 
 .PARAMETER Layer2
 	Convenience switch: equivalent to -Layer 2.
+
+.PARAMETER Layer3
+	Convenience switch: equivalent to -Layer 3.
 
 .PARAMETER Workloads
 	Comma-separated workload subset for the chosen layer. Defaults to all
@@ -49,6 +67,7 @@
 		Layer 2 values: set-many, set-many-atomic, set-many-atomic-2,
 						cross-tree-atomic-2, cross-tree-atomic-64, set-point,
 						set-point-mv, get-point, get-many
+		Layer 3 values: the same nine as Layer 2.
 	Pass 'all' (or omit) to run every workload for the layer.
 
 .PARAMETER N
@@ -90,13 +109,13 @@
 
 .PARAMETER Fidelity
 	BDN fidelity for Layer 1 cohorts. One of:
-	  dry   (default) - Job.Dry: 1 warmup + 1 measurement iter per [Benchmark]
+	  dry             - Job.Dry: 1 warmup + 1 measurement iter per [Benchmark]
 						method. ~3 sec/method, ~75 sec/cohort across the doc's
 						5 workloads. Per-cohort variance is wider than 'quick';
 						the n=3 cohort discipline (median across N) provides the
 						statistical guard. Right floor for a published-doc
 						refresh whose precision is already 'approximate ceiling'.
-	  quick           - Job.ShortRun: 1 launch + 3 warmup + 3 measurement iters.
+	  quick (default) - Job.ShortRun: 1 launch + 3 warmup + 3 measurement iters.
 						~30-40 sec/method when no glob expansion fires; on this
 						bench the GlobFilter expands the 5 doc rows into ~25
 						distinct methods (variant suffixes + parameterisations),
@@ -115,6 +134,17 @@
 .PARAMETER ParametersFile
 	Explicit path to the parameters .ps1 file. Defaults to
 	benchmark/azure-throughput/scripts/parameters.local.ps1.
+
+.PARAMETER WalAdmissionCallBudgetSec
+	Layer 3 only. The second of the two saturation budgets described under
+	-SetManyFanOutBudgetSec: the per-call WAL-admission budget, in seconds,
+	that the rig sets as LatticeOptions.WalAdmissionSaturationCallBudget.
+	Default 15; 0 means infinite, i.e. the shipped library default.
+
+.PARAMETER MaxRungEscalations
+	Layer 3 only. The most times the -SaturationRatio escalation doubles a
+	cell's per-silo rung. Default 3. A cell still offer-bound after the last
+	escalation is published as a lower bound (>=).
 
 .EXAMPLE
 	./benchmark/performance-report.ps1                                  # full sweep
@@ -191,11 +221,13 @@ param(
 	[switch] $KeepAca,
 
 	# Layer 3 only: resume an interrupted sweep from the rig's state.json.
-	# Every (workload, silo count) cell that already holds -N cohorts is kept
-	# as-is and not re-run. A cell holding fewer is re-run in full, so it is
-	# never a blend of two partial attempts. Without this, re-invoking a
-	# 90-cohort sweep that died at cohort 60 starts from cohort 1 and pays
-	# for the first 60 again.
+	# Every (workload, silo count) cell that already holds its full cohort
+	# count (-N, or the row's larger CohortsPerCell) is kept as-is and not
+	# re-run. A cell holding fewer is topped up: its recorded cohorts are
+	# kept, numbering continues after them, and the extra cohorts run at the
+	# recorded cohorts' rung, so a cell never mixes offered loads. Without
+	# this, re-invoking a 90-cohort sweep that died at cohort 60 starts from
+	# cohort 1 and pays for the first 60 again.
 	[switch] $Resume,
 
 	# (#3348) Layer 3 only. The two saturation budgets the rig sets rather than
@@ -589,11 +621,12 @@ $Layer2Rows = @(
 # cohort time, so per-silo demand never falls as the cluster grows.
 #
 # FlushConcurrencyPerSilo is the client's in-flight bound per silo. The
-# atomic and cross-tree modes run their sagas sequentially inside each flush
-# slot, and the point modes fan out at most that many calls per slot, so for
-# those workloads this bound - not the offered rate - is what an
-# undersized client would measure. The rig default of 8 was measured to cap
-# them below the cluster's own ceiling; 64 lifts that cap clear of it (at 64
+# atomic and cross-tree modes dispatch each saga as its own flush unit
+# (#3581), so this bound caps the sagas in flight; the point modes fan out
+# at most that many calls per slot. For those workloads this bound - not the
+# offered rate - is what an undersized client would measure. The rig
+# default of 8 was measured to cap them below the cluster's own ceiling; 64
+# lifts that cap clear of it (at 64
 # the 2-key sagas are bound by per-saga durable-write latency, #3591). The
 # point modes fan each of the FlushConcurrencyPerSilo x N slots out into
 # FlushConcurrencyPerSilo calls (BENCH_POINT_FANOUT), so their in-flight

@@ -6,18 +6,24 @@ namespace Orleans.Lattice.Api.State.Grpc;
 
 /// <summary>
 /// Holds the gRPC <see cref="Method{TRequest, TResponse}"/> definitions for
-/// the read-only cluster state API. Each method is a unary RPC over an
-/// Orleans-serialized, code-first contract. Constructed from DI-resolved
-/// serializers so both the (future) client invoker and the server-side binder
-/// wire up identical marshallers.
+/// the read-only cluster state API: seventeen unary RPCs and two
+/// server-streaming RPCs over an Orleans-serialized, code-first contract.
+/// Constructed from DI-resolved serializers so both the client invoker
+/// (<see cref="LatticeStateApiGrpcClient"/>) and the server-side binder wire up
+/// identical marshallers.
 /// </summary>
 /// <remarks>
-/// The contract is intentionally a flat set of unary RPCs: discovery
-/// (<c>ListTrees</c> / <c>ListViews</c>), tree structure
-/// (<c>GetTreeStructure</c>), and entry inspection (<c>ScanEntries</c> /
-/// <c>GetEntry</c>). Server-streaming subscription and live-metadata
-/// streaming are added additively by later issues as new methods on the same
-/// service. Contract-versioning policy: fields on the wire messages are
+/// The contract is a flat set of RPCs on one service. The unary RPCs cover
+/// catalog discovery (<c>ListTrees</c> / <c>ListViews</c> /
+/// <c>ListTagIndexes</c> / <c>ListTagValues</c> / <c>ListCoveredTrees</c> /
+/// <c>ListIndexTags</c>), tag-member scans (<c>ScanTagMembers</c>), tree
+/// structure (<c>GetTreeStructure</c>), entry inspection (<c>ScanEntries</c> /
+/// <c>GetEntry</c> / <c>GetEntryHistory</c> / <c>CancelScan</c>), metrics
+/// (<c>GetMetricsSnapshot</c>), cluster information (<c>GetClusterInfo</c>),
+/// the auth-scheme advertisement (<c>GetAuthScheme</c>), and dead letters
+/// (<c>GetDeadLetterCount</c> / <c>ListDeadLetters</c>); the server-streaming
+/// <c>ObserveChanges</c> and <c>ObserveMetrics</c> RPCs are the live
+/// subscriptions. Contract-versioning policy: fields on the wire messages are
 /// additive-only (new <c>[Id(n)]</c>); aliases and field numbers are never
 /// renumbered, so a newer response decodes cleanly under an older client.
 /// </remarks>

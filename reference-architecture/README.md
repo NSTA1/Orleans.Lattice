@@ -17,7 +17,7 @@ not duplicate the design; it tells you how to run the kit.
 |--------|----------|
 | [`bicep/`](bicep/) | `main.bicep` orchestrator, the per-concern modules (compute, storage, networking, vnet, privatedns, observability, frontdoor), `bootstrap.bicep` (registry pre-build seam), and `entra/` (the Microsoft Graph extension module + its scoped `bicepconfig.json`), plus example parameter sets (`main.bicepparam` and `params/`). |
 | [`hosts/`](hosts/) | The three container host projects - Silo, MCP, and Explorer - each with a chiselled, non-root Dockerfile. They reference the published `Orleans.Lattice` NuGet packages, plus the shared `Common/` hosting library (the Front Door origin lock and probe helpers, tested in `Common.Tests/`). See [`hosts/README.md`](hosts/README.md) for the full host configuration surface. |
-| [`deploy/`](deploy/) | `Deploy-ReferenceArchitecture.ps1`, the single idempotent orchestrator, and [`deploy/README.md`](deploy/README.md) documenting its internals. |
+| [`deploy/`](deploy/) | `Deploy-ReferenceArchitecture.ps1`, the single idempotent orchestrator; `deployment-sample.ps1`, a zero-decision wrapper that deploys a three-region sample estate from a deployment name; and [`deploy/README.md`](deploy/README.md) documenting both. |
 | [`local/`](local/) | A Docker Compose harness that stands the whole estate up on one machine for development. See [`local/README.md`](local/README.md). |
 | [`local-dev/`](local-dev/) | A two-region variant of the local harness that builds every head straight from `src/**` by project reference (no published Orleans.Lattice packages), runs two network-isolated clusters with per-region primary storage and one shared backup sink, and swaps Entra for per-request dev identities under real deny-by-default. See [`local-dev/README.md`](local-dev/README.md). |
 
@@ -32,8 +32,9 @@ not duplicate the design; it tells you how to run the kit.
   permission declaratively, and that grant needs the privileged role.
 - Tooling on the operator workstation:
   - PowerShell 7.0 or later.
-  - The Azure CLI (`az`) with the `containerapp` extension available, signed in
-    (`az login`) to the target tenant.
+  - The Azure CLI (`az`), signed in (`az login`) to the target tenant. The
+    deployer calls only core `az` command groups (`account`, `group`,
+    `deployment`, `acr`, `ad`), so no CLI extension is needed.
   - Docker is **not** required on the operator workstation: images are built
     server-side with `az acr build`.
 
@@ -60,7 +61,9 @@ $gpw = Read-Host -AsSecureString 'Grafana admin password'
 
 One invocation converges the whole estate and prints the resulting endpoints.
 Re-running it converges again; it never duplicates resources. Add `-WhatIf` to
-preview every action without mutating Azure.
+preview without mutating Azure: it prints each `az` command up to and including
+the pass-1 deployment, then stops, because the Entra deployment and pass 2 need
+pass 1's outputs.
 
 ## Parameter reference
 
@@ -100,7 +103,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). An object id (GUID) or a UPN / email (resolved to its object id). Defaults to the deploying user when Entra is enabled. Further administrators are granted at runtime via the Explorer Access tab. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
 | `-SkipImageBuild` | no | Reuse images already present at `-ImageTag`. |
-| `-WhatIf` | no | Preview every action without mutating Azure. |
+| `-WhatIf` | no | Preview without mutating Azure. Prints each `az` command through the pass-1 deployment, then stops (the Entra deployment and pass 2 need pass 1's outputs). |
 
 ### Bicep top-level parameters
 
@@ -168,6 +171,14 @@ per-cluster replication key** - held in a per-region Key Vault and read via
 managed identity, exactly as in the public option - layered on top of the private
 transport as defense in depth, so `-ReplicationKey` is required here too.
 
+The private option provisions **no Front Door**: `main.bicep` deploys the
+`frontdoor` module only when `deploymentOption` is `public`, because Front Door
+Standard has no Private Link origins. Its heads are reachable only on their
+internal ingress from inside the peered VNets, they run without the
+`X-Azure-FDID` origin lock (there is no Front Door id to assert), and the
+deployer prints only the per-region head FQDNs and skips the warm-up it gives
+the public option's scale-to-zero heads.
+
 > **Scope of "private".** This closes the *ingress* and the *inter-region
 > replication path*, not the entire data plane. Silos still reach Azure Storage
 > (WAL tables, backup blob) and the container registry over public PaaS endpoints
@@ -198,14 +209,16 @@ manual DNS step. The per-region VNet foundation and its full-mesh peering live i
 
 Every managed environment is **zone-redundant** by default (`zoneRedundant`,
 default `true`) under both options, because both are VNet-injected. Once the silo
-autoscales beyond a single replica those replicas are spread across availability
-zones - matching the zone-redundant durability of the WAL storage tier. Set
+runs more than one replica (see [Scaling behaviour](#scaling-behaviour)) those
+replicas are spread across availability zones - matching the zone-redundant
+durability of the WAL storage tier. Set
 `zoneRedundant` to `false` to opt an estate back out (for example a single-zone
 dev estate).
 
 ### Verify
 
-After the script prints the endpoints:
+After the script prints the endpoints (on the private option, use the per-region
+head FQDNs from inside a peered VNet in place of the Front Door hostnames):
 
 - Open the Explorer Front Door hostname in a browser; sign in (Entra, when
   enabled) and confirm the operator console loads and lists the cluster.
@@ -232,21 +245,33 @@ foreach ($app in 'lattice Lattice silo facade','lattice Lattice MCP endpoint','l
 ```
 
 Deleting the resource group removes the container apps, storage, Key Vaults,
-Azure Monitor workspaces, registry, and Front Door profile. The Key Vaults are
-soft-delete + purge-protection enabled, so their names are reserved for the
-retention window; pass a fresh `-BaseName` (or purge them) to redeploy
-immediately under the same names.
+Azure Monitor workspaces, registry, and (public option) Front Door profile. The
+Key Vaults have soft delete (90-day retention) and purge protection enabled, so a
+deleted vault keeps its name for the whole retention window and cannot be purged
+early. A vault's name derives from the resource group id and the region code, not
+from `-BaseName`, so to redeploy immediately use a different `-ResourceGroup` (or
+different region codes).
 
 ## Day-2 operations
 
 ### Scaling behaviour
 
-- The **silo** scales on the `lattice.scaling` compute-axis metric through a KEDA
-  Prometheus scaler that queries the region's managed Prometheus. The floor is
-  pinned at or above one replica (never zero) so the cluster always has a
-  membership quorum; the ceiling defaults to three. A draining replica honours the
-  termination grace period so in-flight shard transfers complete or hand off
-  before exit.
+- The **silo** scales on the `lattice.scaling` compute-axis signal through a KEDA
+  Prometheus scale rule (`lattice-scaling-wal-pressure`) that queries the region's
+  managed Prometheus. The compute module's `siloScaleQuery` default,
+  `max(orleans_lattice_scaling_scale_value{lattice_head="silo"})`, reads the series
+  the in-environment collector stamps with `lattice_head="silo"`; each region's
+  Azure Monitor workspace holds only that region's silo series, so no app-name
+  label is needed. The default `siloScaleThreshold` of `0.5` is below 1 on
+  purpose: KEDA asks for `ceil(value / threshold)` replicas and the scale value
+  never exceeds the current replica count, so a threshold of `1` could only hold
+  or shrink the pool, while `0.5` asks for twice the current count at full
+  saturation. The floor is pinned at or above one replica (never zero) so the
+  cluster always has a membership quorum; the ceiling defaults to three. A stopped
+  replica gets the termination grace period (120 seconds) to drain: it refuses new
+  writes with `LatticeShuttingDownException` and settles in-flight WAL flushes. An
+  interrupted shard split or reshard is not handed off; it resumes from its
+  persisted phase when its coordinator reactivates on another silo.
 - The **MCP** and **Explorer** heads scale to zero and wake on HTTP concurrency;
   they are stateless (MCP) or session-isolated (Explorer) admin surfaces and cost
   nothing while idle.
@@ -271,8 +296,10 @@ immediately under the same names.
 ### Failover and disaster recovery
 
 - Every region is a full read-write peer, so a regional outage is absorbed by the
-  surviving regions with no promotion step: Azure Front Door latency-routes
-  clients to the nearest healthy region and fails over to the next-nearest. The
+  surviving regions with no promotion step: on the public option Azure Front Door
+  latency-routes clients to the nearest healthy region and fails over to the
+  next-nearest (the private option has no Front Door, so its clients fail over
+  through their own private connectivity). The
   Explorer console is the one exception: its Blazor Server circuit must stay on
   one replica, so Front Door pins every operator to the first region's Explorer
   and fails over to a standby region (with a fresh circuit) only if that region
@@ -301,17 +328,21 @@ immediately under the same names.
 
 ### Connect an MCP client
 
-The MCP head exposes the Lattice control surface (state, data, auth-admin,
-tree-administration, and telemetry tool groups, plus backup and replication while
-those surfaces are enabled - the deployer's default) as a Model Context Protocol
-server over streamable HTTP. It
+The MCP head exposes the Lattice control surface (state, auth-admin,
+tree-administration, and telemetry tool groups, plus data, backup and replication
+while those surfaces are enabled - the deployer's default) as a Model Context
+Protocol server over streamable HTTP. It
 runs stateless behind Front Door, is authenticated with a Microsoft Entra bearer
 token that a spec-compliant client acquires automatically via OAuth discovery
 (below), and is origin-locked: Front Door injects the `X-Azure-FDID` header on the
 client's behalf, so a client that reaches the head through the Front Door hostname
 supplies **only** an `Authorization` header. (A client that bypasses Front Door and
 dials a region's container-app FQDN directly must add the matching
-`X-Azure-FDID` header itself.)
+`X-Azure-FDID` header itself.) This describes the public option. The private
+option has no Front Door, so its heads carry no origin lock, and because the
+deployer threads `Mcp:PublicUrl` from the Front Door MCP hostname, its heads
+serve no OAuth discovery document either: use the bearer-token fallback below
+against a region's internal MCP FQDN, from inside a peered VNet.
 
 #### Preferred: automatic OAuth discovery (RFC 9728)
 
@@ -494,11 +525,11 @@ Private Link private origins. Upgrading:
   `Premium_AzureFrontDoor` and lets you attach the managed rule sets in addition
   to (or instead of) custom rules.
 - Enables Private Link origins, so the heads can be reached privately rather than
-  over public ingress. This composes with the **private** network option: with
-  Premium + Private Link the client-facing origins never need public ingress at
-  all. Note that the private option's internal ingress already keeps
-  replication traffic off the public internet; Premium extends that to the
-  client-facing path.
+  over public ingress. This is what would let the **private** network option,
+  which provisions no Front Door today, gain one: with Premium + Private Link the
+  client-facing origins never need public ingress at all. Note that the private
+  option's internal ingress already keeps replication traffic off the public
+  internet; Premium extends that to the client-facing path.
 - Carries a higher base monthly cost than Standard plus managed-rule request
   charges. Weigh it against the estate's exposure and compliance requirements.
 
@@ -574,7 +605,7 @@ deployment option.
 4. **Autoscale.** Drive load at one region's silo and confirm the KEDA scaler
    raises the replica count above the floor, then scales back down after the load
    stops.
-   - Evidence: recorded. The silo carries a KEDA Prometheus scaler (WAL-pressure metric, minReplicas 1, maxReplicas 3, 30s poll, 300s cooldown), verified on the live estate; the MCP and Explorer heads scale to zero and back (minReplicas 0, maxReplicas 3) on an HTTP concurrency rule. Availability under change was validated directly: a forced single-revision silo cutover served continuous HTTP 200 with zero dropped requests across the roll, as the readiness and startup probes gate traffic to warm replicas only. A sustained load-driven scale-out / scale-in timeline was not captured.
+   - Evidence: recorded. The silo carries a KEDA Prometheus scale rule (named `lattice-scaling-wal-pressure`, over the `lattice.scaling` scale value; minReplicas 1, maxReplicas 3; the template sets no polling interval or cooldown, so the Container Apps defaults of 30 s and 300 s apply), verified present on the live estate; the MCP and Explorer heads scale to zero and back (minReplicas 0, maxReplicas 3) on an HTTP concurrency rule. Availability under change was validated directly: a forced single-revision silo cutover served continuous HTTP 200 with zero dropped requests across the roll, as the readiness and startup probes gate traffic to warm replicas only. A sustained load-driven scale-out / scale-in timeline was not captured, and as shipped the rule cannot produce one: its query matches no series (see [Scaling behaviour](#scaling-behaviour)).
 5. **Backup and restore.** Confirm the primary region writes a backup chain to
    the sink, then perform a restore into a standby and confirm the restored value
    is present and causally consistent.
@@ -586,7 +617,8 @@ deployment option.
 ### Cost note
 
 The validated two-region public topology's steady-state cost is dominated by the
-pinned silo replicas (one per region minimum, scaling on load), the two managed
+always-on silo replicas (one per region at the default floor, more while compute
+pressure scales a region out; see [Scaling behaviour](#scaling-behaviour)), the two managed
 Prometheus workspaces and Grafana heads, the two Standard storage accounts plus
 the shared backup blob account, the two Key Vaults, the shared container
 registry, and the single Front Door Standard profile. The scale-to-zero MCP and

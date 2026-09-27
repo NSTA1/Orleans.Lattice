@@ -12,8 +12,11 @@ source write-ahead-log entry has been garbage-collected yet, the maintainer's
 first drain replays the log from its beginning, so earlier revisions are
 recorded with their original clocks; once garbage collection has trimmed the
 start of the log, the maintainer instead seeds one revision per live key from
-current source state and tails forward from there. Revisions trimmed from the
-log before the view existed are never reconstructed.
+current source state and tails forward from there. The same seed is taken when
+the source's logical id already resolves to a different physical tree (after a
+resize or a restore, for example): the view then starts from current state
+whether or not the log has been trimmed. Revisions trimmed from the log before
+the view existed are never reconstructed.
 
 ## How it works
 
@@ -190,8 +193,8 @@ live-tunable policy, not code identity, so changing them never trips a rebuild.
 - **No reconstruction of trimmed history.** The timeline begins with whatever the
   source still holds at creation - its untrimmed write-ahead log, or a
   one-revision-per-key seed from current state once garbage collection has
-  trimmed that log; revisions trimmed before the view existed cannot be
-  recovered.
+  trimmed that log or when the source is already aliased to another physical
+  tree; revisions trimmed before the view existed cannot be recovered.
 - **Count-based retention ("keep last N per key") is not expressible** in a pure
   per-mutation projection and is out of scope for this substrate.
 - **The read path is built in.** `ILattice.ScanEntryHistoryAsync` queries a key's

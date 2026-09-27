@@ -100,9 +100,12 @@ async Task RebalanceAsync(
 }
 ```
 
-When `HasHeadroom` is `false`, register another WAL storage account with the
-`IWalStorageProviderCatalog` first, then re-read the signal - the next
-recommendation will name the new account as the target.
+When `HasHeadroom` is `false`, register another WAL storage account under a new
+key with `AddLatticeWalStorageProvider` on every silo first - the
+`IWalStorageProviderCatalog` has no runtime registration method and lists the
+keys registered at startup, and every silo must register the same set - then
+re-read the signal: the next recommendation will name the new account as the
+target.
 
 ## Turning it off
 

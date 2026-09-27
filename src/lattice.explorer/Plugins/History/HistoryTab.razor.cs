@@ -43,7 +43,7 @@ public partial class HistoryTab
             Headline = "No key chosen",
             Explanation = "This surface shows the revisions of one key, and no key has been "
                 + "opened for this table yet.",
-            Remedy = "Open the Data surface, choose a key, and return here.",
+            Remedy = "Open the Data surface, choose a key, and select its History button.",
         };
 
     /// <summary>

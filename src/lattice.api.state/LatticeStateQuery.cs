@@ -1590,8 +1590,10 @@ internal sealed class LatticeStateQuery(
         string? continuation = page.HasMore ? cursorId : null;
         if (!page.HasMore)
         {
-            // Drained: release the server-side cursor (and, for a snapshot or
-            // point-in-time cursor, its WAL-retention pin) promptly.
+            // Drained: release the server-side cursor promptly. For a snapshot
+            // cursor that also discards the frozen per-shard baseline it captured
+            // at open; no cursor mode holds back WAL trimming, so there is no
+            // WAL retention to give back.
             await tree.CloseCursorAsync(cursorId, cancellationToken).ConfigureAwait(false);
         }
 

@@ -194,8 +194,11 @@ dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.cspro
     --filter "TestCategory=UI" --nologo --blame-hang-timeout 5m --blame-hang-dump-type none
 ```
 
-`.github/workflows/ui-tests.yml` is the lane's only CI runner and is path-filtered
-to the Explorer UI. See the "Browser UI tier" section of
+`.github/workflows/ui-tests.yml` is the lane's own workflow and is path-filtered
+to the Explorer UI. The scheduled coverage workflow
+(`.github/workflows/coverage.yml`) also runs the suite, sharded from the same
+`ui-test-shards.json`, so these paths count toward coverage. See the
+"Browser UI tier" section of
 `.github/instructions/testing.instructions.md` for the tier rules, including when
 a check belongs in bUnit instead.
 

@@ -211,7 +211,7 @@ Maximum entries parked while waiting for causal dependencies. Increase for highl
 
 ### `CausalBufferMaxBytes`
 
-Byte cap for the causal buffer. This bounds receiver memory when dependencies lag.
+Byte cap for the causal buffer. This bounds receiver memory when dependencies lag. Must be at least 64 KiB (`65536`).
 
 ### `ShadowForwardDedupeCacheSize`
 
@@ -307,7 +307,7 @@ Maximum retry delay after repeated send failures.
 
 ### `ShipBackoffJitter`
 
-Randomization fraction applied to backoff to avoid synchronized retries. Must be within validator bounds.
+Randomization fraction applied to backoff to avoid synchronized retries. Must lie in `[0.0, 1.0]`.
 
 ### `MaintenanceGcInterval`
 
@@ -327,7 +327,7 @@ Cadence for digest probes when enabled.
 
 ### `DigestProbeJitter`
 
-Randomization fraction applied to digest probe scheduling.
+Randomization fraction applied to digest probe scheduling. Must lie in `[0.0, 1.0]`.
 
 ### `MerkleWalkEnabled`
 

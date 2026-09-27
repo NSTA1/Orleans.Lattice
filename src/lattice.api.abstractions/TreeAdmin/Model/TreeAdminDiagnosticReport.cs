@@ -4,10 +4,10 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 
 /// <summary>
 /// A whole-tree diagnostic report: one <see cref="ShardDiagnosticSnapshot"/> per
-/// physical shard plus tree-level roll-ups, sampled at a single instant. The
-/// <see cref="Deep"/> flag records whether the sample walked leaf state
-/// (authoritative but more expensive) or read only the cheap shard-root
-/// projection.
+/// physical shard plus tree-level roll-ups, sampled at a single instant. Every
+/// sample pages through each shard's leaf chain; the <see cref="Deep"/> flag records
+/// whether each leaf also counted its tombstoned and expired entries (more
+/// expensive) or reported live keys only.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiTreeAdminTypeAliases.TreeAdminDiagnosticReport)]
@@ -30,8 +30,9 @@ public sealed record TreeAdminDiagnosticReport
     [Id(4)] public long TotalTombstones { get; init; }
 
     /// <summary>
-    /// <see langword="true"/> when the sample walked leaf state (authoritative counts);
-    /// <see langword="false"/> for the cheap shard-root projection.
+    /// <see langword="true"/> when each leaf also counted its tombstoned and expired
+    /// entries; <see langword="false"/> when the walk counted live keys only, so the
+    /// tombstone counts are zero.
     /// </summary>
     [Id(5)] public bool Deep { get; init; }
 

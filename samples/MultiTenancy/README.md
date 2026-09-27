@@ -57,9 +57,11 @@ hold.
 ## How authorization works here
 
 The gate runs **default-deny** (the production posture). Tenant-lifecycle
-operations authorize the cluster-wide `Admin` capability, which only a bootstrap
-administrator - or an explicitly authored cluster-wide `Admin` rule - holds, so
-the operator seam is fail-closed against every other caller. The sample declares
+operations authorize `Admin` on the reserved authorization policy tree, which only a
+bootstrap administrator - or a subject explicitly granted whole-tree `Admin` on that
+tree through the access-administration delegation - holds, so the operator seam is
+fail-closed against every other caller. A cluster-wide all-trees rule does not
+reach that tree. The sample declares
 `platform-operator` as a bootstrap administrator and runs each operator action
 under that credential; the unrelated subject `mallory` is refused.
 

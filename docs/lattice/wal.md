@@ -185,7 +185,7 @@ replication change feed.
 |---|---|
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-shard sequence number. |
 | `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
-| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1`; out-of-range reads return `WalShardPage.Empty(fromSequence)`. |
+| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight is returned, so a cursor-advancing reader never skips a prefix hole. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
 | `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so dashboards, alerts, and the back-pressure health check observe the persisted footprint rather than a monotonically-growing offset counter. |
@@ -369,14 +369,18 @@ user-supplied resolver is preserved.
 
 ## Turn-safe batching protocol
 
-The WAL grain's `AppendAsync` hot path implements a turn-safe batching
-protocol. Each call accumulates into an in-memory pending batch held on
-the grain instance; up to `WalMaxPendingBatches` flushes can be in
+The WAL grain's append path implements a turn-safe batching protocol:
+the exclusive-turn single append and the interleaving batch append that
+every single-entry append takes by default (`WalBatchedSingleEntryAppends`,
+see [Batched leaf write path](#batched-leaf-write-path)) run the same
+cutover protocol. Each call accumulates into an in-memory pending batch held
+on the grain instance; up to `WalMaxPendingBatches` flushes can be in
 motion against `IWalStorageProvider.AppendEncodedBatchAsync` simultaneously,
 each independently completing per-caller `TaskCompletionSource<long>`
-instances when the provider acknowledges durability. Offset assignment
-remains serialised under the grain turn, so each in-flight flush owns a
-strictly-increasing, non-overlapping offset window by construction.
+instances when the provider acknowledges durability. Offset assignment is
+serialised under the shard's internal state gate, so each in-flight flush
+owns a strictly-increasing, non-overlapping offset window by construction
+even while batch appends interleave.
 
 ```text
 append(entry)
@@ -481,7 +485,14 @@ single-entry `AppendAsync`. A partition group of exactly one entry still
 takes the WAL grain's interleaving batch append rather than its
 exclusive-turn single append (`WalBatchedSingleEntryAppends`, default
 `true`), so a wide fan-out of one-entry slices does not serialise on the
-partition.
+partition. The same option routes every point append - the leaf's point
+sets and deletes and their conditional forms, CRDT merge apply,
+pending-transaction staging and inline saga terminal records - through the
+batch append as a one-entry batch, so `WalMaxPendingBatches` pipelining and
+`WalAppendCoalescingInFlightThreshold` coalescing engage for them too
+instead of each point append holding the partition for a whole provider
+round trip. Setting it to `false` restores the exclusive-turn dispatch for
+both shapes.
 
 The `LeafWriteDuration` histogram records one sample per batched
 dispatch on the merge channel (`kind=merge`) rather than one sample per
@@ -629,7 +640,8 @@ seeding the cache first from its own latest durable snapshot when that
 snapshot is newer than its checkpoint. Three cases:
 
 - **Tail replay.** The last persisted projection checkpoint is at offset *N*,
-  the WAL head is at offset *M*, and `M - N` is bounded by the checkpoint
+  the newest WAL entry is at offset *M* (the WAL head, the next offset to be
+  assigned, is `M + 1`), and `M - N` is bounded by the checkpoint
   interval. The leaf reads entries `(N, M]` in bounded slices and applies
   each to its projection. Replay is in-process and typically completes in a
   few milliseconds.
@@ -653,10 +665,11 @@ snapshot is newer than its checkpoint. Three cases:
   would rebuild the leaf over the lost prefix. See
   [`projection-rebuild.md`](projection-rebuild.md) for the policies and the
   operator remedies. The grain-state row holds only tree metadata (sibling
-  pointers, tree id, shard index, key range, split lifecycle,
-  last-compaction-version), the projection checkpoints, the running
-  projection hash and the small replay ledger - it is never the source of
-  truth for committed entry values.
+  and parent pointers, tree id, shard index, key range, moved-away slots,
+  split lifecycle, last-compaction-version), the leaf's hybrid-logical clock
+  and version vector, the projection checkpoints, the running projection
+  hash and its publish sequence, a snapshot-size hint and the small replay
+  ledger - it is never the source of truth for committed entry values.
 
 In both replay cases, the projection that a reader observes after activation is
 byte-equivalent to the projection at the moment the leaf last deactivated (or
@@ -712,6 +725,16 @@ next activation the leaf rehydrates its
 entries from its latest durable snapshot and replays the WAL from the
 checkpoint offset rather than from zero.
 
+Both triggers are evaluated as each advance is recorded. An advance that
+arrives inside the interval and below the entry count - typically the last
+partition an activation replay reconciled - would otherwise stay pending on
+a resident, write-idle leaf, because no later advance re-asks the question.
+The leaf's periodic coverage-lag check (every
+[`LeafSnapshotMaxCoverageLagSeconds`](configuration.md#leafsnapshotmaxcoveragelagseconds),
+300 seconds by default) re-evaluates the same triggers and commits such an
+advance once the interval has elapsed, so a pending advance becomes durable
+within the later of the interval and the next check (issue #3608).
+
 The checkpoint is **not** an additional durability boundary - it's a replay-cost
 optimization. If a checkpoint flush fails, the next activation simply replays
 more WAL entries; correctness is unaffected. The checkpoint is also flushed
@@ -755,7 +778,10 @@ on durable offset evidence alone. The floor can also refuse an entry that only
 the in-memory consumer cursor would admit, because that cursor tracks what a
 leaf folded into its cache rather than what it made durable. It never
 overrules the TTL ceiling, and a tree with no durable floor evaluates the HLC
-axis alone.
+axis alone. A pass that cannot read the durable pin or offset census at all
+is not a tree with no durable floor: the floor is unknown, so the pass fails
+closed, trims nothing on any partition - TTL included - and retries on the
+next pass (issue #3576).
 
 The causal-stable clause is satisfied when **either** of the following holds:
 
@@ -879,7 +905,7 @@ effective trim frontier is whichever bound binds first.
 |---|---|---|---|---|
 | Consumer frontier | *(none - always on)* | always on | The hard floor: `min(cursor)` across every registered consumer (overruled, where available, by the durable materialiser offset floor), intersected with the causal-stable frontier and held below the blocked floor. | **No.** This is the durability invariant. |
 | Wall-clock TTL | `WalRetention` | `null` (disabled) | Entries older than `now - WalRetention` fall off the log even if a consumer still pins them. | **Yes** - this is the only bound that does. |
-| Advisory byte ceiling | `WalMaxRetainedBytes` | `null` (disabled) | Schedules byte-pressure trim work when retained bytes exceed the ceiling, but only *within* the consumer frontier. | **No** - it surfaces an over-threshold signal instead. |
+| Advisory byte ceiling | `WalMaxRetainedBytes` | `null` (disabled) | Schedules byte-pressure trim work when the WAL's on-disk occupancy - physical bytes, dead bytes not yet compacted included, or the retained payload for a provider that cannot report physical size - exceeds the ceiling, but only *within* the consumer frontier. | **No** - it surfaces an over-threshold signal instead. |
 
 `WalBytePressureReclaimTarget` (default `0.8`) is not itself a bound: it is the
 low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the
@@ -993,6 +1019,16 @@ start from:
 | `orleans.lattice.wal.gc.passes` | `tree`, `outcome` | Counter. One count per scheduled pass, by outcome: `reclaimed`, `blocked`, `no_consumer`, `idle`, `over_ceiling`, `stranded`, `unclassified` or `failed`. Only `reclaimed` states that WAL came back; every other arm says why nothing was trimmed. |
 | `orleans.lattice.wal.gc.interval` | `tree` | Histogram (seconds). The adaptive interval the scheduler chose for the tree after its latest pass. A series pinned at `WalGcMinInterval` is a tree the scheduler is holding at the floor - reclaiming, blocked, or over its byte ceiling. |
 | `orleans.lattice.wal.gc.trim_stop` | `tree`, `shard`, `reason` | Counter. Why each shard's trim scan stopped: `exhausted`, `empty`, `offset_floor`, `cursor_floor`, `causal_frontier`, `block_pin`, `durability_unverified`, `durability_hold` or `durable_offset_refusal`. |
+
+Two further GC signals separate a tree that is catching up from one that is
+stuck (issue #3149). `orleans.lattice.wal.gc.floor_head_distance` records,
+for each shard a pass scanned, how many offsets lie from the first entry the
+scan had to retain through the shard's newest entry - zero when the scan
+released everything it was offered - and
+`orleans.lattice.wal.gc.terminal_breach` counts each pass of a tree that has
+been over its byte ceiling, with a usable cursor floor, reclaiming nothing,
+for ten consecutive passes, the point at which `over_ceiling` has stopped
+being a transient.
 
 ## Relationship to replication
 

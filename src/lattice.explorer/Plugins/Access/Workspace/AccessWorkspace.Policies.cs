@@ -202,8 +202,10 @@ public sealed partial class AccessWorkspace
             {
                 // Author an all-trees (cluster-wide) grant: a whole-tree rule over
                 // the all-trees sentinel ("*") carrying the chosen operations and
-                // effect. The server records it always, but only enforces it when
-                // the cluster's all-trees grants option is enabled.
+                // effect. While the cluster's all-trees grants option is off the
+                // server rejects it if it carries any data-plane operation; a rule
+                // without one is accepted, and only its Telemetry bit is enforced
+                // until the option is enabled.
                 rule = AccessCreateModel.BuildAllTreesRule(
                     RuleIdInput.Trim(), subject, CombineOperations(_ruleOperations), RuleEffect);
             }

@@ -80,6 +80,11 @@ await admin.SetVersionConfigAsync(
     "orders", new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 1), cancellationToken);
 ```
 
+Read a tree's config back with `GetVersionConfigAsync` (`null` for an unversioned
+tree). `ClearVersionConfigAsync` opts the tree out again: new writes are no longer
+stamped, and an already-stamped stored value is still stripped of its envelope on
+read but returned at its stored version, because no target remains to upcast it to.
+
 ## Declaring upcasters
 
 An upcaster is a per-hop [value transform](value-transforms.md) from one version to
@@ -156,7 +161,9 @@ LatticeSchemaRemediationReport again =
 ```
 
 Migration re-stamps each value from its **own** stored version to the target through
-the registered upcaster chain, then re-envelopes it at the target. It reuses the
+the registered upcaster chain, then re-envelopes it at the target; a legacy value
+written before the tree opted in carries no envelope and is stamped at the target
+with its body unchanged, matching what the lazy read path returns for it. It reuses the
 crash-safe [shadow-build-and-cutover](schema-enforcement.md#bringing-existing-data-into-compliance)
 mechanism: it is all-or-nothing (a value that cannot be upcast aborts the whole
 migration and leaves the tree untouched), idempotent (a value already at the target

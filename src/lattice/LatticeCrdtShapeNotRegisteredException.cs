@@ -11,10 +11,11 @@ namespace Orleans.Lattice;
 /// host-configuration precondition, not a server fault.
 /// <para>
 /// <b>Caller contract.</b> Register the OR-Map pair for the tree at silo
-/// construction (closed-shape modes - OR-Set, PN-Counter, Version-Vector,
-/// MV-Register - resolve through the global registry automatically and never
-/// raise this). Retrying the identical request against an unconfigured tree will
-/// fail identically.
+/// construction (every other CRDT merge mode - OR-Set, PN-Counter,
+/// Version-Vector, MV-Register, Sequence, OR-Flag, RW-Flag, G-Counter, G-Set,
+/// RW-Set, Max-Register and Min-Register - resolves through the global registry
+/// automatically and never raises this for a missing registration). Retrying
+/// the identical request against an unconfigured tree will fail identically.
 /// </para>
 /// <para>
 /// <b>Sources.</b> Raised by the leaf grain's typed CRDT apply path

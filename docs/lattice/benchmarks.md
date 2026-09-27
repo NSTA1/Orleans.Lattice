@@ -185,7 +185,10 @@ of the benchmark stack README for the full dashboard catalogue.
 `microbench` is the in-process tier - no Docker, no Orleans cluster boot. It
 hand-instantiates the full lattice grain vertical (the tree's entry grain,
 shard root, leaf, and leaf cache)
-and routes `IGrainFactory` calls through NSubstitute mocks, then
+and routes `IGrainFactory` calls through an allocation-free fake grain
+factory that resolves those real instances (the auxiliary grains the
+vertical only calls in passing - the reminder registry, tombstone
+compaction, the hot-shard monitor and similar - are NSubstitute mocks), then
 exercises a fixed set of `[Benchmark]` methods (point reads/writes, bulk
 loads, mixed workloads, atomic-write sagas) via
 [BenchmarkDotNet](https://benchmarkdotnet.org/) with the `InProcessEmitToolchain`.
@@ -240,7 +243,7 @@ floor.
 #### Opt-in suites
 
 The default run drives the cluster-shaped tree workloads above. The same
-harness also carries fifty-three narrower, cluster-free suites, selected with
+harness also carries a set of narrower, cluster-free suites, selected with
 `BENCH_MICROBENCH_SUITE` (or `--suite`); each one replaces the default suite
 for that run rather than adding to it. Most isolate one optimisation, running
 the prior shape against the shipped one so the delta is measurable without a
@@ -291,6 +294,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `stateorder` | The state API's bounded catalog page selection and remaining catalog sort, plus the shard-summary ordering the shared metrics sampler runs on every tick. |
 | `applygatetrims` | Three allocation reductions on per-operation paths: the receiver's parallel-apply plan, durable-pin bucketing, and the tag-index tag-set reconcile on every tag-carrying write. |
 | `alloctrio` | Three allocation reductions on repeatedly executed paths: the shared metrics sampler's per-tick aggregate map, the tenant-usage snapshot compile behind write admission, and the shard-report ordering of each diagnostics report. |
+| `crdtreadtrio` | Three CRDT read-path materialisation trims: the whole-set reads of a grow-only set and a remove-wins set, and the provenance projection behind an entry-level sequence read. |
 | `tagrowtrims` | Tag-index membership-row parsing and the aggregation applier's per-shard gathers. |
 | `tagindexbatching` | Three tag-index round-trip reductions: batched membership-row adds, overlapped removals, and a windowed intersection probe. |
 | `viewrebuildfanout` | Three corpus-sized round-trip reductions: the view-generation clear, the shard purge's internal-node sweep, and the view rebuild's source read. |

@@ -14,9 +14,9 @@ namespace Orleans.Lattice;
 /// cached physical-tree-ID and <see cref="ShardMap"/> snapshots, re-resolves
 /// via the registry, and retries against the new physical tree. This
 /// exception is part of the internal coordination protocol between
-/// <c>LatticeGrain</c> and <c>ShardRootGrain</c> and is never surfaced to
-/// external callers because <c>LatticeGrain</c> always catches and recovers
-/// from it.
+/// <c>LatticeGrain</c> and <c>ShardRootGrain</c>; the retry is bounded by a
+/// 60-second wall-clock budget, and if the topology has not quiesced when it
+/// expires the original exception is rethrown and reaches the caller.
 /// </para>
 /// </summary>
 [GenerateSerializer]

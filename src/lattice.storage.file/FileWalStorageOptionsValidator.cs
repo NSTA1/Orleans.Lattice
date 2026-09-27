@@ -3,10 +3,12 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Storage.File;
 
 /// <summary>
-/// Validates <see cref="FileWalStorageOptions"/> at options-resolution
-/// time so a misconfigured host fails fast at startup rather than on the
-/// first WAL append. Registered by
-/// <see cref="LatticeFileServiceCollectionExtensions.AddFileWalStorage"/>.
+/// Validates <see cref="FileWalStorageOptions"/> when the options are first
+/// resolved, failing with an <see cref="OptionsValidationException"/> that
+/// lists every violation. Registered by
+/// <see cref="LatticeFileServiceCollectionExtensions.AddFileWalStorage"/>
+/// without start-up validation, so the check runs when the provider is first
+/// constructed on first use, not while the silo starts.
 /// </summary>
 internal sealed class FileWalStorageOptionsValidator : IValidateOptions<FileWalStorageOptions>
 {
@@ -27,7 +29,7 @@ internal sealed class FileWalStorageOptionsValidator : IValidateOptions<FileWalS
         {
             failures.Add(
                 $"{nameof(FileWalStorageOptions.CompactionThreshold)} must be a positive number "
-                + $"(use a value >= 1.0 to disable trim-triggered compaction); was {options.CompactionThreshold}.");
+                + $"(use a value greater than 1.0 to disable the ratio trigger); was {options.CompactionThreshold}.");
         }
 
         if (options.CompactionMinimumDeadBytes < 0)

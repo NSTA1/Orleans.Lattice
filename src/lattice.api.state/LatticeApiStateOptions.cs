@@ -50,11 +50,11 @@ public enum LatticeStateApiReadVisibility
 /// and resolvable via <c>IOptions&lt;LatticeApiStateOptions&gt;</c>.
 /// </summary>
 /// <remarks>
-/// The type carries the read-bounding knobs the read facade honours: the
-/// entry-scan page-size cap and the scan / single-entry value-preview byte
-/// budgets. Later issues in the cluster-state-API epic add further knobs
-/// (sampling cadences, the authorization posture, and so on) without changing
-/// the registration front door.
+/// The type carries the read-bounding knobs the read facade honours (the
+/// entry-scan page-size default and cap, the scan and single-entry value-preview
+/// byte budgets, and the per-key history page-size and preview budgets), the
+/// change-observation polling cadence and page size, the metrics-feed sampling
+/// cadence, and the auth-backed <see cref="ReadVisibility"/> posture.
 /// </remarks>
 public sealed class LatticeApiStateOptions
 {

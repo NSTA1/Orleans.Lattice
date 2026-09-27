@@ -37,6 +37,8 @@ LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
 // digest.Hash             - 16-byte XxHash128 fingerprint of the shard's projection
 // digest.EntryCount       - entries (live + tombstoned) folded into the hash
 // digest.CheckpointOffset - highest per-leaf projection-checkpoint offset
+// digest.Version          - contribution-function version; compare hashes only
+//                           between digests that carry the same Version
 ```
 
 `GetLeafProjectionDigestAsync` reads the requested **physical shard**'s
@@ -254,8 +256,8 @@ foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
     LeafProjectionDigest digest = await tree.GetLeafProjectionDigestAsync(
         shardIndex,
         cancellationToken);
-    // emit (silo, treeId, shardIndex, digest.Hash, digest.EntryCount, digest.CheckpointOffset)
-    // to your telemetry pipeline.
+    // emit (silo, treeId, shardIndex, digest.Version, digest.Hash, digest.EntryCount,
+    // digest.CheckpointOffset) to your telemetry pipeline.
 }
 ```
 
@@ -411,9 +413,10 @@ When a leaf grain reactivates it consults its persisted
 per-partition `ProjectionCheckpointOffsetsByPartition[p]` (and the
 legacy scalar `ProjectionCheckpointOffset` for the partition-0
 back-compat slot) and decides how to recover. The classifier runs
-**once per partition** in `[0, WalPartitions)`; the leaf is treated
-as fall-off-log if **any** partition's classifier raises a non-
-`TailReplay` decision. Three triggers classify an individual
+**once per partition** in `[0, WalPartitions)`; the leaf is refused
+as fall-off-log if **any** partition's classifier reports genuine loss,
+while a cost signal or the snapshot advisory below still tail-replays.
+Three triggers classify an individual
 partition - but only the **first** indicates missing data, and only
 the first is fatal:
 
@@ -435,16 +438,17 @@ the first is fatal:
    `MaxLeafReplayEntries` is a **per-leaf, post-range-filter** budget.
    The two are in different units, and on a partition carrying ~1,350
    leaves the gap overstates a leaf's real work by up to that fan-out.
-   What the comparison does establish is a sound **upper bound**: every
-   entry a leaf applies lies inside `(checkpoint, head]`, so
-   `applied <= gap` always holds. Since issue #2275 nothing acts on the
+   What the comparison does establish is a sound **upper bound**: the
+   head is the next offset the partition will assign, so every entry a
+   leaf applies lies inside `(checkpoint, head)` and `applied <= gap`
+   always holds. Since issue #2275 nothing acts on the
    comparison (it was once a candidate the replay confirmed): an
    over-budget gap yields the decision `TailReplayOverBudget` and the
    leaf tail-replays exactly as for `TailReplay`, and its only remaining
    effect is that it suppresses the snapshot advisory described under
    [Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net).
    Confirming the gap in the classifier would mean reading
-   `(checkpoint, head]` before the replay reads it again - doubling the
+   `(checkpoint, head)` before the replay reads it again - doubling the
    most expensive part of activation - so the **verdict** is taken on
    every replay path, during the replay that happens anyway, by counting
    the entries that actually pass the per-leaf range filter
@@ -460,8 +464,8 @@ the first is fatal:
    `LatticeOptions.LeafProjectionRetention` (default 7 days). Also a
    cost signal only - an old checkpoint does not imply a trimmed WAL,
    so it degrades to the same non-fatal `TailReplayOverBudget` replay.
-   Evaluated once for the leaf as a whole (age is a property of the
-   leaf, not of any one partition). Note the activation path currently
+   Age is a property of the leaf, not of any one partition, so every
+   partition's classification sees the same age. Note the activation path currently
    supplies `TimeSpan.Zero` as the age, so this trigger does not fire
    from activation today (tracked in #1738).
 
@@ -543,7 +547,9 @@ On the healthy multi-partition path every partition's classifier
 returns `TailReplay`, and the leaf executes a two-pass replay across
 all partitions (per-partition Set / Delete absorption with
 `TxCommit` / `TxAbort` / `DeleteRange` deferred until every partition
-has populated its pending-tx record, then drained) followed by a
+has populated its pending-tx record, then drained; a `DeleteRange` whose
+range cannot overlap the leaf's key range is instead consumed in the
+first pass, applying nothing - issue #3601) followed by a
 post-pass per-partition checkpoint reconciliation that advances each
 partition's `ProjectionCheckpointOffsetsByPartition[p]` to the
 highest applied offset once the saga-prepare clamp lifts.
@@ -554,7 +560,7 @@ the leaf does once a trigger fires:
 | Policy | Behaviour |
 |---|---|
 | `SnapshotThenWal` *(default)* | The per-leaf snapshot rehydrate already runs in core at activation Step 0 (`TryRehydrateFromSnapshotAsync`), covering the prefix and letting the tail replay handle the remainder. What is not yet integrated is a recovery for the case where that rehydrate has *already declined* and the WAL is genuinely short: there the leaf surfaces `LeafProjectionStaleException` rather than reconstructing the lost prefix. |
-| `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
+| `FullRebuildFromWal` | Diagnostic. Intended to replay from the absolute tail of the WAL, but the policy is reached only when the WAL has been trimmed and a complete history is unavailable, so the leaf surfaces `LeafProjectionStaleException` here too; no full-rebuild recovery path is integrated. |
 | `Fail` | Surfaces a `LeafProjectionStaleException` at activation time and waits for an operator-driven rebuild. |
 
 > This policy is reached **only** on genuine loss (the WAL trimmed past
@@ -565,17 +571,21 @@ the leaf does once a trigger fires:
 
 Background starvation drives share the same process-wide replay permits as
 leaf activations, but never queue for one. Across all trees, drives may hold
-at most half the configured replay ceiling, rounded down with a minimum of
-one. This leaves capacity for foreground and maintenance activations when
-the ceiling is greater than one; memory-pressure withholding can reduce the
-shared capacity further. At a ceiling of one, drives and activations still
-share that single permit.
+at most half the replay permits in circulation - the configured replay
+ceiling less any that memory-pressure withholding is holding back - rounded
+down with a minimum of one (issue #3610). This leaves capacity for foreground
+and maintenance activations whenever more than one permit circulates. While
+only one does - a ceiling of one, or a larger ceiling at the withholding
+floor - drives and activations share that single permit.
 
 Two callers request drives, and they do not compete for that share on
 equal terms (issue #3575):
 
 - the WAL GC's blocked-leaf sweep, the only caller that lifts a pin holding
-  a tree's cursor floor, may use the whole share;
+  a tree's cursor floor, may use the whole share, and on a pass over the
+  floor holders it has classified it touches the one nearest the floor
+  first, alone, so a free permit goes to the floor rather than to whichever
+  touch reaches the gate first (issue #3610);
 - a leaf's own coverage-lag timer, which drives a leaf that has never
   checkpointed or whose checkpoint has stopped advancing, never takes the
   last free slot: it is admitted only while at least two slots of the share
@@ -773,7 +783,11 @@ The capture path is **leaf-driven**, not maintenance-driven:
   checkpointed partition that no snapshot covers yet captures one at
   activation and on its later checkpoint persists and coverage-lag
   checks, until a capture succeeds, within a per-activation attempt
-  budget that re-arms after a backoff (issue #2692). This is what gives
+  budget that re-arms after a backoff (issue #2692). A capture covers
+  every partition checkpointed at the time, so a partition that
+  checkpoints later brings the leaf back once more, and an attempt that
+  covered at least one partition is not charged against the budget:
+  only captures that make no progress spend it (issue #3576). This is what gives
   a tree that has stopped taking writes snapshot coverage on its next
   activation.
 - A graceful deactivation also captures one for any checkpointed
@@ -786,7 +800,9 @@ The capture path is **leaf-driven**, not maintenance-driven:
   a deactivation deadline can skip. The final persist of a graceful
   deactivation also publishes its pin before the recheck, so a recheck
   that overruns the deadline cannot cost the pin. The coverage-lag check also republishes a pin that has fallen
-  below `min(persisted checkpoint, coverage)`, and the WAL GC's
+  below `min(persisted checkpoint, coverage)`, first committing a pending
+  checkpoint advance once `MaterialiserCheckpointInterval` has elapsed so a
+  write-idle leaf's advance cannot stay pending (issue #3608), and the WAL GC's
   blocked-leaf sweep asks a floor-holding leaf for the same step before it
   spends a replay permit on a drive. That step takes no replay permit and
   replays nothing, and a capture that fails or is declined leaves coverage,
@@ -839,7 +855,9 @@ materialiser pin) past work that is not yet durable. The replay defers
 two kinds of record:
 
 - a **deferred** saga terminal (`TxCommit` / `TxAbort`) or
-  `DeleteRange`, which is applied only in the replay's second pass; and
+  `DeleteRange`, which is applied only in the replay's second pass (a
+  range delete that cannot overlap the leaf's key range is not deferred:
+  the first pass consumes it, so it takes no ledger slot); and
 - an **unresolved saga prepare**, whose pending-transaction bucket no
   snapshot captures because the matching terminal is itself deferred.
 
@@ -971,9 +989,11 @@ Error surface:
 
 ```csharp verify
 long lag = await tree.GetMaterialiserLagAsync(cancellationToken);
-// 0 -> fully caught up across every shard.
-// > 0 -> the materialiser has an estimated `lag` WAL entries it has
-//        not yet folded into the leaf projection for some shard.
+// An estimate of the WAL entries the worst shard's leaves have not yet
+// folded into their projections. Each WAL head is the next offset to be
+// assigned and each checkpoint the last offset applied, so even a
+// caught-up shard with a non-empty WAL reports a small positive value:
+// read a steady value as caught up and a growing one as falling behind.
 ```
 
 `GetMaterialiserLagAsync` returns the **maximum lag across all
@@ -986,7 +1006,12 @@ walHead[p] - min(checkpointOffset across leaves in the shard)
 
 with each term clamped at zero so a checkpoint that has temporarily
 raced ahead of the head observation (e.g. between the head fetch and
-the per-leaf checkpoint fetch) cannot contribute a negative value. The
+the per-leaf checkpoint fetch) cannot contribute a negative value.
+`walHead[p]` is the next offset partition `p` will assign - one past its
+newest entry - while a checkpoint is the offset of the last entry a leaf
+applied, so a partition whose newest entry the checkpoint has reached
+still contributes `1`; the result is `0` only when every term clamps to
+zero, as on an empty WAL. The
 per-leaf checkpoint read is each leaf's partition-0 checkpoint, which
 the reduction applies to every partition's head as an approximation, so
 on a multi-partition tree the figure is an estimate rather than an exact
@@ -1017,7 +1042,8 @@ ingestion. Common causes are slow leaf activation under
 storage-provider backpressure, a stuck `ILeafReplayCoordinatorGrain`,
 or a deactivation storm cycling leaves faster than they can replay.
 A persistent lag at a small positive value (a few entries) is
-expected under sustained write load - the materialiser checkpoints
+expected: each non-empty partition contributes at least `1` even when
+caught up, and under sustained write load the materialiser checkpoints
 in batches, so the most recently published WAL entries naturally lag
 the head briefly.
 

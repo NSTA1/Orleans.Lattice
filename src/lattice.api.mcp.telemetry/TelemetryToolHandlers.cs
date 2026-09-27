@@ -63,7 +63,7 @@ internal static class TelemetryToolHandlers
         TelemetryMetricAccessPolicy policy,
         TelemetryAccessAuthorizer access,
         CancellationToken cancellationToken,
-        [Description("The PromQL expression to evaluate at a single instant, for example 'up' or 'rate(lattice_wal_append_total[5m])'.")]
+        [Description("The PromQL expression to evaluate at a single instant, for example 'up' or 'rate(orleans_lattice_shard_writes_total[5m])'.")]
         string query,
         [Description("Optional evaluation timestamp; null evaluates at the backend's current time.")]
         DateTimeOffset? time = null)

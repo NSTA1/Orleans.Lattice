@@ -170,7 +170,7 @@ When `true`, the provider removes an extra recovery-marker write from the normal
 
 ### `PipelinedPhaseTwoFaultHandler`
 
-Optional observer for pipelined completion faults on a shard that goes idle before a successor append can observe the fault. The delegate should be idempotent and observability-only. Exceptions thrown by the delegate are ignored.
+Optional observer invoked once for every pipelined completion that faults, whether or not a successor append later observes the same fault, so a fault on a shard that goes idle before a successor append arrives still reaches the application. Because one fault can be reported both here and to that successor, the delegate should be idempotent and observability-only. Exceptions thrown by the delegate are ignored. It is never invoked when `PipelinePhaseTwoCommits` is `false`, because every append then observes its own completion.
 
 ```csharp verify
 using Orleans.Lattice.Storage.AzureTable;

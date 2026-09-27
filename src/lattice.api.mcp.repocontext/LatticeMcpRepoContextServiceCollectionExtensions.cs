@@ -35,7 +35,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// Opts the repository-context surface into the MCP binding: registers the
     /// repository-context tool group so its tools are advertised to a caller
     /// holding a data read-or-write grant, along with the bootstrap coordinator,
-    /// the retrieval services (the exact-kNN semantic index and the search
+    /// the retrieval services (the semantic index - approximate by default, with the
+    /// exact kNN scan as its fallback and as the opt-in exact mode - and the search
     /// orchestrator), and the embed-and-store bootstrap vectorisation seam.
     /// Idempotent for the tool group:
     /// calling it more than once registers exactly one tool group. The host must
@@ -53,9 +54,10 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// Whether the dynamic multi-repository workspace surface is contributed. When
     /// <see langword="false"/> (the default) the mutating onboarding tool is the
     /// single-repository <c>repocontext_bootstrap</c>. When <see langword="true"/>
-    /// the read-only <c>repocontext_list_repos</c> is added and
+    /// the read-only <c>repocontext_list_repos</c> is added and, with writes enabled,
     /// <c>repocontext_bootstrap</c> is replaced by the workspace-scoped
-    /// <c>repocontext_add_repo</c> and <c>repocontext_remove_repo</c>.
+    /// <c>repocontext_add_repo</c>, <c>repocontext_remove_repo</c> and
+    /// <c>repocontext_reset_index</c>.
     /// </param>
     /// <param name="workspaceRoot">
     /// The read-only workspace root that repositories onboarded from the wire must

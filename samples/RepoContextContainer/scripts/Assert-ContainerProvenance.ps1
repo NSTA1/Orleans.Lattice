@@ -270,13 +270,15 @@ param(
 
 	# Defaults to 2 because the documented deployment of this sample IS two
 	# files: the tracked `docker-compose.yml`, which carries a `build:` stanza
-	# and no `image:`, and a `docker-compose.override.yml` that is untracked and
-	# gitignored on purpose, and which supplies the image pin, the memory limit,
-	# the CPU caps and the scan cadence. A stack launched from a directory that
-	# lacks the override resolves one file and every path it does resolve is
-	# still correct, so only the count catches it. Passing 1 here is a
-	# deliberate statement that you meant to run without an override, which is
-	# the point: dropping it should be an act, not an accident.
+	# and no `image:`, and the tracked `docker-compose.tuning.yml`, layered by
+	# name with `-f`, which supplies the image pin, the memory limit, the CPU
+	# caps and the scan cadence (it replaced an untracked, gitignored
+	# `docker-compose.override.yml`, issue #2609). A plain `docker compose up`
+	# with no override present resolves one file and every path it does
+	# resolve is still correct, so only the count catches it; a personal
+	# override layered on top of the two makes it 3. Passing 1 here is a
+	# deliberate statement that you meant to run the base file alone, which is
+	# the point: dropping the second file should be an act, not an accident.
 	[int] $ExpectedConfigFileCount = 2,
 
 	# The container path the durable-memory archive is bound at. A parameter

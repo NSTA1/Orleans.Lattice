@@ -3,8 +3,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <summary>
 /// The structured result of the read-only <c>repocontext_stats</c> tool: an aggregate roll-up of the
 /// repository-context surface's usage over a bounded recent window, so a team can see whether the
-/// surface actually reduces context cost. It reports only summed token figures - how many calls were
-/// answered, the exact response tokens they spent, the whole-file read tokens they conservatively
+/// surface actually reduces context cost. It reports only summed token figures over the answered
+/// <c>repocontext_context</c> bundles (the one call the surface records) - how many were answered,
+/// the estimated response tokens they spent, the whole-file read tokens they conservatively
 /// replaced, and the net tokens saved - and never any body text, query, path, or repository identity.
 /// </summary>
 /// <remarks>
@@ -13,10 +14,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </remarks>
 public sealed record RepoContextStatsResult
 {
-    /// <summary>The number of successfully answered calls counted in the window.</summary>
+    /// <summary>The number of successfully answered <c>repocontext_context</c> calls counted in the window.</summary>
     public required long Calls { get; init; }
 
-    /// <summary>The total exact response tokens spent across those calls.</summary>
+    /// <summary>
+    /// The total estimated response tokens spent across those calls: the sum of each bundle's own
+    /// wire-cost estimate (<see cref="RepoContextContextResult.ResponseTokens"/>), not a measured count.
+    /// </summary>
     public required long ResponseTokens { get; init; }
 
     /// <summary>

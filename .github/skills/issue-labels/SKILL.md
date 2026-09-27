@@ -28,7 +28,11 @@ Strong signals, in priority order:
    package labels are ground truth. Copy them onto the issue.
 2. **Fully-qualified type or namespace** in the title or body
    (`Orleans.Lattice.Api.Data`, `Orleans.Lattice.Membership.Entra.Graph`) - a
-   direct, high-precision signal for that exact package.
+   direct, high-precision signal for the package that declares it. Resolve the
+   name to its declaring `src/<package>/` rather than reading the package off the
+   namespace, because a namespace can span packages: the `Orleans.Lattice.Api.Data`
+   contracts such as `ILatticeDataApi` are declared in `lattice.api.abstractions`,
+   and only the facade and its registration live in `lattice.api.data`.
 3. **The component named in the title.** Titles are curated; a title that says
    "State API", "Explorer", "replication shipper", "dashboard", or "Azure Table
    WAL" reliably indicates the package.

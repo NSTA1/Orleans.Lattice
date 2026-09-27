@@ -296,7 +296,7 @@ internal static class TreeAdminLifecycleToolHandlers
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree to reshard. Must not be null, empty, or a reserved system tree id.")]
         string treeId,
-        [Description("The desired number of distinct physical shards to grow the tree to. Grow-only: must be greater than the current physical shard count (an empty tree may be re-pinned to any count) and at most 4096. Must be at least 2.")]
+        [Description("The desired number of distinct physical shards to grow the tree to. Grow-only: a count below the current physical shard count is rejected and the current count is a no-op (an empty tree may be re-pinned to any count). Must be at least 2 and at most 4096.")]
         int targetShardCount,
         CancellationToken cancellationToken = default)
     {
@@ -361,9 +361,9 @@ internal static class TreeAdminLifecycleToolHandlers
         string destinationTreeId,
         [Description("Snapshot mode: Offline quiesces the source tree during the copy; Online keeps it serving reads and writes.")]
         TreeSnapshotMode mode,
-        [Description("Optional maximum keys per leaf node for the destination tree. Null inherits the source tree's sizing.")]
+        [Description("Optional maximum keys per leaf node for the destination tree. Null takes the library default; the source tree's sizing is not inherited.")]
         int? maxLeafKeys = null,
-        [Description("Optional maximum children per internal node for the destination tree. Null inherits the source tree's sizing.")]
+        [Description("Optional maximum children per internal node for the destination tree. Null takes the library default; the source tree's sizing is not inherited.")]
         int? maxInternalChildren = null,
         CancellationToken cancellationToken = default)
     {

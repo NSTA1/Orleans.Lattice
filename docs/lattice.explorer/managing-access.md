@@ -24,14 +24,18 @@ is a presentation-only aid to reading the rule set, not a second opinion.
 
 ## The three tabs
 
-- **Groups** - browse groups, create and edit them, add and remove members
-  (including nested groups), and see a group's direct and transitive membership.
-  Group nesting is resolved through the server's membership listing, so the
-  transitive views match what the server actually evaluates.
+- **Groups** - browse groups, create, edit and delete them, and add and remove
+  members (including nested groups) in the selected group's direct-member list.
+  The tab lists direct members only; a subject's transitive group closure, as the
+  server resolved it, is shown in the Explain verdict and the effective-permissions
+  result instead.
 - **Policies** - author the authorization rules. A rule targets a scope chosen
   with the scope picker (whole tree, a key prefix, or a single key), one or more
   `LatticeOperation` values chosen from a multi-select, and an **Allow** or
-  **Deny** effect. Existing rules are listed and can be removed.
+  **Deny** effect. The form also offers the two opt-in rule shapes the posture
+  badges below describe - an all-trees grant and an access-administration
+  delegation rule - each of which supplies its own scope. Existing rules are listed
+  in precedence order, and each can be opened in the form to edit or delete it.
 - **Explain** - drive the facade's introspection: ask whether a subject may
   perform an operation on a scope (**Explain**) and see the effective permission
   set for a subject over a scope (**EffectivePermissions**). Both render the

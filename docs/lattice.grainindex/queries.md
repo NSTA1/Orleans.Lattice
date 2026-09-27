@@ -111,7 +111,11 @@ no lambda can name. That single fact drives the whole planner.
 The planner lowers a predicate into a **union of conjunctions**, each conjunction
 a set of per-property key-range scans:
 
-1. **`!` is pushed down** by negating the comparison beneath it.
+1. **`!` is pushed down** through `&&` and `||` by De Morgan's laws. On a single
+   comparison it becomes the complement of that comparison's key ranges when
+   those are exact; otherwise the property's whole range is scanned with the
+   negated clause kept as a residual predicate, because once null or NaN is in
+   play negating a comparison is not the same as flipping its operator.
 2. **`||` unions** its branches: each branch becomes its own conjunction, and the
    results are de-duplicated so a grain matching several branches is yielded once.
 3. **`&&` distributes over `||`**, then each conjunction becomes one key-range

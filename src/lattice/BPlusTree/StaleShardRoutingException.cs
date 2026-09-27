@@ -11,9 +11,10 @@ namespace Orleans.Lattice;
 /// against the new physical shard.
 /// <para>
 /// This exception is part of the internal coordination protocol between
-/// <c>LatticeGrain</c> and <c>ShardRootGrain</c> during shard splits - it is
-/// never surfaced to external callers because <c>LatticeGrain</c> always
-/// catches and recovers from it.
+/// <c>LatticeGrain</c> and <c>ShardRootGrain</c> during shard splits.
+/// <c>LatticeGrain</c> catches and recovers from it within a 60-second
+/// wall-clock retry budget; if the topology has not quiesced when that budget
+/// expires, the original exception is rethrown and reaches the caller.
 /// </para>
 /// </summary>
 [GenerateSerializer]

@@ -212,10 +212,16 @@ workload is driven at its own deliberately *sub-saturation* offered load
 single Azure Tables account that backs the WAL saturates at a very
 different offered rate for each call shape. Non-atomic batched
 `SetManyAsync` tolerates a high per-row rung because each flush completes
-quickly and releases its in-flight slot; per-key `SetAsync` and the
-atomic-saga shapes instead hold one of the eight in-flight WAL-flush
-slots for a whole commit round-trip, so they peg those slots at a small
-fraction of the batched rate. Driven at or near saturation those shapes
+quickly and releases its in-flight slot; at the measured revision,
+per-key `SetAsync` and the atomic-saga shapes instead held a WAL partition
+for a whole commit round-trip - a single-entry append then took the
+partition's exclusive append turn, so one was in flight per partition,
+eight at the default `WalPartitions` - and pegged those turns at a small
+fraction of the batched rate. Single-entry appends now take the
+interleaving batched path
+([`WalBatchedSingleEntryAppends`](configuration.md#walbatchedsingleentryappends),
+on by default), which lifts that per-partition cap; these rows predate the
+change. Driven at or near saturation those shapes
 are not reproducible - a single Azure tail-latency burst times out an
 in-flight flush and fails the cohort - so each is offered a load below
 its own saturation point. Every write-row throughput cell is therefore a
@@ -265,8 +271,9 @@ semantics across multiple keys via the atomic-write saga: one saga
 durably commits the configured key batch with cross-shard isolation.
 It is the slowest of the write rows in per-saga latency, because the
 saga pays multiple WAL round-trips (candidate, decision, per-leaf apply)
-per commit; and like the per-key path it holds an in-flight WAL-flush
-slot for the whole commit round-trip, so its sustainable key-write rate
+per commit; and, like the per-key path at the measured revision, it held
+a WAL partition's append turn for the whole commit round-trip, so its
+sustainable key-write rate
 is a small fraction of the non-atomic batched path and it is offered a
 correspondingly low load (which is why its throughput cell can land near
 the per-key `SetAsync` row even though the two are driven independently).
@@ -278,7 +285,11 @@ production read path is served from memory**, not because they exhaust
 Azure Tables' read budget. A read resolves through the per-silo
 read-through leaf cache, and whatever the cache cannot answer is read
 from the leaf grain's resident state, so neither path issues a storage
-request; that is why the `GetAsync` and `GetManyAsync` per-call
+request. (These rows also predate the optimistic shard-root point read,
+[`OptimisticShardRootPointReads`](configuration.md#optimisticshardrootpointreads),
+on by default, which serves a validated `GetAsync` from the primary leaf's
+resident state without consulting the cache; it issues no storage request
+either.) That is why the `GetAsync` and `GetManyAsync` per-call
 latencies in the Layer 2 table above are each roughly two orders of
 magnitude faster than a single Azure Tables round-trip. The
 single-account read budget itself (the same ~2,500 transactions/sec
@@ -319,7 +330,10 @@ consequences follow:
    with random access). The histogram cannot distinguish hits from
    misses on a per-call basis; pair `get.duration` with the
    `cache.hits` / `cache.misses` counters on a dashboard to estimate
-   the regime your workload sits in.
+   the regime your workload sits in. A point read the optimistic path
+   validates never reaches the cache, so read those counters beside
+   `shard_root.optimistic_read.outcomes`, whose `validated` arm counts
+   the point reads they do not see.
 2. **`GetWithVersionAsync` bypasses the cache** because the returned
    `HybridLogicalClock` must reflect the primary leaf's authoritative
    ordering, which the value-only cache cannot guarantee. So

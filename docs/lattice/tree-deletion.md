@@ -77,7 +77,7 @@ After all shards are marked, the `TreeDeletionGrain` persists its own `IsDeleted
 
 ### Phase 3: Purge
 
-When the reminder fires and the soft-delete window has elapsed (`now - DeletedAtUtc ≥ SoftDeleteDuration`), a grain timer is started that processes one shard per tick (every 2 seconds) - the same pattern used by [tombstone compaction](tombstone-compaction.md).
+When the reminder fires and the soft-delete window has elapsed (`now - DeletedAtUtc >= SoftDeleteDuration`), the purge is recorded as in progress, a one-minute keepalive reminder is registered as its crash-recovery anchor, and a grain timer is started that processes one shard per tick (every 2 seconds) - the same pattern used by [tombstone compaction](tombstone-compaction.md).
 
 For each shard, `PurgeAsync()`:
 
@@ -90,7 +90,7 @@ Step 3's routed-leaf sweep matters on a **retried** purge. A purge that fails pa
 
 `ClearGrainStateAsync()` deletes the grain's storage record - the provider reports no state for it afterwards - and retires the leaf's WAL replay barrier and unregisters its materialiser pins before it does, so a cleared leaf no longer holds the WAL trim floor down. The WAL itself is trimmed separately: each GC pass re-computes the trim floor from the pins that remain and re-issues the trim, which is idempotent, so a trim that fails is retried on the next pass rather than lost. Deleting a record and reclaiming the storage behind it are distinct: a provider may keep the freed space until its own compaction runs.
 
-After all shards are purged, the deletion grain records the purge as complete, removes the tree from the registry (so `TreeExistsAsync` returns `false` from then on), unregisters all reminders, and deactivates itself.
+After all shards are purged, the deletion grain records the purge as complete, removes the tree from the registry (so `TreeExistsAsync` returns `false` from then on), drops any leaf-materialiser cursors registered for the tree, unregisters all reminders, counts the purge on `orleans.lattice.tree.lifecycle` (`kind=purged`, with a tree event when [tree events](events.md) are enabled), and deactivates itself.
 
 ## Recovery
 
@@ -107,7 +107,7 @@ After all shards are purged, the deletion grain records the purge as complete, r
 - `DeleteTreeAsync()` is idempotent - calling it on an already-deleted tree is a no-op.
 - `MarkDeletedAsync()` is idempotent per shard.
 - `PurgeAsync()` is safe to call multiple times - `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op. A retry reaches the leaves a failed attempt left behind, even past the chain break that attempt caused, through the routed-leaf sweep in step 3.
-- Failed shards during purge are retried once before being skipped, and a skipped shard is not revisited: the pass still completes, records the purge as complete, removes the tree from the registry, and unregisters its reminders, so a shard whose purge failed twice keeps its state in storage.
+- During the reminder-driven purge, a failed shard is retried once before being skipped, and a skipped shard is not revisited: the pass still completes, records the purge as complete, removes the tree from the registry, and unregisters its reminders, so a shard whose purge failed twice keeps its state in storage. A manual `PurgeTreeAsync()` does not skip: the first shard failure propagates to the caller and the tree is not recorded as purged.
 
 ## Read Cache Behaviour
 
@@ -141,7 +141,7 @@ await tree.RecoverTreeAsync();
 byte[]? value = await tree.GetAsync("customer-123");
 ```
 
-`RecoverTreeAsync()` clears the `IsDeleted` flag on every shard, re-asserts each shard's node bindings so an interrupted purge cannot leave a routable-but-unbound leaf behind (see [Repairing an unbound node](#repairing-an-unbound-node)), unregisters the purge reminder, re-instates the [tombstone compaction](tombstone-compaction.md) reminder, and resets the deletion grain's state. The tree returns to normal operation with all its data intact, including automatic tombstone compaction.
+`RecoverTreeAsync()` clears the `IsDeleted` flag on every shard, re-asserts each shard's node bindings so an interrupted purge cannot leave a routable-but-unbound leaf behind (see [Repairing an unbound node](#repairing-an-unbound-node)), then resets the deletion grain's state, unregisters the purge reminder, and re-instates the [tombstone compaction](tombstone-compaction.md) reminder. The tree returns to normal operation with all its data intact, including automatic tombstone compaction.
 
 **State validation:**
 
@@ -193,5 +193,5 @@ await tree.PurgeTreeAsync();
 |---|---|
 | Not deleted | Throws `InvalidOperationException` - delete first |
 | Soft-deleted (within window) | ✅ Purges immediately |
-| Purge in progress (via reminder) | ✅ Purges remaining shards |
+| Purge in progress (via reminder) | ✅ Purges every shard again from shard `0` (clearing an already-purged shard is a no-op) |
 | Purge complete | Throws `InvalidOperationException` - already purged |

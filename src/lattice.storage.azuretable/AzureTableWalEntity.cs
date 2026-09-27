@@ -37,9 +37,10 @@ internal sealed class AzureTableWalEntity : ITableEntity
     public long Offset { get; set; }
 
     /// <summary>
-    /// Orleans-binary-serialised <see cref="LatticeMutation"/> payload.
-    /// Null on the per-partition head sentinel (see
-    /// <see cref="AzureTableWalStorageProvider.HeadRowKey"/>).
+    /// Orleans-binary-serialised <see cref="LatticeMutation"/> payload. Every row
+    /// the provider writes carries one; the property is nullable only for the
+    /// reserved head-sentinel key
+    /// (<see cref="AzureTableWalStorageProvider.HeadRowKey"/>), which is not written.
     /// </summary>
     public byte[]? Payload { get; set; }
 

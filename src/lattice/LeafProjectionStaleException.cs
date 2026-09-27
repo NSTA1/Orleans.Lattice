@@ -3,21 +3,21 @@ using Orleans.Serialization.Cloning;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Surfaced when a leaf grain''s persisted projection checkpoint is
-/// stale relative to the per-shard WAL and the configured
-/// <see cref="ProjectionRebuildPolicy"/> elects to surface the
-/// condition rather than recover automatically. Callers respond by
-/// invoking the operator surface to drive an explicit rebuild
-/// (the operator rebuild API) or by
-/// reconfiguring the option to <see cref="ProjectionRebuildPolicy.SnapshotThenWal"/>
-/// and reactivating the leaf.
+/// Surfaced when a leaf grain cannot rebuild its projection from the WAL: the
+/// WAL has been trimmed past the leaf's persisted projection checkpoint (the
+/// first offset it still needs is gone) and no snapshot covers the gap, so
+/// replaying the surviving suffix would rebuild the leaf over the lost prefix.
+/// The leaf surfaces the condition rather than recovering automatically under
+/// every configured <see cref="ProjectionRebuildPolicy"/> value (the
+/// snapshot-then-WAL and full-rebuild recovery paths are not integrated).
+/// Callers respond by invoking the operator surface to drive an explicit
+/// rebuild (<see cref="ILattice.RebuildLeafProjectionAsync(int, CancellationToken)"/>).
 /// <para>
-/// Three triggers can produce this exception: (1) the WAL has been
-/// trimmed past the leaf''s persisted projection checkpoint;
-/// (2) the gap between the persisted checkpoint and the WAL head
-/// exceeds <see cref="LatticeOptions.MaxLeafReplayEntries"/>; or
-/// (3) the persisted checkpoint is older than
-/// <see cref="LatticeOptions.LeafProjectionRetention"/>.
+/// Only that genuine-loss condition produces this exception. The cost triggers
+/// - a gap between the persisted checkpoint and the WAL head over
+/// <see cref="LatticeOptions.MaxLeafReplayEntries"/>, or a checkpoint older than
+/// <see cref="LatticeOptions.LeafProjectionRetention"/> - never do: the leaf
+/// tail-replays and converges (issue #1738).
 /// </para>
 /// <para>
 /// Orleans-serializable so that an activation fault raised on a leaf placed
@@ -42,8 +42,9 @@ namespace Orleans.Lattice;
 /// has nothing to do with a stale projection - silently converting an actionable,
 /// operator-addressable fault into a retry, a cache discard, or a swallow. A
 /// stale projection is never resolved by retrying: it is resolved only by an
-/// explicit operator rebuild or by reconfiguring
-/// <see cref="ProjectionRebuildPolicy"/>. Handlers that catch the base type
+/// explicit operator rebuild (reconfiguring
+/// <see cref="ProjectionRebuildPolicy"/> does not help, since every value
+/// surfaces this exception). Handlers that catch the base type
 /// broadly must therefore decline this exception explicitly, for example with
 /// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>,
 /// and let it propagate to the caller who can act on it.

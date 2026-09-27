@@ -6,10 +6,10 @@ namespace Orleans.Lattice.Api.Auth;
 /// <summary>
 /// Transport-agnostic configuration and control facade over a cluster's
 /// authorization system: membership administration, policy administration, and
-/// policy introspection behind a single surface. Every transport binding (a
-/// future gRPC surface) is a thin adapter over this one facade, so the admin
-/// semantics are written and tested once and no transport concern leaks into
-/// the control logic.
+/// policy introspection behind a single surface. Every transport binding (the
+/// gRPC service, the MCP tool group) is a thin adapter over this one facade, so
+/// the admin semantics are written and tested once and no transport concern
+/// leaks into the control logic.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,10 +24,11 @@ namespace Orleans.Lattice.Api.Auth;
 /// adds no bespoke, un-authorized write path to the membership or policy trees.
 /// </para>
 /// <para>
-/// <b>Zero cost when unregistered.</b> The add-on is opt-in and absent by
-/// default; when the authorization package is not registered the gate is the
-/// core no-op and the administrator check short-circuits, so the facade behaves
-/// exactly as an un-secured control surface would.
+/// <b>Requires the authorization add-on.</b> The facade is opt-in and absent by
+/// default, and its registration (<c>AddLatticeAuthApi</c>) fails fast unless
+/// <c>AddLatticeAuth</c> has already registered the policy store, so the
+/// administrator check always runs against the authorization add-on's enforcing
+/// access gate rather than the core no-op gate.
 /// </para>
 /// </remarks>
 public interface ILatticeAuthAdmin
@@ -134,8 +135,15 @@ public interface ILatticeAuthAdmin
     /// Explains whether <paramref name="subjectId"/> may perform
     /// <paramref name="operation"/> over <paramref name="scope"/>, returning the
     /// gate's verdict plus the authored rules that apply. The verdict is
-    /// produced by the same access gate the data plane consults, so it can never
-    /// disagree with the enforced decision.
+    /// produced by the same access gate the data plane consults, evaluated for a
+    /// subject whose groups are resolved from the membership directory alone:
+    /// groups a live caller's credential would contribute (token-asserted groups,
+    /// or groups projected by the membership claim-to-groups mapping) are not part
+    /// of it, and the membership group-merge mode is not applied. The verdict can
+    /// therefore differ from the decision enforced for a real caller whose token
+    /// carries or projects groups, and under the token-only merge mode (which
+    /// ignores directory groups at enforcement) it can differ even when the token
+    /// carries none.
     /// </summary>
     /// <param name="subjectId">The subject to explain the decision for. Must not be <c>null</c> or empty.</param>
     /// <param name="operation">The operation to evaluate.</param>

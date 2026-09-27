@@ -30,4 +30,5 @@ siloBuilder
     });
 ```
 
-The last registration wins, so this call replaces the default in-cluster sink.
+The call replaces the sink registration outright, so it displaces the default
+in-cluster sink whether it runs before or after `AddLatticeBackup`.

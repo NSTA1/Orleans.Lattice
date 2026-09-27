@@ -79,6 +79,13 @@ value fails rejects it with that rule's reason:
 | `LatticeSchemaRule.Regex(pattern, memberPath?)` | The value (or a named JSON member) matches a regex. |
 | `LatticeSchemaRule.Structured(predicate)` | A JSON document satisfies a `LatticePredicateNode` (the same predicate IR used by [predicate operations](../lattice/predicated-operations.md)). |
 
+Every factory also takes an optional `description`, which replaces the rule's default
+violation reason when the rule fails. A `Regex` rule's `memberPath` is a dotted path
+to a string member, and its pattern is compiled with `RegexOptions.NonBacktracking`
+when the policy is set, so `SetPolicyAsync` rejects a pattern that cannot be compiled
+that way - as it does a policy aimed at one of the reserved `sys-schema-*` trees -
+with an `ArgumentException` rather than failing on a later write.
+
 ```csharp verify
 using Orleans.Lattice.Schema;
 

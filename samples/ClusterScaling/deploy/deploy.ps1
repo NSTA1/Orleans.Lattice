@@ -322,7 +322,7 @@ Write-Host "  resource group : $ResourceGroup"
 Write-Host "  container app  : $appName"
 Write-Host "  ingress FQDN   : $fqdn"
 Write-Host "  data API       : $dataApiAddress"
-Write-Host "  scale rule     : metrics-api reads scaleValue from https://$fqdn/lattice/scale (target 1, replicas $MinReplicas..$MaxReplicas)"
+Write-Host "  scale rule     : metrics-api reads scaleValue from https://$fqdn/lattice/scale (target 0.5, replicas $MinReplicas..$MaxReplicas)"
 Write-Host ''
 Write-Host 'Drive compute-axis load and watch ACA scale out with:' -ForegroundColor Yellow
 Write-Host "  ./drive-load.ps1 -ResourceGroup $ResourceGroup -AppName $appName"

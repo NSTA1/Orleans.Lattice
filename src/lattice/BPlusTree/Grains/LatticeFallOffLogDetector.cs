@@ -102,7 +102,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // first offset this leaf still needs is checkpoint + 1; the entry AT
         // the checkpoint is already applied and harmless to lose. When
         // tail == checkpoint + 1 only that already-applied entry was trimmed
-        // and the entire needed (checkpoint, head] window survives - a clean
+        // and the entire needed (checkpoint, head) window survives - a clean
         // tail replay, never a rebuild. This is exactly the boundary the
         // activation-time #945 loss guard uses
         // (BPlusLeafGrain.Activation.cs: "tail > persistedCheckpoint + 1");
@@ -135,7 +135,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // fan-out of ~1,350 leaves per partition.
         //
         // What the comparison IS, and why it is kept: every entry this leaf
-        // applies is one of the entries in (checkpoint, head], so
+        // applies is one of the entries in (checkpoint, head), so
         //
         //     appliedByThisLeaf <= gap
         //
@@ -166,7 +166,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // second quantity to keep in step, which is what #2149 and #2291 each
         // had to unpick.
         //
-        // Confirming here instead would mean scanning (checkpoint, head]
+        // Confirming here instead would mean scanning (checkpoint, head)
         // before the replay - the same read the replay then repeats, and the
         // read whose 30 s overrun is the livelock of issue #2165. A pre-check
         // that costs as much as the work it is checking is not a pre-check.
@@ -244,7 +244,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         }
 
         // A COST trigger fired (replay budget or projection age) but the WAL
-        // still covers the entire (checkpoint, head] window, so a plain tail
+        // still covers the entire (checkpoint, head) window, so a plain tail
         // replay reconstructs exactly the same projection - it is merely
         // longer than the configured budget wanted. Returning a fatal
         // decision here is what bricked a tree holding fully intact data in

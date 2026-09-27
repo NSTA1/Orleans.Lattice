@@ -1005,13 +1005,18 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultAutoSplitMinTreeAge = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Maximum number of times a strongly-consistent scan
-    /// (<c>ILattice.CountAsync</c>, <c>KeysAsync</c>, <c>EntriesAsync</c>)
-    /// will reconcile against newly-discovered shard-map changes before giving
-    /// up. Each retry only re-fetches data for the slots that actually moved
-    /// during the scan, so the cost is bounded by the number of in-flight
-    /// splits, not the size of the tree. Set to <c>1</c> to disable
-    /// reconciliation entirely (fall back to eventually-consistent scans).
+    /// Bound on how many times a strongly-consistent read reconciles against
+    /// a concurrent topology change before giving up with
+    /// <see cref="InvalidOperationException"/>. <c>ILattice.KeysAsync</c> and
+    /// <c>EntriesAsync</c> reconcile in place: each round re-fetches only the
+    /// virtual slots that moved during the scan, so the cost is bounded by the
+    /// number of in-flight splits, not the size of the tree, and this caps the
+    /// number of rounds. <c>CountAsync</c>, <c>CountPerShardAsync</c> and
+    /// <c>GetManyAsync</c> instead re-run their fan-out when the shard-map
+    /// version moved, or a saga committed, while it was in flight, and this
+    /// caps the number of attempts. Values below <c>1</c> are treated as
+    /// <c>1</c>: a scan still reconciles once, and a count or multi-get makes a
+    /// single attempt that throws if the topology moves under it.
     /// </summary>
     public int MaxScanRetries { get; set; } = DefaultMaxScanRetries;
 
@@ -1085,10 +1090,14 @@ public class LatticeOptions
     /// as long as that one await takes - 576 seconds against a 5 second budget
     /// in the incident behind issue 2002 - and every other request to the shard
     /// queues behind it. This ceiling closes that gap: when it elapses the call
-    /// stops waiting and fails with <see cref="ScanPageStalledException"/>,
-    /// releasing the shard so queued work can drain. The caller retries and
-    /// resumes from its last continuation token, so the worst-case hold on a
-    /// shard becomes this single number.
+    /// stops waiting and releases the shard so queued work can drain. Work the
+    /// walk had already completed is returned as a short page the caller resumes
+    /// from (issues 2585, 2807); a fire that catches the walk with nothing to
+    /// show - or on an operation with no meaningful partial, the snapshot
+    /// baseline capture and the bounded range delete - faults with
+    /// <see cref="ScanPageStalledException"/>, which the caller retries from its
+    /// last continuation token. Either way the worst-case hold on a shard
+    /// becomes this single number.
     /// </para>
     /// <para>
     /// The ceiling stops the walk as well as the wait. Ending only the wait
@@ -1097,8 +1106,9 @@ public class LatticeOptions
     /// continuation: it keeps its place in the leaf chain and, once the read it
     /// was parked on returns, walks on - issuing further leaf calls against the
     /// very leaves whose contention caused the stall, on behalf of a caller
-    /// that was told to retry seconds earlier. The retry then contends with its
-    /// own predecessor's leftovers, which makes the next stall likelier. Each
+    /// that was already answered seconds earlier. The caller's next request then
+    /// contends with its own predecessor's leftovers, which makes the next stall
+    /// likelier. Each
     /// walk loop therefore re-reads this deadline between iterations and
     /// unwinds when it has fired, so the work a stall leaks is bounded by the
     /// one read already in flight rather than by the length of the leaf chain.
@@ -1114,9 +1124,10 @@ public class LatticeOptions
     /// that path could not run, and it must sit <em>below</em> the Orleans
     /// response timeout that governs the call. Above that timeout the ceiling
     /// is dead configuration: the caller's own RPC deadline expires first, so
-    /// the caller sees a generic Orleans timeout instead of the typed,
-    /// retriable <see cref="ScanPageStalledException"/>, and - worse - nothing
-    /// releases the shard, which is the very failure this exists to stop.
+    /// the caller sees a generic Orleans timeout instead of a banked short page
+    /// or the typed, retriable <see cref="ScanPageStalledException"/>, and -
+    /// worse - nothing releases the shard, which is the very failure this exists
+    /// to stop.
     /// </para>
     /// <para>
     /// Because that is a <em>relative</em> constraint, this option defaults to
@@ -1302,8 +1313,11 @@ public class LatticeOptions
     public const int DefaultMaxAtomicActionArgsBytes = 32 * 1024;
 
     /// <summary>
-    /// How long a completed saga's commit/abort decision persists in the
-    /// per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> as a tombstone after
+    /// How long a completed saga's commit/abort decision persists as a
+    /// tombstone in the saga decision registry that owns its transaction id
+    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> - one
+    /// per tree, or one per registry shard when
+    /// <see cref="TxRegistryShardCount"/> is above one) after
     /// the saga calls <c>ForgetAsync</c>. Covers the race window where a
     /// concurrent <c>TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync</c>
     /// installs a pending bucket on a destination shard <i>after</i> the
@@ -2002,10 +2016,15 @@ public class LatticeOptions
     public const long MinimumLeafSnapshotSegmentBytes = 64L * 1024;
 
     /// <summary>
-    /// Selects the recovery strategy a leaf grain takes when one of
-    /// the fall-off-log triggers fires at activation time
-    /// (WAL trimmed past checkpoint, replay budget exceeded, projection
-    /// older than <see cref="LeafProjectionRetention"/>).
+    /// Selects the recovery strategy a leaf grain takes on genuine loss at
+    /// activation time: the WAL has been trimmed past the leaf's persisted
+    /// checkpoint (the first offset it still needs is gone) and no snapshot
+    /// covers the gap. It is not consulted for the cost triggers - a replay gap
+    /// over <see cref="MaxLeafReplayEntries"/> or a projection older than
+    /// <see cref="LeafProjectionRetention"/> - which tail-replay regardless
+    /// (issue #1738). Every value currently surfaces
+    /// <see cref="LeafProjectionStaleException"/> on genuine loss; see
+    /// <see cref="Orleans.Lattice.ProjectionRebuildPolicy"/>.
     /// </summary>
     public ProjectionRebuildPolicy ProjectionRebuildPolicy { get; set; } = ProjectionRebuildPolicy.SnapshotThenWal;
 
@@ -3422,9 +3441,12 @@ public class LatticeOptions
     /// timeout) time. Defaults to
     /// <see cref="DefaultWalAppendDispatchTimeout"/> (30 seconds) -
     /// above the legitimate envelope of a fully-saturated dispatch
-    /// (one healthy flush + headroom), yet well below the Orleans
-    /// response timeout so a true park is caught and surfaced
-    /// promptly. Set to <see cref="Timeout.InfiniteTimeSpan"/> to
+    /// (one healthy flush + headroom). That equals the Orleans default
+    /// response timeout rather than sitting below it, so at defaults the
+    /// two deadlines coincide; set this below the response timeout the
+    /// deployment runs with for the writer-side ceiling, and its
+    /// per-shard attribution, to fire first. Set to
+    /// <see cref="Timeout.InfiniteTimeSpan"/> to
     /// disable the ceiling and restore the historical unbounded-await
     /// behaviour; the registered options validator rejects any other
     /// non-positive value at first-resolve time.

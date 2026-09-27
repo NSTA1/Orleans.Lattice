@@ -9,8 +9,10 @@ namespace Orleans.Lattice.Backup;
 /// registered). The catalog tree carries the core <c>sys-</c> prefix, so it is
 /// hidden from the default cluster-state tree catalog and the backup API is the
 /// sole enumeration surface for backups. This interface is the catalog storage
-/// surface only; capturing and restoring backups are the responsibility of later
-/// features.
+/// surface only; capture and restore are served by
+/// <see cref="ILatticeBackupCaptureService"/> and
+/// <see cref="ILatticeBackupRestoreService"/>, which register and read manifests
+/// through it.
 /// </summary>
 public interface ILatticeBackupCatalogStore
 {

@@ -3,7 +3,7 @@
 ## :warning: CRDTs are opt-in
 
 Plain writes on a tree - `SetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, and
-friends - are **last-writer-wins** (an `LwwRegister`): when two writers touch the
+friends - are **last-writer-wins** (the `LatticeMergeMode.LwwRegister` merge mode): when two writers touch the
 same key concurrently, the later timestamp silently overwrites the earlier one
 and the losing update is discarded. That is the correct default for ordinary
 key/value data, but it is **not** conflict-free.
@@ -51,6 +51,13 @@ typed CRDT extension surface and are not exercised here.
 | `tree.RwSet(key)` | Remove-wins observed-remove set; a concurrent remove beats a concurrent add. | Membership where a removal must win a tie: revocation lists, blocklists. |
 | `tree.MaxRegister<T>(key, orderKeySelector)` | Monotone register that keeps the greatest value under a caller-supplied order key. | High-water marks: a version ceiling, a max-seen reading. |
 | `tree.MinRegister<T>(key, orderKeySelector)` | Monotone register that keeps the smallest value under a caller-supplied order key. | Low-water marks: a min-seen latency floor, a first-seen timestamp. |
+
+`tree.OrMap<TKey,TValue>(key)` is the one accessor that needs host registration:
+register its `(TKey, TValue)` shape for each tree at silo start with
+`siloBuilder.AddOrMapShape<TKey, TValue>(treeName)` - the sample does so for
+`replica-a` and `replica-b` - or its writes throw
+`LatticeCrdtShapeNotRegisteredException`. Every other accessor resolves its
+shape automatically.
 
 ## Run it
 
@@ -104,7 +111,7 @@ Done. Every replica reached the same state without locks, consensus, or a confli
 - Multi-writer or multi-region data where you want availability over
   coordination: each writer proceeds locally and the state merges deterministically.
 - Counters, sets, flags, registers, maps, and sequences whose concurrent updates
-  should combine by algebra (sum, add-wins, disable-wins, latest-wins, union)
+  should combine by algebra (sum, add-wins, disable-wins, max/min, union)
   rather than by a lock or a manual conflict prompt.
 
 ## When not to use

@@ -36,7 +36,11 @@ public static class LatticeBackupApiGrpcServiceCollectionExtensions
     /// <summary>
     /// Registers the <c>Orleans.Lattice.Api.Backup.Grpc</c> binding: the
     /// method-definition singleton, the server-side service, the default-deny
-    /// authorizer, and the authorization interceptor. Idempotent.
+    /// authorizer, and the authorization interceptor. Call it once: the service
+    /// registrations are TryAdd-guarded, but every call layers its
+    /// <paramref name="configure"/> delegate and adds the authorization interceptor
+    /// to the gRPC pipeline again, so after two calls the interceptor runs twice on
+    /// every RPC.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="configure">

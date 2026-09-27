@@ -84,8 +84,9 @@ automatically sets `RequiresAspNetWebAssets` for you; you do not need to set
 anything. If you have already set that property yourself, your value is kept.
 
 The UI's stylesheet and scripts ship as static web assets of the referenced
-`Orleans.Lattice.Explorer.UI` package and are served automatically under the
-Development environment. When you run under a non-Development environment, call
+`Orleans.Lattice.Explorer.UI` package and are served automatically by a published
+host and under the Development environment. When you run from build output (for
+example with `dotnet run`) under a non-Development environment, call
 `builder.WebHost.UseStaticWebAssets()` so those assets are mapped and the console
 is styled.
 

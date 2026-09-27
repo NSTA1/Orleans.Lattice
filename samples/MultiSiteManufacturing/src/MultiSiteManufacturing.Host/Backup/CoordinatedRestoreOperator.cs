@@ -7,8 +7,9 @@ namespace MultiSiteManufacturing.Host.Backup;
 /// <summary>
 /// Operator-facing facade that captures and restores the sample's replicated
 /// fact tree (<see cref="LatticeFactBackend.FactTreeId"/>) through the shared
-/// external backup sink (the Azure blob sink under docker-compose; a local
-/// <see cref="FileSystemBackupSink"/> in the single-machine quick-start). It mirrors the seam
+/// external backup sink (the Azure blob sink under docker-compose; a
+/// <see cref="FileSystemBackupSink"/> under a shared temp directory when no
+/// shared blob account is configured). It mirrors the seam
 /// <c>OperatorActions</c> uses: a small DI-registered facade the UI, a gRPC
 /// service, or a test can drive directly, with no new web framework bolted on.
 /// <para>
@@ -17,9 +18,11 @@ namespace MultiSiteManufacturing.Host.Backup;
 /// package's restore entry point promotes the restore into an all-or-nothing
 /// coordinated multi-cluster saga automatically: dispatch is decided by the
 /// target tree's current replication membership, not by this facade. When the
-/// tree is not replicated (the single-cluster quick-start) the same call runs as
-/// a plain local restore. The facade therefore stays transport-agnostic and free
-/// of any saga wiring.
+/// tree is not replicated - as in the sample's in-process tests, which construct
+/// this facade directly over clusters with no replication - the same call runs
+/// as a plain local restore; the host itself registers the facade only on the
+/// replicated path. The facade therefore stays transport-agnostic and free of
+/// any saga wiring.
 /// </para>
 /// </summary>
 public sealed class CoordinatedRestoreOperator(

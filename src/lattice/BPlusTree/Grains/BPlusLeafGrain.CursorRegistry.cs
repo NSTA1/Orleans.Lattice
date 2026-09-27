@@ -115,9 +115,11 @@ internal sealed partial class BPlusLeafGrain
     /// Whether to follow the cursor report with the durable pin publish (the
     /// batched flush on the first real frontier, the debounced mirror
     /// thereafter). <see langword="false"/> only on the teardown persist's tail,
-    /// which publishes the pin itself through the awaited batched flush once
-    /// its snapshot recheck has run (issues #3393, #3599), so a fire-and-forget
-    /// mirror queued behind it would be redundant work on a path with a deadline.
+    /// which publishes the pin itself through the awaited batched flush -
+    /// first before its snapshot recheck (issue #3393), then again after it
+    /// only when the recheck's capture was kept (issue #3599) - so a
+    /// fire-and-forget mirror queued behind it would be redundant work on a
+    /// path with a deadline.
     /// </param>
     private async Task ReportCursorIfActiveAsync(bool publishDurablePin = true)
     {
@@ -291,11 +293,11 @@ internal sealed partial class BPlusLeafGrain
     /// a later re-report: a leaf that deactivates is typically not reactivated
     /// for a long time, and its last published pin holds the shared WAL's trim
     /// floor until it is. It is safe because the teardown persist publishes its
-    /// own pin before this barrier runs (issue #3393), after its own snapshot
-    /// recheck so that pin carries any coverage that recheck restamped (issue
-    /// #3599), so an abandoned flush here leaves the pin at
-    /// <c>min(final persisted checkpoint, coverage)</c> rather than at an older
-    /// value; and a pin that lags only retains more WAL.
+    /// own pin before this barrier runs: once before its snapshot recheck
+    /// (issue #3393), and again after it when a capture the recheck kept
+    /// restamped coverage (issue #3599), so an abandoned flush here leaves the
+    /// pin at <c>min(final persisted checkpoint, coverage)</c> rather than at an
+    /// older value; and a pin that lags only retains more WAL.
     /// </param>
     /// <remarks>
     /// <see langword="internal"/> rather than private so the #3476 clamp and

@@ -61,7 +61,10 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
             Read(services, AuthToolHandlers.ExplainAsync, "lattice_auth_explain", "Explain an authorization decision",
                 "Explains whether a subject may perform an operation over a keyspace scope (whole tree, a key, or a "
                 + "prefix), returning the access gate's verdict and the authored rules that apply. Set subjectKind to "
-                + "Group to explain a group subject rather than a user. Under a default-allow posture a subject can be "
+                + "Group to explain a group subject rather than a user. The subject's groups are resolved from the "
+                + "membership directory only: groups a real caller's token asserts or its claims project are not "
+                + "included, so the verdict can differ from the one enforced for that caller. Under a default-allow "
+                + "posture a subject can be "
                 + "allowed with an empty matchedRules list: no rule denied the operation, so the gate's implicit allow "
                 + "stands - an empty matchedRules on an allow verdict means 'nothing objected', not 'nothing was "
                 + "evaluated'. The result also reports the cluster's authorization posture (whether the all-trees grant "
