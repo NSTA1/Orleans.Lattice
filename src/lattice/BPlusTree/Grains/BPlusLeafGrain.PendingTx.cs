@@ -1246,41 +1246,35 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Returns the minimum WAL offset across every unresolved
-    /// pending-tx prepare on this leaf, or <c>null</c> when no
-    /// prepare-with-offset is currently buffered. Used by
-    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> to clamp
-    /// the persisted checkpoint to <c>min(requested, value - 1)</c>
-    /// so crash recovery does not advance past an unresolved prepare.
-    /// O(pending-txs) - bounded by the small cardinality of in-flight
-    /// sagas; returns immediately when the offset map has never been
-    /// allocated (the steady state for foreground-driven leaves).
-    /// </summary>
-    internal long? MinUnresolvedPrepareOffset
-    {
-        get
-        {
-            if (_pendingTxOffsets is null || _pendingTxOffsets.Count == 0)
-                return null;
-
-            long min = long.MaxValue;
-            foreach (var offset in _pendingTxOffsets.Values)
-            {
-                if (offset < min)
-                    min = offset;
-            }
-            return min;
-        }
-    }
-
-    /// <summary>
-    /// Returns the minimum WAL offset across every unresolved
     /// pending-tx prepare on this leaf that was recorded under
-    /// <paramref name="partition"/>, or <c>null</c> when no
-    /// prepare-with-offset for the given partition is currently
-    /// buffered. Required by the per-partition projection-checkpoint
-    /// clamp so a multi-partition replay does not advance partition
-    /// <c>P</c>'s checkpoint past an unresolved prepare from a
-    /// distinct partition's offset space.
+    /// <paramref name="partition"/> and whose replay work is not durably
+    /// recorded, or <c>null</c> when there is no such prepare. This is the
+    /// single source of the prepare clamp at both checkpoint clamp sites -
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> (which clamps
+    /// the requested advance to <c>min(requested, value - 1)</c>) and the
+    /// replay flush ceiling in <c>TryFlushRecoveredCeilingAsync</c> - so
+    /// crash recovery never advances past a prepare it would need to re-read.
+    /// O(pending-txs); returns immediately when the offset map has never been
+    /// allocated (the steady state for foreground-driven leaves).
+    /// <para>
+    /// Both filters are load-bearing, and a whole-leaf minimum over every
+    /// buffered offset is NOT an equivalent substitute (issue #2469, which
+    /// removed a dead accessor of that shape):
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><b>Per partition.</b> WAL partitions have disjoint
+    /// offset spaces, so an unresolved prepare on partition <c>Q</c> says
+    /// nothing about partition <c>P</c>. A cross-partition minimum would pin
+    /// every partition's checkpoint behind one partition's in-flight saga.
+    /// </description></item>
+    /// <item><description><b>Durably recorded prepares are skipped (issue
+    /// #2165).</b> A prepare whose mutation is in the durable replay-work
+    /// ledger no longer needs a WAL re-read to rebuild the pending-tx map, so
+    /// clamping on it only produces a self-perpetuating checkpoint pin: the
+    /// checkpoint cannot advance, it pins the coverage-gated WAL GC, and the
+    /// next activation re-reads the identical prepare and banks nothing.
+    /// </description></item>
+    /// </list>
     /// </summary>
     internal long? MinUnresolvedPrepareOffsetForPartition(int partition)
     {

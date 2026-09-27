@@ -25,7 +25,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// mutations whose terminals have not yet replayed, and the persisted
 /// checkpoint is advanced under
 /// <see cref="ILeafProjection.SetCheckpointOffsetAsync(long, CancellationToken)"/>'s
-/// <c>MinUnresolvedPrepareOffset - 1</c> clamp so the next activation
+/// per-partition <c>MinUnresolvedPrepareOffsetForPartition - 1</c> clamp so the next activation
 /// never silently advances past a prepare whose terminal is still
 /// outstanding.
 /// </para>
