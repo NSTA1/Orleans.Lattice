@@ -439,4 +439,55 @@ public class RwSetTests
             Assert.That(set.Count, Is.EqualTo(1));
         });
     }
+
+    [Test]
+    public void SnapshotElements_matches_the_Elements_projection_element_for_element()
+    {
+        // The single-scan snapshot exists only to avoid walking the survivor
+        // set twice, so its sole contract is that it is indistinguishable from
+        // the lazy projection - same survivors, same order, same bytes.
+        var set = new RwSet();
+        set.Add([0x00], "A", 1);
+        set.Add([0x34], "A", 2);
+        set.Add([0xFF], "A", 3);
+        set.Add(E("live"), "A", 4);
+        set.Add(E("dead"), "A", 5);
+        set.Remove(E("dead"), "B", 6);
+
+        var snapshot = set.SnapshotElements();
+
+        Assert.That(snapshot, Is.EqualTo(set.Elements().ToList()).AsCollection);
+    }
+
+    [Test]
+    public void SnapshotElements_is_empty_when_no_element_survives()
+    {
+        // The two distinct empty outcomes: nothing was ever added, and
+        // everything added was removed. The second is the one that only shows
+        // up after the survivor scan, so the snapshot must size from survivors
+        // rather than from the add count.
+        var never = new RwSet();
+        var allRemoved = new RwSet();
+        allRemoved.Add(E("x"), "A", 1);
+        allRemoved.Remove(E("x"), "B", 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(never.SnapshotElements(), Is.Empty);
+            Assert.That(allRemoved.Adds, Is.Not.Empty);
+            Assert.That(allRemoved.SnapshotElements(), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void SnapshotElements_is_exactly_sized_to_the_live_count()
+    {
+        var set = new RwSet();
+        set.Add(E("a"), "A", 1);
+        set.Add(E("b"), "A", 2);
+        set.Add(E("c"), "A", 3);
+        set.Remove(E("b"), "B", 4);
+
+        Assert.That(set.SnapshotElements(), Has.Length.EqualTo(set.Count));
+    }
 }

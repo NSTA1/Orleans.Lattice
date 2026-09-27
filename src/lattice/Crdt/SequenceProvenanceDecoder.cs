@@ -159,19 +159,28 @@ public sealed class SequenceProvenanceDecoder : ICrdtProvenanceDecoder
     {
         ArgumentNullException.ThrowIfNull(state);
         var rga = (Rga)state;
-        var live = rga.ToList();
-        if (live.Count == 0) return Array.Empty<CrdtMemberValue>();
+        // MaterializeShared, not ToList: ToList allocates a fresh
+        // (OrSetDot, byte[]) tuple array purely to hand the projection over,
+        // and this method re-projects every entry into a CrdtMemberValue on the
+        // next line, so that tuple array is discarded immediately. The shared
+        // view is the same cached, insertion-resolved order without it. The
+        // per-value copy ToList also performs is NOT dropped - it is the
+        // buffer-ownership guard for a value that escapes to a public caller -
+        // it simply moves here, straight into the member it populates.
+        var live = rga.MaterializeShared();
+        var count = live.Count;
+        if (count == 0) return Array.Empty<CrdtMemberValue>();
 
-        var result = new List<CrdtMemberValue>(live.Count);
-        for (var i = 0; i < live.Count; i++)
+        var result = new CrdtMemberValue[count];
+        for (var i = 0; i < count; i++)
         {
             var (dot, value) = live[i];
-            result.Add(new CrdtMemberValue
+            result[i] = new CrdtMemberValue
             {
-                Element = value ?? Array.Empty<byte>(),
+                Element = value is null or { Length: 0 } ? Array.Empty<byte>() : value.AsSpan().ToArray(),
                 ReplicaId = dot.ReplicaId,
                 Ordinal = dot.Counter,
-            });
+            };
         }
 
         return result;
