@@ -7,7 +7,7 @@ public static class AppManifestValidator
 {
     internal static readonly LatticeOperation RoleOperations =
         Enum.GetValues<LatticeOperation>()
-            .Where(static value => value != LatticeOperation.Telemetry && Enum.GetName(value) != "AppInstall")
+            .Where(static value => value != LatticeOperation.Telemetry && value != LatticeOperation.AppInstall)
             .Aggregate(LatticeOperation.None, static (mask, value) => mask | value);
 
     /// <summary>
