@@ -24,6 +24,16 @@ namespace Orleans.Lattice.Internal.Cgroups;
 /// <c>CgroupSourcesCompileStandaloneTests</c>).
 /// </para>
 /// <para>
+/// The file access itself - the ordered path probe, the defensive read, and the
+/// degrade-to-unknown policy - belongs to <see cref="CgroupFileSystem"/> (issue
+/// #2828), so this type holds only the CPU-specific parsing. The probe is "first
+/// known value wins": a cgroup v2 <c>cpu.max</c> that reads <c>max</c> no longer
+/// ends the probe, and the v1 pair is consulted next. On a real host the two
+/// hierarchies do not both carry the CPU controller, so the answer is the same as
+/// before; the rule is stated here because it is now shared with
+/// <see cref="ContainerMemoryLimit"/> rather than chosen per reader.
+/// </para>
+/// <para>
 /// It exists because <see cref="System.Environment.ProcessorCount"/> is not a
 /// reliable statement of how much CPU the process may use. It is quota-derived
 /// only when nothing overrides it, and <c>DOTNET_PROCESSOR_COUNT</c> overrides
@@ -105,16 +115,10 @@ internal static class ContainerCpuGrant
     /// A null result is not an error: it is the correct answer on an
     /// unconstrained host and on a non-Linux machine.</returns>
     public static int? Read()
-    {
-        var v2 = TryReadAllText(CgroupV2CpuMaxPath);
-        if (v2 is not null)
-        {
-            return ParseCpuMax(v2);
-        }
-
-        return ParseCpuQuota(
-            TryReadAllText(CgroupV1QuotaPath), TryReadAllText(CgroupV1PeriodPath));
-    }
+        => CgroupFileSystem.ReadFirstKnown([CgroupV2CpuMaxPath], ParseCpuMax)
+            ?? ParseCpuQuota(
+                CgroupFileSystem.TryReadAllText(CgroupV1QuotaPath),
+                CgroupFileSystem.TryReadAllText(CgroupV1PeriodPath));
 
     /// <summary>
     /// Parses a cgroup v2 <c>cpu.max</c> payload, which is a quota and a period
@@ -173,21 +177,5 @@ internal static class ContainerCpuGrant
         // Positive inputs make the ceiling at least one; .NET 10 saturates
         // the conversion at int.MaxValue for a quota larger than it can hold.
         return (int)Math.Ceiling((double)quotaValue / periodValue);
-    }
-
-    private static string? TryReadAllText(string path)
-    {
-        try
-        {
-            return File.Exists(path) ? File.ReadAllText(path) : null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
     }
 }
