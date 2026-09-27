@@ -542,6 +542,27 @@ a genuine registry fault propagates as itself, and cancellation is
 never swallowed. A read of a key with no prepared mutation never
 consults the registry, so it is unaffected.
 
+Multi-key reads (`GetManyAsync`, `CountAsync`, `CountPerShardAsync`,
+and the `KeysAsync` / `EntriesAsync` scans) resolve every key against
+one registry snapshot and then verify, after the fan-out, that no saga
+committed while it ran. When the registry cannot be reached for either
+step, the read cannot vouch for that single view, so it **fails closed
+only when its result depends on the registry**:
+
+- if no key the read reached carried a prepared mutation, no value
+  depended on a saga decision and the result is returned;
+- otherwise the attempt is retried under a fresh snapshot, within
+  `LatticeOptions.MaxScanRetries`, and on exhaustion the read throws
+  `LatticeTransactionOutcomeUnavailableException` rather than return a
+  result that could be torn (some keys post-saga, some pre-saga).
+
+A streaming scan whose starting snapshot cannot be fetched keeps going
+until a page reaches a prepared key, which then throws; every page
+already yielded held no prepared key, so what the caller received is
+consistent. Previously each of these failures was treated as "stable",
+which let a registry blip certify exactly the torn read the check
+exists to prevent.
+
 ## Crash-Recovery Timeline
 
 | Crash point | State on reactivation | Recovery path |

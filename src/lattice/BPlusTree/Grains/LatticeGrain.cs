@@ -1471,8 +1471,10 @@ internal sealed partial class LatticeGrain(
         // keys show the post-saga value within a single observed map
         // version.
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
+        LatticeTransactionOutcomeUnavailableException? unavailableCause = null;
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
+            unavailableCause = null;
             if (attempt > 0)
             {
                 InvalidateShardMap();
@@ -1578,129 +1580,182 @@ internal sealed partial class LatticeGrain(
             // concurrent merge target entirely and captures the one shard's
             // own result dictionary in `singleShardFetched`, handing it back
             // verbatim (no copy) when stable.
+            // Registry-verification passes (issue #3641). Pass 0 fans out under
+            // snap1, or - when snap1 could not be fetched - under the "snapshot
+            // unavailable" marker. When pass 0 ran under snap1 but its stability
+            // is Unverifiable (the post-fan-out probe or disambiguation snapshot
+            // failed in transport), one strict pass re-runs the fan-out under the
+            // marker: its completion proves no leaf needed a saga decision, which
+            // is the only condition under which an unverified result is safe
+            // (ReaderStabilityGate.Decide). A strict pass that reaches a prepared
+            // key throws the typed exception, and the attempt is retried.
             ConcurrentDictionary<string, byte[]>? concurrent = null;
             Dictionary<string, byte[]>? singleShardFetched = null;
-            RegistrySnapshotPair snap1Pair;
-            var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-            try
-            {
-                snap1Pair = await FetchRegistrySnapshotAsync();
-                var snap1 = snap1Pair.Snap;
-                if (fastBucket != null)
-                {
-                    // Single-shard fast path: every requested key routes to one
-                    // physical shard (the dominant case, and the only case for a
-                    // single-shard tree), so skip the per-call ConcurrentDictionary
-                    // merge target, the parallel fan-out, and the final
-                    // ConcurrentDictionary -> Dictionary copy. Issue one
-                    // IShardRootGrain.GetManyAsync under the snapshot scope and take
-                    // its own result dictionary directly. This mirrors the shard
-                    // grain's single-leaf fast path in TraverseForBatchReadAsync one
-                    // layer down. The per-shard ShardActivationRetry wrap, the
-                    // snapshot scope, and the topology + snap2 stability checks and
-                    // retry below are all identical to the multi-shard path, so
-                    // atomic visibility is unchanged.
-                    var shard = GetShardGrainByIndex(physicalTreeId, fastShardIdx);
-                    using (LatticeRegistrySnapshotContext.BeginScope(snap1))
-                    {
-                        singleShardFetched = await ShardActivationRetry.RunAsync(
-                            () => shard.GetManyAsync(fastBucket));
-                    }
-                }
-                else
-                {
-                    // Presize the per-call merge target: the per-shard
-                    // FetchFromShardAsync workers TryAdd one entry per
-                    // returned key, so the steady-state final size is
-                    // bounded by keys.Count (less when some keys are
-                    // absent on the leaf). concurrencyLevel is the
-                    // distinct-shard count - one writer per shard task -
-                    // which matches the actual parallel-TryAdd fan-in
-                    // without over-segmenting the bucket array. Both
-                    // arguments must be >= 1 (ConcurrentDictionary's
-                    // constructor rejects 0); the keys.Count == 0 entry
-                    // point (legal per the public ILattice.GetManyAsync
-                    // surface, exercised by GetManyAsync_returns_empty_for_no_keys)
-                    // makes both shardBuckets.Count and keys.Count zero,
-                    // so a Math.Max(1, ...) floor on each preserves the
-                    // presize semantics on the common path while keeping
-                    // the empty-batch path well-defined.
-                    concurrent = new ConcurrentDictionary<string, byte[]>(
-                        concurrencyLevel: Math.Max(1, shardBuckets.Count),
-                        capacity: Math.Max(1, keys.Count));
-                    using (LatticeRegistrySnapshotContext.BeginScope(snap1))
-                    {
-                        var tasks = new List<Task>(shardBuckets.Count);
-                        foreach (var (shardIdx, bucket) in shardBuckets)
-                        {
-                            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-                            tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
-                        }
-                        await Task.WhenAll(tasks);
-                    }
-                }
-            }
-            finally
-            {
-                LatticeMetrics.GetManyStageDuration.Record(
-                    System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageFanOutTag,
-                    StageTagTenant);
-            }
-
-            // Merge stage: topology-stability check + snap2 stability
-            // check + final ConcurrentDictionary -> Dictionary
-            // materialise on the happy path. Recorded once per attempt
-            // even when a topology-version drift or snap2 mismatch
-            // forces a continue, so operators see the wasted-attempt
-            // cost.
-            var mergeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            RegistrySnapshotPair snap1Pair = default;
+            var strictPass = false;
             bool returning = false;
             Dictionary<string, byte[]>? result = null;
-            try
+            for (var pass = 0; pass < 2; pass++)
             {
-                // Unconditional topology-stability check: if the shard-map
-                // version moved while the fan-out was in flight, the per-shard
-                // reads may have spanned an inconsistent snapshot (some keys
-                // routed to a shadow-forwarded source owner, others to the new
-                // owner). Discard and retry against the fresh map.
-                var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
-                if (shardMapNow.Version != versionAtStart)
+                concurrent = null;
+                singleShardFetched = null;
+                var reachedUnresolvablePrepare = false;
+                var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
                 {
-#if LATTICE_DIAG
-                    DiagSink.Write($"[DIAG reader-topology-retry] tree={physicalTreeId} attempt={attempt} versionAtStart={versionAtStart} versionNow={shardMapNow.Version}");
-#endif
-                    continue;
+                    if (pass == 0)
+                    {
+                        snap1Pair = await FetchRegistrySnapshotAsync();
+                        strictPass = !snap1Pair.Available;
+                    }
+
+                    try
+                    {
+                        if (fastBucket != null)
+                        {
+                            // Single-shard fast path: every requested key routes to one
+                            // physical shard (the dominant case, and the only case for a
+                            // single-shard tree), so skip the per-call ConcurrentDictionary
+                            // merge target, the parallel fan-out, and the final
+                            // ConcurrentDictionary -> Dictionary copy. Issue one
+                            // IShardRootGrain.GetManyAsync under the snapshot scope and take
+                            // its own result dictionary directly. This mirrors the shard
+                            // grain's single-leaf fast path in TraverseForBatchReadAsync one
+                            // layer down. The per-shard ShardActivationRetry wrap, the
+                            // snapshot scope, and the topology + snap2 stability checks and
+                            // retry below are all identical to the multi-shard path, so
+                            // atomic visibility is unchanged.
+                            var shard = GetShardGrainByIndex(physicalTreeId, fastShardIdx);
+                            using (BeginRegistryScope(snap1Pair, strictPass))
+                            {
+                                singleShardFetched = await ShardActivationRetry.RunAsync(
+                                    () => shard.GetManyAsync(fastBucket));
+                            }
+                        }
+                        else
+                        {
+                            // Presize the per-call merge target: the per-shard
+                            // FetchFromShardAsync workers TryAdd one entry per
+                            // returned key, so the steady-state final size is
+                            // bounded by keys.Count (less when some keys are
+                            // absent on the leaf). concurrencyLevel is the
+                            // distinct-shard count - one writer per shard task -
+                            // which matches the actual parallel-TryAdd fan-in
+                            // without over-segmenting the bucket array. Both
+                            // arguments must be >= 1 (ConcurrentDictionary's
+                            // constructor rejects 0); the keys.Count == 0 entry
+                            // point (legal per the public ILattice.GetManyAsync
+                            // surface, exercised by GetManyAsync_returns_empty_for_no_keys)
+                            // makes both shardBuckets.Count and keys.Count zero,
+                            // so a Math.Max(1, ...) floor on each preserves the
+                            // presize semantics on the common path while keeping
+                            // the empty-batch path well-defined.
+                            concurrent = new ConcurrentDictionary<string, byte[]>(
+                                concurrencyLevel: Math.Max(1, shardBuckets.Count),
+                                capacity: Math.Max(1, keys.Count));
+                            using (BeginRegistryScope(snap1Pair, strictPass))
+                            {
+                                var tasks = new List<Task>(shardBuckets.Count);
+                                foreach (var (shardIdx, bucket) in shardBuckets)
+                                {
+                                    var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                                    tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
+                                }
+                                await Task.WhenAll(tasks);
+                            }
+                        }
+                    }
+                    catch (LatticeTransactionOutcomeUnavailableException ex) when (strictPass)
+                    {
+                        // A leaf reached a prepared key with no single decision
+                        // view to resolve it against: the read depends on the
+                        // registry, so this attempt cannot be certified.
+                        unavailableCause = ex;
+                        reachedUnresolvablePrepare = true;
+                    }
+                }
+                finally
+                {
+                    LatticeMetrics.GetManyStageDuration.Record(
+                        System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
+                        stageTagTree, LatticeMetrics.StageFanOutTag,
+                        StageTagTenant);
                 }
 
-                if (await IsSnap2StableAsync(snap1Pair.Snap, snap1Pair.Revision))
+                if (reachedUnresolvablePrepare) break;
+
+                // Merge stage: topology-stability check + snap2 stability
+                // check + final ConcurrentDictionary -> Dictionary
+                // materialise on the happy path. Recorded once per pass
+                // even when a topology-version drift or snap2 mismatch
+                // forces a retry, so operators see the wasted-attempt
+                // cost.
+                var mergeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                var repass = false;
+                try
                 {
+                    // Unconditional topology-stability check: if the shard-map
+                    // version moved while the fan-out was in flight, the per-shard
+                    // reads may have spanned an inconsistent snapshot (some keys
+                    // routed to a shadow-forwarded source owner, others to the new
+                    // owner). Discard and retry against the fresh map.
+                    var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
+                    if (shardMapNow.Version != versionAtStart)
+                    {
 #if LATTICE_DIAG
-                    var diagView = (IReadOnlyDictionary<string, byte[]>?)singleShardFetched ?? concurrent!;
-                    DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={diagView.Count} rounds=[{string.Join(',', diagView.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
+                        DiagSink.Write($"[DIAG reader-topology-retry] tree={physicalTreeId} attempt={attempt} versionAtStart={versionAtStart} versionNow={shardMapNow.Version}");
 #endif
-                    // Single-shard fast path hands back the shard's own
-                    // dictionary verbatim; multi-shard materialises the
-                    // concurrent merge target into a plain Dictionary.
-                    result = singleShardFetched ?? new Dictionary<string, byte[]>(concurrent!);
-                    returning = true;
+                    }
+                    else
+                    {
+                        // A strict pass that completed resolved no prepared key;
+                        // under a snapshot that is not observable, so the rule
+                        // is fed the conservative answer.
+                        var verdict = strictPass
+                            ? ReaderStabilityVerdict.Unverifiable
+                            : await ClassifySnap2Async(snap1Pair.Snap, snap1Pair.Revision);
+                        if (ReaderStabilityGate.Decide(verdict, resolvedPreparedKey: !strictPass)
+                            == ReaderAttemptDecision.Accept)
+                        {
+#if LATTICE_DIAG
+                            var diagView = (IReadOnlyDictionary<string, byte[]>?)singleShardFetched ?? concurrent!;
+                            DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={diagView.Count} rounds=[{string.Join(',', diagView.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
+#endif
+                            // Single-shard fast path hands back the shard's own
+                            // dictionary verbatim; multi-shard materialises the
+                            // concurrent merge target into a plain Dictionary.
+                            result = singleShardFetched ?? new Dictionary<string, byte[]>(concurrent!);
+                            returning = true;
+                        }
+                        else if (verdict == ReaderStabilityVerdict.Unverifiable && !strictPass)
+                        {
+                            // The registry could not vouch for the snap1 pass:
+                            // re-run it strictly within this attempt.
+                            strictPass = true;
+                            repass = true;
+                        }
+                        // else: a saga's InFlight->Committed transition raced our
+                        // fan-out; retry with the fresh snapshot in scope.
+                    }
+#if LATTICE_DIAG
+                    if (!returning && !repass) DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={(singleShardFetched?.Count ?? concurrent!.Count)}");
+#endif
                 }
-                // else: a saga's InFlight->Committed transition raced our
-                // fan-out; retry with the fresh snapshot in scope.
-#if LATTICE_DIAG
-                if (!returning) DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={(singleShardFetched?.Count ?? concurrent!.Count)}");
-#endif
+                finally
+                {
+                    LatticeMetrics.GetManyStageDuration.Record(
+                        System.Diagnostics.Stopwatch.GetElapsedTime(mergeStartTicks).TotalMilliseconds,
+                        stageTagTree, LatticeMetrics.StageMergeTag,
+                        StageTagTenant);
+                }
+
+                if (!repass) break;
             }
-            finally
-            {
-                LatticeMetrics.GetManyStageDuration.Record(
-                    System.Diagnostics.Stopwatch.GetElapsedTime(mergeStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageMergeTag,
-                    StageTagTenant);
-            }
+
             if (returning) return result!;
         }
 
+        if (unavailableCause is not null) throw OutcomeUnavailableAfterRetries(unavailableCause);
         throw new InvalidOperationException(
             $"GetManyAsync exceeded {Options.MaxScanRetries} retries while the TxRegistry " +
             "kept committing sagas faster than the fan-out could complete. Increase " +
@@ -3329,10 +3384,12 @@ internal sealed partial class LatticeGrain(
 
         var registry = grainFactory.GetLatticeRegistry();
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
+        LatticeTransactionOutcomeUnavailableException? unavailableCause = null;
 
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            unavailableCause = null;
             if (attempt > 0)
             {
                 InvalidateShardMap();
@@ -3359,9 +3416,9 @@ internal sealed partial class LatticeGrain(
             // leaves returning post-saga Entries while sibling
             // undrained leaves consult snap1.InFlight and fall through
             // to pre-saga Entries - split observation that defeats
-            // strict per-tree atomic visibility.
-            var snap1Pair = await FetchRegistrySnapshotAsync();
-            var snap1 = snap1Pair.Snap;
+            // strict per-tree atomic visibility. When the registry cannot
+            // vouch for the read, RunRegistryVerifiedPassAsync fails the
+            // attempt closed if any leaf needed a saga decision (#3641).
 
             // Fast path: Version == 0 means the default identity map is in
             // effect - no split has ever been persisted for this tree.
@@ -3373,15 +3430,12 @@ internal sealed partial class LatticeGrain(
             // entirely.
             if (versionAtStart == 0L)
             {
-                int simple;
-                using (LatticeRegistrySnapshotContext.BeginScope(snap1))
-                {
-                    simple = await SimpleSumCountAsync(physicalTreeId, physicalShards, startInclusive, endExclusive);
-                }
+                var simplePass = await RunRegistryVerifiedPassAsync(
+                    () => SimpleSumCountAsync(physicalTreeId, physicalShards, startInclusive, endExclusive));
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap0;
                 if (mapAfter.Version != 0L) { shardMap0 = mapAfter; continue; }
-                if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
-                return simple;
+                if (!simplePass.Accepted) { unavailableCause = simplePass.UnavailableCause; continue; }
+                return simplePass.Value;
             }
 
             // Partition virtual slots by current owner per the
@@ -3391,9 +3445,9 @@ internal sealed partial class LatticeGrain(
             // snapshot regardless of where each shard is in its per-split
             // phase machine.
             var ownedByShard = BuildOwnedSlotMap(shardMap0);
-            var pass1Tasks = new Task<int>[physicalShards.Count];
-            using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+            var slotPass = await RunRegistryVerifiedPassAsync(async () =>
             {
+                var pass1Tasks = new Task<int>[physicalShards.Count];
                 for (int i = 0; i < physicalShards.Count; i++)
                 {
                     var physicalIdx = physicalShards[i];
@@ -3414,11 +3468,12 @@ internal sealed partial class LatticeGrain(
                         shard, owned, virtualShardCount, startInclusive, endExclusive);
                 }
                 await Task.WhenAll(pass1Tasks);
-            }
 
-            var total = 0;
-            for (int i = 0; i < pass1Tasks.Length; i++)
-                total += pass1Tasks[i].Result;
+                var total = 0;
+                for (int i = 0; i < pass1Tasks.Length; i++)
+                    total += pass1Tasks[i].Result;
+                return total;
+            });
 
             // Unconditional stability check: if the shard-map version moved
             // while pass1 was in flight, the per-shard counts may have
@@ -3430,11 +3485,12 @@ internal sealed partial class LatticeGrain(
             // TxRegistry stability check: an InFlight->Committed
             // transition during the fan-out forces a retry under a
             // fresh snapshot.
-            if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
+            if (!slotPass.Accepted) { unavailableCause = slotPass.UnavailableCause; continue; }
 
-            return total;
+            return slotPass.Value;
         }
 
+        if (unavailableCause is not null) throw OutcomeUnavailableAfterRetries(unavailableCause);
         throw new InvalidOperationException(
             $"CountAsync exceeded {Options.MaxScanRetries} retries while topology kept changing. " +
             "Increase LatticeOptions.MaxScanRetries or reduce concurrent split activity.");
@@ -3812,10 +3868,12 @@ internal sealed partial class LatticeGrain(
         // inflated by double-counted migrating slots.
         var registry = grainFactory.GetLatticeRegistry();
         var maxRetries = Math.Max(1, Options.MaxScanRetries);
+        LatticeTransactionOutcomeUnavailableException? unavailableCause = null;
 
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            unavailableCause = null;
             if (attempt > 0)
             {
                 InvalidateShardMap();
@@ -3832,18 +3890,17 @@ internal sealed partial class LatticeGrain(
             // the totals reconcile against CountAsync; snap1/snap2
             // validation prevents the InFlight->Committed transition
             // race that would otherwise produce a split observation
-            // across drained vs undrained leaves.
-            var snap1Pair = await FetchRegistrySnapshotAsync();
-            var snap1 = snap1Pair.Snap;
+            // across drained vs undrained leaves, and an unverifiable
+            // attempt fails closed if any leaf needed a saga decision (#3641).
 
             // Fast path: Version == 0 means no split has ever been persisted
             // for this tree. Use the cheap per-shard CountAsync() path and
             // confirm the map is still at Version 0 after fan-out.
             if (versionAtStart == 0L)
             {
-                var fastTasks = new Task<int>[physicalShards.Count];
-                using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+                var fastPass = await RunRegistryVerifiedPassAsync(async () =>
                 {
+                    var fastTasks = new Task<int>[physicalShards.Count];
                     for (int i = 0; i < physicalShards.Count; i++)
                     {
                         var sh = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
@@ -3853,19 +3910,20 @@ internal sealed partial class LatticeGrain(
                             () => sh.CountAsync());
                     }
                     await Task.WhenAll(fastTasks);
-                }
+                    var fastCounts = new int[physicalShards.Count];
+                    for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
+                    return fastCounts;
+                });
                 var mapAfter = await registry.GetShardMapAsync(TreeId) ?? shardMap;
                 if (mapAfter.Version != 0L) { shardMap = mapAfter; continue; }
-                if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
-                var fastCounts = new int[physicalShards.Count];
-                for (int i = 0; i < physicalShards.Count; i++) fastCounts[i] = fastTasks[i].Result;
-                return fastCounts;
+                if (!fastPass.Accepted) { unavailableCause = fastPass.UnavailableCause; continue; }
+                return fastPass.Value;
             }
 
             var ownedByShard = BuildOwnedSlotMap(shardMap);
-            var tasks = new Task<int>[physicalShards.Count];
-            using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+            var slotPass = await RunRegistryVerifiedPassAsync(async () =>
             {
+                var tasks = new Task<int>[physicalShards.Count];
                 for (int i = 0; i < physicalShards.Count; i++)
                 {
                     var physicalIdx = physicalShards[i];
@@ -3881,19 +3939,21 @@ internal sealed partial class LatticeGrain(
                         shard, owned, virtualShardCount, null, null);
                 }
                 await Task.WhenAll(tasks);
-            }
+                var counts = new int[physicalShards.Count];
+                for (int i = 0; i < physicalShards.Count; i++)
+                    counts[i] = tasks[i].Result;
+                return counts;
+            });
 
             var shardMapNow = await registry.GetShardMapAsync(TreeId) ?? shardMap;
             if (shardMapNow.Version != versionAtStart) continue;
 
-            if (!await IsSnap2StableAsync(snap1, snap1Pair.Revision)) continue;
+            if (!slotPass.Accepted) { unavailableCause = slotPass.UnavailableCause; continue; }
 
-            var counts = new int[physicalShards.Count];
-            for (int i = 0; i < physicalShards.Count; i++)
-                counts[i] = tasks[i].Result;
-            return counts;
+            return slotPass.Value;
         }
 
+        if (unavailableCause is not null) throw OutcomeUnavailableAfterRetries(unavailableCause);
         throw new InvalidOperationException(
             $"CountPerShardAsync exceeded {Options.MaxScanRetries} retries while topology kept changing. " +
             "Increase LatticeOptions.MaxScanRetries or reduce concurrent split activity.");
@@ -4689,18 +4749,19 @@ internal sealed partial class LatticeGrain(
     /// reading captured in the same call window. The revision lets the
     /// double-checked retry replace its snap2 dictionary fetch with the
     /// cheap revision probe (see
-    /// <see cref="IsSnap2StableAsync"/>): when the registry's
+    /// <see cref="ClassifySnap2Async"/>): when the registry's
     /// <em>post</em>-fan-out revision equals the snap1 revision, no
     /// decision mutation occurred and snap1 is provably authoritative.
     /// </summary>
     private readonly record struct RegistrySnapshotPair(
         Dictionary<Guid, TxStatus>? Snap,
-        long Revision);
+        long Revision,
+        bool Available = true);
 
     /// <summary>
     /// Fetches a single per-tree <see cref="ITxRegistryGrain"/> decision
     /// snapshot. Used by multi-shard read fan-outs in concert with
-    /// <see cref="IsSnapshotStable"/> to implement a double-checked
+    /// <see cref="ClassifySnap2Async"/> to implement a double-checked
     /// snapshot retry: pre-fetch (snap1) is stamped onto the ambient
     /// <see cref="LatticeRegistrySnapshotContext"/> for the lifetime of
     /// the fan-out so every leaf applies the same registry decision
@@ -4709,22 +4770,20 @@ internal sealed partial class LatticeGrain(
     /// transition that raced the fan-out and would otherwise produce
     /// a split observation across drained vs undrained leaves.
     /// <para>
-    /// Defensive: if the registry RPC fails the call returns
-    /// <c>null</c> so the scan still proceeds - leaves fall back to
-    /// their per-leaf <c>GetStatusManyAsync</c> RPC, which reintroduces
-    /// the original non-linearizable-scan race but keeps reads
-    /// available. The matching <see cref="IsSnapshotStable"/> check
-    /// treats a <c>null</c> snap2 as stable for the same reason.
+    /// Issue #3641: a registry <b>transport</b> failure returns a pair with
+    /// <see cref="RegistrySnapshotPair.Available"/> <see langword="false"/>.
+    /// The caller must then fan out under
+    /// <see cref="LatticeRegistrySnapshotContext.BeginUnavailableScope"/>, never
+    /// under a null snapshot: a null snapshot means "no scope", which let each
+    /// leaf resolve its own prepares at its own moment - no single view, and a
+    /// torn read. Any other registry fault propagates, and cancellation is never
+    /// swallowed.
     /// </para>
     /// <para>
     /// Returns a <see cref="RegistrySnapshotPair"/> carrying both the
     /// decision dictionary and the registry's monotonic decisions
     /// revision; the revision feeds the post-fan-out
-    /// <see cref="IsSnap2StableAsync"/> cheap-probe stability check.
-    /// On RPC failure both fields decay to defaults
-    /// (<c>Snap = null</c>, <c>Revision = 0</c>); the stability check
-    /// treats this as stable (same back-compat as the original
-    /// snap1-null path).
+    /// <see cref="ClassifySnap2Async"/> cheap-probe stability check.
     /// </para>
     /// </summary>
     private async ValueTask<RegistrySnapshotPair> FetchRegistrySnapshotAsync()
@@ -4753,32 +4812,124 @@ internal sealed partial class LatticeGrain(
                 : await TxRegistryFanOut.SnapshotWithRevisionAsync(grainFactory, TreeId);
             return new RegistrySnapshotPair(pair.Decisions, pair.Revision);
         }
-        catch
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
         {
-            return new RegistrySnapshotPair(null, 0L);
+            return new RegistrySnapshotPair(null, 0L, Available: false);
         }
     }
+
+    /// <summary>
+    /// Enters the registry scope a fan-out attempt runs under: the captured
+    /// snapshot when <paramref name="snap1Pair"/> is available, otherwise the
+    /// "snapshot unavailable" marker (issue #3641).
+    /// </summary>
+    private static IDisposable BeginRegistryScope(in RegistrySnapshotPair snap1Pair, bool strict) =>
+        strict || !snap1Pair.Available
+            ? LatticeRegistrySnapshotContext.BeginUnavailableScope()
+            : LatticeRegistrySnapshotContext.BeginScope(snap1Pair.Snap);
+
+    /// <summary>
+    /// Runs one registry-verified fan-out pass for a read whose fan-out is
+    /// expressed as a delegate (the counts): fetches snap1, fans out under it,
+    /// classifies the post-fan-out stability, and - when stability is
+    /// <see cref="ReaderStabilityVerdict.Unverifiable"/> - re-runs the fan-out
+    /// once under the "snapshot unavailable" marker, whose completion proves no
+    /// leaf resolved a prepared key (issue #3641). The accept/retry rule is
+    /// <see cref="ReaderStabilityGate.Decide"/>. A strict pass that reaches a
+    /// prepared key reports the typed exception as the retry's cause.
+    /// <para>
+    /// Not used by <c>GetManyAsyncCore</c>, which inlines the same sequence to
+    /// keep the batch-read hot path free of the delegate and closure.
+    /// </para>
+    /// </summary>
+    private async Task<RegistryVerifiedPass<T>> RunRegistryVerifiedPassAsync<T>(Func<Task<T>> fanOut)
+    {
+        var snap1Pair = await FetchRegistrySnapshotAsync();
+        if (snap1Pair.Available)
+        {
+            T value;
+            using (LatticeRegistrySnapshotContext.BeginScope(snap1Pair.Snap))
+            {
+                value = await fanOut();
+            }
+
+            // Whether a leaf resolved a prepared key under a snapshot is not
+            // observable here, so the rule is fed the conservative answer.
+            var verdict = await ClassifySnap2Async(snap1Pair.Snap, snap1Pair.Revision);
+            if (ReaderStabilityGate.Decide(verdict, resolvedPreparedKey: true) == ReaderAttemptDecision.Accept)
+            {
+                return new RegistryVerifiedPass<T>(true, value, null);
+            }
+
+            if (verdict != ReaderStabilityVerdict.Unverifiable)
+            {
+                return new RegistryVerifiedPass<T>(false, default!, null);
+            }
+        }
+
+        try
+        {
+            T value;
+            using (LatticeRegistrySnapshotContext.BeginUnavailableScope())
+            {
+                value = await fanOut();
+            }
+
+            // Completing under the marker proves no leaf resolved a prepared key.
+            var accepted = ReaderStabilityGate.Decide(
+                ReaderStabilityVerdict.Unverifiable, resolvedPreparedKey: false) == ReaderAttemptDecision.Accept;
+            return new RegistryVerifiedPass<T>(accepted, value, null);
+        }
+        catch (LatticeTransactionOutcomeUnavailableException ex)
+        {
+            return new RegistryVerifiedPass<T>(false, default!, ex);
+        }
+    }
+
+    /// <summary>
+    /// The outcome of <see cref="RunRegistryVerifiedPassAsync"/>: whether the
+    /// pass is accepted, its value when it is, and - when a strict pass reached a
+    /// prepared key - the typed exception that is the retry's cause.
+    /// </summary>
+    private readonly record struct RegistryVerifiedPass<T>(
+        bool Accepted,
+        T Value,
+        LatticeTransactionOutcomeUnavailableException? UnavailableCause);
+
+    /// <summary>
+    /// Throws the typed exception for a multi-key read whose snapshot retry
+    /// budget was exhausted because the registry was unavailable and the read
+    /// depended on it (issue #3641).
+    /// </summary>
+    private LatticeTransactionOutcomeUnavailableException OutcomeUnavailableAfterRetries(
+        LatticeTransactionOutcomeUnavailableException cause) =>
+        LatticeTransactionOutcomeUnavailableException.Create(
+            TreeId, key: null, cause.KeyCount, cause.TransactionIds, cause);
 
     /// <summary>
     /// Cheap-probe replacement for the post-fan-out snap2 dictionary
     /// fetch. Issues a single
     /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetDecisionsRevisionAsync"/> RPC and
-    /// returns <c>true</c> when the returned revision equals the
-    /// captured <paramref name="snap1Revision"/> - in that case the
-    /// registry's Decisions map provably did not mutate during the
+    /// returns <see cref="ReaderStabilityVerdict.Stable"/> when the returned
+    /// revision equals the captured <paramref name="snap1Revision"/> - in that
+    /// case the registry's Decisions map provably did not mutate during the
     /// fan-out, so <paramref name="snap1"/> is still authoritative and
     /// no second dictionary serialization is required. On revision
     /// mismatch the method falls through to a full
     /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.SnapshotAsync"/> fetch and applies
-    /// the existing <see cref="IsSnapshotStable"/> rule, preserving
-    /// every legacy correctness guarantee.
+    /// <see cref="ReaderStabilityGate.ClassifySnapshot"/>.
+    /// <para>
+    /// Issue #3641: a transport failure of either call yields
+    /// <see cref="ReaderStabilityVerdict.Unverifiable"/>, never "stable". Any
+    /// other fault propagates.
+    /// </para>
     /// <para>
     /// Multi-silo safe: the probe is still a grain RPC to the
     /// single-activation registry; the saving is the elided dictionary
     /// payload on the steady-state happy path, not the RPC turn itself.
     /// </para>
     /// </summary>
-    private async ValueTask<bool> IsSnap2StableAsync(
+    private async ValueTask<ReaderStabilityVerdict> ClassifySnap2Async(
         Dictionary<Guid, TxStatus>? snap1,
         long snap1Revision)
     {
@@ -4793,17 +4944,13 @@ internal sealed partial class LatticeGrain(
                 ? await coalescer.GetRevisionAsync(TreeId)
                 : await TxRegistryFanOut.GetDecisionsRevisionAsync(grainFactory, TreeId);
         }
-        catch
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
         {
-            // RPC failure: treat as stable (legacy snap1-null /
-            // snap2-null handling - the reader proceeds and falls back
-            // to per-leaf GetStatusManyAsync if a pending entry is
-            // observed).
-            return true;
+            return ReaderStabilityVerdict.Unverifiable;
         }
         if (ReaderStabilityGate.IsRevisionStable(snap1Revision, revision2))
         {
-            return true;
+            return ReaderStabilityVerdict.Stable;
         }
 
         // Revision changed during the fan-out. A Committed transition
@@ -4811,8 +4958,8 @@ internal sealed partial class LatticeGrain(
         // transition would not. Issue a fresh atomic
         // SnapshotWithRevisionAsync to disambiguate (using the
         // self-consistent shape avoids re-introducing the snap1
-        // skew the optimisation closed), then run the existing
-        // IsSnapshotStable rule.
+        // skew the optimisation closed), then run the
+        // ClassifySnapshot rule.
         Dictionary<Guid, TxStatus>? snap2;
         try
         {
@@ -4821,24 +4968,10 @@ internal sealed partial class LatticeGrain(
                 : await TxRegistryFanOut.SnapshotWithRevisionAsync(grainFactory, TreeId);
             snap2 = snap2Pair.Decisions;
         }
-        catch
+        catch (Exception ex) when (TxRegistryTransportFault.IsTransportFailure(ex))
         {
-            // RPC failure on the disambiguation path: same defensive
-            // treatment as FetchRegistrySnapshotAsync above.
-            return true;
+            return ReaderStabilityVerdict.Unverifiable;
         }
-        return IsSnapshotStable(snap1, snap2);
+        return ReaderStabilityGate.ClassifySnapshot(snap1, snap2);
     }
-
-    /// <summary>
-    /// Returns <c>true</c> when a fan-out result computed under
-    /// <paramref name="snap1"/> is still consistent given a fresh
-    /// <paramref name="snap2"/> taken after the fan-out. The rule now
-    /// lives in <see cref="ReaderStabilityGate.IsSnapshotStable"/>; this
-    /// method is retained only as the internal call shape.
-    /// </summary>
-    private static bool IsSnapshotStable(
-        Dictionary<Guid, TxStatus>? snap1,
-        Dictionary<Guid, TxStatus>? snap2) =>
-        ReaderStabilityGate.IsSnapshotStable(snap1, snap2);
 }

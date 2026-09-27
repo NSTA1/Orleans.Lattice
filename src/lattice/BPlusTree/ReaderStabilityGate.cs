@@ -17,10 +17,12 @@ namespace Orleans.Lattice.BPlusTree;
 /// the read is stable iff the registry's revision after resolving all keys equals
 /// the revision captured with the snapshot. When the revision moved, a decision
 /// mutated during the fan-out; the reader disambiguates with
-/// <see cref="IsSnapshotStable"/> (only an
+/// <see cref="ClassifySnapshot"/> (only an
 /// <see cref="TxStatus.InFlight"/>-&gt;<see cref="TxStatus.Committed"/>
 /// transition actually invalidates the read) and, if still unstable, retries
-/// under a fresh snapshot.
+/// under a fresh snapshot. When the registry cannot be reached the verdict is
+/// <see cref="ReaderStabilityVerdict.Unverifiable"/>, and <see cref="Decide"/>
+/// accepts it only for a read that resolved no prepared key (issue #3641).
 /// </para>
 /// </summary>
 internal static class ReaderStabilityGate
@@ -63,20 +65,23 @@ internal static class ReaderStabilityGate
     /// <see cref="TxStatus.Aborted"/> transitions and registry forgets
     /// (<paramref name="snap1"/> has the txid, <paramref name="snap2"/> does not)
     /// are atomic-safe by construction and do not invalidate the read. A
-    /// <see langword="null"/> <paramref name="snap2"/> (registry RPC failure) is
-    /// treated as stable so the read completes rather than retrying indefinitely.
+    /// <see langword="null"/> <paramref name="snap2"/> (the disambiguation
+    /// snapshot could not be fetched) is <see cref="ReaderStabilityVerdict.Unverifiable"/>,
+    /// not stable (issue #3641): treating it as stable let a registry blip
+    /// certify exactly the torn read this check exists to catch. The caller
+    /// combines it with the prepared-key signal through <see cref="Decide"/>.
     /// The parameters are the concrete <see cref="Dictionary{TKey, TValue}"/> the
     /// registry snapshot produces so the iteration below uses the struct
     /// enumerator and allocates nothing on this reader path.
     /// </para>
     /// </summary>
-    public static bool IsSnapshotStable(
+    public static ReaderStabilityVerdict ClassifySnapshot(
         Dictionary<Guid, TxStatus>? snap1,
         Dictionary<Guid, TxStatus>? snap2)
     {
         if (snap2 is null)
         {
-            return true;
+            return ReaderStabilityVerdict.Unverifiable;
         }
 
         foreach (var (txid, status) in snap2)
@@ -87,11 +92,35 @@ internal static class ReaderStabilityGate
                     || !snap1.TryGetValue(txid, out var s1)
                     || s1 != TxStatus.Committed)
                 {
-                    return false;
+                    return ReaderStabilityVerdict.Unstable;
                 }
             }
         }
 
-        return true;
+        return ReaderStabilityVerdict.Stable;
     }
+
+    /// <summary>
+    /// Decides what a multi-key read does with one fan-out attempt (issue #3641):
+    /// a <see cref="ReaderStabilityVerdict.Stable"/> attempt is accepted and an
+    /// <see cref="ReaderStabilityVerdict.Unstable"/> one retried. An
+    /// <see cref="ReaderStabilityVerdict.Unverifiable"/> attempt is accepted only
+    /// when <paramref name="resolvedPreparedKey"/> is <see langword="false"/>.
+    /// <para>
+    /// The safety argument: a torn read needs at least one leaf that gated a key
+    /// on an undrained prepare (falling through to the pre-saga value) while a
+    /// drained sibling served the post-saga value. If no leaf resolved a prepared
+    /// key, no key's value depended on a saga decision, so the result cannot be
+    /// torn even though the registry could not vouch for it. A caller that cannot
+    /// observe whether a prepared key was resolved must pass
+    /// <see langword="true"/>.
+    /// </para>
+    /// </summary>
+    public static ReaderAttemptDecision Decide(ReaderStabilityVerdict verdict, bool resolvedPreparedKey) =>
+        verdict switch
+        {
+            ReaderStabilityVerdict.Stable => ReaderAttemptDecision.Accept,
+            ReaderStabilityVerdict.Unverifiable when !resolvedPreparedKey => ReaderAttemptDecision.Accept,
+            _ => ReaderAttemptDecision.Retry,
+        };
 }

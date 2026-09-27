@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// current instant, so a tombstone crossing its retention boundary removes a row
 /// from that surface with no write anywhere to bump a counter. The reader-side
 /// fast path short-circuits on revision equality and never consults
-/// <c>IsSnapshotStable</c>, so a token that fails to move across that transition
+/// <c>ClassifySnapshot</c>, so a token that fails to move across that transition
 /// hands a reader a stale snapshot it will accept as authoritative. These tests
 /// drive the same predicate that fast path uses
 /// (<see cref="ReaderStabilityGate.IsRevisionStable(long, long)"/>) with real
@@ -72,7 +72,7 @@ public partial class TxRegistryGrainTests
 
         // The reader's post-fan-out probe. This is the exact predicate the
         // LatticeGrain fast path runs before it decides it may skip the
-        // IsSnapshotStable rule entirely.
+        // ClassifySnapshot rule entirely.
         var revision2 = await grain.GetDecisionsRevisionAsync();
 
         Assert.That(

@@ -64,19 +64,70 @@ internal static class LatticeRegistrySnapshotContext
     }
 
     /// <summary>
+    /// Gets whether the ambient marks the fan-out as <b>snapshot
+    /// unavailable</b> (issue #3641): the lattice-level read could not fetch
+    /// or verify a registry snapshot, so no single decision view exists for
+    /// the fan-out. This is distinct from "no scope", under which a leaf
+    /// resolves its prepares against the registry itself. Under it, a leaf
+    /// that would have to resolve a prepared key throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> instead of
+    /// resolving it at its own moment, which is what would tear the read.
+    /// Never set together with <see cref="Current"/>.
+    /// </summary>
+    public static bool IsUnavailable =>
+        RequestContext.Get(LatticeEventConstants.RegistrySnapshotUnavailableRequestContextKey) is true;
+
+    /// <summary>
+    /// Gets whether any registry scope - a snapshot or the "snapshot
+    /// unavailable" marker - is in force.
+    /// </summary>
+    public static bool IsScoped => IsUnavailable || Current is not null;
+
+    /// <summary>
     /// Sets <see cref="Current"/> to <paramref name="snapshot"/> for
     /// the lifetime of the returned scope, restoring the prior value
-    /// on <see cref="IDisposable.Dispose"/>. Safe to nest; disposal is
-    /// idempotent.
+    /// on <see cref="IDisposable.Dispose"/>. Clears any
+    /// <see cref="IsUnavailable"/> marker for the scope's lifetime. Safe to
+    /// nest; disposal is idempotent.
     /// </summary>
     public static IDisposable BeginScope(Dictionary<Guid, TxStatus>? snapshot)
     {
         var prior = Current;
+        var priorUnavailable = IsUnavailable;
+        if (priorUnavailable) SetUnavailable(false);
         Current = snapshot;
-        return new Scope(prior);
+        return new Scope(prior, priorUnavailable);
     }
 
-    private sealed class Scope(Dictionary<Guid, TxStatus>? prior) : IDisposable
+    /// <summary>
+    /// Marks the fan-out <see cref="IsUnavailable">snapshot unavailable</see>
+    /// for the lifetime of the returned scope, clearing any
+    /// <see cref="Current"/> snapshot, and restores the prior ambient on
+    /// <see cref="IDisposable.Dispose"/>. Safe to nest; disposal is
+    /// idempotent.
+    /// </summary>
+    public static IDisposable BeginUnavailableScope()
+    {
+        var prior = Current;
+        var priorUnavailable = IsUnavailable;
+        Current = null;
+        SetUnavailable(true);
+        return new Scope(prior, priorUnavailable);
+    }
+
+    private static void SetUnavailable(bool unavailable)
+    {
+        if (unavailable)
+        {
+            RequestContext.Set(LatticeEventConstants.RegistrySnapshotUnavailableRequestContextKey, true);
+        }
+        else
+        {
+            RequestContext.Remove(LatticeEventConstants.RegistrySnapshotUnavailableRequestContextKey);
+        }
+    }
+
+    private sealed class Scope(Dictionary<Guid, TxStatus>? prior, bool priorUnavailable) : IDisposable
     {
         private bool _disposed;
 
@@ -85,6 +136,7 @@ internal static class LatticeRegistrySnapshotContext
             if (_disposed) return;
             _disposed = true;
             Current = prior;
+            if (priorUnavailable != IsUnavailable) SetUnavailable(priorUnavailable);
         }
     }
 }

@@ -111,16 +111,18 @@ internal sealed partial class LatticeGrain
         // Streaming-scan isolation: see KeysAsyncCore for the full
         // rationale. One registry snapshot pinned on the ambient for
         // the lifetime of the IAsyncEnumerable so every per-shard
-        // page reads the same saga-decision view.
-        Dictionary<Guid, TxStatus>? scanSnapshot = null;
+        // page reads the same saga-decision view, or - when the snapshot
+        // cannot be fetched - under the "snapshot unavailable" ambient
+        // (issue #3641).
         var ownsScanSnapshotScope = !isSystemTree
-            && LatticeRegistrySnapshotContext.Current is null;
+            && !LatticeRegistrySnapshotContext.IsScoped;
+        RegistrySnapshotPair scanSnapshot = default;
         if (ownsScanSnapshotScope)
         {
-            scanSnapshot = (await FetchRegistrySnapshotAsync()).Snap;
+            scanSnapshot = await FetchRegistrySnapshotAsync();
         }
         using var scanSnapshotScope = ownsScanSnapshotScope
-            ? LatticeRegistrySnapshotContext.BeginScope(scanSnapshot)
+            ? BeginRegistryScope(scanSnapshot, strict: false)
             : null;
 
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;

@@ -920,6 +920,15 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var treeId = state.State.TreeId;
+
+        // Issue #3641: the lattice-level fan-out has no single decision view,
+        // so resolving this prepare at this leaf's own moment could tear the
+        // read against a sibling leaf. Fail closed rather than resolve.
+        if (LatticeRegistrySnapshotContext.IsUnavailable)
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(treeId ?? string.Empty, key, 1, [txid], null);
+        }
+
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
         try
         {
@@ -1215,6 +1224,16 @@ internal sealed partial class BPlusLeafGrain
             return (filtered, pendingKeys);
         }
 
+        // Issue #3641: no single decision view exists for this fan-out, so the
+        // leaf must not resolve its prepares at its own moment. Hand back the
+        // unavailable sentinel; ResolveReadOutcome throws the typed exception
+        // only if the read actually reaches a prepared key, so a read whose
+        // range holds no prepare still completes.
+        if (LatticeRegistrySnapshotContext.IsUnavailable)
+        {
+            return (UnavailableOutcomes, pendingKeys);
+        }
+
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
         {
@@ -1247,6 +1266,32 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return (outcomes, pendingKeys);
+    }
+
+    /// <summary>
+    /// Sentinel outcome map returned by <see cref="SnapshotPendingForReadAsync"/>
+    /// under a <see cref="LatticeRegistrySnapshotContext.IsUnavailable"/>
+    /// ambient (issue #3641). Identified by reference and never mutated.
+    /// </summary>
+    private static readonly Dictionary<Guid, TxStatus> UnavailableOutcomes = new(0);
+
+    /// <summary>
+    /// Resolves the scan-path outcome of <paramref name="txid"/> from the
+    /// <paramref name="outcomes"/> map <see cref="SnapshotPendingForReadAsync"/>
+    /// returned, through the shared <see cref="TxDecisionView"/> rule. Throws
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/> when the map is
+    /// the <see cref="UnavailableOutcomes"/> sentinel: the read reached a prepared
+    /// key it has no single decision view to resolve against.
+    /// </summary>
+    private TxStatus ResolveReadOutcome(Dictionary<Guid, TxStatus> outcomes, Guid txid, int pendingKeyCount)
+    {
+        if (ReferenceEquals(outcomes, UnavailableOutcomes))
+        {
+            throw LatticeTransactionOutcomeUnavailableException.Create(
+                state.State.TreeId ?? string.Empty, key: null, pendingKeyCount, [txid], null);
+        }
+
+        return new TxDecisionView(outcomes).Resolve(txid);
     }
 
     /// <summary>
