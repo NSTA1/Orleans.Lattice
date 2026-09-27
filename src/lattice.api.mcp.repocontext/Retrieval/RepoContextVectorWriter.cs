@@ -1967,6 +1967,15 @@ internal sealed class RepoContextVectorWriter
         return Task.FromResult(RepoContextEmbeddedCount.PendingRefresh(carried?.Count));
     }
 
+    /// <summary>Reads the existing count memo without starting a membership scan.</summary>
+    internal RepoContextEmbeddedCount ReadEmbeddedCount(string repoId)
+    {
+        var generation = _cache.ReadGeneration(repoId);
+        return _countMemo.TryGetValue(repoId, out var memo)
+            ? new RepoContextEmbeddedCount { Count = memo.Count, Pending = memo.Generation != generation }
+            : RepoContextEmbeddedCount.PendingRefresh(null);
+    }
+
     /// <summary>
     /// Starts a background refresh of the memoised embedded-source count for
     /// <paramref name="repoId"/>, unless one is already in flight.

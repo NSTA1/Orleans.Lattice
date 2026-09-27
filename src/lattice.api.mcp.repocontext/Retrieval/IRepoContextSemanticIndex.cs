@@ -91,4 +91,7 @@ internal interface IRepoContextSemanticIndex
     /// <param name="repoId">The repository being searched.</param>
     /// <returns><see langword="true"/> when an exact fallback is being withheld.</returns>
     bool IsExactFallbackSuppressed(string repoId) => false;
+
+    /// <summary>Reads the local serving gates without executing a search or consuming a recovery probe.</summary>
+    RepoContextSemanticReadiness DescribeReadiness(string repoId, EmbeddingSpaceTag space) => default;
 }

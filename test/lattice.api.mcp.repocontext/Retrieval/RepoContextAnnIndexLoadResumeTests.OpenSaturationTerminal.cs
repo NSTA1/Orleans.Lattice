@@ -125,6 +125,8 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(handle.DescribeReadiness().Saturated, Is.True);
+            Assert.That(handle.DescribeReadiness().Blocker, Is.EqualTo("ann_open_saturated"));
             Assert.That(handle.OpenSaturation, Is.EqualTo(RepoContextAnnOpenSaturationState.Unavailable),
                 "AT THE BOUND THE RUN MUST DECLARE. This is the whole of issue #3286 part 2: without it "
                 + "a plane that will never arm at the present capacity emits exactly what a plane that "

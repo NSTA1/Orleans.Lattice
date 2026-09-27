@@ -425,22 +425,24 @@ public static class SpecMutationCatalogue
 
         foreach (var raw in baseConfig.ReplaceLineEndings("\n").Split('\n'))
         {
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith("\\*", StringComparison.Ordinal))
+            var comment = raw.IndexOf("\\*", StringComparison.Ordinal);
+            var line = (comment >= 0 ? raw[..comment] : raw).Trim();
+            if (line.Length == 0)
             {
                 continue;
             }
 
-            if (line.StartsWith(InvariantsBlock, StringComparison.Ordinal))
+            var declaration = Regex.Match(line, @"^(INVARIANTS?|PROPERTY|PROPERTIES)\b(.*)$");
+            if (declaration.Success)
             {
-                current = invariants;
-                continue;
-            }
-
-            if (line.StartsWith(PropertiesBlock, StringComparison.Ordinal))
-            {
-                current = properties;
-                continue;
+                current = declaration.Groups[1].Value.StartsWith("INVARIANT", StringComparison.Ordinal)
+                    ? invariants
+                    : properties;
+                line = declaration.Groups[2].Value.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
             }
 
             if (line.StartsWith("SPECIFICATION", StringComparison.Ordinal)
@@ -451,10 +453,10 @@ public static class SpecMutationCatalogue
             }
 
             // A CONSTANTS assignment line ('t1 = t1') keeps capturing off; only
-            // bare identifiers inside an INVARIANTS / PROPERTIES block count.
-            if (current is not null && Regex.IsMatch(line, "^[A-Za-z][A-Za-z0-9_]*$"))
+            // bare identifier lists inside a checked-property block count.
+            if (current is not null && Regex.IsMatch(line, @"^[A-Za-z][A-Za-z0-9_]*(\s+[A-Za-z][A-Za-z0-9_]*)*$"))
             {
-                current.Add(line);
+                current.AddRange(Regex.Split(line, @"\s+"));
             }
             else
             {

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -157,10 +158,53 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         // exact upper bound - taking it up front means the sink never grows.
         sink.EnsureCapacity(sink.Count + map.Adds.Count);
 
+        // A key that has churned accumulates tombstones, and testing each of
+        // its live dots by linear scan over that list is O(adds x tombstones)
+        // per key. Within one key's tombstone list the dots overwhelmingly
+        // share a replica id (the same observation OrSetDot.Equals is ordered
+        // around), and when they do the membership test reduces to a counter
+        // lookup: a dot whose replica differs from the shared one cannot be in
+        // the list at all, and one that matches is in it exactly when its
+        // counter is. Above a threshold that lookup is served by sorting the
+        // key's counters into a scratch buffer once and binary-searching it,
+        // making the test O(T log T + A log T) with no hashing and no
+        // allocation. Hashing is deliberately avoided: an index over OrSetDot
+        // hashes its replica id, which costs far more than the counter
+        // comparison the linear scan leads with, and measured slower than the
+        // scan it replaced. A key whose tombstones span several replicas or
+        // whose list is short keeps the scan.
+        //
+        // The buffer is rented lazily, on the first key that qualifies, rather
+        // than taken up front: a quiet map qualifies no key at all, and an
+        // unconditional stack buffer charges every such call for zeroing a
+        // scratch it never reads.
+        long[]? rented = null;
+
         foreach (var (key, entries) in map.Adds)
         {
             if (entries.Count == 0) continue;
             map.Tombstones.TryGetValue(key, out var tomb);
+
+            string? sharedReplica = null;
+            var counters = Span<long>.Empty;
+            if (tomb is not null
+                && tomb.Count > TombstoneIndexThreshold
+                && entries.Count > 1)
+            {
+                sharedReplica = SingleReplica(tomb);
+                if (sharedReplica is not null)
+                {
+                    if (rented is null || rented.Length < tomb.Count)
+                    {
+                        if (rented is not null) ArrayPool<long>.Shared.Return(rented);
+                        rented = ArrayPool<long>.Shared.Rent(tomb.Count);
+                    }
+
+                    counters = rented.AsSpan(0, tomb.Count);
+                    for (var i = 0; i < tomb.Count; i++) counters[i] = tomb[i].Counter;
+                    counters.Sort();
+                }
+            }
 
             var hasLive = false;
             var bestReplica = string.Empty;
@@ -168,7 +212,11 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
             for (var i = 0; i < entries.Count; i++)
             {
                 var entry = entries[i];
-                if (IsEntryTombstoned(tomb, entry.ReplicaId, entry.Counter)) continue;
+                var tombstoned = sharedReplica is not null
+                    ? string.Equals(entry.ReplicaId, sharedReplica, StringComparison.Ordinal)
+                        && counters.BinarySearch(entry.Counter) >= 0
+                    : IsEntryTombstoned(tomb, entry.ReplicaId, entry.Counter);
+                if (tombstoned) continue;
                 if (!hasLive
                     || entry.Counter > bestCounter
                     || (entry.Counter == bestCounter && string.CompareOrdinal(entry.ReplicaId, bestReplica) > 0))
@@ -187,7 +235,40 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
                 Ordinal = bestCounter,
             });
         }
+
+        if (rented is not null) ArrayPool<long>.Shared.Return(rented);
     }
+
+    /// <summary>
+    /// The single replica id every dot in <paramref name="tombstones"/> carries,
+    /// or <see langword="null"/> when the list spans more than one replica (or
+    /// is empty). One pass, comparing ordinally and short-circuiting on the
+    /// reference the list overwhelmingly repeats.
+    /// </summary>
+    private static string? SingleReplica(List<OrSetDot> tombstones)
+    {
+        if (tombstones.Count == 0) return null;
+        var first = tombstones[0].ReplicaId;
+        for (var i = 1; i < tombstones.Count; i++)
+        {
+            var candidate = tombstones[i].ReplicaId;
+            if (!ReferenceEquals(candidate, first)
+                && !string.Equals(candidate, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return first;
+    }
+
+    /// <summary>
+    /// Tombstone count above which a key's membership test switches from a
+    /// linear scan to a sorted counter index. Below it the scan wins: sorting
+    /// and binary-searching has a fixed cost that a handful of counter-first
+    /// comparisons does not repay.
+    /// </summary>
+    private const int TombstoneIndexThreshold = 8;
 
     private static bool IsEntryTombstoned(List<OrSetDot>? tombstones, string replicaId, long counter)
     {
@@ -249,12 +330,30 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
 
         if (addCount > 0)
         {
+            // A delta's dots arrive grouped by key - a single mutation ships
+            // every dot it authored for one key together - so encoding the key
+            // surrogate per dot re-runs the same UTF-8 encode (and mints the
+            // same array) for every dot after the first in a group. A one-slot
+            // memo over the previous key collapses a group to one encode and
+            // one array, and degrades to the prior cost when no two adjacent
+            // dots share a key. EmitStateTyped already hoists per key; this is
+            // the same hoist expressed for a flat, key-carrying list.
+            TKey? memoKey = default;
+            byte[]? memoBytes = null;
+            var comparer = EqualityComparer<TKey>.Default;
+
             for (var i = 0; i < adds!.Count; i++)
             {
                 var add = adds[i];
+                if (memoBytes is null || !comparer.Equals(memoKey!, add.Key))
+                {
+                    memoKey = add.Key;
+                    memoBytes = KeyToBytes(add.Key);
+                }
+
                 sink.Add(new CrdtMemberChange
                 {
-                    Element = KeyToBytes(add.Key),
+                    Element = memoBytes,
                     Kind = CrdtMemberChangeKind.Added,
                     ReplicaId = add.ReplicaId,
                     Ordinal = add.Counter,
@@ -265,12 +364,22 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
 
         if (tombCount > 0)
         {
+            TKey? memoKey = default;
+            byte[]? memoBytes = null;
+            var comparer = EqualityComparer<TKey>.Default;
+
             for (var i = 0; i < tombstones!.Count; i++)
             {
                 var tomb = tombstones[i];
+                if (memoBytes is null || !comparer.Equals(memoKey!, tomb.Key))
+                {
+                    memoKey = tomb.Key;
+                    memoBytes = KeyToBytes(tomb.Key);
+                }
+
                 sink.Add(new CrdtMemberChange
                 {
-                    Element = KeyToBytes(tomb.Key),
+                    Element = memoBytes,
                     Kind = CrdtMemberChangeKind.Removed,
                     ReplicaId = tomb.ReplicaId,
                     Ordinal = tomb.Counter,

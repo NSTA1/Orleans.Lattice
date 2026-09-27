@@ -60,6 +60,13 @@ internal sealed class ShardHealingOrchestratorGrain(
     private bool _running;
 
     /// <summary>
+    /// Whether this activation's keepalive reminder is known to be registered.
+    /// False after a registration attempt faulted, so the next sweep tick
+    /// retries it (#3682).
+    /// </summary>
+    private bool _keepaliveRegistered;
+
+    /// <summary>
     /// The most recent sweep's live load measurements. Deliberately not
     /// persisted: a skew ratio is an observation of traffic happening now, and
     /// replaying a pre-restart one would be a claim about load the silo did not
@@ -93,13 +100,40 @@ internal sealed class ShardHealingOrchestratorGrain(
 
         _running = true;
 
+        // The sweep timer is armed BEFORE the keepalive is registered, and a
+        // failed registration does not disarm it (#3682). `_running` is latched
+        // above, so if the timer came second a registration fault - typically
+        // Orleans' reminder service still initializing, which waits ~20s and
+        // then throws - would leave this activation claiming to run with nothing
+        // sweeping, and every later call would return at the guard. A tree armed
+        // only by activation (one that serves only reads) then never healed.
+        // The keepalive only re-activates the orchestrator after collection;
+        // the timer is the work, so it must not depend on the keepalive.
+        if (_timer is null) StartTimer();
+
+        try
+        {
+            await RegisterKeepaliveAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            // Transient by Orleans' own contract. The sweep is running, so the
+            // caller's request has been met; the next sweep tick retries the
+            // registration (see OnTimerTickAsync).
+            logger.LogDebug(
+                "Deferred the shard-healing keepalive reminder for tree {TreeId}: reminder service still initializing; the next sweep retries it.",
+                TreeId);
+        }
+    }
+
+    private async Task RegisterKeepaliveAsync()
+    {
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,
             reminderName: KeepaliveReminderName,
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
-
-        StartTimer();
+        _keepaliveRegistered = true;
     }
 
     /// <inheritdoc />
@@ -108,6 +142,7 @@ internal sealed class ShardHealingOrchestratorGrain(
         _timer?.Dispose();
         _timer = null;
         _running = false;
+        _keepaliveRegistered = false;
 
         try
         {
@@ -145,6 +180,7 @@ internal sealed class ShardHealingOrchestratorGrain(
 
         if (_timer is null) StartTimer();
         _running = true;
+        _keepaliveRegistered = true;
     }
 
     private void StartTimer()
@@ -165,6 +201,24 @@ internal sealed class ShardHealingOrchestratorGrain(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Shard-healing pass failed for tree {TreeId}", TreeId);
+        }
+
+        // After the pass, not before it: a registration inside the reminder
+        // service's startup window can wait ~20s, and the sweep must not.
+        if (_keepaliveRegistered) return;
+        try
+        {
+            await RegisterKeepaliveAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            logger.LogDebug(
+                "Shard-healing keepalive reminder for tree {TreeId} still deferred: reminder service still initializing.",
+                TreeId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to register the shard-healing keepalive reminder for tree {TreeId}; the next sweep retries it.", TreeId);
         }
     }
 

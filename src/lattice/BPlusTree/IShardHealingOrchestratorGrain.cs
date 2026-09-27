@@ -41,6 +41,12 @@ internal interface IShardHealingOrchestratorGrain : IGrainWithStringKey
     /// keepalive reminder so it survives silo restarts. Idempotent - repeated
     /// calls are no-ops once it is running, and the call is a no-op when
     /// <see cref="LatticeOptions.ShardHealingEnabled"/> is <c>false</c>.
+    /// <para>
+    /// The sweep timer is armed before the keepalive is registered and stays
+    /// armed if registration fails (#3682). A registration that loses the race
+    /// with the reminder service's startup is deferred rather than thrown, and
+    /// the next sweep retries it; any other registration fault is still thrown.
+    /// </para>
     /// </summary>
     /// <remarks>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the

@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Tests;
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private static readonly string[] EveryOutcome =
-        ["reclaimed", "idle", "blocked", "no_consumer", "over_ceiling", "stranded", "unclassified", "failed"];
+        ["reclaimed", "idle", "blocked", "no_consumer", "no_partitions", "over_ceiling", "stranded", "unclassified", "failed"];
 
     /// <summary>
     /// Configures the collaborator so a single pass lands on <paramref name="outcome"/>.
@@ -80,6 +80,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns(_ => Task.FromResult(OverCeilingReport()));
                 break;
+            case "no_partitions":
+                gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                    .Returns(_ => Task.FromResult(Report(entriesTrimmed: 0) with { ShardsScanned = 0 }));
+                break;
             case "stranded":
                 gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns(_ => Task.FromResult(StrandedReport()));
@@ -109,6 +113,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("idle")]
     [TestCase("blocked")]
     [TestCase("no_consumer")]
+    [TestCase("no_partitions")]
     [TestCase("over_ceiling")]
     [TestCase("stranded")]
     [TestCase("unclassified")]
@@ -213,6 +218,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [TestCase("idle")]
     [TestCase("blocked")]
     [TestCase("no_consumer")]
+    [TestCase("no_partitions")]
     [TestCase("over_ceiling")]
     [TestCase("stranded")]
     [TestCase("unclassified")]

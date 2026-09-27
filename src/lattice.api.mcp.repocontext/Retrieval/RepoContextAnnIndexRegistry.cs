@@ -118,6 +118,17 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     internal RepoContextAnnIndexLoadReporter Load => _load;
 
     /// <inheritdoc />
+    public RepoContextSemanticReadiness DescribeReadiness(string repoId, EmbeddingSpaceTag space)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        return _disposed
+            ? new(false, "ann_registry_disposed")
+            : _entries.TryGetValue(new PlaneKey(repoId, space), out var handle)
+                ? handle.DescribeReadiness()
+                : default;
+    }
+
+    /// <inheritdoc />
     public bool TryGetProgress(string repoId, EmbeddingSpaceTag space, out VectorIndexBuildProgress progress)
     {
         ArgumentNullException.ThrowIfNull(repoId);
