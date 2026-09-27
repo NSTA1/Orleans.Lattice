@@ -43,6 +43,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Api.Schema.Grpc` | `src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin` | `src/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin.Grpc` | `src/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.csproj` |
+| `Orleans.Lattice.Api.Apps` | `src/lattice.api.apps/Orleans.Lattice.Api.Apps.csproj` |
 | `Orleans.Lattice.Api.Apps.Grpc` | `src/lattice.api.apps.grpc/Orleans.Lattice.Api.Apps.Grpc.csproj` |
 | `Orleans.Lattice.Api.TenantAdmin` | `src/lattice.api.tenantadmin/Orleans.Lattice.Api.TenantAdmin.csproj` |
 | `Orleans.Lattice.Api.TenantAdmin.Grpc` | `src/lattice.api.tenantadmin.grpc/Orleans.Lattice.Api.TenantAdmin.Grpc.csproj` |
@@ -117,6 +118,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Api.Schema.Grpc` | `lattice.api.schema.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin` | `lattice.api.treeadmin-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin.Grpc` | `lattice.api.treeadmin.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Apps` | `lattice.api.apps-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Apps.Grpc` | `lattice.api.apps.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TenantAdmin` | `lattice.api.tenantadmin-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TenantAdmin.Grpc` | `lattice.api.tenantadmin.grpc-v<X.Y.Z>` |

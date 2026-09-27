@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Apps</PackageId>
+    <Version>9.6.0</Version>
+    <Description>Transport-agnostic app lifecycle and consent control facade for Orleans.Lattice. Implements ILatticeAppsControl by composing the app registry, the app source seam and the activation pipeline behind one fail-closed, slug-dispatched surface that authorizes every verb with AppInstall, applies the caller's active tenant at entry and never discloses composed physical tree ids. Adds no transport behaviour of its own.</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Apps.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\lattice.apps\Orleans.Lattice.Apps.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>
