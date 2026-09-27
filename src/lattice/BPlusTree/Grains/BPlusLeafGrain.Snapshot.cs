@@ -2855,15 +2855,10 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="OutOfMemoryException"/> - walking <see cref="Exception.InnerException"/>
     /// and every branch of an <see cref="AggregateException"/>.
     /// <para>
-    /// The walk is necessary rather than defensive. The allocation that fails
-    /// is inside the storage provider's deserialiser, several frames below the
-    /// grain call this leaf issues, and it reaches the caller wrapped: Orleans
-    /// surfaces a failure to read a grain's persistent state as an activation
-    /// failure carrying the original as an inner exception. Testing the
-    /// outermost type alone would classify every real occurrence of this fault
-    /// as an ordinary storage fault - that is, it would report the exact wrong
-    /// answer for the one case the classifier exists to catch, rather than
-    /// reporting nothing.
+    /// The walk recognises wrapped failures when the original exception reaches
+    /// this caller. A snapshot-grain activation failure can hide that original
+    /// cause; returning false then means unclassified, not that memory pressure
+    /// was ruled out. Never infer a cause from exception-message text.
     /// </para>
     /// <para>
     /// Cycle-safe by bounded depth: a hand-constructed exception graph can be
