@@ -1,0 +1,36 @@
+# Orleans.Lattice.Apps
+
+Pure data contracts for installable Lattice apps. JSON is canonical: a manifest
+can be inspected through `AppManifestParser.Parse` before loading app code.
+`AppManifestResources.Load` reads a named embedded resource from an already
+available assembly without depending on the package's filesystem layout.
+Neither entry point invokes app code, installs an app, or registers services.
+
+Manifests declare identity, trees, flat membership-group roles, optional
+replication intent and schema-family bindings, subscriptions, and MCP tools.
+Parsing and validation return `AppManifestResult` with path-addressed errors;
+invalid content never produces a usable manifest. Missing resources also return
+an error. Null assembly/stream arguments are programming errors.
+
+`AppManifestResources.GetJsonSchema` exposes the bundled JSON Schema (also
+packed under `schema/`). The parser checks JSON shape, rejects unknown and
+duplicate properties, then checks semantic constraints such as unique names,
+known operation bits, and references to declared trees. Schema-family bindings
+are declarations only: they do not run migrations or validate stored values.
+
+Scope templates contain a local tree name and an optional other-app slug.
+Omitting the slug means the manifest's own app. A compiler composes these as
+`a/{app}/{tree}` before tenant composition; no arbitrary path interpolation or
+role inheritance is supported. A declaration is a request, not authorization:
+provenance is descriptive, and cross-app access still requires operator consent.
+JSON operations are readable name arrays, such as `["Read", "RangeRead"]`,
+not numbers. Unknown, repeated, composite and `None` names are rejected.
+Scopeless `Telemetry` and `AppInstall` do not belong in a tree-scoped role.
+Tree-scoped administration, backup, restore, schema, replication and lifecycle
+requests remain explicit and require the corresponding installation ceiling.
+
+Tree sizing fields are optional pins; omission inherits host defaults.
+`VirtualShardCount` is fixed at creation and cannot change in an upgrade;
+pass the previous manifest to `AppManifestValidator.Validate` to check this.
+Rebuildable trees may be rederived rather than restored by app-scoped backup.
+MCP tool names are app-local and become `{slug}_{name}` at dispatch.

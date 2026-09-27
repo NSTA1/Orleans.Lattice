@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="src/lattice.apps/Orleans.Lattice.Apps.csproj" />
+  <Project Path="test/lattice.apps/Orleans.Lattice.Apps.Tests.csproj" />
   <Project Path="src/lattice/Orleans.Lattice.csproj" />
   <Project Path="src/lattice.api.abstractions/Orleans.Lattice.Api.Abstractions.csproj" />
   <Project Path="src/lattice.api.state/Orleans.Lattice.Api.State.csproj" />

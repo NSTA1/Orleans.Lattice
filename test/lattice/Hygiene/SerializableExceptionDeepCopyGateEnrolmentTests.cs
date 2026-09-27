@@ -88,6 +88,7 @@ public sealed class SerializableExceptionDeepCopyGateEnrolmentTests
         "lattice.api.tenantadmin.grpc",
         "lattice.api.treeadmin",
         "lattice.api.treeadmin.grpc",
+        "lattice.apps",
         "lattice.auth",
         "lattice.backup.azureblob",
         "lattice.caching.azureblob",

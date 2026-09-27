@@ -1,0 +1,29 @@
+{
+  "identity": {
+    "slug": "tiny-app",
+    "version": "1.2.3-preview.1+test",
+    "provenance": { "reference": "embedded:test.tiny-app.json" }
+  },
+  "trees": [{
+    "name": "records",
+    "shardCount": 2,
+    "virtualShardCount": 16,
+    "maxLeafKeys": 128,
+    "maxInternalChildren": 32,
+    "walPartitions": 4,
+    "softDeleteDuration": "3.00:00:00",
+    "rebuildable": true
+  }],
+  "roles": [{
+    "name": "reader",
+    "operations": ["Read", "RangeRead"],
+    "scopes": [
+      { "tree": "records" },
+      { "tree": "events", "app": "other-app", "kind": "Prefix", "keyOrPrefix": "public/" }
+    ]
+  }],
+  "replication": [{ "tree": "records", "mergeMode": "LwwRegister" }],
+  "schema": [{ "tree": "records", "family": "tiny", "version": 1, "strictIngest": true }],
+  "subscriptions": [{ "name": "observe", "app": "other-app", "tree": "events", "keyPrefix": "public/" }],
+  "mcpTools": [{ "name": "read_records", "description": "Reads records.", "role": "reader" }]
+}
