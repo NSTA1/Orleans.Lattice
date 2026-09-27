@@ -70,10 +70,10 @@ internal sealed partial class RefinementDetectorMappingTests
     public void The_note_yields_the_expected_behaviour_asserting_denominator()
     {
         // Anti-vacuity, and a standing check on the census's own arithmetic.
-        // The note states 14 behaviour-asserting rows (8 property, 6 action);
+        // The note has 15 behaviour-asserting rows (9 property, 6 action);
         // if a row is added or removed, this fails and the prose must be
         // re-derived rather than quietly drifting out of date.
-        Assert.That(BehaviourRows(), Has.Count.EqualTo(14));
+        Assert.That(BehaviourRows(), Has.Count.EqualTo(15));
     }
 
     [Test]
