@@ -32,6 +32,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - GC reclaimable distance and terminal breach.** Each GC shard scan publishes its floor-to-head distance in offsets, and a tree over its byte ceiling with an available floor that reclaims nothing for 10 consecutive passes advances a primed terminal-breach counter. ([#3149](https://github.com/NSTA1/Orleans.Lattice/issues/3149)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
+- **Retrieval - Per-repository readiness verdict.** `repocontext_health` accepts an optional `repoId` and returns that repository's passive serving verdict, naming its blocker with vector-coverage, ANN, breaker and content-tree evidence; with no argument its host output is unchanged. ([#2485](https://github.com/NSTA1/Orleans.Lattice/issues/2485)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **WAL - Drain-lag holders named while lag persists.** A tree above the materialiser lag threshold repeats its structured warning naming the lowest-cursor consumers, at most every `LatticeOptions.WalDrainLagHolderLogInterval` (default 10 minutes; null keeps edge-only logging). ([#2505](https://github.com/NSTA1/Orleans.Lattice/issues/2505)) (`Orleans.Lattice`)
+
 ### Changed
 
 - **Performance - Predicate scan read path.** Predicate row filtering now validates an admitted row's JSON only after it evaluates true, instead of scanning every candidate twice, and the fast-path eligibility decision is hoisted out of the per-row loop in the leaf, cache and snapshot scans. ([#3692](https://github.com/NSTA1/Orleans.Lattice/pull/3692)) (`Orleans.Lattice`)
@@ -54,9 +58,15 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Deletion - Single reminder teardown path.** An unreachable PurgeComplete arm is removed from the tree-deletion reminder handler, leaving the early guard as the one teardown path, now pinned by reminder-dispatch tests. ([#2347](https://github.com/NSTA1/Orleans.Lattice/issues/2347)) (`Orleans.Lattice`)
 
-- **Core - Dead members removed.** The unused whole-leaf `BPlusLeafGrain.MinUnresolvedPrepareOffset` and the unreachable `rethrow` arm of the cursor's point-in-time unpin are removed, their stale docs corrected, and the live checkpoint clamp and unpin paths pinned by tests. ([#2405](https://github.com/NSTA1/Orleans.Lattice/issues/2405), [#2469](https://github.com/NSTA1/Orleans.Lattice/issues/2469)) (`Orleans.Lattice`)
+- **Core - Dead members removed.** `BPlusLeafGrain.MinUnresolvedPrepareOffset`, the cursor unpin's unreachable `rethrow` arm and the uncalled `ShardRootGrain.TryForwardShadowWriteAsync` are removed, their stale docs corrected, and the live paths pinned by tests. ([#2405](https://github.com/NSTA1/Orleans.Lattice/issues/2405), [#2469](https://github.com/NSTA1/Orleans.Lattice/issues/2469), [#2488](https://github.com/NSTA1/Orleans.Lattice/issues/2488)) (`Orleans.Lattice`)
 
 - **Backlog - Outcome-comment fields are named as such.** The backlog protocol now says at first use that `result=released` is a field of the outcome comment on the mirrored issue, not a `repocontext_release_claim` argument, and names the outcome comment consistently. ([#2463](https://github.com/NSTA1/Orleans.Lattice/issues/2463)) (`repository-wide`)
+
+- **Observability - Snapshot load failures no longer claim a cause.** The leaf snapshot load-failure counter's residual reason is `unclassified` instead of `faulted`, since a wrapped activation failure can hide an OOM; reason-filtered alerts should match both values during rollout. ([#2404](https://github.com/NSTA1/Orleans.Lattice/issues/2404)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Container - CPU quota parsing.** Three unreachable clauses in the cgroup `cpu.max` quota parser are removed, its comment on how an unlimited `max` is handled is corrected, and every parse outcome, including saturation, is pinned by tests. ([#2819](https://github.com/NSTA1/Orleans.Lattice/issues/2819)) (`Orleans.Lattice`)
+
+- **Docs - Naming registry covers RepoContext.** The naming-conventions registry gains its missing `Orleans.Lattice.Api.Mcp.RepoContext` section, and a gate fails when that section drifts from the package's public types. ([#2494](https://github.com/NSTA1/Orleans.Lattice/issues/2494)) (`repository-wide`)
 
 ### Fixed
 
@@ -141,6 +151,14 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Core - Queue ids could be reissued after a crash.** A queue that drained, or lost its newest entry, before its coalesced head-cursor flush cold-started below ids it had already issued. The next id is now made durable before the newest entry's row is deleted. ([#3681](https://github.com/NSTA1/Orleans.Lattice/issues/3681)) (`Orleans.Lattice`)
 
 - **Config - Reference autoscaler rules could never scale out.** The shipped KEDA and ACA rules set `targetValue` 1, which asks for at most the current replica count, and the reference architecture queried a series nothing exports. The rules now use 0.5 and the exported series. ([#3679](https://github.com/NSTA1/Orleans.Lattice/issues/3679)) (`Orleans.Lattice.Scaling`)
+
+- **Atomic - Multi-key reads surfaced an indeterminate prepare.** `GetManyAsync`, key and entry scans, counts and stats now resolve every pending override through the same visibility gate as a point read, so a prepare a point read hides is hidden on every multi-key path too. ([#3665](https://github.com/NSTA1/Orleans.Lattice/issues/3665)) (`Orleans.Lattice`)
+
+- **Shard - Healing never swept a read-only tree.** The healing orchestrator latched itself running before registering its keepalive, so a reminder service still initializing left it with no sweep timer. The timer is now armed first and the keepalive retried on each sweep. ([#3682](https://github.com/NSTA1/Orleans.Lattice/issues/3682)) (`Orleans.Lattice`)
+
+- **WAL - A GC pass that resolved no provider read as idle.** `orleans.lattice.wal.gc.passes` gains a zero-primed `no_partitions` arm for a pass whose silo resolved no pinned WAL provider, so a misplaced tree no longer reports an arm that asserts health. ([#2465](https://github.com/NSTA1/Orleans.Lattice/issues/2465)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Gates - Refinement note left checked properties unmapped.** `CommitIntegrity` is now mapped and `TypeOK` declared as a reasoned exclusion in `spec/Refinement.md`, and a gate fails when any property TLC checks is neither mapped nor excluded. ([#2558](https://github.com/NSTA1/Orleans.Lattice/issues/2558)) (`repository-wide`)
 
 ### Security
 
