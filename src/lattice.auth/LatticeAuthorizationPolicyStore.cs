@@ -13,6 +13,7 @@ namespace Orleans.Lattice.Auth;
 /// the per-key history view created at bootstrap.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The store is authorization <b>infrastructure</b>: it reads and writes the
 /// policy tree that feeds the enforcement gate itself, so every operation runs
 /// under <see cref="LatticeAccessGateContext.EnterSystemOrigin"/>. This both
@@ -22,6 +23,22 @@ namespace Orleans.Lattice.Auth;
 /// call back into a cold gate and deadlock. Authorizing <i>who</i> may edit
 /// policy is a higher-layer concern (a bootstrap administrator or an admin API
 /// grain), not the store's.
+/// </para>
+/// <para>
+/// The one origin-sensitive rule the store itself enforces is app-owned rule
+/// protection: a write or delete of a rule id in the
+/// <see cref="LatticeAppRuleIds.Prefix"/> namespace is admitted only when the
+/// caller is already system-origin (the app compiler), and is otherwise rejected
+/// with <see cref="LatticeAppOwnedRuleException"/>. The store exposes no bulk,
+/// replace, or import verb, so <see cref="PutRuleAsync"/> and
+/// <see cref="RemoveRuleAsync"/> are the only mutation paths the guard needs to
+/// cover. Replication applies, backup restores, and other infrastructure paths
+/// that write the reserved policy tree directly do so under system origin rather
+/// than through this store (so they may carry app-owned rules unimpeded), and a
+/// user-origin write to that reserved <c>sys-</c> tree is refused by the core
+/// library, so the guard cannot be sidestepped by writing the tree around the
+/// store.
+/// </para>
 /// </remarks>
 internal sealed class LatticeAuthorizationPolicyStore(
     IGrainFactory grainFactory,
@@ -34,6 +51,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
+        EnsureAppOwnedRuleWritable(rule.RuleId, nameof(rule));
 
         // Authoring guard (the single seam that decides whether a reserved-namespace
         // rule may be persisted): an ordinary tree is always authorable; the reserved
@@ -67,6 +85,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
+        EnsureAppOwnedRuleWritable(ruleId, nameof(ruleId));
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
@@ -118,6 +137,27 @@ internal sealed class LatticeAuthorizationPolicyStore(
                     yield return rule;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// App-owned rule write guard: the single seam that decides whether a rule id in
+    /// the <see cref="LatticeAppRuleIds.Prefix"/> namespace may be written or deleted.
+    /// It is admitted only when the caller is already inside a system-origin scope
+    /// (the app compiler), and rejected fail-closed otherwise, before any read or
+    /// write is issued, so a rejected delete does not disclose whether the rule
+    /// exists. The check must run against the <i>caller's</i> ambient origin, so it
+    /// precedes the store's own system-origin scope. Allocation-free on the ordinary
+    /// (non-app) path: an ordinal prefix test and nothing else.
+    /// </summary>
+    /// <param name="ruleId">The targeted rule id.</param>
+    /// <param name="paramName">The store parameter the id came from.</param>
+    /// <exception cref="LatticeAppOwnedRuleException">The id is app-owned and the caller is not system-origin.</exception>
+    private static void EnsureAppOwnedRuleWritable(string ruleId, string paramName)
+    {
+        if (LatticeAppRuleIds.IsAppOwned(ruleId) && !LatticeAccessGateContext.IsSystemOrigin)
+        {
+            throw LatticeAppOwnedRuleException.Rejected(ruleId, paramName);
         }
     }
 
