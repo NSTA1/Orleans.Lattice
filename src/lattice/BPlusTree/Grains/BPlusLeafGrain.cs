@@ -73,6 +73,12 @@ internal sealed partial class BPlusLeafGrain(
         var coverageLagTimer = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
         coverageLagTimer?.Dispose();
 
+        // Issue #3643: the frontier_pin barrier may elide only against a pin
+        // acknowledged IN THIS deactivation, so any record left from an earlier
+        // one (there is none in practice; an activation deactivates once) is
+        // discarded before the teardown persist's tail can write a fresh one.
+        ResetDeactivationPinAcknowledgement();
+
         // Each barrier below is contained INDEPENDENTLY (issue #3366). They
         // previously shared a single try with a single anonymous bare catch
         // that had no logger, ordered most-fragile-first, so a fault in an
@@ -213,6 +219,10 @@ internal sealed partial class BPlusLeafGrain(
             // publish, and the pin store's monotonic-max merge makes the repeat
             // idempotent. It is also the only publisher for a deactivation with
             // no pending advance, where nothing is persisted and no tail runs.
+            // It resolves the pin exactly as before and then ELIDES the pin-store
+            // call when every partition's resolved pin is dominated, on both
+            // axes, by what the tail's publishes in THIS deactivation had
+            // acknowledged (issue #3643): the merge would have been a no-op.
             // Skips, rather than faults, once the deadline has torn the
             // activation down; the tail's publish already stands by then.
             await RunBarrierAsync(
@@ -363,6 +373,34 @@ internal sealed partial class BPlusLeafGrain(
                 barrier.Value,
                 context.GrainId.ToString(),
                 treeTag.Value);
+        }
+        catch (Exception)
+        {
+            // Observability must never fail a deactivation.
+        }
+    }
+
+    /// <summary>
+    /// Counts one <c>frontier_pin</c> barrier whose pin-store call was elided
+    /// because the pin it resolved was already acknowledged in this
+    /// deactivation (issue #3643), and never throws.
+    /// </summary>
+    /// <remarks>
+    /// Tags are resolved defensively and individually, for the reason
+    /// <see cref="RecordDeactivationBarrierSkip"/> gives. The barrier's duration
+    /// is still recorded by the barrier runner, so an elided barrier contributes
+    /// its (short) sample to <see cref="LatticeMetrics.LeafDeactivationBarrierDuration"/>.
+    /// </remarks>
+    private void RecordDeactivationBarrierElision()
+    {
+        try
+        {
+            var treeTag = TryResolveDeactivationBarrierTag(LeafTreeTag, LatticeMetrics.TagTree);
+            var tenantTag = TryResolveDeactivationBarrierTag(
+                LeafTenantTag, LatticeTenantLabel.ForTree(null).Key);
+
+            LatticeMetrics.LeafDeactivationBarrierElided.Add(
+                1, treeTag, LatticeMetrics.DeactivationBarrierFrontierPin, tenantTag);
         }
         catch (Exception)
         {

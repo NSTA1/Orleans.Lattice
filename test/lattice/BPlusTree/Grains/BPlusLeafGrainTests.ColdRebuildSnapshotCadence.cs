@@ -62,7 +62,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);

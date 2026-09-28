@@ -92,6 +92,16 @@ public partial class BPlusLeafGrainTests
         /// <summary>Runs inside the awaited batched pin flush, once per call.</summary>
         public Action? OnPinFlush;
 
+        /// <summary>
+        /// What the awaited batched pin flush reports back: <see langword="true"/>
+        /// for a batch the pin store acknowledged, <see langword="false"/> for one
+        /// whose shard write faulted and was swallowed (issue #3643).
+        /// </summary>
+        public bool AcknowledgePinFlush = true;
+
+        /// <summary>The frontier of every report the awaited batched flush received, in order.</summary>
+        public readonly List<HybridLogicalClock> BatchedFrontiers = [];
+
         public IEnumerable<FinalAdvancePin> Batched =>
             Published.Where(p => p.Channel == FinalAdvancePinChannel.Batched);
 
@@ -143,7 +153,8 @@ public partial class BPlusLeafGrainTests
     private static FinalAdvanceLeaf CreateFinalAdvanceLeaf(
         ILeafReplayCoordinatorGrain coordinator,
         int digestCoalescingWindowMs,
-        int reclassifyEveryNCheckpoints = 1000)
+        int reclassifyEveryNCheckpoints = 1000,
+        ILeafCursorReporter? reporterOverride = null)
     {
         var leaf = new FinalAdvanceLeaf();
 
@@ -184,11 +195,12 @@ public partial class BPlusLeafGrainTests
                 foreach (var report in call.ArgAt<IReadOnlyList<MaterialiserPinReport>>(1))
                 {
                     Record(FinalAdvancePinChannel.Batched, report.CheckpointOffset);
+                    leaf.BatchedFrontiers.Add(report.Frontier);
                     leaf.Calls.Add($"pin:{report.CheckpointOffset}");
                 }
 
                 leaf.OnPinFlush?.Invoke();
-                return Task.CompletedTask;
+                return Task.FromResult(leaf.AcknowledgePinFlush);
             });
         reporter
             .When(r => r.NoteDurableMaterialiserFrontier(
@@ -212,9 +224,14 @@ public partial class BPlusLeafGrainTests
                 return Task.CompletedTask;
             });
 
+        // Issue #3643: a test that must drive the REAL reporter - whose
+        // acknowledgement comes from actual shard writes rather than a stub -
+        // substitutes it here; the recording stub above is then unused.
+        var registeredReporter = reporterOverride ?? reporter;
+
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
-        sc.AddSingleton(reporter);
+        sc.AddSingleton(registeredReporter);
         sc.AddSingleton<ILoggerFactory>(new FinalAdvanceLoggerFactory(leaf.Warnings));
         var services = sc.BuildServiceProvider();
 
@@ -248,7 +265,7 @@ public partial class BPlusLeafGrainTests
             TestMutationObservers.NoObservers(),
             TestOriginClusterIdResolver.Default());
         leaf.State = state;
-        leaf.Reporter = reporter;
+        leaf.Reporter = registeredReporter;
         leaf.Snapshot = snapshotStub;
         return leaf;
     }
@@ -403,6 +420,12 @@ public partial class BPlusLeafGrainTests
     /// deactivation adds two batched flushes (the teardown persist's and the
     /// <c>frontier_pin</c> barrier's) regardless of how many persists preceded
     /// it. The pin grain's own batching is untouched by this change.
+    /// <para>
+    /// Two, not one, because here the deactivation capture raises coverage
+    /// above what the tail published, so the barrier's pin is not dominated by
+    /// the tail's acknowledgement and is not elided (issue #3643). A clean
+    /// deactivation elides it; see the <c>DeactivationFrontierPinElision</c> tests.
+    /// </para>
     /// </summary>
     [Test]
     public async Task Checkpoint_persists_write_no_extra_durable_pins_outside_the_teardown_persist()

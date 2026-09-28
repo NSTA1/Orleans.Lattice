@@ -5614,6 +5614,38 @@ public static class LatticeMetrics
     public const string LeafDeactivationBarrierDurationName = "orleans.lattice.leaf.deactivation.barrier.duration";
 
     /// <summary>
+    /// Counter of graceful-deactivation barriers that were elided because the
+    /// pin store had already acknowledged everything the barrier would publish,
+    /// tagged with <see cref="TagTree"/>, <see cref="TagReason"/> (only
+    /// <c>frontier_pin</c> today) and the tenant dimension.
+    /// <para>
+    /// <b>Why this exists (issue #3643).</b> The <c>frontier_pin</c> barrier
+    /// republishes the leaf's durable materialiser pin at the end of every
+    /// graceful deactivation, but the teardown persist tail has usually just
+    /// published and been acknowledged for the very same pin, so the barrier
+    /// pays a pin-store round trip that changes nothing. The barrier now skips
+    /// that call when every partition's pin is dominated, on both the frontier
+    /// and the offset axis, by an acknowledgement obtained in the same
+    /// deactivation. This counts the skips, so the saving is visible and a
+    /// regression that silently stops eliding is too.
+    /// </para>
+    /// <para>
+    /// Read it against the <c>frontier_pin</c> series of
+    /// <see cref="LeafDeactivationBarrierDuration"/>, which is still recorded
+    /// for an elided barrier: the ratio of this rate to that histogram's count
+    /// rate is the fraction of drains whose pin publish was redundant. Not
+    /// zero-primed, matching its sibling barrier instruments; a series appears
+    /// on the first elision.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafDeactivationBarrierElided =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.deactivation.barrier.elided", unit: "{barrier}",
+            description: "Graceful-deactivation barriers skipped because the pin store had already acknowledged, in the same deactivation, a pin dominating everything the barrier would publish, tagged by tree and barrier (frontier_pin).");
+
+    /// <summary>Canonical name of <see cref="LeafDeactivationBarrierElided"/>.</summary>
+    public const string LeafDeactivationBarrierElidedName = "orleans.lattice.leaf.deactivation.barrier.elided";
+
+    /// <summary>
     /// <see cref="TagReason"/> value for the coalesced projection-digest publish
     /// barrier. Benign in isolation - the digest is staleness-tolerant and the
     /// next mutation republishes it.
