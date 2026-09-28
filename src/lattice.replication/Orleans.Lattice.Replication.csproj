@@ -18,6 +18,11 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Grpc" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Grpc.Tests" />
+    <!-- The replication status facade consumes the internal peer-status read
+         path (IReplicationPeerStatusReader and its registration); its tests fake
+         that reader. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication.Tests" />
     <!-- The microbench host drives the internal ReplicationMutationObserver /
          IReplogSink directly so it can isolate the producer-side commit hot
          path (ReplicationCommitObserverBenchmarks) without standing up an

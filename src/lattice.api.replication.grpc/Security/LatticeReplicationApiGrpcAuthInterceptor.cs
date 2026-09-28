@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Api.Replication.Grpc;
 /// <see cref="ILatticeReplicationApiAuthorizer"/> on every inbound replication
 /// control-API call. Calls that the authorizer rejects are failed with
 /// <see cref="StatusCode.PermissionDenied"/>. Enforcement is scoped to the
-/// replication control-API service by matching on the service-name prefix, so
+/// replication control-API service and the replication peer-status service by
+/// matching on their service-name prefixes, so
 /// unrelated gRPC services hosted in the same ASP.NET Core pipeline are
 /// unaffected. The unauthenticated <c>GetAuthScheme</c> discovery RPC is exempt
 /// so a client can learn how to sign in before it holds any credential.
@@ -181,18 +182,25 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
     internal static (LatticeReplicationApiOperation Operation, string? TargetId) DescribeCall<TRequest>(string fullMethodName, TRequest request)
     {
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
-        var operation = methodName switch
-        {
-            LatticeReplicationGrpcMethods.EnableReplicationMethodName => LatticeReplicationApiOperation.EnableReplication,
-            LatticeReplicationGrpcMethods.DisableReplicationMethodName => LatticeReplicationApiOperation.DisableReplication,
-            LatticeReplicationGrpcMethods.GetReplicationConfigMethodName => LatticeReplicationApiOperation.GetReplicationConfig,
-            _ => LatticeReplicationApiOperation.Unknown,
-        };
+        var operation = IsStatusServiceMethod(fullMethodName)
+            ? methodName switch
+            {
+                LatticeReplicationStatusGrpcMethods.GetPeerStatusMethodName => LatticeReplicationApiOperation.GetPeerStatus,
+                _ => LatticeReplicationApiOperation.Unknown,
+            }
+            : methodName switch
+            {
+                LatticeReplicationGrpcMethods.EnableReplicationMethodName => LatticeReplicationApiOperation.EnableReplication,
+                LatticeReplicationGrpcMethods.DisableReplicationMethodName => LatticeReplicationApiOperation.DisableReplication,
+                LatticeReplicationGrpcMethods.GetReplicationConfigMethodName => LatticeReplicationApiOperation.GetReplicationConfig,
+                _ => LatticeReplicationApiOperation.Unknown,
+            };
 
         var targetId = request switch
         {
             ReplicationEnableRequestMessage e => e.TreeId,
             ReplicationDisableRequestMessage d => d.TreeId,
+            ReplicationPeerStatusQuery q when !string.IsNullOrEmpty(q.TreeId) => q.TreeId,
             _ => null,
         };
 
@@ -202,19 +210,31 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
     private static bool IsLatticeReplicationApiMethod(string fullMethodName)
     {
         const string ServicePrefix = "/" + LatticeReplicationGrpcMethods.ServiceName + "/";
-        return fullMethodName.StartsWith(ServicePrefix, StringComparison.Ordinal);
+        return fullMethodName.StartsWith(ServicePrefix, StringComparison.Ordinal)
+            || IsStatusServiceMethod(fullMethodName);
+    }
+
+    private static bool IsStatusServiceMethod(string fullMethodName)
+    {
+        const string StatusServicePrefix = "/" + LatticeReplicationStatusGrpcMethods.ServiceName + "/";
+        return fullMethodName.StartsWith(StatusServicePrefix, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// Whether the call targets a method exempt from authorization. The
     /// auth-scheme advertisement RPC must be reachable without a credential so a
     /// client can discover how to sign in before it holds one; every other
-    /// replication control-API method is enforced.
+    /// replication control-API method, and every peer-status method, is enforced.
     /// </summary>
     /// <remarks>Exposed as <c>internal</c> so the exemption can be asserted
     /// directly in unit tests without standing up a gRPC server.</remarks>
     internal static bool IsUnauthenticatedMethod(string fullMethodName)
     {
+        if (IsStatusServiceMethod(fullMethodName))
+        {
+            return false;
+        }
+
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
         return string.Equals(methodName, LatticeReplicationGrpcMethods.GetAuthSchemeMethodName, StringComparison.Ordinal);
     }

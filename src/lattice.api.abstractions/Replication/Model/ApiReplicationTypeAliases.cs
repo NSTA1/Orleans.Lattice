@@ -36,4 +36,20 @@ public static class ApiReplicationTypeAliases
 
     /// <summary>Alias for <see cref="ReplicationEnrollmentSource"/>.</summary>
     public const string ReplicationEnrollmentSource = "oir.es";
+
+    /// <summary>Alias for <see cref="ReplicationPeerStatusQuery"/>.</summary>
+    public const string ReplicationPeerStatusQuery = "oir.pq";
+
+    /// <summary>Alias for <see cref="ReplicationPeerStatusPage"/>.</summary>
+    public const string ReplicationPeerStatusPage = "oir.pp";
+
+    /// <summary>Alias for <see cref="ReplicationPeerStatusEntry"/>.</summary>
+    public const string ReplicationPeerStatusEntry = "oir.pe";
+
+    /// <summary>Alias for <see cref="ReplicationLinkHealth"/>.</summary>
+    public const string ReplicationLinkHealth = "oir.lh";
+
+    /// <summary>Alias for <see cref="ReplicationLinkDirection"/>.</summary>
+    public const string ReplicationLinkDirection = "oir.ld";
+
 }

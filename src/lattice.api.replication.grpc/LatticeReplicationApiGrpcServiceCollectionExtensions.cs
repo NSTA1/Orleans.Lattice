@@ -31,7 +31,7 @@ namespace Orleans.Lattice.Api.Replication.Grpc;
 /// via a permissive authorizer or by turning enforcement off.
 /// </para>
 /// </remarks>
-public static class LatticeReplicationApiGrpcServiceCollectionExtensions
+public static partial class LatticeReplicationApiGrpcServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the <c>Orleans.Lattice.Api.Replication.Grpc</c> binding: the
