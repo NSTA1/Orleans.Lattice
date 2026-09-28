@@ -1020,7 +1020,11 @@ A stable `operationId` is **required** (there is no auto-generated
 overload): a cross-tree saga touches multiple registries, so a stable
 idempotency key is mandatory for safe retry. The `operationId` must not
 contain `/` (reserved as the grain-key separator). Tree ids in the batch
-must be distinct and non-empty.
+must be distinct and non-empty, and each tree's slice must not repeat a
+key - staging a `Set` and a `Delete` for the same key counts as a repeat.
+A batch that breaks either rule throws `ArgumentException` before any
+write is staged or any saga state is persisted, so the `operationId`
+stays free for a corrected retry.
 
 ### Usage
 

@@ -56,6 +56,31 @@ public sealed class LatticeBackupCaptureIntegrationTests
     }
 
     [Test]
+    public async Task CaptureAsync_records_the_highest_captured_hlc_as_the_cut_frontier()
+    {
+        // The registry-snapshot anchor the core stamps on the snapshot coordinate
+        // is always zero, so a cut built from it alone recorded HLC 0 on every
+        // full backup. The frontier is the high-water of what the capture read.
+        await _fixture.InitializeAsync();
+        var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
+        await tree.SetAsync("k1", Bytes("v1"));
+        await tree.SetAsync("k2", Bytes("v1"));
+        await tree.SetAsync("k1", Bytes("v2"));
+
+        var result = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("frontier", BackupScopeSelector.WholeTree(Tree)));
+
+        var entries = await DecodeAsync(result.Manifest);
+        var highest = entries.Max(e => e.Timestamp.WallClockTicks);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(highest, Is.GreaterThan(0));
+            Assert.That(result.Manifest.ConsistencyCut.HlcTimestamp, Is.EqualTo(highest));
+        });
+    }
+
+    [Test]
     public async Task CaptureAsync_is_isolated_from_writes_made_after_the_snapshot_opens()
     {
         await _fixture.InitializeAsync();

@@ -702,7 +702,8 @@ internal sealed class LatticeBackupCaptureService(
 
                 var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                     .ConfigureAwait(false);
-                var consistencyCut = BuildConsistencyCut(coordinate, collector.PerOriginHighWater, walPartitionOffsets);
+                var consistencyCut = BuildConsistencyCut(
+                    coordinate, collector.HighestHlc, collector.PerOriginHighWater, walPartitionOffsets);
                 var provenance = BuildProvenance(collector.PerOriginHighWater);
 
                 // An empty provenance is expected on a local-only tree and alarming on a
@@ -798,11 +799,23 @@ internal sealed class LatticeBackupCaptureService(
     /// <summary>
     /// Maps the per-shard snapshot coordinate into the manifest consistency cut:
     /// the WAL sequence floor is the maximum captured per-shard head and the HLC
-    /// frontier is the registry-snapshot wall-clock. A per-origin frontier is
-    /// carried only when the captured entries name at least one origin.
+    /// frontier is the highest HLC stamp over the captured entries (or the
+    /// registry-snapshot anchor, should that ever be the later of the two). A
+    /// per-origin frontier is carried only when the captured entries name at
+    /// least one origin.
+    /// <para>
+    /// The registry-snapshot anchor alone is not a frontier: the core records it
+    /// as <see cref="HybridLogicalClock.Zero"/>, so a cut built from it alone
+    /// stamped every full backup at HLC 0, left the first incremental on it
+    /// draining with no WAL pin, and let a chain whose increments saw no writes
+    /// carry that 0 forward (issue #3758). The captured entries' high-water is the
+    /// same measure an incremental cut uses, so a chain's frontier is comparable
+    /// end to end.
+    /// </para>
     /// </summary>
     private static BackupConsistencyCut BuildConsistencyCut(
         LatticeSnapshotCoordinate coordinate,
+        HybridLogicalClock capturedHighestHlc,
         IReadOnlyDictionary<string, long> perOriginHighWater,
         IReadOnlyDictionary<int, long> walPartitionOffsets)
     {
@@ -815,7 +828,9 @@ internal sealed class LatticeBackupCaptureService(
             }
         }
 
-        var hlcTimestamp = coordinate.RegistrySnapshotHlc.WallClockTicks;
+        var hlcTimestamp = Math.Max(
+            coordinate.RegistrySnapshotHlc.WallClockTicks,
+            capturedHighestHlc.WallClockTicks);
         if (hlcTimestamp < 0)
         {
             hlcTimestamp = 0;

@@ -824,13 +824,23 @@ internal sealed class LatticeCrossTreeTxGrain(
 
     /// <summary>
     /// Defensively deep-copies the caller's batches into persistable
-    /// participants: distinct, non-empty tree ids, cloned entry lists and value
-    /// buffers, and a stable submission order (sorted by tree id) so the
-    /// fingerprint is order-independent. Empty per-tree slices are dropped.
+    /// participants: distinct, non-empty tree ids, distinct keys within each
+    /// tree's slice, cloned entry lists and value buffers, and a stable
+    /// submission order (sorted by tree id) so the fingerprint is
+    /// order-independent. Empty per-tree slices are dropped.
+    /// <para>
+    /// A duplicate key within one tree's slice is rejected here, before the
+    /// coordinator persists <see cref="CrossTreeTxPhase.Preparing"/> or registers
+    /// its keepalive. The participant sub-saga rejects the same batch
+    /// deterministically, so admitting it would leave the coordinator re-dispatching
+    /// a prepare that can never succeed on every keepalive tick, with the other
+    /// trees' sub-sagas parked on it indefinitely (issue #3756).
+    /// </para>
     /// </summary>
     private static List<CrossTreeParticipant> BuildParticipants(List<LatticeTreeBatch> batches)
     {
         var seen = new HashSet<string>(batches.Count, StringComparer.Ordinal);
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<CrossTreeParticipant>(batches.Count);
         foreach (var batch in batches)
         {
@@ -844,6 +854,7 @@ internal sealed class LatticeCrossTreeTxGrain(
                     $"Cross-tree batch for tree '{batch.TreeId}' has a null entries list.", nameof(batches));
             if (batch.Entries.Count == 0) continue;
 
+            seenKeys.Clear();
             var entries = new List<KeyValuePair<string, byte[]>>(batch.Entries.Count);
             for (var i = 0; i < batch.Entries.Count; i++)
             {
@@ -852,6 +863,10 @@ internal sealed class LatticeCrossTreeTxGrain(
                 if (key is null)
                     throw new ArgumentException(
                         $"Cross-tree batch for tree '{batch.TreeId}' contains a null key.", nameof(batches));
+                if (!seenKeys.Add(key))
+                    throw new ArgumentException(
+                        $"Cross-tree batch for tree '{batch.TreeId}' contains duplicate key '{key}'.",
+                        nameof(batches));
                 if (value is null && !isDelete)
                     throw new ArgumentException(
                         $"Cross-tree batch for tree '{batch.TreeId}' contains a null value for key '{key}'.",

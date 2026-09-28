@@ -58,7 +58,7 @@ Resolve the seam from DI and call per-tree:
 | `ListAsync(treeId, ct)` | `IReadOnlyList<DeadLetterEntry>` | Ascending entry-id order. Pure read. |
 | `CountAsync(treeId, ct)` | `int` | Cached count, served from memory. |
 | `DiscardAsync(treeId, entryId, ct)` | `bool` | `true` when removed; `false` when the id was unknown. Emits `reason=discarded`. |
-| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorator's failure tracker). On any non-throwing return - including a result the canonical applier filtered or diverted (`Applied = false`) - the entry is removed with `reason=replayed`. A thrown exception leaves the entry parked. |
+| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorator's failure tracker). On any non-throwing, non-deferred return - including a result the canonical applier filtered or diverted (`Applied = false`) - the entry is removed with `reason=replayed`. A result deferred by a coordinated restore's receive fence (`Deferred = true`) or a thrown exception leaves the entry parked. |
 
 ```csharp verify
 var dlq = client.ServiceProvider.GetRequiredService<ILatticeReplicationDeadLetters>();
@@ -73,7 +73,9 @@ if (parked.Count > 0)
 {
     var result = await dlq.ReplayAsync("orders", parked[0].EntryId, cancellationToken);
     // result is null when the id is unknown; otherwise the replay routed
-    // through the canonical applier and the entry is removed.
+    // through the canonical applier and the entry is removed - unless a
+    // coordinated restore deferred it (result.Value.Deferred), which leaves
+    // it parked for a later replay.
 }
 ```
 
@@ -90,7 +92,7 @@ Parking advances the tree's per-origin HWM (the entry for the parked entry's `Or
 1. A parked entry that failed deterministically would re-park itself on every replay if routed through the decorator, which would produce an infinite re-park loop and corrupt the failure-counter state for that tuple.
 2. Operators are explicitly opting into a "this entry might still apply" attempt; the failure budget is logically a transport-level concern, not an operator-replay concern.
 
-The replay is a genuine apply attempt: parking advances the per-origin HWM but not the snapshot-pinned causal floor - the canonical applier's only point-write drop threshold - so a replayed point entry runs the full apply pipeline. Every park path also releases the entry's own shadow-forward dedupe reservation (or never took one), so the replay is not suppressed as a duplicate of its original delivery. The seam treats any non-throwing return as terminal for cleanup and removes the parked row, whatever the resulting `Applied` flag. `Applied = true` means the write landed. `Applied = false` means the canonical applier filtered, diverted, or deferred it: its HLC is at or below the pinned floor; its identity is held in the shadow-forward dedupe cache by a re-delivered copy of the same record that has since been applied or parked; its origin is the local cluster (an entry the sender parked because it could not encode the batch), which the canonical applier never applies back onto its authoring cluster; a receiver-side gate rejected it (the enrollment gate drops it; the merge-mode and tenant-isolation gates dead-letter it again under a new id); a dependency is still missing and it was re-parked in the causal-apply buffer; or a coordinated restore holds the tree's inbound receive fence (`Deferred = true`). A deferred replay is not retried - the parked row is still removed although the entry was not applied - so do not replay a tree's entries while a coordinated restore is in flight.
+The replay is a genuine apply attempt: parking advances the per-origin HWM but not the snapshot-pinned causal floor - the canonical applier's only point-write drop threshold - so a replayed point entry runs the full apply pipeline. Every park path also releases the entry's own shadow-forward dedupe reservation (or never took one), so the replay is not suppressed as a duplicate of its original delivery. The seam treats any non-throwing, non-deferred return as terminal for cleanup and removes the parked row, whatever the resulting `Applied` flag. `Applied = true` means the write landed. `Applied = false` means the canonical applier filtered or diverted it: its HLC is at or below the pinned floor; its identity is held in the shadow-forward dedupe cache by a re-delivered copy of the same record that has since been applied or parked; its origin is the local cluster (an entry the sender parked because it could not encode the batch), which the canonical applier never applies back onto its authoring cluster; a receiver-side gate rejected it (the enrollment gate drops it; the merge-mode and tenant-isolation gates dead-letter it again under a new id); or a dependency is still missing and it was re-parked in the causal-apply buffer. The one non-terminal outcome is a deferral: while a coordinated restore holds the tree's inbound receive fence the applier returns `Deferred = true` without applying anything, and the seam leaves the parked row in place (no `dead_letter.removed` is emitted), because nothing re-ships a parked entry once the fence lifts. Replay it again after the restore completes.
 
 A throwing replay leaves the entry parked. The operator can re-attempt or `Discard`.
 
@@ -110,7 +112,7 @@ The grain bulk-loads its parked rows from the system tree on every activation. O
 ## When to discard vs. replay
 
 - **Discard** when you have validated the underlying data fault and deliberately want to drop the entry (e.g. it carries a key your tree no longer participates in). Emits `reason=discarded`.
-- **Replay** when you have fixed the upstream cause of the apply failure (config drift, schema mismatch, transient infra fault) and want the entry back in the apply path. Emits `reason=replayed`. Check the returned `ApplyResult`: `Applied = true` confirms the write landed, while `Applied = false` means the canonical applier filtered or diverted it (see [Replay semantics](#replay-semantics)) - the entry is removed either way.
+- **Replay** when you have fixed the upstream cause of the apply failure (config drift, schema mismatch, transient infra fault) and want the entry back in the apply path. Emits `reason=replayed`. Check the returned `ApplyResult`: `Applied = true` confirms the write landed, while `Applied = false` means the canonical applier filtered or diverted it (see [Replay semantics](#replay-semantics)) - the entry is removed either way, unless `Deferred = true`, which means a coordinated restore's receive fence held it back and it is still parked.
 
 ## Bootstrap under concurrent load
 
@@ -129,9 +131,10 @@ The window during which the third and fourth rows are reachable is bounded: it l
 
 1. **Wait for the catch-up window to close.** Watch `apply.buffered_entries{tree}` - once it returns to zero (or near zero), every origin's diagonal has caught up to the snapshot frontier and the steady-state apply path is back in control. Replaying DLQ entries before this point is safe but pointless: the missing predecessors might still be in flight.
 2. **List parked entries.** `await dlq.ListAsync(treeName, ct)` enumerates every entry the receiver parked since the bootstrap. Filter by `EnqueuedAtTicks` to scope to the bootstrap window if other DLQ traffic is mixed in.
-3. **Replay each entry.** `await dlq.ReplayAsync(treeName, entryId, ct)` routes the entry through the canonical applier (which bypasses the failure-tracking decorator). Two terminal outcomes:
+3. **Replay each entry.** `await dlq.ReplayAsync(treeName, entryId, ct)` routes the entry through the canonical applier (which bypasses the failure-tracking decorator). Two terminal outcomes, and one that is not:
    - `ApplyResult.Applied = true` - the entry's deps are now satisfied, the apply landed, and the entry is removed from the DLQ with `reason=replayed`.
    - `ApplyResult.Applied = false` - the canonical applier did not install the entry on this attempt, and the entry is still removed with `reason=replayed`. Eviction released the entry's shadow-forward dedupe reservation, so its original delivery cannot suppress the replay; the usual cause is a dependency that is still missing, in which case the entry was re-parked in the causal-apply buffer. The transport does not normally re-deliver an evicted entry (its original delivery was acknowledged when it was parked), but a copy that does arrive again - for example in a batch re-shipped after a lost acknowledgement - is applied or parked in its own right and then holds the identity, so the replay is suppressed as its duplicate. See [Replay semantics](#replay-semantics) for the other `Applied = false` outcomes. Verify the key's state rather than treating this outcome as confirmation.
+   - `ApplyResult.Deferred = true` - a coordinated restore holds the tree's inbound receive fence, so nothing was applied and the entry stays parked. Replay it again once the restore completes.
 4. **Discard only after validation.** If `ReplayAsync` throws repeatedly (e.g. the entry references a tree configuration that no longer exists), fall back to `DiscardAsync`. Replication continues regardless - the dead-letter store never blocks the apply stream.
 
 A persistent rate of `reason=hlc_skew` long after every bootstrap completes signals a structural problem (sustained authoring load above the receiver's apply throughput, transport reordering breaking per-origin FIFO, an undersized `CausalBufferMaxEntries` for the tree's fan-in). Treat it as the cue to raise `CausalBufferMaxEntries` / `CausalBufferMaxBytes` for the affected tree, or to investigate the producer-side write rate.

@@ -55,6 +55,16 @@ internal sealed class LatticeReplicationDeadLetters(
         // leaves the entry parked for the operator to decide.
         var result = await inner.ApplyAsync(parked.Value.Entry, cancellationToken).ConfigureAwait(false);
 
+        // A deferred result is not terminal: the durable receive fence of an
+        // in-flight restore saga held the entry back without applying it, and
+        // unlike a streamed batch nothing will re-ship a parked entry once the
+        // fence lifts. Removing it here would silently drop the write, so it
+        // stays parked for a later replay (issue #3757).
+        if (result.Deferred)
+        {
+            return result;
+        }
+
         // Successful apply (or filtered re-delivery) is terminal for
         // inspection - remove the entry and tag the metric with
         // reason=replayed so dashboards can distinguish operator replay
