@@ -271,12 +271,23 @@ public sealed class TelemetryContractSurfaceTests
     [Test]
     public void Every_public_telemetry_type_lives_in_the_telemetry_contract_namespace()
     {
-        var strays = AbstractionsAssembly.GetExportedTypes()
+        var telemetryTypes = AbstractionsAssembly.GetExportedTypes()
             .Where(t => t.Namespace is null
                 || !t.Namespace.StartsWith("OrleansCodeGen", StringComparison.Ordinal))
             .Where(t => t.Name.StartsWith("Telemetry", StringComparison.Ordinal)
                 || t.Name.Equals(nameof(ILatticeTelemetry), StringComparison.Ordinal)
                 || t.Name.Equals(nameof(ApiTelemetryTypeAliases), StringComparison.Ordinal))
+            .ToArray();
+
+        // The only assertion below is that the stray set is empty, and a candidate
+        // set that matched nothing produces an empty stray set too. Renaming the
+        // types out of the "Telemetry" prefix - or retargeting the assembly - would
+        // therefore silence this guard rather than redden it.
+        Assert.That(telemetryTypes, Is.Not.Empty,
+            "The scan matched no telemetry contract types at all, so the namespace assertion below "
+            + "proved nothing. Fix the scan's predicate; do not delete this floor.");
+
+        var strays = telemetryTypes
             .Where(t => t.Namespace != "Orleans.Lattice.Api.Telemetry")
             .Select(t => t.FullName)
             .OrderBy(name => name, StringComparer.Ordinal)
