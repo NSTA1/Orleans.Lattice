@@ -80,7 +80,7 @@ internal enum RepoContextAnnBuildSliceOutcome
 internal enum RepoContextAnnBuildFaultCause
 {
     /// <summary>
-    /// Something outside the five classified causes. The only value that should
+    /// Something outside the six classified causes. The only value that should
     /// page: it means a step faulted in a way nobody has classified, so the
     /// vocabulary itself is behind the code. Every unrecognised type fails open
     /// onto this arm rather than onto one with a benign explanation.
@@ -92,7 +92,7 @@ internal enum RepoContextAnnBuildFaultCause
     /// could not be walked inside the per-call stall ceiling. The remedy is the
     /// tree's leaf geometry - an oversized leaf that cannot be materialised in one
     /// grain call - and NOT the slice budget, which no larger value repairs.
-    /// Classified ahead of <see cref="DependencyUnavailable"/> because the
+    /// Classified ahead of <see cref="ResponseTimeout"/> because the
     /// exception derives from <see cref="TimeoutException"/> and would otherwise be
     /// swallowed into it, losing exactly the distinction that makes it actionable.
     /// </summary>
@@ -109,12 +109,11 @@ internal enum RepoContextAnnBuildFaultCause
     ProjectionStale = 2,
 
     /// <summary>
-    /// A dependency could not be reached: a grain call timed out, the transport
-    /// failed, or the cluster rejected the message. Expected to clear once the
+    /// A dependency could not be reached: the transport failed, or the cluster
+    /// rejected the message. Expected to clear once the
     /// cluster settles, which is what separates it from
-    /// <see cref="PlaneRejected"/>. This is the arm the run-12 census landed on -
-    /// 39 of 39 faults were a <see cref="TimeoutException"/> on a leaf read - so a
-    /// deployment seeing it rise is looking at reachability, not at the build.
+    /// <see cref="PlaneRejected"/>. A response deadline alone does not establish
+    /// unreachability and belongs to <see cref="ResponseTimeout"/> instead.
     /// </summary>
     DependencyUnavailable = 3,
 
@@ -152,6 +151,14 @@ internal enum RepoContextAnnBuildFaultCause
     /// </para>
     /// </summary>
     Saturated = 5,
+
+    /// <summary>
+    /// A response deadline expired. A callee may be busy inside a legitimate build
+    /// turn, including when a keepalive reminder queues behind it. This does not
+    /// establish either busyness or unreachability; inspect progress and logs
+    /// before deciding whether the build has stalled.
+    /// </summary>
+    ResponseTimeout = 6,
 }
 
 /// <summary>
@@ -163,17 +170,20 @@ internal enum RepoContextAnnBuildFaultCause
 /// <param name="DependencyUnavailable">Faults that could not reach a dependency.</param>
 /// <param name="PlaneRejected">Faults the plane refused deterministically.</param>
 /// <param name="Saturated">Refusals by an admission gate at its bound, which are retryable back-pressure rather than faults.</param>
+/// <param name="ResponseTimeout">Expired response deadlines without a proven reachability failure.</param>
 internal readonly record struct RepoContextAnnBuildFaultTally(
     long Unexpected,
     long ScanPageStalled,
     long ProjectionStale,
     long DependencyUnavailable,
     long PlaneRejected,
-    long Saturated)
+    long Saturated,
+    long ResponseTimeout)
 {
-    /// <summary>Every fault counted, across all six causes.</summary>
+    /// <summary>Every fault counted, across all seven causes.</summary>
     public long Total
-        => Unexpected + ScanPageStalled + ProjectionStale + DependencyUnavailable + PlaneRejected + Saturated;
+        => Unexpected + ScanPageStalled + ProjectionStale + DependencyUnavailable + PlaneRejected + Saturated
+            + ResponseTimeout;
 }
 
 /// <summary>
@@ -433,6 +443,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// <summary>The tag value for work an admission gate declined at its bound.</summary>
     internal const string CauseSaturatedTag = "saturated";
 
+    /// <summary>The tag value for an expired response deadline with no proven cause.</summary>
+    internal const string CauseResponseTimeoutTag = "response-timeout";
+
     /// <summary>
     /// The tag key naming the repository whose approximate index the step was
     /// building. Bounded by the number of repositories onboarded on this host, one
@@ -527,6 +540,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     private long _faultedDependencyUnavailable;
     private long _faultedPlaneRejected;
     private long _faultedSaturated;
+    private long _faultedResponseTimeout;
     private long _faultedCoordinating;
     private long _faultedOpening;
     private long _faultedIngesting;
@@ -585,9 +599,11 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 + "leaf chain behind the corpus could not be walked inside the per-call stall ceiling, which is a "
                 + "leaf-geometry problem and which no larger slice budget repairs), 'projection-stale' (a durable "
                 + "projection checkpoint has fallen off the write-ahead log with no covering snapshot, so the read "
-                + "will not clear on retry and needs an operator-driven rebuild), 'dependency-unavailable' (a grain "
-                + "call timed out, the transport failed, or the cluster rejected the message, which is expected to "
-                + "clear once the cluster settles), 'plane-rejected' (the embedding space did not match or an "
+                + "will not clear on retry and needs an operator-driven rebuild), 'dependency-unavailable' (the "
+                + "transport failed or the cluster rejected the message, which is expected to clear once the "
+                + "cluster settles), 'response-timeout' (a response deadline expired, possibly behind a busy "
+                + "callee or keepalive turn; neither busyness nor unreachability is proven, so inspect progress "
+                + "and logs before declaring a stall), 'plane-rejected' (the embedding space did not match or an "
                 + "argument was refused, which is deterministic and will not clear on retry), 'saturated' (an "
                 + "ADMISSION GATE DECLINED THE WORK AT ITS BOUND - the per-silo WAL replay permit queue was "
                 + "full, or the heap was at its withholding floor - so the work was never attempted, the "
@@ -1193,6 +1209,9 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 case RepoContextAnnBuildFaultCause.Saturated:
                     _faultedSaturated++;
                     break;
+                case RepoContextAnnBuildFaultCause.ResponseTimeout:
+                    _faultedResponseTimeout++;
+                    break;
                 default:
                     // Fails open onto the arm that pages, matching the tag
                     // DescribeCause resolves for the same value, so the tally can
@@ -1222,7 +1241,8 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                     _faultedProjectionStale,
                     _faultedDependencyUnavailable,
                     _faultedPlaneRejected,
-                    _faultedSaturated),
+                    _faultedSaturated,
+                    _faultedResponseTimeout),
                 new RepoContextAnnBuildPhaseTally(
                     _faultedCoordinating,
                     _faultedOpening,
@@ -1267,6 +1287,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
         RepoContextAnnBuildFaultCause.DependencyUnavailable => CauseDependencyUnavailableTag,
         RepoContextAnnBuildFaultCause.PlaneRejected => CausePlaneRejectedTag,
         RepoContextAnnBuildFaultCause.Saturated => CauseSaturatedTag,
+        RepoContextAnnBuildFaultCause.ResponseTimeout => CauseResponseTimeoutTag,
         _ => CauseUnexpectedTag,
     };
 
