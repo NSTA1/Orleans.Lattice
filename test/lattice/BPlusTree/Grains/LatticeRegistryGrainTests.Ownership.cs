@@ -1,11 +1,41 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class LatticeRegistryGrainTests
 {
+    [TestCase("logical")]
+    [TestCase("physical")]
+    [TestCase("owner")]
+    public async Task SetAliasAsync_lifecycle_refusal_precedes_ownership_lookup(string endpoint)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var tree = Substitute.For<ISystemLattice>();
+        tree.GetAsync("physical").Returns(JsonSerializer.SerializeToUtf8Bytes(
+            new TreeRegistryEntry { DerivedFrom = "owner" }));
+        factory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId).Returns(tree);
+        var deleted = Substitute.For<ITreeDeletionGrain>();
+        var refusal = new InvalidOperationException("deleted endpoint");
+        deleted.EnsureAliasWritableAsync().ThrowsAsync(refusal);
+        factory.GetGrain<ITreeDeletionGrain>(endpoint).Returns(deleted);
+        var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        options.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        var guard = Substitute.For<ITreeOwnershipGuard>();
+        var grain = new LatticeRegistryGrain(factory, options, ownershipGuard: guard);
+
+        Assert.That(Assert.ThrowsAsync<InvalidOperationException>(
+            () => grain.SetAliasAsync("logical", "physical")), Is.SameAs(refusal));
+
+        Assert.That(guard.ReceivedCalls(), Is.Empty);
+        await tree.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task SetAliasAsync_denied_ownership_writes_and_publishes_nothing_even_for_system_origin(bool systemOrigin)
