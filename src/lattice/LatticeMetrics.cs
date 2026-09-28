@@ -4460,22 +4460,34 @@ public static class LatticeMetrics
     /// pivot from the snapshot frame alone and fell back to the ordered view,
     /// tagged by tree, <see cref="TagReason"/> and <see cref="TagDetachSeam"/>.
     /// <para>
-    /// The fallback materialises the whole leaf and ends in a detach, so every
-    /// row is resident for the life of the activation and no later eviction can
-    /// recover the footprint. On an oversized leaf that is the allocation the
-    /// division can least afford, which makes dividing it require an allocation
-    /// proportional to its size - so a leaf that cannot afford it stays over
-    /// threshold and keeps growing.
+    /// What the fallback costs is decided by whether a snapshot frame is still
+    /// attached at the moment of refusal, and the reason tag says which. The
+    /// fallback reads the ordered key view, whose whole-cache hydration returns
+    /// immediately when no frame is attached and otherwise materialises every
+    /// row the frame still owns and detaches it, leaving those rows resident and
+    /// unsheddable for the life of the activation (issue #2856):
     /// </para>
-    /// <para>
-    /// The two tags are only useful together. <see cref="TagReason"/> =
-    /// <c>no_snapshot_attached</c> with <see cref="TagDetachSeam"/> = <c>none</c>
-    /// is benign: the leaf was replayed from the write-ahead log, never attached
-    /// a frame, and its rows were already resident, so the fallback costs
-    /// nothing extra. The same reason with any other seam is a forfeiture, and
-    /// the seam names the surface that caused it. Reading the reason alone
-    /// conflates the two, and they have opposite costs.
-    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>no_snapshot_attached</c> - <b>free at the refusal.</b>
+    /// The reason is reported exactly when no frame is attached, so every row was
+    /// already resident before the division began and the fallback materialises
+    /// nothing. With <see cref="TagDetachSeam"/> = <c>none</c> no frame was ever
+    /// attached (a leaf replayed from the write-ahead log) and nothing was
+    /// forfeited. With any other seam a frame was attached and the named surface
+    /// had already materialised or discarded it, earlier and typically on the
+    /// read path: the fast path was lost there, the cost was sunk there, and the
+    /// seam is where to look - not the split path, which only observes the
+    /// consequence.</description></item>
+    /// <item><description><c>too_few_rows</c> - cheap. A frame is attached but
+    /// declares fewer than two rows, so the fallback materialises at most one
+    /// frame row.</description></item>
+    /// <item><description><c>frame_key_unreadable</c> and
+    /// <c>no_key_sorts_below_pivot</c> - <b>expensive.</b> A frame is still
+    /// attached with its rows, so the fallback itself materialises the whole
+    /// remainder of the leaf and detaches the frame. These are the only reasons
+    /// at which the refusal is the forfeiture, and on an oversized leaf that is
+    /// the allocation the division can least afford.</description></item>
+    /// </list>
     /// </summary>
     public static readonly Counter<long> LeafBisectRefusals =
         Meter.CreateCounter<long>("orleans.lattice.leaf.bisect_refusals", unit: "{refusal}",

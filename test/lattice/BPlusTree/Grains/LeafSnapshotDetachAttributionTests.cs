@@ -20,10 +20,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// never had a frame or an unrelated operation consumed it.
 /// </para>
 /// <para>
-/// Those two cases have opposite costs. A leaf replayed from the write-ahead log
-/// never attaches a frame and its rows are already resident, so the fallback is
-/// free; a leaf whose frame was consumed pays for the whole leaf, resident and
-/// unsheddable. The fixtures below pin that the pair
+/// Those two cases differ in where the cost lands, not in what the division
+/// pays (issue #2856). A leaf replayed from the write-ahead log never attaches a
+/// frame and a leaf whose frame was consumed has already paid for the whole
+/// leaf at the consuming seam; either way no frame is attached at the refusal,
+/// every row is resident, and the fallback itself materialises nothing. What
+/// separates them is whether a forfeiture happened at all and which surface
+/// caused it, and the fixtures below pin that the pair
 /// (refusal reason, detaching seam) separates them, because neither value does
 /// so alone.
 /// </para>
