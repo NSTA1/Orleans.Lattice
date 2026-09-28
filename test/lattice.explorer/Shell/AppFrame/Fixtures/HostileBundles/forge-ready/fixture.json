@@ -1,0 +1,11 @@
+{
+  "name": "forge-ready",
+  "description": "The app posts extra lattice.ready messages to the parent hoping for a second port.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toast":"Hostile: forged-ready-sent","secondHelloSent":false}
+}

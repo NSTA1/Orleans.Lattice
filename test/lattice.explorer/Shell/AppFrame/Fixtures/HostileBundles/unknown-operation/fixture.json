@@ -1,0 +1,11 @@
+{
+  "name": "unknown-operation",
+  "description": "The app asks for lifecycle, consent and unconsented operations.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toast":"Hostile: uninstall=denied user=denied"}
+}
