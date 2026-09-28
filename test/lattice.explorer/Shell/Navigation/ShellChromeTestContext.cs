@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
@@ -50,6 +51,9 @@ public abstract class ShellChromeTestContext : ShellDesignTestContext
         Services.AddSingleton<IExplorerAuthMethod, BasicExplorerAuthMethod>();
 
         Services.AddLatticeExplorerShell();
+
+        // Chrome tests register their own probe areas; drop the real areas the Shell's area partials add.
+        Services.RemoveAll<IExplorerArea>();
     }
 
     /// <summary>The clock every chrome timeout is measured on.</summary>
