@@ -96,7 +96,8 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
     private static bool IsAppsMethod(string method)
         => method.StartsWith(LatticeAppsGrpcMethods.ServicePrefix, StringComparison.Ordinal)
             || method.StartsWith(LatticeAppCatalogGrpcMethods.ServicePrefix, StringComparison.Ordinal)
-            || method.StartsWith(LatticeAppWorkspaceGrpcMethods.ServicePrefix, StringComparison.Ordinal);
+            || method.StartsWith(LatticeAppWorkspaceGrpcMethods.ServicePrefix, StringComparison.Ordinal)
+            || method.StartsWith(LatticeAppBridgeGrpcMethods.ServicePrefix, StringComparison.Ordinal);
 
     internal static (LatticeAppsApiOperation Operation, string? Slug) DescribeCall<TRequest>(string method, TRequest request)
     {
@@ -121,6 +122,10 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
             (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "DescribeMyApp", AppsSlugRequest r) => (LatticeAppsApiOperation.DescribeMyApp, r.Slug),
             (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "GetIcon", AppsSlugRequest r) => (LatticeAppsApiOperation.GetMyAppIcon, r.Slug),
             (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "GetUiAsset", AppsUiAssetRequest r) => (LatticeAppsApiOperation.GetUiAsset, r.Slug),
+            (LatticeAppBridgeGrpcMethods.ServicePrefix + "Get", AppsBridgeKeyRequest r) => (LatticeAppsApiOperation.BridgeGet, r.Target?.AppSlug),
+            (LatticeAppBridgeGrpcMethods.ServicePrefix + "Scan", AppsBridgeScanRequest r) => (LatticeAppsApiOperation.BridgeScan, r.Target?.AppSlug),
+            (LatticeAppBridgeGrpcMethods.ServicePrefix + "Set", AppsBridgeSetRequest r) => (LatticeAppsApiOperation.BridgeSet, r.Target?.AppSlug),
+            (LatticeAppBridgeGrpcMethods.ServicePrefix + "Delete", AppsBridgeKeyRequest r) => (LatticeAppsApiOperation.BridgeDelete, r.Target?.AppSlug),
             _ => (LatticeAppsApiOperation.Unknown, null),
         };
     }

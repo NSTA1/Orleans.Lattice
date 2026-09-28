@@ -206,6 +206,7 @@ public sealed class ShellTransportRegistrationTests
         services.AddLogging();
         services.AddExplorerConfiguration();
         services.AddExplorerAuth();
+        services.AddShellTransportTestHead();
         services.AddLatticeExplorerShell();
         return services;
     }
