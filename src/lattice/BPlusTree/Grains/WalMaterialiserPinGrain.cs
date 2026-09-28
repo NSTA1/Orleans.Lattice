@@ -1840,9 +1840,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             if (_treeTag is null)
             {
-                _treeTag = WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
+                var treeId = WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
+                _treeTag = treeId;
                 _treeTagPair = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeTag);
-                _tenantTagPair = LatticeTenantLabel.ForTree(_treeTag);
+                _tenantTagPair = LatticeTenantLabel.ForTree(treeId);
             }
 
             return _treeTag;
