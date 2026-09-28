@@ -243,6 +243,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
+
+- **Security - A single-key allow certified a whole prefix.** An app role scoped to a key prefix probed its key filter with the prefix string, which resolves on the exact-key tier, so a policy allowing only the key equal to that prefix held the role prefix-wide. Filtered decisions now fail closed. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp.Apps`)
+
+- **Security - Read-only callers were advertised every mutating data tool.** The data group never overrode its per-tool minimum, so the session filter fell back to the coarse group mask and became a no-op; a bare read grant listed all nineteen destructive tools. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
+
 - **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
 
 - **Security - Replication peers could act under another cluster's origin.** `Push` and `GetPeerHighWaterMark` trusted the body-declared origin, so any mesh-secret holder could advance or read a third cluster's high-water mark. Both now bind it to the stamped caller, as the manifest exchange did. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Replication.Grpc`)
