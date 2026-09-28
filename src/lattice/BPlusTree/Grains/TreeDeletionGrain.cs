@@ -199,7 +199,7 @@ internal sealed partial class TreeDeletionGrain(
         state.State.DeletePending || state.State.LogicalPhysicalTreeId is not null
         || (!state.State.RetainsRegistryEntry && state.State.IsDeleted));
 
-    public Task<bool> IsPhysicalDeletedAsync() => Task.FromResult(state.State.IsDeleted);
+    public Task<bool> IsPhysicalDeletedAsync() => Task.FromResult(state.State.IsDeleted || state.State.Delegated);
 
     public Task<TreeDeletionSnapshot> GetDeletionStatusAsync()
     {
@@ -245,7 +245,7 @@ internal sealed partial class TreeDeletionGrain(
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
-        if (!state.State.IsDeleted)
+        if (!state.State.IsDeleted && !state.State.Delegated)
             throw new InvalidOperationException("Cannot recover a tree that has not been deleted.");
 
         if (state.State.PurgeComplete)

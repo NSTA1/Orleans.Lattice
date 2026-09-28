@@ -107,6 +107,53 @@ public partial class TreeDeletionGrainTests
     }
 
     [Test]
+    public async Task Recovery_of_partially_applied_delegated_delete_unmarks_every_shard()
+    {
+        var (grain, state, _, factory, _) = CreateGrain();
+        var failedShard = factory.GetGrain<IShardRootGrain>($"{TreeId}/1");
+        failedShard.MarkDeletedAsync().ThrowsAsync(new IOException("mark response lost"));
+        Assert.ThrowsAsync<IOException>(() => grain.DeleteDelegatedAsync());
+        Assert.That(state.State.IsDeleted, Is.False);
+        Assert.That(await grain.IsPhysicalDeletedAsync(), Is.True);
+
+        await grain.RecoverPhysicalAsync();
+
+        for (var i = 0; i < ShardCount; i++)
+        {
+            var shard = factory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
+            await shard.Received(1).UnmarkDeletedAsync();
+            await shard.Received(1).ReseedNodeBindingsAsync();
+        }
+        Assert.That(await grain.IsPhysicalDeletedAsync(), Is.False);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Ambiguous_delegated_delete_can_be_recovered_or_purged(bool purge)
+    {
+        var (grain, state, _, factory, _) = CreateGrain();
+        var target = ConfigureAlias(factory);
+        target.DeleteDelegatedAsync().ThrowsAsync(new IOException("response lost"));
+        Assert.ThrowsAsync<IOException>(() => grain.DeleteTreeAsync());
+        Assert.That(state.State.LogicalPhysicalTreeId, Is.EqualTo(PhysicalTarget));
+        target.DeleteDelegatedAsync().Returns(Task.CompletedTask);
+        target.IsPhysicalDeletedAsync().Returns(true);
+        if (purge)
+        {
+            await grain.PurgeNowAsync();
+            await target.Received(2).DeleteDelegatedAsync();
+            await target.Received(1).PurgePhysicalAsync();
+            Assert.That(state.State.LogicalPurgeComplete, Is.True);
+        }
+        else
+        {
+            await grain.RecoverAsync();
+            await target.Received(1).RecoverPhysicalAsync();
+            Assert.That(await grain.IsDeletedAsync(), Is.False);
+        }
+    }
+
+    [Test]
     public async Task Failed_target_recovery_preserves_the_logical_deletion_for_retry()
     {
         var (grain, state, _, factory, _) = CreateGrain();

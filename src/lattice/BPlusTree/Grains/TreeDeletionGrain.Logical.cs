@@ -172,6 +172,13 @@ internal sealed partial class TreeDeletionGrain
         if (state.State.LogicalPurgeComplete || state.State.LogicalPurgeInProgress)
             throw Refuse($"Cannot recover tree '{TreeId}': its purge has started or completed.");
         var physical = state.State.LogicalPhysicalTreeId!;
+        // A failed recovery may already have unmarked the target. A subsequent
+        // delete or purge must re-drive the marks rather than trust completion
+        // from before that recovery attempt.
+        var wasComplete = state.State.LogicalDeleteComplete;
+        state.State.LogicalDeleteComplete = false;
+        try { await state.WriteStateAsync(); }
+        catch { state.State.LogicalDeleteComplete = wasComplete; throw; }
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(physical);
         if (await deletion.IsPhysicalDeletedAsync())
             await deletion.RecoverPhysicalAsync();
