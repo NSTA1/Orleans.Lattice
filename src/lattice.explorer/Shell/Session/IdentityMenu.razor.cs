@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Tenancy;
+using Orleans.Lattice.Explorer.Shell.Design.Components;
 using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 
 namespace Orleans.Lattice.Explorer.Shell.Session;
@@ -57,7 +58,7 @@ public partial class IdentityMenu
     [Inject]
     private IServiceProvider Services { get; set; } = default!;
 
-    [CascadingParameter(Name = SessionPresentation.BreakpointCascadeName)]
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
     private LtBreakpoint? Breakpoint { get; set; }
 
     private bool Folded => SessionPresentation.IsFolded(Breakpoint);
