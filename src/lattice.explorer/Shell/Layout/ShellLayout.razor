@@ -125,9 +125,10 @@
                     </div>
                 </LtDialog>
             }
+            @* Inside the width cascade, so the session overlay's dialogs open as full-screen sheets when compact. *@
+            @Slot(ShellSlotNames.OverlaySession)
         </CascadingValue>
     </CascadingValue>
 
     <LtToastRegion Label="Notifications" />
-    @Slot(ShellSlotNames.OverlaySession)
 </div>

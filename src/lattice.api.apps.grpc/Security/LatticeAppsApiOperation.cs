@@ -41,4 +41,12 @@ public enum LatticeAppsApiOperation
     GetMyAppIcon = 17,
     /// <summary>Read one UI bundle asset of one of the caller's apps (workspace).</summary>
     GetUiAsset = 18,
+    /// <summary>Read one key of an app-owned tree through the app bridge.</summary>
+    BridgeGet = 19,
+    /// <summary>Scan one page of an app-owned tree through the app bridge.</summary>
+    BridgeScan = 20,
+    /// <summary>Write one key of an app-owned tree through the app bridge.</summary>
+    BridgeSet = 21,
+    /// <summary>Delete one key of an app-owned tree through the app bridge.</summary>
+    BridgeDelete = 22,
 }
