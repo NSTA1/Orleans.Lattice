@@ -159,6 +159,8 @@ public sealed partial class AppManifestTests
         Assert.That(result.IsValid, Is.True);
         Assert.That(result.Manifest!.Replication, Is.Null);
         Assert.That(result.Manifest.Schema, Is.Null);
+        Assert.That(result.Manifest.Presentation, Is.Null);
+        Assert.That(result.Manifest.Ui, Is.Null);
         Assert.That(result.Manifest.Identity.Provenance, Is.EqualTo(new AppProvenance()));
         Assert.That(result.Manifest.Trees[0], Is.EqualTo(new AppTreeDeclaration { Name = "data" }));
     }

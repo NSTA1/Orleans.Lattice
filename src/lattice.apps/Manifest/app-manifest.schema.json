@@ -12,7 +12,9 @@
     "replication": { "type": ["array", "null"], "maxItems": 256, "items": { "$ref": "#/$defs/replication" } },
     "schema": { "type": ["array", "null"], "maxItems": 256, "items": { "$ref": "#/$defs/schema" } },
     "subscriptions": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/subscription" } },
-    "mcpTools": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/tool" } }
+    "mcpTools": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/tool" } },
+    "presentation": { "anyOf": [{ "$ref": "#/$defs/presentation" }, { "type": "null" }] },
+    "ui": { "anyOf": [{ "$ref": "#/$defs/ui" }, { "type": "null" }] }
   },
   "$defs": {
     "name": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(?![\\s\\S])", "minLength": 1, "maxLength": 128 },
@@ -105,6 +107,93 @@
         "name": { "$ref": "#/$defs/name", "maxLength": 96 },
         "description": { "$ref": "#/$defs/text", "maxLength": 4096 },
         "role": { "$ref": "#/$defs/name" }
+      }
+    },
+    "line": {
+      "$ref": "#/$defs/text",
+      "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F\\u2028\\u2029\\u202A-\\u202E\\u2066-\\u2069]*(?![\\s\\S])",
+      "description": "Untrusted single-line plain text: no control characters, line breaks or bidirectional overrides. Never interpreted as HTML or markdown."
+    },
+    "bundlePath": {
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^(?!\\.\\.?(?:/|(?![\\s\\S])))[a-z0-9._-]+(?:/(?!\\.\\.?(?:/|(?![\\s\\S])))[a-z0-9._-]+)*(?![\\s\\S])",
+      "description": "Normalised, relative, lower-case, '/'-separated bundle path without '.' or '..' segments, a query or a fragment."
+    },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])", "description": "Lower-case hexadecimal SHA-256." },
+    "presentation": {
+      "type": "object", "additionalProperties": false, "required": ["displayName"],
+      "description": "Untrusted presentation text, rendered as plain text and never as HTML or markdown. Descriptive only; provenance remains the trust record.",
+      "properties": {
+        "displayName": { "$ref": "#/$defs/line", "maxLength": 60 },
+        "summary": { "anyOf": [{ "$ref": "#/$defs/line", "maxLength": 160 }, { "type": "null" }] },
+        "description": {
+          "anyOf": [{
+            "$ref": "#/$defs/text", "maxLength": 4000,
+            "pattern": "^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F\\u202A-\\u202E\\u2066-\\u2069]*(?![\\s\\S])"
+          }, { "type": "null" }],
+          "description": "Plain text with line breaks allowed. Never interpreted as HTML or markdown."
+        },
+        "icon": {
+          "anyOf": [{
+            "type": "object", "additionalProperties": false, "required": ["path", "digest"],
+            "properties": {
+              "path": { "$ref": "#/$defs/bundlePath", "pattern": "\\.(?:svg|png|webp)(?![\\s\\S])" },
+              "digest": { "$ref": "#/$defs/digest" }
+            }
+          }, { "type": "null" }],
+          "description": "SVG, PNG or WebP asset rendered only through <img>, never as inline SVG. Must be listed in ui.assets when a ui section is present."
+        },
+        "categories": {
+          "type": ["array", "null"], "maxItems": 5, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}(?![\\s\\S])" }
+        },
+        "documentationUrl": { "type": ["string", "null"], "maxLength": 2048, "pattern": "^https://[^\\s\\x00-\\x1F\\x7F-\\x9F]+(?![\\s\\S])" },
+        "publisherDisplayName": { "anyOf": [{ "$ref": "#/$defs/line", "maxLength": 80 }, { "type": "null" }] }
+      }
+    },
+    "ui": {
+      "type": "object", "additionalProperties": false, "required": ["entry", "assets", "bundleDigest"],
+      "description": "Untrusted UI bundle, format v1. The runtime validator additionally checks that every referenced path is a listed asset of the right media type, recomputes bundleDigest, and checks bridge trees against declared trees.",
+      "properties": {
+        "entry": { "$ref": "#/$defs/bundlePath", "description": "An HTML fragment inserted into the frame bootstrap's <body>: no <html>, <head> or <script>." },
+        "styles": { "type": ["array", "null"], "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/$defs/bundlePath" } },
+        "scripts": {
+          "type": ["array", "null"], "maxItems": 256,
+          "description": "Self-contained scripts: a module may import only from absolute blob: URLs obtained at runtime through the in-frame API, never by relative specifier.",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["path"],
+            "properties": {
+              "path": { "$ref": "#/$defs/bundlePath" },
+              "module": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "assets": {
+          "type": "array", "minItems": 1, "maxItems": 256,
+          "description": "Every bundle file. Each asset is at most 2 MiB and the bundle at most 16 MiB; those byte caps are enforced when the bytes are read.",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["path", "mediaType", "digest"],
+            "properties": {
+              "path": { "$ref": "#/$defs/bundlePath" },
+              "mediaType": { "enum": ["text/html", "text/css", "text/javascript", "image/svg+xml", "image/png", "image/webp", "font/woff2", "application/json"] },
+              "digest": { "$ref": "#/$defs/digest" }
+            }
+          }
+        },
+        "bundleDigest": { "$ref": "#/$defs/digest", "description": "SHA-256 over the UTF-8 lines \"{path}\\u0000{digest}\\n\" of every asset, sorted ordinally by path." },
+        "bridge": {
+          "type": ["array", "null"], "maxItems": 256,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["operation"],
+            "properties": {
+              "operation": { "enum": ["context.read", "context.user", "data.read", "data.write", "data.delete", "nav.sync", "ui.notify"] },
+              "trees": { "type": ["array", "null"], "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } }
+            },
+            "if": { "properties": { "operation": { "not": { "enum": ["data.read", "data.write", "data.delete"] } } } },
+            "then": { "properties": { "trees": { "type": "null" } } }
+          }
+        },
+        "minProtocol": { "type": "integer", "minimum": 1, "maximum": 1, "default": 1 }
       }
     }
   }

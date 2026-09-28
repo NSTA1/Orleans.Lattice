@@ -19,4 +19,22 @@ internal static class AppManifestLimits
 
     /// <summary>The longest MCP tool description.</summary>
     internal const int MaxDescriptionLength = 4096;
+
+    /// <summary>The longest presentation display name.</summary>
+    internal const int MaxDisplayNameLength = 60;
+
+    /// <summary>The longest presentation summary.</summary>
+    internal const int MaxSummaryLength = 160;
+
+    /// <summary>The longest presentation description.</summary>
+    internal const int MaxPresentationDescriptionLength = 4000;
+
+    /// <summary>The longest presentation publisher display name.</summary>
+    internal const int MaxPublisherDisplayNameLength = 80;
+
+    /// <summary>The most presentation categories.</summary>
+    internal const int MaxCategories = 5;
+
+    /// <summary>The longest presentation documentation URL.</summary>
+    internal const int MaxUrlLength = 2048;
 }
