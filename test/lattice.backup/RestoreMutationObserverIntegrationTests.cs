@@ -26,6 +26,7 @@ public sealed class RestoreMutationObserverIntegrationTests
                 new LatticeRestoreRequest(backup.BackupId, treeId, mode: LatticeRestoreMode.ShadowCutover));
             Assert.That(await fixture.GrainFactory.GetLatticeRegistry().ResolveAsync(treeId), Is.Not.EqualTo(treeId));
             var observer = fixture.SiloServices.GetRequiredService<Observer>();
+            var physical = await fixture.GrainFactory.GetLatticeRegistry().ResolveAsync(treeId);
             observer.Mutations.Clear();
 
             await tree.SetAsync("point", [2]);
@@ -38,7 +39,7 @@ public sealed class RestoreMutationObserverIntegrationTests
             await apply.ApplySetAsync("remote", [7],
                 new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks }, "peer", null, 0);
 
-            var mutations = observer.Mutations.ToArray();
+            var mutations = observer.Mutations.Where(m => m.TreeId == treeId || m.TreeId == physical).ToArray();
             Assert.That(mutations.Where(m => m.Kind == MutationKind.Set).Select(m => m.Key),
                 Is.EquivalentTo(new[] { "point", "counter", "many1", "many2", "atomic1", "atomic2", "remote" }));
             Assert.That(mutations.Any(m => m.Kind == MutationKind.Delete && m.Key == "point"), Is.True);

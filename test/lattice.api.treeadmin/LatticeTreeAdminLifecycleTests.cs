@@ -51,6 +51,20 @@ public sealed class LatticeTreeAdminLifecycleTests
     // ----- CreateTree -----
 
     [Test]
+    public async Task SetTreeAliasAsync_preserves_ownership_denial_without_reporting_success()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Registry(factory);
+        var error = new LatticeTreeOwnershipDeniedException("different owner");
+        registry.SetAliasAsync(Tree, "physical").Returns(Task.FromException(error));
+
+        Assert.That(Assert.ThrowsAsync<LatticeTreeOwnershipDeniedException>(
+            () => Create(factory).SetTreeAliasAsync(Tree, "physical")), Is.SameAs(error));
+
+        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+    }
+
+    [Test]
     public async Task CreateTreeAsync_registers_a_new_tree_and_reports_created_true()
     {
         var factory = Substitute.For<IGrainFactory>();

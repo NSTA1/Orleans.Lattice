@@ -68,6 +68,7 @@ internal static class TypeAliases
     // throws when the registered access gate denies the caller. Serialized so
     // the denial propagates intact from the enforcing grain back to the client.
     internal const string LatticeAuthorizationDenied = "ol.azd";
+    internal const string LatticeTreeOwnershipDenied = "ol.tod";
 
     // Write-path interceptor: the fail-closed rejection the public write / CRDT
     // / atomic / bulk-load surface throws when the registered write interceptor
