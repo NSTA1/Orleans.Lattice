@@ -287,7 +287,7 @@ var flushConcurrency = ReadInt("BENCH_FLUSH_CONCURRENCY", 8);
 var pointFanOut = ReadIntAllowZero("BENCH_POINT_FANOUT", 0);
 var walPartitions = ReadInt("BENCH_WAL_PARTITIONS", LatticeOptions.DefaultWalPartitions);
 var walMaxPending = ReadInt("BENCH_WAL_MAX_PENDING_BATCHES", LatticeOptions.DefaultWalMaxPendingBatches);
-var walAppendCoalescing = ReadInt("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
+var walAppendCoalescing = ReadIntAllowZero("BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD", LatticeOptions.DefaultWalAppendCoalescingInFlightThreshold);
 var walBatchedSingleEntryAppends = ReadBool("BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS", LatticeOptions.DefaultWalBatchedSingleEntryAppends);
 var walMaterialiserPinBuckets = ReadInt("BENCH_WAL_MATERIALISER_PIN_BUCKETS", LatticeOptions.DefaultWalMaterialiserPinBuckets);
 // BENCH_WAL_REPLAY_QUEUE_DEPTH: the multi-silo (Layer 3) cold start is exactly

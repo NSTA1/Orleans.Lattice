@@ -75,7 +75,7 @@ var vehicleCount = ReadInt("BENCH_VEHICLE_COUNT", 1000);
 var tickHz       = ReadInt("BENCH_TICK_HZ", 5);
 var siloHost     = Environment.GetEnvironmentVariable("BENCH_SILO_HOST") ?? "127.0.0.1";
 var siloPort     = ReadInt("BENCH_SILO_PORT", 7000);
-var duration     = ReadInt("BENCH_DURATION_SEC", 300);
+var duration     = ReadIntAllowZero("BENCH_DURATION_SEC", 300);
 
 Console.WriteLine($"[producer] vehicles={vehicleCount} tickHz={tickHz} silo={siloHost}:{siloPort} duration={duration}s");
 
