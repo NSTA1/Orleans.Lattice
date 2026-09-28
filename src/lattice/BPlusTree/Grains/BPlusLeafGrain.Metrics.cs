@@ -34,6 +34,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
+    private string? _metricTreeId;
+    private string MetricTreeId => _metricTreeId ?? state.State.TreeId ?? string.Empty;
+
     /// <summary>
     /// Cached <see cref="ICommitLogWriter"/> resolved from
     /// <see cref="IGrainContext.ActivationServices"/> on first use.
@@ -186,7 +189,7 @@ internal sealed partial class BPlusLeafGrain
     {
         try
         {
-            return state.State.TreeId ?? string.Empty;
+            return MetricTreeId;
         }
         catch (InvalidOperationException)
         {
@@ -300,7 +303,7 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>Builds the single-tree tag used by every leaf-level instrument.</summary>
     private KeyValuePair<string, object?> LeafTreeTag() =>
-        new(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty);
+        new(LatticeMetrics.TagTree, MetricTreeId);
 
     /// <summary>
     /// Builds the derived owning-tenant tag emitted alongside
@@ -411,7 +414,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafCommitDuration.Record(elapsedMs,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagStep, step),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
     }

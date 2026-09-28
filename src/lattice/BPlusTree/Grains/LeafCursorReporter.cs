@@ -35,7 +35,8 @@ internal sealed class LeafCursorReporter(
     IOptionsMonitor<LatticeOptions>? options = null,
     ILogger<LeafCursorReporter>? logger = null,
     IGrainStorage? pinStorage = null,
-    Func<string, GrainId>? pinGrainIdResolver = null) : ILeafCursorReporter
+    Func<string, GrainId>? pinGrainIdResolver = null,
+    LatticeOptionsResolver? optionsResolver = null) : ILeafCursorReporter
 {
     /// <summary>
     /// Minimum wall-clock spacing between durable pin writes for a single
@@ -515,13 +516,14 @@ internal sealed class LeafCursorReporter(
         {
             var shedTreeId = WalMaterialiserPinRouting.TreeNameFromKey(grainKey);
             var shedShard = WalMaterialiserPinRouting.ShardIndexFromKey(grainKey);
-            var decision = WalMaterialiserPinPressure.EvaluateShed(grainKey, ResolvePinShedCeilingMs());
+            var metricTreeId = optionsResolver?.GetMetricTreeId(shedTreeId) ?? shedTreeId;
+            var decision = WalMaterialiserPinPressure.EvaluateShed(grainKey, ResolvePinShedCeilingMs(), metricTreeId);
 
             if (decision == WalMaterialiserPinPressure.PinShedDecision.Shed)
             {
                 LatticeMetrics.MaterialiserPinReportsShed.Add(
                     bucket.Count,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shedShard),
                     LatticeTenantLabel.ForTree(shedTreeId));
                 return false;
@@ -531,7 +533,7 @@ internal sealed class LeafCursorReporter(
             {
                 LatticeMetrics.MaterialiserPinShedForced.Add(
                     1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shedShard),
                     LatticeTenantLabel.ForTree(shedTreeId));
             }
@@ -580,7 +582,8 @@ internal sealed class LeafCursorReporter(
                 grainKey,
                 Environment.TickCount64 - startedTickMs,
                 faulted,
-                latencyThresholdMs);
+                latencyThresholdMs,
+                optionsResolver);
         }
 
         return true;

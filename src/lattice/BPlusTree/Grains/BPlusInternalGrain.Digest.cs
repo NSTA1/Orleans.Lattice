@@ -741,7 +741,7 @@ internal sealed partial class BPlusInternalGrain
             deadline.Dispose();
             _publishDeadline = null;
             LatticeMetrics.DigestPublishTimeouts.Add(
-                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
             throw new TimeoutException(
                 $"Internal-node digest publish from '{context.GrainId}' of tree "

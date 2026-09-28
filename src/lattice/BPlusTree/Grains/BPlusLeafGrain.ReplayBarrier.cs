@@ -338,13 +338,13 @@ internal sealed partial class BPlusLeafGrain
     /// the terminal path of a background task, where an incidental failure in the
     /// observation would replace the fault the caller needs to see.
     /// </summary>
-    private static void RecordReplayBarrierOutcome(string? treeId, KeyValuePair<string, object?> outcome)
+    private void RecordReplayBarrierOutcome(string? treeId, KeyValuePair<string, object?> outcome)
     {
         try
         {
             LatticeMetrics.LeafReplayBarrierOutcomes.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId ?? string.Empty),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 outcome,
                 LatticeTenantLabel.ForTree(treeId ?? string.Empty));
         }

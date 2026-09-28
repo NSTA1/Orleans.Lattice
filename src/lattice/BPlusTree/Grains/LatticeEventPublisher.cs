@@ -38,8 +38,10 @@ internal static class LatticeEventPublisher
         LatticeTreeEvent evt,
         ILogger? logger = null)
     {
+        var metricTreeId = evt.TreeId;
         try
         {
+            metricTreeId = services.GetService<LatticeOptionsResolver>()?.GetMetricTreeId(evt.TreeId) ?? evt.TreeId;
             var provider = services.GetKeyedService<IStreamProvider>(options.EventStreamProviderName);
             if (provider is null)
             {
@@ -47,7 +49,7 @@ internal static class LatticeEventPublisher
                     "Lattice event publication skipped: no Orleans stream provider named '{ProviderName}' is registered on this silo. Register one via siloBuilder.AddMemoryStreams / AddEventHubStreams / etc., or disable LatticeOptions.PublishEvents.",
                     options.EventStreamProviderName);
                 LatticeMetrics.EventsDropped.Add(1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "missing_provider"),
                     LatticeTenantLabel.ForTree(evt.TreeId));
                 return Task.CompletedTask;
@@ -59,7 +61,7 @@ internal static class LatticeEventPublisher
             return InvokeAsync(
                 stream,
                 evt,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId),
                 LatticeTenantLabel.ForTree(evt.TreeId),
                 logger);
         }
@@ -67,7 +69,7 @@ internal static class LatticeEventPublisher
         {
             logger?.LogWarning(ex, "Lattice event publication threw synchronously for tree {TreeId} kind {Kind}.", evt.TreeId, evt.Kind);
             LatticeMetrics.EventsDropped.Add(1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"),
                 LatticeTenantLabel.ForTree(evt.TreeId));
             return Task.CompletedTask;
@@ -155,25 +157,27 @@ internal static class LatticeEventPublisher
         string treeId,
         ILogger? logger = null)
     {
+        var metricTreeId = treeId;
         try
         {
+            metricTreeId = services.GetService<LatticeOptionsResolver>()?.GetMetricTreeId(treeId) ?? treeId;
             var provider = services.GetKeyedService<IStreamProvider>(options.EventStreamProviderName);
             if (provider is null)
             {
                 logger?.LogWarning(
                     "Lattice event publication skipped: no Orleans stream provider named '{ProviderName}' is registered on this silo. Register one via siloBuilder.AddMemoryStreams / AddEventHubStreams / etc., or disable LatticeOptions.PublishEvents.",
                     options.EventStreamProviderName);
-                return new BatchPublisher(null, treeId, "missing_provider", logger);
+                return new BatchPublisher(null, treeId, "missing_provider", logger, metricTreeId);
             }
 
             var stream = provider.GetStream<LatticeTreeEvent>(
                 StreamId.Create(LatticeEventConstants.StreamNamespace, treeId));
-            return new BatchPublisher(stream, treeId, dropReason: null, logger);
+            return new BatchPublisher(stream, treeId, dropReason: null, logger, metricTreeId);
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "Lattice event publication threw synchronously for tree {TreeId}.", treeId);
-            return new BatchPublisher(null, treeId, "publish_error", logger);
+            return new BatchPublisher(null, treeId, "publish_error", logger, metricTreeId);
         }
     }
 
@@ -198,14 +202,15 @@ internal static class LatticeEventPublisher
             IAsyncStream<LatticeTreeEvent>? stream,
             string treeId,
             string? dropReason,
-            ILogger? logger)
+            ILogger? logger,
+            string? metricTreeId = null)
         {
             _stream = stream;
             _treeId = treeId;
             _dropReason = dropReason;
             _logger = logger;
             _operationId = RequestContext.Get(LatticeEventConstants.OperationIdRequestContextKey) as string;
-            _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+            _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId ?? treeId);
             _tenantTag = LatticeTenantLabel.ForTree(treeId);
         }
 

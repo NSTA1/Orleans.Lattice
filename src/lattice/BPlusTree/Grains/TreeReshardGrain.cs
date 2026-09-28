@@ -68,7 +68,7 @@ internal sealed class TreeReshardGrain(
         // correlate reshard activity with wedge onset directly. The
         // initiated counter increments AFTER the validation gate below
         // so it counts only invocations that actually start a reshard.
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId));
         var tenantTag = LatticeTenantLabel.ForTree(TreeId);
 
         // Zero-prime every member of the rejection taxonomy before any of the six
@@ -589,13 +589,13 @@ internal sealed class TreeReshardGrain(
         }
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId)),
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "reshard"),
             LatticeTenantLabel.ForTree(TreeId));
 
         // Reshard activity counter: coordinator-driven reshard
         // completed successfully.
-        LatticeMetrics.ShardRootReshardCompleted.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.ShardRootReshardCompleted.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId)), LatticeTenantLabel.ForTree(TreeId));
 
         await PublishReshardCompletedAsync();
 
@@ -677,7 +677,7 @@ internal sealed class TreeReshardGrain(
         // to the new shard count) - count it via Initiated + Completed
         // in lockstep so dashboard sums match the coordinator-driven
         // path.
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId));
         var tenantTag = LatticeTenantLabel.ForTree(TreeId);
         LatticeMetrics.ShardRootReshardInitiated.Add(1, treeTag, tenantTag);
         LatticeMetrics.ShardRootReshardCompleted.Add(1, treeTag, tenantTag);

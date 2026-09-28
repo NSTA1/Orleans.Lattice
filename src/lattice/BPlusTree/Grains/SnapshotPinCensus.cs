@@ -56,6 +56,8 @@ internal sealed class SnapshotPinCensus
     private static bool _gaugeRegistered;
 
     private readonly IWalCursorRegistry? _cursorRegistry;
+    private readonly LatticeOptionsResolver? _optionsResolver;
+    private readonly Dictionary<string, long> _metricCounts = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per-tree live snapshot-pin sets, keyed by tree id then by the consumer
@@ -80,9 +82,11 @@ internal sealed class SnapshotPinCensus
     /// <see langword="null"/> on a host that registered none - in which case
     /// <see cref="ReconcileAsync"/> is a no-op and the marks stand alone.
     /// </param>
-    public SnapshotPinCensus(IWalCursorRegistry? cursorRegistry = null)
+    /// <param name="optionsResolver">Cached metric provenance; does not change physical pin ownership.</param>
+    public SnapshotPinCensus(IWalCursorRegistry? cursorRegistry = null, LatticeOptionsResolver? optionsResolver = null)
     {
         _cursorRegistry = cursorRegistry;
+        _optionsResolver = optionsResolver;
         Publish(this);
     }
 
@@ -247,12 +251,20 @@ internal sealed class SnapshotPinCensus
     /// </summary>
     private IEnumerable<Measurement<long>> ObservePins()
     {
-        foreach (var kv in _byTree)
+        lock (_metricCounts)
         {
-            yield return new Measurement<long>(
-                kv.Value.Count,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
-                LatticeTenantLabel.ForTree(kv.Key));
+            _metricCounts.Clear();
+            foreach (var kv in _byTree)
+            {
+                var logical = _optionsResolver?.GetMetricTreeId(kv.Key) ?? kv.Key;
+                _metricCounts.TryGetValue(logical, out var count);
+                _metricCounts[logical] = count + kv.Value.Count;
+            }
+            foreach (var kv in _metricCounts)
+                yield return new Measurement<long>(
+                    kv.Value,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                    LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 

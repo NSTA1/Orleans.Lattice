@@ -316,7 +316,7 @@ internal sealed partial class BPlusLeafGrain
         {
             LatticeMetrics.LeafUnresolvedPrepareLedgerBeyondCap.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                 LatticeTenantLabel.ForTree(state.State.TreeId));
 

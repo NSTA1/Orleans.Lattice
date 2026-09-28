@@ -602,7 +602,8 @@ public static class LatticeServiceCollectionExtensions
                 sp.GetService<IGrainFactory>(),
                 sp.GetService<IOptionsMonitor<LatticeOptions>>(),
                 sp.GetService<ILogger<LeafCursorReporter>>(),
-                sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName)));
+                sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName),
+                optionsResolver: sp.GetService<LatticeOptionsResolver>()));
 
         // Reusable per-shard WAL tailing loop shared by every log consumer
         // (materialised views, the replication producer, future change-feed /

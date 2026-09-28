@@ -77,8 +77,9 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// every gauge scrape, matching the DI singleton model used by
     /// <c>AddLattice</c>.
     /// </summary>
-    public WalSaturationSignal()
+    public WalSaturationSignal(LatticeOptionsResolver? optionsResolver = null)
     {
+        _optionsResolver = optionsResolver;
         lock (RegistrationLock)
         {
             _current = this;
@@ -88,6 +89,22 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
                 _gaugeRegistered = true;
             }
         }
+    }
+
+    private readonly LatticeOptionsResolver? _optionsResolver;
+    private readonly Dictionary<string, WalSaturationState> _metricStates = new(StringComparer.Ordinal);
+    // The sampler also sees process-wide heads from other in-process silos.
+    // Resolve each newly observed tree once, outside foreground measurements.
+    private readonly HashSet<string> _metricTreesInitialized = new(StringComparer.Ordinal);
+
+    internal string MetricTreeId(string treeId) => _optionsResolver?.GetMetricTreeId(treeId) ?? treeId;
+
+    internal async ValueTask InitializeMetricTreeAsync(string treeId)
+    {
+        if (_optionsResolver is null || _metricTreesInitialized.Contains(treeId))
+            return;
+        await _optionsResolver.ResolveMetricTreeIdAsync(treeId).ConfigureAwait(false);
+        _metricTreesInitialized.Add(treeId);
     }
 
     /// <inheritdoc />
@@ -446,27 +463,24 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
 
     private IEnumerable<Measurement<long>> ObserveStateGauge()
     {
-        foreach (var kv in _states)
+        lock (_metricStates)
         {
-            // Emit only the tree tag: the ordinal value already encodes
-            // the regime (0=Healthy, 1=Throttled, 2=Saturated), so a
-            // redundant state-name label would just fragment the series.
-            // With the state carried as a label, every transition changed
-            // the series identity and the callback stopped emitting the
-            // prior state's series without ever driving it back to zero,
-            // so the stale elevated value lingered under Prometheus
-            // staleness and a tree that had recovered still read as
-            // Saturated (and max by (tree) over the orphaned series
-            // returned the worst regime the tree had ever been in). One
-            // series per tree whose value steps 0->1->2->0 keeps the
-            // series identity stable across transitions, so nothing can
-            // linger. The per-state breakdown stays on the
-            // WalSaturationTransitions counter, where the state and
-            // previous_state labels belong.
-            yield return new Measurement<long>(
-                (long)kv.Value,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
-                LatticeTenantLabel.ForTree(kv.Key));
+            _metricStates.Clear();
+            foreach (var physical in _states)
+            {
+                var logical = MetricTreeId(physical.Key);
+                if (!_metricStates.TryGetValue(logical, out var current) || physical.Value > current)
+                    _metricStates[logical] = physical.Value;
+            }
+            foreach (var kv in _metricStates)
+            {
+                // One ordinal series per logical tree avoids stale state-label
+                // series. Retired and live copies contribute their worst regime.
+                yield return new Measurement<long>(
+                    (long)kv.Value,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                    LatticeTenantLabel.ForTree(kv.Key));
+            }
         }
     }
 

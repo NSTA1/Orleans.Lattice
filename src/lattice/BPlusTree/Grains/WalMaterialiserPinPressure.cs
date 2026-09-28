@@ -38,6 +38,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal static class WalMaterialiserPinPressure
 {
+    private static readonly ConcurrentDictionary<string, string> MetricTreeIds = new(StringComparer.Ordinal);
+    private static readonly Dictionary<(string Tree, int Shard), long> MetricStalls = new();
     /// <summary>
     /// Multiple of the previous durable pin write's own measured duration for
     /// which subsequent <i>coalescible</i> reports to the same shard are shed
@@ -136,7 +138,8 @@ internal static class WalMaterialiserPinPressure
     /// gated on its own option; the shed gate below still runs, because shedding
     /// is a self-tuning safety behaviour rather than a reported signal.
     /// </param>
-    internal static void RecordWrite(string shardKey, long elapsedMs, bool faulted, long? latencyThresholdMs)
+    /// <param name="optionsResolver">Cached metric provenance; never consulted for pressure decisions.</param>
+    internal static void RecordWrite(string shardKey, long elapsedMs, bool faulted, long? latencyThresholdMs, LatticeOptionsResolver? optionsResolver = null)
     {
         // Self-tuning shed window: hold off coalescible reports to this shard
         // for a multiple of the duration the write just demonstrated it costs.
@@ -166,7 +169,7 @@ internal static class WalMaterialiserPinPressure
 
         LatticeMetrics.MaterialiserPinDurableWriteLatency.Record(
             elapsedMs,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver?.GetMetricTreeId(treeId) ?? treeId),
             LatticeTenantLabel.ForTree(treeId));
     }
 
@@ -240,8 +243,11 @@ internal static class WalMaterialiserPinPressure
     /// preserves the historical behaviour exactly; the run clock is still
     /// maintained, so the stall remains observable even when it is unbounded.
     /// </param>
-    internal static PinShedDecision EvaluateShed(string shardKey, long? ceilingMs)
+    /// <param name="metricTreeId">Logical owner used only by the stall-age metric.</param>
+    internal static PinShedDecision EvaluateShed(string shardKey, long? ceilingMs, string? metricTreeId = null)
     {
+        if (metricTreeId is not null)
+            MetricTreeIds[shardKey] = metricTreeId;
         var now = Environment.TickCount64;
 
         if (!IsWindowOpen(shardKey))
@@ -276,22 +282,25 @@ internal static class WalMaterialiserPinPressure
     internal static IEnumerable<Measurement<long>> ObserveShedStalls()
     {
         var now = Environment.TickCount64;
-        var measurements = new List<Measurement<long>>();
-
-        foreach (var entry in _shedRunStartTickMs)
+        lock (MetricStalls)
         {
-            var treeId = WalMaterialiserPinRouting.TreeNameFromKey(entry.Key);
-            var shard = WalMaterialiserPinRouting.ShardIndexFromKey(entry.Key);
-            var ageSeconds = Math.Max(0, (now - entry.Value) / 1000);
-
-            measurements.Add(new Measurement<long>(
-                ageSeconds,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, shard),
-                LatticeTenantLabel.ForTree(treeId)));
+            MetricStalls.Clear();
+            foreach (var entry in _shedRunStartTickMs)
+            {
+                var treeId = MetricTreeIds.TryGetValue(entry.Key, out var logical)
+                    ? logical : WalMaterialiserPinRouting.TreeNameFromKey(entry.Key);
+                var key = (treeId, WalMaterialiserPinRouting.ShardIndexFromKey(entry.Key));
+                var ageSeconds = Math.Max(0, (now - entry.Value) / 1000);
+                MetricStalls.TryGetValue(key, out var previous);
+                MetricStalls[key] = Math.Max(previous, ageSeconds);
+            }
+            foreach (var entry in MetricStalls)
+                yield return new Measurement<long>(
+                    entry.Value,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, entry.Key.Tree),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPinShard, entry.Key.Shard),
+                    LatticeTenantLabel.ForTree(entry.Key.Tree));
         }
-
-        return measurements;
     }
 
     /// <summary>
@@ -303,6 +312,7 @@ internal static class WalMaterialiserPinPressure
         _latencyTrips.Clear();
         _shedUntilTickMs.Clear();
         _shedRunStartTickMs.Clear();
+        MetricTreeIds.Clear();
     }
 
     /// <summary>

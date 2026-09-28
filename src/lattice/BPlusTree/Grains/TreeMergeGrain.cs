@@ -580,7 +580,7 @@ internal sealed class TreeMergeGrain(
         }
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TargetTreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TargetTreeId)),
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
             LatticeTenantLabel.ForTree(TargetTreeId));
 

@@ -33,9 +33,17 @@ internal sealed class LeafCacheGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
-    ILatticeOriginClusterIdResolver originClusterIdResolver) : ILeafCacheGrain
+    ILatticeOriginClusterIdResolver originClusterIdResolver) : ILeafCacheGrain, IGrainBase
 #pragma warning restore CS9113
 {
+    IGrainContext IGrainBase.GrainContext => context;
+
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _treeId = await PrimaryLeaf.GetTreeIdAsync() ?? string.Empty;
+        _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(_treeId);
+    }
+
     /// <summary>
     /// The read-through mirror of the primary leaf's rows.
     /// <para>
@@ -98,6 +106,7 @@ internal sealed class LeafCacheGrain(
     private VersionVector _version = new();
     private long _lastRefreshTicks;
     private string? _treeId;
+    private string? _metricTreeId;
 
     /// <summary>
     /// Activation-scoped delivery cursor obtained from the primary
@@ -522,7 +531,7 @@ internal sealed class LeafCacheGrain(
     }
 
     private KeyValuePair<string, object?> CacheTreeTag() =>
-        new(LatticeMetrics.TagTree, _treeId ?? string.Empty);
+        new(LatticeMetrics.TagTree, _metricTreeId ?? _treeId ?? string.Empty);
 
     /// <summary>Derives the owning-tenant tag emitted beside <see cref="CacheTreeTag"/>.</summary>
     private KeyValuePair<string, object?> CacheTenantTag() =>

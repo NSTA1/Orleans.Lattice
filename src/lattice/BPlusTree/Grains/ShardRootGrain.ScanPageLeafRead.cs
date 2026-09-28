@@ -663,7 +663,7 @@ internal sealed partial class ShardRootGrain
     private void RecordScanPageLeafReadOutcome(long delta, KeyValuePair<string, object?> outcome) =>
         LatticeMetrics.ScanPageLeafReadOutcomes.Add(
             delta,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
             outcome,
             LatticeTenantLabel.ForTree(TreeId));

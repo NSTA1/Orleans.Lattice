@@ -371,26 +371,21 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
         // timing race that would otherwise contaminate the
         // assertion. The writer's AppendAsync integration is
         // covered by the counter / wait-histogram tests above.
-        var trackerType = typeof(Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter).Assembly
-            .GetType("Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter+PartitionTracker", throwOnError: true)!;
-        var ctor = trackerType.GetConstructor(new[] { typeof(string), typeof(int) })!;
-        var tracker = ctor.Invoke(new object[] { "tracker-admission-direct", 0 });
-        var acquire = trackerType.GetMethod("AcquireAsync")!;
-        var release = trackerType.GetMethod("ReleaseAdmission")!;
+        var tracker = new WalCommitLogWriter.PartitionTracker("tracker-admission-direct", 0);
 
         // cap=1 admission: first acquire succeeds immediately
         // (uncontended fast path returns 0 ms wait). Passing
         // CancellationToken.None for both the caller-supplied CT and
         // the writer-supplied drain token isolates this test to the
         // admission path.
-        var firstTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
+        var firstTask = tracker.AcquireAsync(1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None);
         var firstWait = await firstTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.That(firstWait, Is.GreaterThanOrEqualTo(0d),
             "writer-layer admission: uncontended first acquire must return non-negative wait time");
 
         // Second acquire on the saturated semaphore: must throw
         // TimeoutException after the 50 ms deadline.
-        var secondTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
+        var secondTask = tracker.AcquireAsync(1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None);
         var ex = Assert.ThrowsAsync<TimeoutException>(async () => await secondTask.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.That(ex!.Message, Does.Contain("admission deadline"),
             "writer-layer admission: TimeoutException must name the admission deadline so the failure mode is unambiguous in caller logs");
@@ -398,8 +393,8 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
             "writer-layer admission: TimeoutException must include the configured cap so an operator can correlate the failure with the setting");
 
         // Release the held slot; a subsequent acquire must succeed.
-        release.Invoke(tracker, Array.Empty<object>());
-        var thirdTask = (Task<double>)acquire.Invoke(tracker, new object[] { 1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
+        tracker.ReleaseAdmission();
+        var thirdTask = tracker.AcquireAsync(1, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None);
         var thirdWait = await thirdTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.That(thirdWait, Is.GreaterThanOrEqualTo(0d),
             "writer-layer admission: post-release acquire must succeed");
@@ -409,11 +404,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
     public async Task PartitionTracker_AcquireAsync_with_cap_zero_is_unbounded_opt_out()
     {
         // Direct test on the opt-out sentinel.
-        var trackerType = typeof(Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter).Assembly
-            .GetType("Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter+PartitionTracker", throwOnError: true)!;
-        var ctor = trackerType.GetConstructor(new[] { typeof(string), typeof(int) })!;
-        var tracker = ctor.Invoke(new object[] { "tracker-admission-optout", 0 });
-        var acquire = trackerType.GetMethod("AcquireAsync")!;
+        var tracker = new WalCommitLogWriter.PartitionTracker("tracker-admission-optout", 0);
 
         // cap=0 (opt-out): every acquire must complete immediately
         // returning 0 ms wait, even when called many times without
@@ -421,7 +412,7 @@ public class WalCommitLogWriterWedgeDiagnosticsTests
         // acquire onwards would deadlock until the deadline.
         for (var i = 0; i < 50; i++)
         {
-            var task = (Task<double>)acquire.Invoke(tracker, new object[] { 0, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None })!;
+            var task = tracker.AcquireAsync(0, TimeSpan.FromMilliseconds(50), CancellationToken.None, CancellationToken.None);
             var wait = await task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.That(wait, Is.EqualTo(0d),
                 $"writer-layer admission: opt-out (cap=0) acquire #{i} must complete immediately returning 0 ms");

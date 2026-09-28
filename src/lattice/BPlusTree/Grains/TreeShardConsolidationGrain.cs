@@ -606,7 +606,7 @@ internal sealed class TreeShardConsolidationGrain(
         // corresponds to a durably-committed fold rather than an attempt. The
         // shard tag carries the donor - the shard this fold retired.
         LatticeMetrics.ShardConsolidationsCommitted.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId)),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, state.State.DonorShardIndex),
             LatticeTenantLabel.ForTree(TreeId));
 

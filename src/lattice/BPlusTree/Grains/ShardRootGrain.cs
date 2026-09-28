@@ -38,14 +38,14 @@ internal sealed partial class ShardRootGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     /// <summary>
-    /// Publishes the scan-page leaf-read outcome arms at zero, then runs the
+    /// Resolves metric provenance, publishes the scan-page leaf-read outcome
+    /// arms at zero, then runs the
     /// one-time activation repair for a persisted <c>RootIsLeaf</c> flag baked
     /// <c>true</c> over an internal root (issue 899 / issue 1883). Returns a
-    /// completed task without allocating on every shard that has nothing to repair,
-    /// which after the population has drained is every shard. See
+    /// completed task when both provenance and repair complete synchronously. See
     /// <c>ShardRootGrain.RootFlagHeal.cs</c> for why activation is the seam.
     /// <para>
-    /// <b>The primes are the first statements and that is load-bearing</b> (issue
+    /// <b>The primes precede every repair branch</b> (issue
     /// #2809, extended to the stall phase arms by issue #2952). Priming from
     /// activation rather than from the read path is what makes the series
     /// workload-independent: it exists for every <c>(tree, shard)</c>
@@ -65,14 +65,15 @@ internal sealed partial class ShardRootGrain(
     /// priming is synchronous and returns nothing.
     /// </para>
     /// </summary>
-    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(TreeId);
         PrimeScanPageLeafReadOutcomes();
         PrimeScanPageStallPhases();
         PrimeScanPageZeroProgressOutcomes();
         PrimeScanChainRegressions();
         PrimeOptimisticReadOutcomes();
-        return HealBakedRootIsLeafFlagAsync();
+        await HealBakedRootIsLeafFlagAsync();
     }
 
     async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
@@ -92,6 +93,8 @@ internal sealed partial class ShardRootGrain(
 
     private string? _treeId;
     private string TreeId => _treeId ??= ComputeTreeId();
+    private string? _metricTreeId;
+    private string MetricTreeId => _metricTreeId ?? optionsResolver.GetMetricTreeId(TreeId);
 
     private bool? _internalOriginEnforced;
 
@@ -286,7 +289,7 @@ internal sealed partial class ShardRootGrain(
             context.GrainId.Key.ToString(), kind, MaxConsecutiveFlushFailures, permanentConflict);
 
         LatticeMetrics.ShardRootFlushRetriesSuspended.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind),
             LatticeTenantLabel.ForTree(TreeId));
@@ -1128,7 +1131,7 @@ internal sealed partial class ShardRootGrain(
             }
             LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
                 Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeMetrics.OperationSetManyTag,
                 LatticeTenantLabel.ForTree(TreeId));
 
@@ -1144,7 +1147,7 @@ internal sealed partial class ShardRootGrain(
                 {
                     LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
                         Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                         LatticeTenantLabel.ForTree(TreeId));
                 }
                 return;
@@ -1532,7 +1535,7 @@ internal sealed partial class ShardRootGrain(
                 var result = await leaf.SetManyAsync(slice);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     LatticeMetrics.OperationSetManyTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
@@ -1543,7 +1546,7 @@ internal sealed partial class ShardRootGrain(
 
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     LatticeMetrics.OperationSetManyTag,
                     LatticeTenantLabel.ForTree(TreeId));
             }
@@ -1591,7 +1594,7 @@ internal sealed partial class ShardRootGrain(
             }
             LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
                 Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeMetrics.OperationSetManyWherePredicateTag,
                 LatticeTenantLabel.ForTree(TreeId));
 
@@ -1606,7 +1609,7 @@ internal sealed partial class ShardRootGrain(
                 {
                     LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
                         Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                         LatticeTenantLabel.ForTree(TreeId));
                 }
                 RecordRecordsWritten(written.Count);
@@ -1773,7 +1776,7 @@ internal sealed partial class ShardRootGrain(
                 var result = await leaf.SetManyWherePredicateAsync(slice, predicate);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     LatticeMetrics.OperationSetManyWherePredicateTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
@@ -1784,7 +1787,7 @@ internal sealed partial class ShardRootGrain(
 
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     LatticeMetrics.OperationSetManyWherePredicateTag,
                     LatticeTenantLabel.ForTree(TreeId));
             }
@@ -2722,7 +2725,7 @@ internal sealed partial class ShardRootGrain(
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
         {
             LatticeMetrics.ActivationReadyTimeouts.Add(
-                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeTenantLabel.ForTree(TreeId));
             throw new ShardActivationTimeoutException(
                 $"Activation-readiness seed for shard {MyShardIndex} of tree '{TreeId}' "

@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Backup.Tests;
 
@@ -297,6 +299,14 @@ public sealed partial class LatticeBackupRestoreIntegrationTests
     public async Task RestoreAsync_shadow_cutover_swaps_alias_then_revert_restores_prior_tree()
     {
         await _fixture.InitializeAsync();
+        var metricTrees = new ConcurrentQueue<string>();
+        using var listener = MeterListening.StartForInstrument(LatticeMetrics.ShardWrites, current =>
+            current.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                foreach (var tag in tags)
+                    if (tag.Key == LatticeMetrics.TagTree && tag.Value is string id && id.StartsWith("orders-live", StringComparison.Ordinal))
+                        metricTrees.Enqueue(id);
+            }));
 
         var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
         await source.SetAsync("k1", Bytes("backup-v1"));
@@ -322,7 +332,15 @@ public sealed partial class LatticeBackupRestoreIntegrationTests
             Assert.That(await live.GetAsync("live-key"), Is.Null);
         });
 
+        metricTrees.Clear();
+        await live.SetAsync("after-cutover", Bytes("value"));
+        Assert.That(metricTrees, Is.Not.Empty);
+        Assert.That(metricTrees.Distinct(), Is.EqualTo(new[] { target }));
         await _fixture.Restore.RevertRestoreAsync(result);
+        metricTrees.Clear();
+        await live.SetAsync("after-revert", Bytes("value"));
+        Assert.That(metricTrees, Is.Not.Empty);
+        Assert.That(metricTrees.Distinct(), Is.EqualTo(new[] { target }));
 
         await Assert.MultipleAsync(async () =>
         {

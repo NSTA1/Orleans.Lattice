@@ -470,7 +470,7 @@ internal sealed class HotShardMonitorGrain(
             // whether the cluster gate is enabled, so operators can compute the
             // cluster aggregate as a sum across the tree tag and decide whether they
             // need MaxClusterConcurrentAutoSplits at all.
-            var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+            var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId));
             var tenantTag = LatticeTenantLabel.ForTree(TreeId);
             LatticeMetrics.SplitInFlight.Record(inFlight, treeTag, tenantTag);
 
