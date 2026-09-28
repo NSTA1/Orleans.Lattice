@@ -458,7 +458,9 @@ public static class LatticeEventConstants
     /// reading the retained tree. When the marker equals the shard's own
     /// physical tree ID (direct-physical access) or is absent (maintenance
     /// firing directly on the shard) the redirect gate is a no-op. The routing
-    /// tier overwrites any client-supplied value, so it cannot be forged.
+    /// tier overwrites any client-supplied value, and
+    /// <see cref="Orleans.Lattice.LatticeCapabilityStrippingCallFilter"/> strips it
+    /// from external client calls, so it cannot be forged.
     /// </para>
     /// </summary>
     internal const string RoutedLogicalTreeIdRequestContextKey = "ol.rlt";
@@ -468,6 +470,7 @@ public static class LatticeEventConstants
     /// when mutation observers are registered. Publishers honour the logical
     /// identity only when this value ordinally matches their own physical tree,
     /// so inherited context cannot relabel a write to another backing tree.
+    /// Stripped from external client calls with its logical companion.
     /// </summary>
     internal const string RoutedPhysicalTreeIdRequestContextKey = "ol.rpt";
 

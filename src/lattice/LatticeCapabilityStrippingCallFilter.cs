@@ -96,6 +96,14 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// The public request-parameter contexts (idempotency, HLC override, vector
     /// clock, origin cluster id) are likewise excluded - they carry no capability
     /// and are legitimately client-supplied.
+    /// <para>
+    /// The routed identity pair (the logical tree id and its physical companion)
+    /// is included although it is a classification rather than a bypass: mutation
+    /// observers and retained-shard redirects honour it to decide which logical
+    /// tree a write belongs to, so only the facade may assert it. The facade
+    /// re-stamps it on its own routing paths; stripping it here keeps any path
+    /// that does not from trusting a client-chosen attribution.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -107,6 +115,8 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.CommitLogSourceRequestContextKey,
         LatticeEventConstants.ApplyOffsetRequestContextKey,
         LatticeEventConstants.ApplyOffsetPartitionRequestContextKey,
+        LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey,
+        LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
     ];
 
     /// <inheritdoc />
