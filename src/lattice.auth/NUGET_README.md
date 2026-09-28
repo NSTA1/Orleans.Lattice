@@ -12,7 +12,10 @@ behaviour, and zero runtime cost, when `AddLatticeAuth` is not registered**.
 `sys-auth-policy` tree through an `ILatticeAuthorizationPolicyStore`: a
 `LatticeAuthorizationRule` binds a subject selector (user / group), a scope
 (whole-tree / key / prefix), an operation set, and an `Allow` / `Deny` effect,
-and every edit is durably auditable through the store's history. A background
+and every edit is durably auditable through the store's history. Rule ids under
+the `app:` prefix (`LatticeAppRuleIds`) belong to installable apps and are
+written only by the app compiler under system origin; a direct write or delete of
+one throws `LatticeAppOwnedRuleException`. A background
 maintainer compiles the rule set into an immutable, monotonically-versioned
 in-memory snapshot, rebuilding on every policy change observed through the
 change feed, and an `ILatticeDecisionEngine` evaluates a request against that
@@ -60,7 +63,7 @@ siloBuilder
     });
 ```
 
-Must be registered after `AddLatticeMembership()`.
+Must be registered after `AddLattice(...)` and `AddLatticeMembership()`.
 
 See the
 [Auth documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.auth/README.md)

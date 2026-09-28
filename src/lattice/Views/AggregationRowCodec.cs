@@ -17,11 +17,32 @@ namespace Orleans.Lattice.Views;
 /// <item><b>Accumulator</b> (<c>\u0000a{groupKey}\u0000{slot}</c>) - the running count and sum of a group shard (count / sum kinds).</item>
 /// <item><b>Inverse</b> (<c>\u0000i{groupKey}\u0000{slot}</c>) - the per-source-key contributions of a group shard (min / max / set-union kinds).</item>
 /// </list>
-/// The payloads never travel the wire (they are opaque bytes in the view tree),
-/// so they use a compact manual encoding rather than an Orleans serializer.
+/// The payloads are opaque bytes in the view tree and use a compact manual
+/// encoding rather than an Orleans serializer. They are <b>not</b> purely local:
+/// under <see cref="LatticeViewReplicationMode.ShipView"/> the view tree itself is
+/// replicated, so a row can arrive from a remote peer and reach these decoders.
+/// Every decode is therefore defensive - lengths and entry counts are bounded
+/// against the bytes actually present before anything is sized from them, and a
+/// malformed row raises <see cref="InvalidDataException"/> rather than an
+/// index-out-of-range fault or an unbounded allocation.
 /// </summary>
 internal static class AggregationRowCodec
 {
+    /// <summary>
+    /// The smallest number of bytes an inverse entry can occupy: an empty
+    /// length-prefixed source key (1), the has-member flag (1), and the numeric (8).
+    /// Used to bound a wire-supplied entry count before pre-sizing.
+    /// </summary>
+    private const int MinimumInverseEntrySize = 1 + sizeof(bool) + sizeof(double);
+
+    /// <summary>
+    /// The smallest number of bytes a fold-inverse entry can occupy: an empty
+    /// length-prefixed source key (1), the HLC wall clock (8) and counter (4), and
+    /// a zero-length value's length prefix (4).
+    /// Used to bound a wire-supplied entry count before pre-sizing.
+    /// </summary>
+    private const int MinimumFoldInverseEntrySize = 1 + sizeof(long) + sizeof(int) + sizeof(int);
+
     /// <summary>The reserved NUL prefix every internal row key begins with.</summary>
     internal const string ReservedPrefix = "\u0000";
 
@@ -229,7 +250,7 @@ internal static class AggregationRowCodec
         // stream + reader + decode buffer on each such view mutation. The parsed
         // layout is byte-for-byte the BinaryReader encoding.
         var reader = new RowReader(bytes);
-        var count = reader.ReadInt32();
+        var count = reader.ReadBoundedCount(MinimumInverseEntrySize);
         var map = new Dictionary<string, MemberEntry>(count, StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
@@ -297,7 +318,7 @@ internal static class AggregationRowCodec
         // The raw value bytes are read as an exact-length slice copy, matching
         // BinaryReader.ReadBytes(length) byte-for-byte.
         var reader = new RowReader(bytes);
-        var count = reader.ReadInt32();
+        var count = reader.ReadBoundedCount(MinimumFoldInverseEntrySize);
         var map = new Dictionary<string, FoldMember>(count, StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
@@ -417,10 +438,18 @@ internal static class AggregationRowCodec
         private readonly ReadOnlySpan<byte> _buffer = buffer;
         private int _pos;
 
-        public bool ReadBool() => _buffer[_pos++] != 0;
+        /// <summary>The number of bytes left to read, never negative.</summary>
+        public readonly int Remaining => _buffer.Length - _pos;
+
+        public bool ReadBool()
+        {
+            Demand(sizeof(byte));
+            return _buffer[_pos++] != 0;
+        }
 
         public int ReadInt32()
         {
+            Demand(sizeof(int));
             var value = BinaryPrimitives.ReadInt32LittleEndian(_buffer[_pos..]);
             _pos += sizeof(int);
             return value;
@@ -428,6 +457,7 @@ internal static class AggregationRowCodec
 
         public long ReadInt64()
         {
+            Demand(sizeof(long));
             var value = BinaryPrimitives.ReadInt64LittleEndian(_buffer[_pos..]);
             _pos += sizeof(long);
             return value;
@@ -435,6 +465,7 @@ internal static class AggregationRowCodec
 
         public double ReadDouble()
         {
+            Demand(sizeof(double));
             var value = BinaryPrimitives.ReadDoubleLittleEndian(_buffer[_pos..]);
             _pos += sizeof(double);
             return value;
@@ -442,6 +473,17 @@ internal static class AggregationRowCodec
 
         public byte[] ReadBytes(int count)
         {
+            // The length prefix is attacker-controlled on a ShipView row, so it is
+            // validated against what the row can actually hold before the copy is
+            // sized from it. Without this a negative or oversized length reaches
+            // Slice and raises ArgumentOutOfRangeException, which the drain loop
+            // does not recognise as a framing fault.
+            if (count < 0 || count > Remaining)
+            {
+                throw new InvalidDataException(
+                    $"An aggregation row declares a {count}-byte value but only {Remaining} byte(s) remain; the row is truncated or corrupt.");
+            }
+
             var value = _buffer.Slice(_pos, count).ToArray();
             _pos += count;
             return value;
@@ -450,9 +492,44 @@ internal static class AggregationRowCodec
         public string ReadString()
         {
             var byteCount = Read7BitEncodedInt();
+            if (byteCount < 0 || byteCount > Remaining)
+            {
+                throw new InvalidDataException(
+                    $"An aggregation row declares a {byteCount}-byte string but only {Remaining} byte(s) remain; the row is truncated or corrupt.");
+            }
+
             var value = Encoding.UTF8.GetString(_buffer.Slice(_pos, byteCount));
             _pos += byteCount;
             return value;
+        }
+
+        /// <summary>
+        /// Reads a leading entry count and bounds it against the bytes that remain,
+        /// so a caller can pre-size a collection from it without a hostile or
+        /// corrupt row turning four bytes into a multi-gigabyte allocation. Each
+        /// entry costs at least <paramref name="minimumEntrySize"/> bytes, so a
+        /// count above that ceiling is necessarily a lie.
+        /// </summary>
+        public int ReadBoundedCount(int minimumEntrySize)
+        {
+            var count = ReadInt32();
+            var maxPossible = Remaining / minimumEntrySize;
+            if (count < 0 || count > maxPossible)
+            {
+                throw new InvalidDataException(
+                    $"An aggregation row reports {count} entries but its {Remaining} remaining byte(s) can hold at most {maxPossible}; the row is truncated or corrupt.");
+            }
+
+            return count;
+        }
+
+        private void Demand(int bytes)
+        {
+            if (Remaining < bytes)
+            {
+                throw new InvalidDataException(
+                    $"An aggregation row needs {bytes} more byte(s) but only {Remaining} remain; the row is truncated or corrupt.");
+            }
         }
 
         private int Read7BitEncodedInt()
@@ -464,6 +541,7 @@ internal static class AggregationRowCodec
             var shift = 0;
             while (shift < 5 * 7)
             {
+                Demand(sizeof(byte));
                 var b = _buffer[_pos++];
                 result |= (b & 0x7F) << shift;
                 if ((b & 0x80) == 0)

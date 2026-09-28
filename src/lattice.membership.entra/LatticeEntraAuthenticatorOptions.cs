@@ -18,7 +18,14 @@ public sealed class LatticeEntraAuthenticatorOptions
     /// </summary>
     public const string DefaultIssuerTemplate = "https://login.microsoftonline.com/{tenantid}/v2.0";
 
-    /// <summary>The default Entra login host used to derive the OIDC metadata address.</summary>
+    /// <summary>
+    /// The public-cloud Entra login host, provided as a convenience for composing
+    /// <see cref="Authority"/> (for example
+    /// <c>https://login.microsoftonline.com/{tenant-guid}/v2.0</c>). The authenticator
+    /// never reads it: the discovery document address comes only from
+    /// <see cref="MetadataAddress"/> or <see cref="Authority"/>, as
+    /// <see cref="ResolveMetadataAddress"/> resolves it.
+    /// </summary>
     public const string DefaultAuthorityHost = "https://login.microsoftonline.com";
 
     /// <summary>

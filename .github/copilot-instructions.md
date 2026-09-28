@@ -151,7 +151,7 @@ package from that gate's exemption list.
 
 - Use `ISiloBuilder.AddLattice(...)` to register storage.
 - Use `ISiloBuilder.ConfigureLattice(...)` for global or per-tree options.
-- Options are resolved via `IOptionsMonitor<LatticeOptions>.Get(treeName)`.
+- Configured options are resolved via `IOptionsMonitor<LatticeOptions>.Get(treeName)`. That read does not see what the tree registry pins or overrides per tree (structural sizing, the WAL partition count, and per-tree runtime overrides); code that needs those resolves them through the registry-backed options resolver - see "Options Access" in `.github/instructions/grains.instructions.md`.
 
 ## Metrics
 
@@ -447,7 +447,8 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     no `branches:` filter and so already covers every base; `coverage.yml` runs
     nightly on a schedule, `coverage-catch-up.yml` runs on `push` to `main`
     only, `publish.yml` is push-triggered, and
-    `ci-serial-old.yml` is manual-dispatch only, so none of them is affected.)
+    `ci-serial-old.yml` and `promote-videos.yml` are manual-dispatch only, so
+    none of them is affected.)
     The same four workflows also run on `push` to `*/epic/**` (never
     `release/**`): an advisory integration-branch lane that evaluates the bucket
     itself after each member merge - `ci.yml` unconditionally, the other three
@@ -583,4 +584,4 @@ The testing policy (every public type needs a test; exclude the chaos suite in t
 
 ## Security
 
-Load-bearing security invariants for the auth, membership, replication, telemetry, MCP, and Explorer surfaces (fail-closed gates, never trusting peer/wire-supplied classification, enforcing at the single narrowest seam, per-circuit credential isolation, no dead security config) live in `.github/instructions/security.instructions.md`, which auto-attaches when you edit those packages. Read it before changing any authorization, enrollment, allow-list, credential-scoping, or validation seam on those surfaces.
+Load-bearing security invariants for the auth, membership, replication, telemetry, MCP, Explorer, and installable-app surfaces (fail-closed gates, never trusting peer/wire-supplied classification, enforcing at the single narrowest seam, per-circuit credential isolation, no dead security config) live in `.github/instructions/security.instructions.md`, which auto-attaches when you edit those packages. Read it before changing any authorization, enrollment, allow-list, credential-scoping, or validation seam on those surfaces.

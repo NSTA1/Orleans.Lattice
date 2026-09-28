@@ -47,6 +47,24 @@ parameters file. The folder also holds two dot-sourced helper modules (`_run-coh
 `Test-ProducerBoundReport.ps1`). The Layer 3 sweep itself is driven by
 `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 
+**`performance-report.ps1` currently runs in only two shapes.** #3597 removed its `-NamePrefix`
+parameter but left two reads of it in place, and under the script's `Set-StrictMode -Version Latest`
+each read throws `The variable '$NamePrefix' cannot be retrieved because it has not been set`. Every
+Layer 1 or Layer 2 run (with or without `-ReuseVm`), and every Layer 3 run that would provision its
+own rig, therefore stops at startup before anything is provisioned; passing `-NamePrefix` fails
+parameter binding, although the script's comment-based help still has a `.PARAMETER NamePrefix`
+entry. What works:
+
+- **Layer 3 on a rig you provisioned.** Run `./scripts/deploy-aca.ps1 -NamePrefix <prefix>` with a
+  prefix of three to nine lowercase letters and digits (`deploy-aca.ps1` refuses a prefix with fewer
+  than three alphanumerics, and the report lower-cases the prefix it is given, strips its hyphens and
+  refuses more than nine characters, so any other form can name a different rig or be refused), then
+  `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
+  finishes and leaves `rg-<prefix>` standing for you to delete.
+- **`-DryRun`**, which reaches neither read and re-renders a document from the most recently written
+  `state.json`. Replay the multi-silo document with the `-Layer3` switch: `-Layer 3 -DryRun` falls
+  through to the single-silo replay instead.
+
 ---
 
 ## Scripts and their parameters
@@ -246,7 +264,11 @@ Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and
 producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
 `performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line (or reports
 `entries=0`) `UNSEEDED`, re-runs it at the same rung up to twice, and never publishes it, because
-an unseeded cohort measures only the miss path (#3474).
+an unseeded cohort measures only the miss path (#3474). Its Layer 2 sweep has no such guard and
+never seeds: it drives `run-cohort.ps1` with a silo environment that omits `BENCH_VEHICLE_COUNT`, so
+every Layer 2 `get-point` and `get-many` cohort it runs reads keys that were never written (its
+silo log carries no `[silo] preseed` line), and a `HEALTHY` one is aggregated into the published
+table like any other: a miss-path number, not the read ceiling.
 
 The four atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
 one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
@@ -545,5 +567,12 @@ until the resource group is deleted.
 - `az login` first. Managed-identity role propagation can take up to ~60 s after
   `deploy.ps1`; if the silo's first WAL write returns 403, wait a minute and re-run
   `update.ps1` to bounce the silo. Multi-account deploys can take longer to propagate.
-- Keys are `Guid.ToString("N")`, uniform-random across shards. Edit `Producer/Program.cs`
-  to change the key distribution.
+- Keys are not random. Each is a vehicle GUID in `ToString("N")` form built from the vehicle's
+  index (the index in its first four bytes, fixed constants in the other twelve), so a run with the
+  same vehicle count reuses the same keys, and every vehicle emits once per tick. They spread
+  across shards because the tree places each key by an XxHash32 hash of it, not because the keys
+  are random. The derivation is written three times and the copies must agree:
+  `Producer/Program.cs` (the TCP producer), `Producer/ChannelGenerator.cs` (the Orleans-client
+  producer and `--dry-run`) and `Engine/BenchPreseed.cs` (`KeyFor`, the keys the read-mode pre-seed
+  writes). To change the key distribution, change all three together: change one alone and the
+  producers drive different keyspaces, or the read modes read keys the pre-seed never wrote.

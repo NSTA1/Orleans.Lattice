@@ -19,8 +19,10 @@ namespace Orleans.Lattice;
 /// <b>Sources.</b> Raised by the single-tree atomic-write saga
 /// (<c>ILattice.SetManyAtomicAsync</c> with a caller-supplied
 /// <c>operationId</c>) and by the cross-tree atomic-write coordinator
-/// (<c>ILattice.SetManyAtomicCrossTreeAsync</c>); the cross-tree form also
-/// covers a re-submit that presents a different set of participating trees.
+/// (<see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>, or
+/// <see cref="LatticeCrossTreeAtomicWriteExtensions.BeginAtomicWrite"/> followed
+/// by <see cref="LatticeAtomicWriteBuilder.CommitAsync"/>); the cross-tree form
+/// also covers a re-submit that presents a different set of participating trees.
 /// </para>
 /// <para>
 /// The typed slot lets the API bindings map this specific misuse to a

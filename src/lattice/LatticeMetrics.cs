@@ -3096,23 +3096,26 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of <b>caller-observed</b> durable leaf-materialiser pin write
-    /// duration, in milliseconds, recorded by <c>LeafCursorReporter</c> around
-    /// each pin grain call whose duration reached
+    /// duration, in milliseconds, recorded by the reporting silo around a pin
+    /// store write only when that write reached
     /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>
-    /// (or which faulted). Tagged with <see cref="TagTree"/>.
+    /// or faulted - that is, it records the saturation input's trips, not every
+    /// pin write. Tagged with <see cref="TagTree"/>.
     /// <para>
     /// This is the durable-storage counterpart to
     /// <see cref="MaterialiserDrainLag"/>, which is derived from the in-memory
     /// cursor registry and therefore cannot observe a stalled pin store (issue
     /// #2015). Measured at the call site so it includes the time a report spent
     /// queued ahead of the shard's non-reentrant activation - what the reporting
-    /// leaf actually experiences. Only emitted when the input is enabled; the
-    /// option defaults to <c>null</c>.
+    /// leaf actually experiences. Records nothing while the input is disabled;
+    /// the option defaults to <c>null</c>. A write faster than the threshold is
+    /// never recorded, so the histogram's quantiles describe tripped writes
+    /// only.
     /// </para>
     /// </summary>
     public static readonly Histogram<double> MaterialiserPinDurableWriteLatency =
         Meter.CreateHistogram<double>("orleans.lattice.materialiser.pin.durable_write_latency", unit: "ms",
-            description: "Caller-observed durable leaf-materialiser pin write duration, tagged by tree.");
+            description: "Caller-observed duration of durable leaf-materialiser pin writes that reached the WalSaturationMaterialiserPinLatencyThreshold or faulted (the pin-latency input's trips, not every pin write), tagged by tree. Nothing is recorded while the threshold is unset.");
 
     /// <summary>
     /// Counter of coalescible leaf-materialiser pin reports shed by
@@ -3303,20 +3306,22 @@ public static class LatticeMetrics
     public static readonly KeyValuePair<string, object?> OutcomePinNoAdvance = new(TagOutcome, "none");
 
     /// <summary>
-    /// Histogram of leaf-materialiser drain lag, in milliseconds, recorded by the
+    /// Histogram of materialiser drain lag, in milliseconds, recorded by the
     /// WAL saturation sampler on every tick
     /// (<see cref="LatticeOptions.WalSaturationSampleInterval"/>, default 200 ms)
     /// while the drain-lag input is enabled. Measured live from in-memory state as
-    /// the WAL head wall-clock timestamp minus the slowest fresh
-    /// leaf-materialiser cursor frontier, clamped at zero. The freshness filter is
+    /// the WAL head wall-clock timestamp minus the slowest fresh consumer cursor in
+    /// the in-memory WAL cursor registry - across leaf materialisers and tree-wide
+    /// tailers such as view maintainers, WAL subscribers and replication
+    /// shippers - clamped at zero. The freshness filter is
     /// a lag-plane-only classifier input; cold consumers remain registered for the
     /// WAL GC trim floor. Recorded for every checked tree, not only the
     /// over-threshold ones, so the histogram carries the whole distribution leading
-    /// up to a trip; a tree with no fresh materialiser frontier yet records a zero
+    /// up to a trip; a tree with no fresh consumer cursor yet records a zero
     /// rather than being skipped.
     /// <para>
     /// A rising drain lag is the back-pressure signal (issue #1030): when it stays
-    /// at or above <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
+    /// above <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
     /// for <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>
     /// consecutive sampler windows the tree is held at
     /// <see cref="WalSaturationState.Throttled"/>. Unlike the dispatch-timeout,
@@ -3335,7 +3340,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> MaterialiserDrainLag =
         Meter.CreateHistogram<double>("orleans.lattice.materialiser.drain_lag", unit: "ms",
-            description: "Leaf-materialiser drain lag sampled by the WAL saturation sampler, tagged by tree.");
+            description: "Materialiser drain lag (WAL head minus the slowest fresh consumer cursor, across leaf materialisers and tree-wide tailers) sampled by the WAL saturation sampler, tagged by tree.");
 
     /// <summary>
     /// Number of individually lagging WAL cursor consumers behind a tree's
@@ -3343,8 +3348,10 @@ public static class LatticeMetrics
     /// whose aggregate lag is <b>already over</b>
     /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> on that
     /// tick. A consumer counts when its own reported cursor trails the WAL head
-    /// wall clock by more than that same threshold and its report is fresh under
-    /// <see cref="LatticeOptions.WalDrainLagConsumerFreshness"/>; consumers that
+    /// wall clock by more than that same threshold and it passes the lag-plane
+    /// eligibility the aggregate uses: its report is fresh under
+    /// <see cref="LatticeOptions.WalDrainLagConsumerFreshness"/>, and a leaf
+    /// materialiser's position must not be stale either; consumers that
     /// have never reported a cursor (<see cref="HybridLogicalClock.Zero"/>) are
     /// excluded, as they are from the lag-plane meet that produces the aggregate.
     /// <para>
@@ -4296,21 +4303,24 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of activation-time leaf-snapshot hydrations that passed through
     /// the byte-budgeted admission gate, tagged with <see cref="TagTree"/>,
-    /// <see cref="TagOutcome"/> (<c>immediate</c>/<c>queued</c>) and the tenant
-    /// label (issue #2765).
+    /// <see cref="TagOutcome"/> (<c>immediate</c>/<c>queued</c>/<c>sole_occupancy</c>)
+    /// and the tenant label (issues #2765, #2844).
     /// <para>
     /// The gate bounds the aggregate bytes of snapshot loads materialising at
     /// once, so a cold start costs a function of this process's heap rather than
     /// of however many leaves Orleans happens to activate together. The
-    /// <c>queued</c> arm is the one that carries information: it counts the
+    /// <c>queued</c> arm is the one that carries information about the budget: it counts the
     /// hydrations that actually had to wait, and a sustained non-zero rate means
     /// the deployment's leaves are large enough, or numerous enough, that
     /// unbounded activation would have exceeded the heap hard limit - which is
     /// precisely the condition that used to present as a clean-exit restart
-    /// loop with no OOM kill recorded anywhere.
+    /// loop with no OOM kill recorded anywhere. The <c>sole_occupancy</c> arm
+    /// counts, instead of either of the other two, the hydrations the contiguity
+    /// rule admitted only as sole occupant, a predicate a larger memory grant
+    /// does not relax.
     /// </para>
     /// <para>
-    /// Both arms are primed to zero per tree at the first hydration, because a
+    /// All three arms are primed to zero per tree at the first hydration, because a
     /// counter that is only ever incremented cannot distinguish "the gate never
     /// had to queue anything" from "the gate is not deployed in this build" from
     /// "nothing has activated yet". Those have entirely different responses, and
@@ -4319,7 +4329,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSnapshotHydrationAdmissions =
         Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.hydration_admissions", unit: "{hydration}",
-            description: "Activation-time leaf-snapshot hydrations admitted through the byte-budgeted concurrency gate, tagged by tree and outcome (immediate/queued). A sustained queued rate means unbounded cold activation would have exceeded the heap hard limit.");
+            description: "Activation-time leaf-snapshot hydrations admitted through the byte-budgeted concurrency gate, tagged by tree and outcome (immediate/queued/sole_occupancy). A sustained queued rate means unbounded cold activation would have exceeded the heap hard limit; sole_occupancy counts hydrations the contiguity rule serialised, which a larger memory grant does not relax.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotHydrationAdmissions"/>.</summary>
     public const string LeafSnapshotHydrationAdmissionsName = "orleans.lattice.leaf.snapshot.hydration_admissions";
@@ -7680,19 +7690,24 @@ public static class LatticeMetrics
         new(TagOutcome, "irreducible");
 
     /// <summary>
-    /// Counter of resident unresolved saga prepares recorded into
-    /// <c>LeafNodeState.UnresolvedReplayWork</c> <b>beyond</b> the
+    /// Counter of resident unresolved saga prepares recorded into the leaf's
+    /// durable replay-work ledger <b>at or beyond</b> the
     /// <see cref="LatticeOptions.MaxDurableUnresolvedReplayWork"/> cap, emitted
-    /// by <c>BPlusLeafGrain.EnsureUnresolvedPrepareRecorded</c> (issue #2183).
+    /// once per prepare the leaf newly records during activation-time WAL
+    /// replay (issue #2183).
+    /// The threshold is inclusive (issue #2756): the prepare that fills the
+    /// ledger to the cap is counted, as is every prepare recorded past it.
     /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
     /// <para>
     /// A resident prepare must never be dropped (dropping it
     /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
     /// is recorded unconditionally and the row is allowed to grow for as long
-    /// as a saga leaves a prepare unresolved (registry status InFlight: the
+    /// as a saga leaves a prepare unresolved (registry status InFlight, or
+    /// Indeterminate once its decision has aged out: the
     /// residual population after issue #2190's self-terminalisation, whose
     /// orphan source is tracked as issue #2304). Persist risk: Azure Table
-    /// rejects writes above its 1MB entity cap, bounding persisted row growth.
+    /// grain storage rejects writes above its ~960 KB grain-state limit,
+    /// bounding persisted row growth.
     /// Read risk: the larger SQLite limit on the default <c>local</c> profile
     /// permits growth that can exhaust memory or the read budget during
     /// activation, before grain-level repair can run. A successful persist
@@ -7705,7 +7720,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafUnresolvedPrepareLedgerBeyondCap =
         Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
-            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Persist risk: Azure Table rejects writes above its 1MB entity cap, bounding persisted row growth. Read risk: the larger SQLite local-profile limit permits growth that can exhaust memory or the read budget during activation, before grain-level repair can run. Alert on every profile.");
+            description: "Resident unresolved saga prepares recorded at or beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Persist risk: Azure Table grain storage rejects writes above its ~960 KB grain-state limit, bounding persisted row growth. Read risk: the larger SQLite local-profile limit permits growth that can exhaust memory or the read budget during activation, before grain-level repair can run. Alert on every profile.");
 
     /// <summary>
     /// Durable ledger records refused for deferred terminals (<c>TxCommit</c>,
@@ -7911,7 +7926,7 @@ public static class LatticeMetrics
     /// <summary>Canonical name of the observable gauge reporting a tree's current estimated retained bytes (tagged <see cref="TagTree"/>). May alias <see cref="StorageTotalBytesName"/>.</summary>
     public const string AdmissionEstimatedBytesName = "orleans.lattice.admission.estimated_bytes";
 
-    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree currently exceeding its advisory admission ceiling (tagged <see cref="TagTree"/>).</summary>
+    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree currently at or above an advisory admission ceiling (tagged <see cref="TagTree"/>).</summary>
     public const string AdmissionOverAdvisoryName = "orleans.lattice.admission.over_advisory";
 
     /// <summary>Canonical name of the observable ratio gauge reporting current / ceiling per <see cref="TagDimension"/> (tagged <see cref="TagTree"/>).</summary>
@@ -8520,15 +8535,19 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of wall-clock ms spent inside the local-apply path
-    /// of a shard-root batched write: from the moment the shard-root
-    /// receives a batch to the moment every per-leaf RPC dispatched by
-    /// its local apply has returned. Recorded by <b>two</b> operations,
-    /// separated by <see cref="TagOperation"/>:
-    /// <c>set_many</c> (<c>ShardRootGrain.SetManyAsync</c> via
-    /// <c>SetManyLocalOnlyAsync</c>, see <see cref="OperationSetManyTag"/>)
-    /// and <c>set_many_where_predicate</c>
-    /// (<c>ShardRootGrain.SetManyWherePredicateAsync</c> via
-    /// <c>SetManyWhereLocalOnlyAsync</c>, see
+    /// of a shard-root batched write, recorded whether or not the local
+    /// apply throws. The span starts after the shard root's own preparation
+    /// and reject checks and covers the per-entry leaf routing (with, under an
+    /// atomic-write saga's prepare, the shard's first registration as a saga
+    /// participant), the parallel per-leaf RPC fan-out, the split promotion
+    /// that follows it and - while
+    /// an adaptive split is in progress or slots have moved away - the per-key
+    /// forward of affected writes to their new owner shard. Recorded by
+    /// <b>two</b> operations, separated by <see cref="TagOperation"/>:
+    /// <c>set_many</c> for a slice of an <see cref="ILattice.SetManyAsync"/>
+    /// batch (see <see cref="OperationSetManyTag"/>) and
+    /// <c>set_many_where_predicate</c> for a slice of an
+    /// <see cref="ILattice.SetManyWherePredicateAsync"/> batch (see
     /// <see cref="OperationSetManyWherePredicateTag"/>). Also tagged with
     /// <see cref="TagTree"/>. Compare an arm only against the envelope of
     /// the same operation - <see cref="SetManyDuration"/> for
@@ -8537,26 +8556,37 @@ public static class LatticeMetrics
     /// either. Includes per-leaf RPC scheduling, leaf
     /// turn-queue wait, leaf commit, WAL append, and the WAL provider's
     /// phase-2 commit. Excludes the lattice-grain's per-shard bucket
-    /// build and event publish, and excludes the online-resize
-    /// shadow-forward task (measured separately by
+    /// build and event publish, and excludes the wait on the trailing
+    /// online-snapshot shadow forward (measured separately by
     /// <see cref="ShardRootSetManyShadowForwardDuration"/>).
     /// </summary>
     public static readonly Histogram<double> ShardRootSetManyLocalApplyDuration =
         Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.local_apply.duration", unit: "ms",
-            description: "Wall-clock ms inside a shard root's local apply of one batched write (per-leaf fan-out, leaf commit, WAL append + phase 2), tagged operation=set_many (ShardRootGrain.SetManyAsync) or operation=set_many_where_predicate (ShardRootGrain.SetManyWherePredicateAsync).");
+            description: "Wall-clock ms inside a shard root's local apply of one batched-write slice (leaf routing, per-leaf fan-out with leaf commit, WAL append + phase 2, split promotion and any adaptive-split forward), tagged operation=set_many (an ILattice.SetManyAsync slice) or operation=set_many_where_predicate (an ILattice.SetManyWherePredicateAsync slice).");
 
     /// <summary>
-    /// Histogram of wall-clock ms spent awaiting the trailing
-    /// shadow-forward task in <c>ShardRootGrain.SetManyAsync</c>.
-    /// Tagged with <see cref="TagTree"/>. Expected to be near zero in
-    /// steady state (no active resize): the shadow-forward task
-    /// completes synchronously via <c>TrackShadowForward</c>'s
-    /// no-resize fast-path. Material values indicate either an active
-    /// online resize or an unexpected wait on the resize tracker.
+    /// Histogram of wall-clock ms a shard root's batched-write slice spends
+    /// awaiting its trailing shadow-forward task once the local apply has
+    /// succeeded (nothing is recorded when the local apply throws). Recorded
+    /// by both batched-write paths - an <see cref="ILattice.SetManyAsync"/>
+    /// slice and an <see cref="ILattice.SetManyWherePredicateAsync"/> slice -
+    /// with no <see cref="TagOperation"/> tag, so the series mixes both.
+    /// Tagged with <see cref="TagTree"/>. The shadow forward mirrors the
+    /// slice, in parallel with the local apply, to the same shard of the
+    /// destination tree while an online snapshot - including the one an
+    /// online resize runs - is forwarding live writes to its destination, so
+    /// this is the residual tail of that
+    /// forward rather than its full duration; it is not the adaptive-split
+    /// forward, which the local apply covers. Expected to be near zero
+    /// whenever no shadow forward is active, because the forward then
+    /// completes synchronously. Material values indicate an active shadow
+    /// forward whose destination is answering more slowly than the local
+    /// apply (each forward is bounded by
+    /// <see cref="Orleans.Lattice.LatticeOptions.ShardForwardTimeout"/>).
     /// </summary>
     public static readonly Histogram<double> ShardRootSetManyShadowForwardDuration =
         Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.shadow_forward.duration", unit: "ms",
-            description: "Wall-clock ms awaiting the shadow-forward task at the tail of ShardRootGrain.SetManyAsync.");
+            description: "Wall-clock ms a shard root's batched-write slice (ILattice.SetManyAsync or ILattice.SetManyWherePredicateAsync, not split by operation) spends awaiting its trailing online-snapshot shadow-forward task after a successful local apply.");
 
     /// <summary>
     /// Count of outbound shard-to-shard write forwards that were abandoned
@@ -9678,17 +9708,19 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of wall-clock ms for a single per-leaf batched-write
-    /// RPC dispatched from a shard root's local apply. Recorded per
-    /// attempt (including retries) and per dispatched leaf, so for a
-    /// single shard-root batch there are up to one observation per
-    /// per-leaf bucket. Recorded by <b>two</b> operations, separated by
-    /// <see cref="TagOperation"/>: <c>set_many</c>
-    /// (<c>IBPlusLeafGrain.SetManyAsync</c> via
-    /// <c>DispatchLeafBatchWithRetryAsync</c>, see
+    /// RPC attempt dispatched from a shard root's local apply. Recorded per
+    /// dispatched leaf for every attempt that returns and for every attempt
+    /// whose fault is retried - a retried attempt's sample also includes the
+    /// back-off it waits when the leaf refused the write mid-retirement -
+    /// while the attempt whose fault ends the dispatch records nothing. A
+    /// single shard-root batch therefore records one observation per
+    /// per-leaf bucket whose dispatch returns, plus one for every retried
+    /// attempt. Recorded by <b>two</b> operations, separated by
+    /// <see cref="TagOperation"/>: <c>set_many</c> for the unconditional
+    /// per-leaf batch of an <see cref="ILattice.SetManyAsync"/> slice (see
     /// <see cref="OperationSetManyTag"/>) and
-    /// <c>set_many_where_predicate</c>
-    /// (<c>IBPlusLeafGrain.SetManyWherePredicateAsync</c> via
-    /// <c>DispatchConditionalLeafBatchWithRetryAsync</c>, see
+    /// <c>set_many_where_predicate</c> for the conditional per-leaf batch of
+    /// an <see cref="ILattice.SetManyWherePredicateAsync"/> slice (see
     /// <see cref="OperationSetManyWherePredicateTag"/>). Also tagged with
     /// <see cref="TagTree"/>.
     /// This is the outbound-call view from the shard-root: it includes
@@ -9699,7 +9731,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> ShardRootSetManyLeafRpcDuration =
         Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.leaf_rpc.duration", unit: "ms",
-            description: "Wall-clock ms per per-leaf batched-write RPC dispatched from a shard root's local apply, tagged operation=set_many (IBPlusLeafGrain.SetManyAsync) or operation=set_many_where_predicate (IBPlusLeafGrain.SetManyWherePredicateAsync).");
+            description: "Wall-clock ms per per-leaf batched-write RPC attempt dispatched from a shard root's local apply (a retried attempt includes its leaf-retirement back-off; the attempt whose fault ends the dispatch is not recorded), tagged operation=set_many (unconditional per-leaf batch) or operation=set_many_where_predicate (conditional per-leaf batch).");
 
     /// <summary>
     /// Histogram of wall-clock ms inside one call to
@@ -9755,36 +9787,45 @@ public static class LatticeMetrics
             description: "Wall-clock ms inside one LatticeGrain.SetManyWherePredicateAsync call (caller-visible envelope of the conditional batched write).");
 
     /// <summary>
-    /// Histogram of wall-clock ms inside one call to
-    /// <c>LatticeGrain.SetAsync</c>, the user-facing point-write
-    /// <see cref="ILattice.SetAsync"/> entry point. Tagged with
-    /// <see cref="TagTree"/>. End-to-end caller-visible latency of one
-    /// single-key set call (includes gate, routing, the shard RPC, and
-    /// event publish). Pair with <see cref="SetStageDuration"/> to
-    /// attribute the per-call envelope to one of four sub-spans.
+    /// Histogram of wall-clock ms inside one call to the user-facing
+    /// point-write entry point without a time-to-live,
+    /// <see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>.
+    /// The TTL overload,
+    /// <see cref="ILattice.SetAsync(string, byte[], TimeSpan, CancellationToken)"/>,
+    /// records neither this instrument nor <see cref="SetStageDuration"/>. The
+    /// library's own internal point writes to its system trees (such as the
+    /// tree registry) take the same path and record it too, under their system
+    /// tree id. Tagged with <see cref="TagTree"/>. End-to-end caller-visible
+    /// latency of one single-key set call (includes the gate pre-flight,
+    /// routing, the shard RPC, and event publish). Pair with
+    /// <see cref="SetStageDuration"/> to attribute the per-call envelope to
+    /// one of three sub-spans.
     /// </summary>
     public static readonly Histogram<double> SetDuration =
         Meter.CreateHistogram<double>("orleans.lattice.set.duration", unit: "ms",
-            description: "Wall-clock ms inside one LatticeGrain.SetAsync call (caller-visible envelope).");
+            description: "Wall-clock ms inside one non-TTL ILattice.SetAsync call (caller-visible envelope); the TTL overload is not recorded.");
 
     /// <summary>
-    /// Histogram of wall-clock ms inside one sub-stage of
-    /// <c>LatticeGrain.SetAsync</c>. Tagged with <see cref="TagTree"/>
-    /// and <see cref="TagStage"/> (<c>gate</c> | <c>route</c> |
-    /// <c>shard</c> | <c>publish</c>).
+    /// Histogram of wall-clock ms inside one sub-stage of the same non-TTL
+    /// point write <see cref="SetDuration"/> measures; the TTL overload
+    /// records neither. Tagged with <see cref="TagTree"/>
+    /// and <see cref="TagStage"/> (<c>gate</c> | <c>shard</c> |
+    /// <c>publish</c>). There is no separate <c>route</c> stage: routing
+    /// interleaves with the shard RPC and its stale-routing retries, so it is
+    /// recorded inside <c>shard</c>.
     /// <para>
     /// Mirrors <see cref="SetManyStageDuration"/> for the point-write
     /// path. Together with the existing per-leaf instruments
-    /// (<c>leaf.commit.duration phase=wal|apply|observer|digest</c>),
+    /// (<c>leaf.commit.duration step=wal|apply|observer|digest</c>),
     /// <c>wal.shard.dispatch.duration</c>, and <c>wal.append.*</c>
-    /// histograms, the full point-write envelope from
+    /// histograms, the full point-write envelope from the non-TTL
     /// <c>ILattice.SetAsync</c> entry down to the Azure provider call is
     /// attributed. The c2-xxvii investigation surfaced this seam.
     /// </para>
     /// </summary>
     public static readonly Histogram<double> SetStageDuration =
         Meter.CreateHistogram<double>("orleans.lattice.set.stage.duration", unit: "ms",
-            description: "Wall-clock ms inside one sub-stage (gate|route|shard|publish) of LatticeGrain.SetAsync.");
+            description: "Wall-clock ms inside one sub-stage (gate|shard|publish) of a non-TTL ILattice.SetAsync call; the TTL overload is not recorded.");
 
     // --- Foreground read envelopes (LatticeGrain) ----------------------------
 
@@ -10149,10 +10190,10 @@ public static class LatticeMetrics
     /// <summary><see cref="TagStage"/> = <c>wal</c> (step 3 commit-log adapter append).</summary>
     public static readonly KeyValuePair<string, object?> StageWalTag = new(TagStage, "wal");
 
-    /// <summary><see cref="TagStage"/> = <c>fanout</c> (step 4 per-leaf ApplyTxTerminalAsync dispatch + shadow-forward).</summary>
+    /// <summary><see cref="TagStage"/> = <c>fanout</c> (on <see cref="SagaBroadcastShardStageDuration"/>, step 4 per-leaf ApplyTxTerminalAsync dispatch + shadow-forward; on <see cref="SetManyStageDuration"/> and <see cref="GetManyStageDuration"/>, the cross-shard fan-out of the per-shard branches).</summary>
     public static readonly KeyValuePair<string, object?> StageFanOutTag = new(TagStage, "fanout");
 
-    /// <summary><see cref="TagStage"/> = <c>gate</c> (LatticeGrain.SetManyAsync pre-flight: compaction reminder + monitor + events-gate probe).</summary>
+    /// <summary><see cref="TagStage"/> = <c>gate</c> (the per-call pre-flight of the point-write and batched-write paths, <see cref="SetStageDuration"/> and <see cref="SetManyStageDuration"/>: ensuring the tree's compaction reminder is registered and its autonomic hot-shard and shard-healing loops are armed).</summary>
     public static readonly KeyValuePair<string, object?> StageGateTag = new(TagStage, "gate");
 
     /// <summary><see cref="TagStage"/> = <c>route</c> (LatticeGrain.SetManyAsync / GetManyAsync routing fetch via GetRoutingAsync; LatticeGrain.GetAsync per-attempt shard resolution).</summary>
@@ -10161,7 +10202,7 @@ public static class LatticeMetrics
     /// <summary><see cref="TagStage"/> = <c>bucket</c> (LatticeGrain.SetManyAsync / GetManyAsync per-key shard bucketing loop).</summary>
     public static readonly KeyValuePair<string, object?> StageBucketTag = new(TagStage, "bucket");
 
-    /// <summary><see cref="TagStage"/> = <c>events</c> (LatticeGrain.SetManyAsync trailing per-entry PublishEventAsync foreach).</summary>
+    /// <summary><see cref="TagStage"/> = <c>events</c> (the batched write's trailing stage on <see cref="SetManyStageDuration"/>: the publish-events probe plus the per-entry event publish).</summary>
     public static readonly KeyValuePair<string, object?> StageEventsTag = new(TagStage, "events");
 
     /// <summary><see cref="TagStage"/> = <c>shard</c> (LatticeGrain.SetAsync / GetAsync inner shard RPC including stale-routing retries).</summary>

@@ -62,8 +62,9 @@ public interface ILatticeReplicationConfigAuthority
     /// </para>
     /// <para>
     /// <b>Bootstrap composition.</b> When <paramref name="bootstrapSourceClusterId"/>
-    /// is supplied and the tree already holds data
-    /// (<c>CountAsync &gt; 0</c>), the authority requests a snapshot re-seed
+    /// is supplied and the tree already holds data (the local tree yields at least
+    /// one live key - the check takes the first key rather than counting the tree),
+    /// the authority requests a snapshot re-seed
     /// through <see cref="ILatticeReplicationAdmin.RequestSnapshotAsync"/> so a
     /// peer converges on the pre-existing rows the change feed will not carry.
     /// <b>Limitation:</b> the bootstrap seam is receiver-driven - it pulls a

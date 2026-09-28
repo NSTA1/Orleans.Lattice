@@ -1873,8 +1873,9 @@ internal sealed partial class LatticeGrain(
 
         // c2-xxvii envelope + sub-stage attribution. SetDuration tracks the caller-visible
         // wall-clock; SetStageDuration tagged with stage=
-        // (gate|route|shard|publish) splits the envelope into its
-        // four sub-spans so the LatticeGrain-side overhead of one
+        // (gate|shard|publish) splits the envelope into its
+        // three sub-spans (routing is folded into the shard stage, see
+        // below) so the LatticeGrain-side overhead of one
         // single-key write is attributed alongside the existing
         // leaf-side / WAL-side instruments. Mirrors c2-xxiv on the
         // set-many path.

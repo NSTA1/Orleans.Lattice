@@ -32,7 +32,7 @@ Routing walks the separator list from right to left and picks the first child wh
 
 ### Leaf Nodes
 
-Each leaf grain holds its live entries in a per-activation in-memory cache - a sorted map from each key to its last-writer-wins entry - that is not part of the persisted leaf state row. On activation the cache is rebuilt from the leaf's persisted snapshot when that snapshot is newer than the leaf's checkpoint, followed by a replay of the WAL beyond it; with no usable snapshot the leaf replays the whole readable WAL window, filtered to its own key range (see [Projection Rebuild](projection-rebuild.md)). Every leaf also maintains next- and previous-sibling pointers forming a doubly-linked list for forward and reverse range scans:
+Each leaf grain holds its entries, the tombstones of deleted keys included, in a per-activation in-memory cache - a sorted map from each key to its last-writer-wins entry - that is not part of the persisted leaf state row. On activation the cache is rebuilt from the leaf's persisted snapshot when that snapshot is newer than the leaf's checkpoint, followed by a replay of the WAL beyond it; with no usable snapshot the leaf replays the whole readable WAL window, filtered to its own key range (see [Projection Rebuild](projection-rebuild.md)). Every leaf also maintains next- and previous-sibling pointers forming a doubly-linked list for forward and reverse range scans:
 
 ```mermaid
 flowchart LR

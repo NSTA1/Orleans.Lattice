@@ -1,7 +1,8 @@
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Configuration thresholds for <see cref="LatticeReplicationHealthCheck"/>.
+/// Configuration thresholds for the replication health check that
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplicationHealthCheck"/> registers.
 /// Bound via the named-options instance whose name matches the health check's
 /// registered name (default <c>"orleans.lattice.replication"</c>); a host that
 /// registers the health check under a different name binds against that name.

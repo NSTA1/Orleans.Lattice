@@ -25,7 +25,7 @@ These are non-negotiable. Each encodes a specific failure mode.
 
 8. **One PR, at the end, to main.** The epic ships as a single PR from the integration branch to `main`. Sub-agents never open PRs. The PR body closes the epic and every sub-issue it fully implements.
 
-9. **GitHub auth + hygiene.** This repo lives under `NSTA1/Orleans.Lattice` (name contains "lattice") - use the **NSTA1** account for every `gh`/issue/PR call: clear the EMU token first (`$env:GH_TOKEN=''`) then `gh auth switch --user NSTA1`. No em-dashes or mojibake in any tracked file, PR body, or issue comment.
+9. **GitHub auth + hygiene.** This repo lives under `NSTA1/Orleans.Lattice` (name contains "lattice") - use the **NSTA1** account for every `gh`/issue/PR call, selected on each command by putting its token on it (`$env:GH_TOKEN = (gh auth token --user NSTA1)`) rather than with `gh auth switch`, and push with that token in the remote URL and the git credential helper disabled, as `.github/copilot-instructions.md` ("Branching and Pull Requests") shows. No em-dashes or mojibake in any tracked file, PR body, or issue comment.
 
 10. **Sub-issue work runs as inspectable child sessions, never opaque background agents.** Every sub-issue is dispatched with `create_session` (a project session running the `feature-dev` agent in its own worktree), **not** the background `task`/sub-agent mechanism, so each appears nested under this coordinator in the app UI and the user can open, watch, and inspect it live. Set `coordinate_with_creator: true` so the session can message you back, and `notify_on_idle: "once"` so you are woken when it finishes. You steer a child session with `send_session_message` (review findings, re-work requests) and, if it was created in plan mode and pauses for approval, `respond_to_session_plan`. The whole point of this rule is auditability: a coordinator that hides its workers inside background agents leaves the user with nothing to inspect until the final PR - do not do that.
 
@@ -37,7 +37,7 @@ Run these phases in order. Do not commit, push, or open the PR until Phase 6, an
 
 ### Phase 1 - Understand the epic
 
-1. Switch to NSTA1 (principle 9). Fetch the epic: `gh issue view <epic> --repo NSTA1/Orleans.Lattice --json number,title,body,labels`.
+1. Select NSTA1 for each `gh` call (principle 9). Fetch the epic: `gh issue view <epic> --repo NSTA1/Orleans.Lattice --json number,title,body,labels`.
 2. Enumerate its sub-issues from the GitHub sub-issue link, not by guessing:
    ```powershell
    gh api repos/NSTA1/Orleans.Lattice/issues/<epic>/sub_issues --jq '.[] | {number, title, state}'

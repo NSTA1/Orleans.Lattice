@@ -10,8 +10,11 @@ namespace Orleans.Lattice;
 /// The leaf surfaces the condition rather than recovering automatically under
 /// every configured <see cref="ProjectionRebuildPolicy"/> value (the
 /// snapshot-then-WAL and full-rebuild recovery paths are not integrated).
-/// Callers respond by invoking the operator surface to drive an explicit
-/// rebuild (<see cref="ILattice.RebuildLeafProjectionAsync(int, CancellationToken)"/>).
+/// Callers respond either by restoring the tree from a backup or, accepting
+/// the loss of the trimmed range, by invoking the operator surface to drive an
+/// explicit rebuild (<see cref="ILattice.RebuildLeafProjectionAsync(int, CancellationToken)"/>),
+/// which rebuilds the leaf from what survives rather than recovering that
+/// range.
 /// <para>
 /// Only that genuine-loss condition produces this exception. The cost triggers
 /// - a gap between the persisted checkpoint and the WAL head over
@@ -42,7 +45,8 @@ namespace Orleans.Lattice;
 /// has nothing to do with a stale projection - silently converting an actionable,
 /// operator-addressable fault into a retry, a cache discard, or a swallow. A
 /// stale projection is never resolved by retrying: it is resolved only by an
-/// explicit operator rebuild (reconfiguring
+/// operator - a restore, or an explicit rebuild that accepts the loss
+/// (reconfiguring
 /// <see cref="ProjectionRebuildPolicy"/> does not help, since every value
 /// surfaces this exception). Handlers that catch the base type
 /// broadly must therefore decline this exception explicitly, for example with

@@ -135,10 +135,12 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         }
 
         // Membership of the admin-subject set *is* the tenant-admin capability, so
-        // this is an administrative membership-reference create path and carries
-        // the same directory contract the create path applies to an explicit seed
-        // set: a typo'd, retired, or not-yet-provisioned id must never be recorded
-        // as a live grant that whoever later registers it would inherit.
+        // this is an administrative membership-reference create path and validates
+        // the id against the identity directory wherever one is configured: a
+        // typo'd, retired, or not-yet-provisioned id must never be recorded as a
+        // live grant that whoever later registers it would inherit. (The shipped
+        // registration of the tenant-create facade supplies no directory, so an
+        // explicit seed set at create is not validated this way.)
         await ValidateDirectorySubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
 
         record.AddAdminSubject(subjectId, _clock.Next(), _writerId);
@@ -199,10 +201,13 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // at which that is observable, so re-check it and self-heal: re-grant this
         // call's own subject at a strictly later stamp (which supersedes the
         // tombstone this call just wrote, and only that one) and refuse the removal.
-        // Both racing callers are then told the removal was refused, and the tenant
-        // is left with at least one admin subject rather than none - the fail-closed
-        // direction. A retry of the refused call now sees a single live subject and
-        // is refused by the guard above before it writes, so this terminates.
+        // The registry commits with an optimistic compare-and-set, so the first
+        // racing caller to commit sees a join that still holds the other's subject
+        // and succeeds; only the caller whose merged result is empty re-grants its own
+        // subject and is refused, and the tenant is left with at least one admin
+        // subject rather than none - the fail-closed direction. A retry of the
+        // refused call now sees a single live subject and is refused by the guard
+        // above before it writes, so this terminates.
         if (merged.AdminSubjectCount == 0)
         {
             merged.AddAdminSubject(subjectId, _clock.Next(), _writerId);
@@ -232,10 +237,12 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     /// <summary>
     /// Validates a subject id against the upstream identity directory, so a
     /// tenant-admin grant can never be recorded against a principal that does not
-    /// exist. Follows the same contract as its siblings on the tenant-create and
-    /// authorization-admin paths: validate only when a real directory provider is
+    /// exist. Shares the gating of its siblings on the tenant-create and
+    /// authorization-admin paths - validate only when a real directory provider is
     /// active and <see cref="LatticeIdentityDirectoryOptions.ValidationRequired"/>
-    /// is set, and deny an unresolvable id before the write.
+    /// is set, and deny an unresolvable id before the write - but, like the
+    /// tenant-create check, not the authorization-admin kind check: an id that
+    /// resolves passes whatever kind of principal it resolves to.
     /// </summary>
     private async Task ValidateDirectorySubjectAsync(string subjectId, CancellationToken cancellationToken)
     {

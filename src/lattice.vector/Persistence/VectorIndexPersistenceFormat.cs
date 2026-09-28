@@ -29,7 +29,12 @@ public static class VectorIndexPersistenceFormat
     /// <summary>The number of bytes a <see cref="VectorIndexManifest"/> payload occupies.</summary>
     public const int ManifestPayloadSize = 32 + VectorIndexFormat.HeaderSize;
 
-    /// <summary>The number of bytes a <see cref="VectorIndexPartitionState"/> payload occupies.</summary>
+    /// <summary>
+    /// The number of bytes the fixed fields of a <see cref="VectorIndexPartitionState"/>
+    /// payload occupy, which is the whole payload in its compact form, where every
+    /// chunk lives under the record's epoch. A record whose chunks were written under
+    /// several epochs appends one 8-byte epoch per chunk after these fields.
+    /// </summary>
     public const int PartitionStatePayloadSize = 24;
 
     /// <summary>

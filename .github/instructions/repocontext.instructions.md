@@ -740,9 +740,13 @@ are not addressable by a session that was not there; a memory entry is both.
   correct or re-tag, not to recreate. On a memory record it also patches
   knowledge-linking edges via `addLinks` / `removeLinks`.
 - `forget` - removes an entry. Default is an immediate hard delete; pass
-  `lapse: true` (optionally with `lapseSeconds`) to re-write it with a short TTL
-  so concurrent readers drain gracefully. Prefer `lapse` when another session
-  may be reading.
+  `lapse: true` (optionally with `lapseSeconds`, default 60) to re-write it with
+  a short TTL so concurrent readers drain gracefully. Prefer `lapse` when another
+  session may be reading. On a memory entry the lapse is max-merged with the
+  expiry already in force, so it cannot shorten an entry that expires later -
+  `expiresAtUtc` on the result shows the expiry in force, and an entry that must
+  go sooner needs the hard delete. No tool call makes an entry that has an
+  expiry durable again: a write without a TTL leaves its expiry unchanged.
 
 ### Knowledge linking - typed edges between memory entries
 
@@ -961,8 +965,11 @@ algorithm for callers.
   `retrievalPhase` of `building` means searches are answered by degraded keyword
   recall and results are incomplete; `keyword_only` is an intended deployment
   with no embedding provider bound and IS ready. The full set is five values:
-  `serving`, `keyword_only`, and `nothing_registered` (no repository onboarded
-  yet) are ready; `building` and `saturated_unavailable` are not.
+  on the no-argument host call, `serving`, `keyword_only`, and
+  `nothing_registered` (no repository onboarded yet) are ready, and `building`
+  and `saturated_unavailable` are not. With `repoId`, `nothing_registered`
+  instead means that repository has no indexed files or vectors, and it reports
+  `retrievalReady: false`.
   `saturated_unavailable` means an admission gate has refused the vector plane's
   open past its declared bound - searches are degraded keyword recall, the open
   keeps retrying, and it clears by itself once admission recovers, so the remedy

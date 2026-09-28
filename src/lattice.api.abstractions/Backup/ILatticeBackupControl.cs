@@ -151,13 +151,17 @@ public interface ILatticeBackupControl
 
     /// <summary>
     /// Restores a backup into its target tree, after authorizing the target
-    /// scope fail-closed.
+    /// scope fail-closed with the <see cref="LatticeOperation.Restore"/> grant. The
+    /// target is the explicitly requested tree, or else the tree the catalogued
+    /// backup was captured from; when neither can be resolved the check is not
+    /// skipped, and the caller must instead hold that grant over the reserved
+    /// backup catalog tree.
     /// </summary>
     /// <param name="request">The restore request. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The restore outcome.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - when no target tree can be resolved - the reserved backup catalog tree.</exception>
     Task<LatticeRestoreResult> RestoreBackupAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
@@ -245,8 +249,11 @@ public interface ILatticeBackupControl
 
     /// <summary>
     /// Restores a backup into a <b>fresh</b> cluster from the durable sink alone,
-    /// after authorizing the operation fail-closed as a high-privilege
-    /// administrative disaster-recovery action. Resolves the target backup's
+    /// after authorizing the target scope fail-closed with the
+    /// <see cref="LatticeOperation.Restore"/> grant: over the explicitly requested
+    /// tree, or else the tree the sink-held manifest was captured from, falling back
+    /// to the reserved backup catalog tree when neither can be resolved, so the check
+    /// is never skipped. Resolves the target backup's
     /// manifest from the sink alone (never the catalog), walks its base chain
     /// catalog-first with a sink fallback so it works while the catalog is
     /// still empty, bootstraps the
@@ -265,7 +272,7 @@ public interface ILatticeBackupControl
     /// No backup with the requested id exists in the sink, or the backup fails
     /// pre-apply validation (a broken base chain or a missing / tampered artifact).
     /// </exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - when no target tree can be resolved - the reserved backup catalog tree.</exception>
     Task<LatticeRestoreResult> ColdRestoreAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);

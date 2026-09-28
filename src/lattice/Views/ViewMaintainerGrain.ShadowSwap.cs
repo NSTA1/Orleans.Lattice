@@ -16,20 +16,26 @@ namespace Orleans.Lattice.Views;
 /// through the durable <see cref="ViewCheckpointState.ActiveGeneration"/>:
 /// generation <c>0</c> is the legacy <c>view-{name}</c> id (so an
 /// already-materialised view keeps its tree across an upgrade) and every
-/// generation greater than <c>0</c> is the suffixed <c>view-{name}#g{N}</c>. A
-/// rebuild targets generation <c>ActiveGeneration + 1</c>, builds it fully in the
+/// generation greater than <c>0</c> is the suffixed <c>view-{name}~g{N}</c>
+/// (<c>view-{name}#g{N}</c> for a generation built before the storage-safe
+/// separator was adopted; see <see cref="LatticeViewTrees.GenerationSeparator"/>).
+/// A rebuild of a locally derived view targets generation
+/// <c>ActiveGeneration + 1</c>, builds it fully in the
 /// background, then flips the active generation - together with the resume
 /// checkpoint - in a single durable <c>WriteStateAsync</c>:
 /// the atomic swap. Readers resolve the active generation, so they move from the
-/// old fully-built tree to the new fully-built tree with no empty window.
+/// old fully-built tree to the new fully-built tree with no empty window. A
+/// <see cref="LatticeViewReplicationMode.ShipView"/> view instead stays on
+/// generation <c>0</c> and is rebuilt in place (see <c>InPlaceRebuildAsync</c>),
+/// which does expose a partly built tree while it runs.
 /// </para>
 /// <para>
 /// <b>Crash safety.</b> A crash before the swap leaves
 /// <see cref="ViewCheckpointState.ActiveGeneration"/> unchanged, so the prior
-/// generation keeps serving; the orphaned shadow under
-/// <c>view-{name}#g{old+1}</c> is exactly the next rebuild attempt's target and
-/// is cleared before that attempt re-builds, so it never leaks. The swap is a
-/// single write, so it either fully happens or not at all.
+/// generation keeps serving; the orphaned shadow under the
+/// <c>ActiveGeneration + 1</c> tree id is exactly the next rebuild attempt's
+/// target and is cleared before that attempt re-builds, so it never leaks. The
+/// swap is a single write, so it either fully happens or not at all.
 /// </para>
 /// <para>
 /// <b>Deferred reclaim.</b> The swapped-out generation tree is not deleted inline

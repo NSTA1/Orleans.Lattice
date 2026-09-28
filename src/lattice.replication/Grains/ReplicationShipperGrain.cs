@@ -2660,18 +2660,20 @@ internal sealed class ReplicationShipperGrain(
     /// (<see cref="CoalesceCrdtDrainBuffer"/>); any other mode ships the
     /// batch verbatim.
     /// <para>
-    /// For a last-writer-wins tree the receiver applies each entry LWW on
-    /// the value bytes ordered by <c>(HybridLogicalClock, OriginClusterId)</c>,
+    /// For a last-writer-wins tree the receiver applies each entry through the
+    /// core last-writer-wins merge (<c>LwwValue{T}.Merge</c>), which ranks
+    /// versions by hybrid-logical clock and breaks an exact clock tie on further
+    /// fields of the write (tombstone, expiry, value bytes, origin, provenance),
     /// so when a key is rewritten several times within a single drained
     /// batch only the highest-HLC version survives convergence; the earlier
     /// versions are invisible after apply. This pass keeps only the last
     /// (highest-HLC) coalescable point write per key and drops the earlier
     /// same-key ones. The shipper drains only its own cluster's authored
     /// writes (<see cref="ShouldShip"/> filters to <c>options.ClusterId</c>),
-    /// so every coalescable entry shares one origin and the ordering
-    /// tie-break collapses to a pure HLC comparison - the drain buffer is
+    /// so every coalescable entry shares one origin, and the drain buffer is
     /// already HLC-ascending, so the last occurrence of a key is the
-    /// highest-HLC one.
+    /// highest-HLC one; the merge's tie-break fields would decide only between
+    /// same-key versions carrying an identical clock.
     /// </para>
     /// <para>
     /// For a CRDT tree the receiver applies each entry by folding its

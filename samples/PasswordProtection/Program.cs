@@ -46,7 +46,7 @@ const string ReaderPassword = "Read0nly-Passw0rd";
 // -- Act 1: create two operator accounts ------------------------------------
 // Each credential is a salted PBKDF2-SHA256 hash (never the plaintext), stored
 // in the environment variable the authorizer looks up by username. In a real
-// deployment an operator produces these with the tools/ helper scripts and sets
+// deployment an operator produces these with tools/New-LatticeStateCredential.ps1 and sets
 // the variables out-of-band; here we mint them in-process for a one-command run.
 Console.WriteLine("== Act 1: create two operator accounts ==");
 PublishCredential(AdminUser, AdminPassword);

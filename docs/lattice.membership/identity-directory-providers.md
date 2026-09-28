@@ -3,8 +3,8 @@
 `Orleans.Lattice.Membership` separates two directories that are easy to confuse:
 
 - The **membership directory** (`ILatticeMembershipDirectory`) is the roster the
-  cluster *owns* - the groups and nested-membership edges it persists in a
-  dogfooded `ILattice` tree and resolves subjects against. A membership edge names
+  cluster *owns* - the groups and nested-membership edges it persists in
+  dogfooded `ILattice` trees and resolves subjects against. A membership edge names
   its member by id (a user or nested group id); the cluster does not persist a
   separate per-user record, so a member id is a plain subject id that is asserted
   through a credential or validated against an identity-directory provider. See
@@ -75,6 +75,8 @@ When `ValidationRequired` is `true` **and** a real provider is active (any provi
 - `AddMemberAsync` requires both the member id and the target group id to resolve: the member id to the kind implied by the member kind - a `User` id for a user member, a `Group` id for a nested-group member - and the `groupId` to a `Group` principal.
 
 The check is **fail-closed**: an id that resolves to no principal, or that resolves to a principal of the wrong `DirectoryPrincipalKind` (for example a user id supplied where a group was required), is rejected with the public `LatticeDirectoryValidationException` (which derives from `ArgumentException`) *before* any membership edge is written, so an unresolved or mis-kinded reference never leaves a partial edge behind. The exception carries the offending `PrincipalId`, the `ExpectedKind`, and the `ResolvedKind` (`null` when the id resolved to no principal at all). Over the gRPC auth binding the exception surfaces as an `InvalidArgument` status.
+
+The tenant-administration facades apply the same contract to the admin-subject ids they record, because membership of a tenant's admin-subject set is the tenant-admin capability: `ILatticeTenantAdmin.CreateTenantAsync` validates each explicitly supplied admin subject, and `ILatticeTenantAccessAdmin.AddAdminSubjectAsync` validates the subject it adds. Those paths require only that the id resolve (they do not check its kind) and reject an unresolvable id with the same `LatticeDirectoryValidationException` before the write; see [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md).
 
 When the active provider is the no-op `NullIdentityDirectory`, no validation runs regardless of `ValidationRequired`, so the exception is never raised in that configuration.
 

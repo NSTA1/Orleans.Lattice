@@ -247,13 +247,13 @@ internal static class StateToolHandlers
         CancellationToken cancellationToken,
         [Description("Logical tree identifier.")]
         string treeId,
-        [Description("When set, restrict the response to the single shard with this index instead of every shard root. When null, the graph enumerates all shard roots (up to the tree's shard count, typically 64) even for an empty tree - scope to a single shard, or rely on maxNodes, to bound the cost.")]
+        [Description("When set, restrict the response to the single shard with this index instead of every shard root. When null, the graph enumerates every shard the tree's routing map reaches (64 by default, more after an adaptive split) even for an empty tree - scope to a single shard, or rely on maxNodes, to bound the cost.")]
         int? shardIndex = null,
         [Description("When set, descend into the internal node with this id (a nodeId from a prior response) and return only that subtree.")]
         string? subPathNodeId = null,
-        [Description("Max depth of internal-node expansion (0-64; values outside the range fall back to 4).")]
+        [Description("Max depth of internal-node expansion (0-64; a negative value falls back to 4 and a value above 64 is clamped to 64).")]
         int depthLimit = StructureRequest.DefaultDepthLimit,
-        [Description("Max nodes materialised across the whole response (1-100000; values outside the range fall back to 1000).")]
+        [Description("Max nodes materialised across the whole response (1-100000; a value below 1 falls back to 1000 and a value above 100000 is clamped to 100000).")]
         int maxNodes = StructureRequest.DefaultMaxNodes)
     {
         ArgumentNullException.ThrowIfNull(query);

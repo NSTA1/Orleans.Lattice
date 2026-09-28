@@ -114,7 +114,12 @@ discoverable at a glance rather than only by inspecting silo configuration:
 
 - **All-trees grants: on / off** - whether `LatticeAuthOptions.AllTreesGrantsEnabled`
   is set, so a `Tree:*` data-plane rule is enforced across every ordinary tree.
-  While off, such a rule is inert and the server rejects authoring a new one.
+  While off, such a rule is inert and the server rejects authoring a new one. A
+  `Tree:*` rule that carries no data-plane operation is accepted either way: a
+  Telemetry or App install grant is honoured whether or not the tier is on,
+  because each is a scopeless cluster-wide capability checked against the `*`
+  scope itself, while a Replication or Tree lifecycle grant stays inert until the
+  tier is enabled.
 - **Access-admin delegation: on / off** - whether
   `LatticeAuthOptions.AccessAdministrationDelegationEnabled` is set, so a whole-tree
   `Admin` rule on the policy tree may be authored to delegate access administration.
@@ -149,8 +154,9 @@ The whole area is gated by a single coarse check, made by the plugin's own
 access gate. It is discovered with a fail-closed probe: the Explorer asks the
 server for the smallest possible page of the admin surface (a one-row group
 listing), and only if that succeeds is the area treated as available. If the
-probe is denied or the endpoint is unreachable, the area entry stays **visible
-but demoted**, grouped below a
+probe is denied, the endpoint is unreachable, or the cluster does not serve the
+auth control facade at all, a signed-in caller's area entry stays **visible
+but demoted** - it is never removed as unavailable - grouped below a
 divider and stating the permission it needs and who to ask, so the user can see
 the capability exists and ask for the grant.
 

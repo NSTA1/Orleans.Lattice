@@ -3,11 +3,12 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Thrown by <see cref="ILattice.OpenSnapshotKeyCursorAsync"/> /
 /// <see cref="ILattice.OpenSnapshotEntryCursorAsync"/> when the frozen
-/// baseline captured for the deepest shard the cursor would touch - the rows
-/// that shard's snapshot leaf would serve - holds more rows than
+/// baseline captured for the tree's deepest physical shard - the rows that
+/// shard's snapshot leaf would serve - holds more rows than
 /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>. The open captures
-/// every touched shard's baseline first and applies the gate to the largest
-/// row count before the cursor is opened, so operators can cap snapshot open
+/// every physical shard's whole baseline first, whatever range the cursor
+/// covers, and applies the gate to the largest row count before the cursor is
+/// opened, so operators can cap snapshot open
 /// cost without waiting for the first <c>Next*Async</c> call to surface the
 /// same problem mid-page. The backup package's capture engine raises it too,
 /// before it opens a snapshot, when a backup scope's live entry count exceeds
@@ -16,9 +17,10 @@ namespace Orleans.Lattice;
 /// The exception aborts the open: no cursor is opened or registered, and the
 /// captured baselines, seeded only in memory into transient per-shard snapshot
 /// leaves, are never persisted. Callers either raise
-/// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/>, narrow the range,
-/// trigger a leaf-projection rebuild, or fall back to a registry-snapshot
-/// point-in-time cursor.
+/// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/> or fall back to a
+/// registry-snapshot point-in-time cursor, which captures no baseline. For the
+/// snapshot open itself, narrowing the cursor's range does not lower the count,
+/// because the capture covers each shard's whole projection.
 /// </para>
 /// </summary>
 public sealed class LatticeSnapshotReplayBudgetExceededException : InvalidOperationException, ILatticeDomainFault

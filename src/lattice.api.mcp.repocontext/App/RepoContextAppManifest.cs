@@ -100,10 +100,12 @@ internal static class RepoContextAppManifest
 
     /// <summary>
     /// Computes the app-scoped backup plan from <paramref name="manifest"/>'s tree
-    /// declarations: trees declared <see cref="AppTreeDeclaration.Rebuildable"/> are rederived
-    /// after a restore, every other tree has its bytes restored. Each tree is named by its
-    /// effective physical id - the adopted id when set, otherwise <c>a/{slug}/{name}</c> -
-    /// composed for <paramref name="tenant"/>.
+    /// declarations: it classifies the trees an app-scoped recovery would re-derive
+    /// (those declared <see cref="AppTreeDeclaration.Rebuildable"/>) versus restore
+    /// from backup bytes (every other tree). No shipped path consumes the plan yet,
+    /// so nothing re-derives or restores on the strength of it. Each tree is named by
+    /// its effective physical id - the adopted id when set, otherwise
+    /// <c>a/{slug}/{name}</c> - composed for <paramref name="tenant"/>.
     /// </summary>
     /// <param name="manifest">The manifest whose trees to classify.</param>
     /// <param name="tenant">The tenant whose install the plan covers.</param>

@@ -1071,15 +1071,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Operator-tooling rebuild: clears the materialised projection state
     /// (entries, projection hash, persisted checkpoint offset, pending-tx
     /// machinery) on every leaf in this shard's chain and forces each
-    /// leaf to deactivate so its next activation replays the per-shard
-    /// write-ahead log from offset <c>0</c> through the existing
-    /// activation-time materialiser. Topology-bearing slots (tree id,
+    /// leaf to deactivate so its next activation re-materialises the
+    /// projection through the existing activation-time path, reloading the
+    /// leaf's snapshot where a usable one exists (the rebuild does not clear
+    /// it) and replaying the write-ahead log after it. Topology-bearing slots (tree id,
     /// shard index, sibling pointers, key range bounds, parent pointer,
     /// split markers) are preserved verbatim so the rebuild observes
     /// the same WAL-filter ownership context the pre-rebuild leaves
-    /// used. Used after a corrupt-projection incident or a
-    /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> blow-out to
-    /// recover the shard state from the durable WAL source of truth.
+    /// used. Used after a corrupt-projection incident, where it re-derives
+    /// only the part no snapshot covers, or to bring back leaves refused
+    /// with <see cref="LeafProjectionStaleException"/> once the loss of the
+    /// trimmed range is accepted; an over-budget replay against
+    /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is advisory and
+    /// needs no rebuild.
     /// <para>
     /// Failures propagate. A transient storage failure on a single leaf
     /// aborts the fan-out with the unaffected leaves' rebuilds already
@@ -1486,9 +1490,10 @@ internal interface IShardRootGrain : IGrainWithStringKey
     //  Online shadow-forwarding primitive
     // ==========================================================================
     //  Used by the coordinator that drives an online copy between physical
-    //  trees (e.g. online resize). During the operation, every accepted
-    //  mutation on this shard is mirrored in parallel to the corresponding
-    //  shard on the destination tree. After the registry alias has been
+    //  trees (e.g. online resize). During the operation, each last-writer-wins
+    //  mutation on this shard (not a typed CRDT delta or a bulk append) is
+    //  mirrored in parallel to the shard with the same index on the
+    //  destination tree. After the registry alias has been
     //  atomically swapped, the shard rejects new operations with
     //  StaleTreeRoutingException so the caller's LatticeGrain can refresh
     //  its cached routing snapshot and retry against the destination tree.
@@ -1497,7 +1502,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Transitions this shard into the <see cref="ShadowForwardPhase.Draining"/>
-    /// phase, mirroring every accepted mutation to the corresponding shard on
+    /// phase, mirroring each of its last-writer-wins mutations (not a typed CRDT
+    /// delta or a bulk append) to the shard with the same index on
     /// <paramref name="destinationPhysicalTreeId"/>. Idempotent for a matching
     /// <paramref name="operationId"/> - repeated calls are no-ops. Refused with
     /// <see cref="InvalidOperationException"/> if the shard is already in a

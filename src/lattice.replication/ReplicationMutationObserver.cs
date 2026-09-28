@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Replication;
 /// Observes every locally-originating mutation at commit time and, when
 /// the tree is declared for replication and the mutation passes the
 /// per-key filters, nudges the registered <see cref="IReplogSink"/> so
-/// the background log-tailing shipper for that tree pumps immediately.
+/// the background log-tailing shipper for that tree is woken - reactivated if
+/// it had been deactivated - and its next phase tick drains the new entries.
 /// The durable change-feed record is written separately by the
 /// foreground leaf commit-log writer in the core assembly; this observer
 /// no longer builds a <c>WalRecord</c> or captures any vector clock.
@@ -19,8 +20,9 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The observer fires on the grain's scheduler. The sink call is
 /// awaited inline, so any latency in <see cref="IReplogSink.WriteAsync"/>
-/// is added to the caller's write latency. The default no-op sink is
-/// O(1).
+/// is added to the caller's write latency. The default doorbell-ringing sink
+/// returns synchronously: each per-peer ring is started, or folded into one
+/// already in flight, without being awaited.
 /// </para>
 /// <para>
 /// <see cref="LatticeMutation.OriginClusterId"/> is preserved verbatim
@@ -172,7 +174,8 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
 
         // The tree is declared, the key passed the filters, and the
         // mutation is not maintenance: nudge the registered sink so the
-        // background log-tailing shipper for this tree pumps immediately.
+        // background log-tailing shipper for this tree is woken (reactivated
+        // if it had been deactivated) and its next phase tick drains the entry.
         // The durable change-feed record was already written to the leaf
         // WAL by the foreground commit-log writer; nothing is built here.
         await _sink.WriteAsync(mutation.TreeId, cancellationToken).ConfigureAwait(false);

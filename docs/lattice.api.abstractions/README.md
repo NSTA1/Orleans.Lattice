@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Abstractions
 
-The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration, and installable-app control) and their request / response models, and nothing else.
+The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration, and installable-app control), their request / response models, and the typed exceptions those interfaces document, and nothing else.
 
 ## What is it?
 
@@ -10,6 +10,7 @@ The Orleans.Lattice API surface is built in layers. Each **facade** package (`Or
 
 - **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` (tenant administration); `ILatticeAppsControl` (installable-app control); and `ILatticeRegionCatalog` (region discovery).
 - **Their request / response models** - the results, pages, records, and requests those interfaces exchange, each with its stable Orleans serialization alias.
+- **Their typed exceptions** - the faults the interfaces document, for example `LatticeStateCursorExpiredException` (state), `TelemetryBackendException`, `TelemetryQueryBoundsException` and `TelemetryQueryNotFoundException` (telemetry), `TenantNotFoundException` and its tenant-administration siblings, and `TreeNotEmptyException` and `BulkLoadOrderException` (tree administration).
 
 ### Region contract
 
@@ -30,7 +31,7 @@ Publishing the contract as a real, versioned public package removes those cross-
 
 ## Core properties
 
-- **Contract-only.** Interfaces and DTOs, no behaviour. There is nothing to register from this package directly.
+- **Contract-only.** Interfaces, DTOs and their typed exceptions, no behaviour. There is nothing to register from this package directly.
 - **Stable wire identity.** Every serializable model keeps its existing `[Alias]`, so the move between assemblies is wire-compatible: persisted and in-flight payloads are unaffected.
 - **Source-compatible.** Namespaces are unchanged, so a consumer's `using` directives and type references keep resolving after the move.
 - **Trusted system-origin seam.** A co-hosted infrastructure consumer that must run a trusted, gate-bypassing introspection uses the public `LatticeSystemOrigin` seam in the core library rather than an internal-visibility grant.

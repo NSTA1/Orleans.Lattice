@@ -13,7 +13,8 @@ public interface IExplorerAuthSchemeProbe
     /// Probes <paramref name="address"/> for its advertised auth schemes. Returns
     /// <see cref="ExplorerAuthSchemeAdvertisement.Empty"/> when the endpoint does
     /// not advertise (an older server) or the probe cannot reach it, so the
-    /// caller falls back to manual scheme selection rather than failing.
+    /// sign-in falls back to the Basic (username and password) flow rather than
+    /// failing.
     /// </summary>
     /// <param name="address">The state-API endpoint address.</param>
     /// <param name="allowUnencryptedHttp2">Whether to permit an <c>http://</c> (h2c) endpoint.</param>
@@ -29,7 +30,7 @@ public interface IExplorerAuthSchemeProbe
     /// user has any credential, so these non-secret routing headers (for example an
     /// origin-routing header a fronting proxy requires) are the only thing that can
     /// gate it; without them a proxy-guarded endpoint rejects the unauthenticated
-    /// probe and discovery wrongly degrades to manual/Basic. The default
+    /// probe and the sign-in wrongly falls back to Basic. The default
     /// implementation forwards to <see cref="ProbeAsync(string, bool, CancellationToken)"/>
     /// so an existing probe that predates transport headers keeps working (it
     /// simply cannot reach a header-gated endpoint).

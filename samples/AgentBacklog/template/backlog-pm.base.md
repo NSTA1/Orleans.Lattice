@@ -106,8 +106,12 @@ These are non-negotiable. Each encodes a specific failure mode.
    do not restate them, reference them.
 
 10. **GitHub auth and text hygiene.** This repository is `{owner}/{repo}`, and
-    every `gh` call runs as **{ghAccount}**: clear
-    the ambient token (`$env:GH_TOKEN=''`) then `gh auth switch --user {ghAccount}`. No
+    every `gh` call runs as **{ghAccount}**: select the account on each command by
+    putting its token on it (`$env:GH_TOKEN = (gh auth token --user {ghAccount})`)
+    rather than with `gh auth switch`, which changes the active account for every
+    other session sharing the machine's `gh` configuration, and push with that token
+    embedded in the remote URL and the git credential helper disabled for that one
+    push, since the helper can authenticate as a different identity. No
     em-dash (U+2014) and no mojibake in any issue body, comment, memory entry or
     tracked file you write. Plain ASCII hyphens only.
 

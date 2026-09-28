@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Tests.Views;
 
 /// <summary>Unit tests for the aggregation view internal row codec.</summary>
 [TestFixture]
-public class AggregationRowCodecTests
+public partial class AggregationRowCodecTests
 {
     [Test]
     public void IsReservedGroupKey_true_for_empty_and_nul_prefixed()

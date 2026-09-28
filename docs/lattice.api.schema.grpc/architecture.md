@@ -52,6 +52,8 @@ The binding also translates the facade's other failure shapes into stable gRPC s
 | Request cancelled | `Cancelled` | On the server-streaming `StreamDeadLetters` RPC a cancelled call simply ends the stream instead. |
 | Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. |
 
+The server-streaming `StreamDeadLetters` RPC maps a narrower set: an authorization denial or fail-closed tenant resolution to `PermissionDenied`, an invalid argument to `InvalidArgument`, and a cancellation to a clean end of the stream. Any other fault on the stream - including an `InvalidOperationException` or a `KeyNotFoundException` - surfaces as `Internal`.
+
 The `FailedPrecondition` shape is the one an operator most often needs to act on for versioning: the endpoint is reachable, but the silo intentionally did not register the optional versioning add-on. The detail should be clear enough for an operator UI to explain which registration is missing.
 
 ### Quota refusals

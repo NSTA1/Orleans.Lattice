@@ -51,8 +51,9 @@ Expected tail:
 [OK] tenant lifecycle ran end-to-end; the reserved tenant and the operator seam stayed fail-closed.
 ```
 
-The process exits `0` on success and `1` if any control-plane guard fails to
-hold.
+The process exits `0` on success and `1` if either Act 4 guard - the reserved-tenant
+refusal or the non-operator denial - fails to hold. An unexpected result in Act 3 (for
+example a re-create that is not refused) is printed but does not change the exit code.
 
 ## How authorization works here
 

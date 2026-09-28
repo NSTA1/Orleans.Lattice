@@ -4,14 +4,17 @@ namespace Orleans.Lattice;
 /// Payload delivered to every registered
 /// <see cref="IWalSaturationObserver"/> on each per-tree transition of
 /// the WAL saturation signal. Carries the tree id, the previous and new
-/// states, optional per-partition / per-shard attribution for the
-/// underlying signal source, and the wall-clock instant at which the
-/// transition was observed by the sampler.
+/// states, the partition and shard the sampler associated with the tree in
+/// that sample window, the input the transition was attributed to, and the
+/// wall-clock instant at which the transition was observed by the sampler.
 /// <para>
 /// Observers may use the attribution slots to graph hotspot partitions
-/// or shards; a transition driven by aggregate behaviour (for example
-/// dispatch-timeout rate summed across several partitions) leaves both
-/// slots <c>null</c>.
+/// or shards, but the slots are filled independently of
+/// <see cref="Cause"/>: they record where admission depth and trips were seen
+/// in the sample window, not which input drove the transition, so a slot can
+/// be populated on a transition some other input drove, including a
+/// transition back to <see cref="WalSaturationState.Healthy"/>. Read them
+/// together with <see cref="Cause"/> rather than as the cause.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -32,20 +35,27 @@ public readonly record struct WalSaturationStateChange
     public WalSaturationState NewState { get; init; }
 
     /// <summary>
-    /// Optional writer-partition index attributable to this transition
-    /// when the source signal is the per-partition admission-semaphore
-    /// depth. <c>null</c> when no single partition dominated (for
-    /// example a transition driven by dispatch-timeout rate, or by
-    /// multiple partitions crossing the threshold in the same sample
-    /// window).
+    /// The writer partition whose admission semaphore had the highest depth
+    /// (in-flight appends over its cap) among the tree's partitions when the
+    /// sampler read them. <c>null</c> when no partition had an append in flight
+    /// against a bounded semaphore at that moment. Filled whatever
+    /// <see cref="Cause"/> the transition carries, so it can name a partition on
+    /// a transition driven by another input.
     /// </summary>
     [Id(3)]
     public int? AttributedPartition { get; init; }
 
     /// <summary>
-    /// Optional shard index attributable to this transition when the
-    /// source signal is recent dispatch-timeout trips. <c>null</c> when
-    /// no single shard dominated.
+    /// The first shard the sampler found with any dispatch-timeout,
+    /// provider-failure, flush-latency or durable pin-write latency trip in the
+    /// sample window, whether or not that input crossed its own threshold; when
+    /// several shards recorded trips, which one is reported is not specified.
+    /// For the first three inputs the index is the tree's WAL partition; for a
+    /// durable pin-write trip it is a materialiser pin-store shard (see
+    /// <see cref="LatticeOptions.WalMaterialiserPinShards"/>), so the two index
+    /// spaces are not interchangeable. <c>null</c> when no shard recorded a
+    /// trip. Like <see cref="AttributedPartition"/>, it is filled whatever
+    /// <see cref="Cause"/> the transition carries.
     /// </summary>
     [Id(4)]
     public int? AttributedShard { get; init; }
@@ -62,8 +72,10 @@ public readonly record struct WalSaturationStateChange
     /// identify the subsystem under pressure; this names it. Best-effort and
     /// single-valued: when several inputs cross in the same window the first
     /// evaluated is reported. <see cref="WalSaturationCause.None"/> on every
-    /// transition back to <see cref="WalSaturationState.Healthy"/>, and on any
-    /// transition published by a host predating cause attribution.
+    /// transition back to <see cref="WalSaturationState.Healthy"/>, on a
+    /// transition to <see cref="WalSaturationState.Throttled"/> that only the
+    /// <see cref="LatticeOptions.WalSaturationRecoveryWindow"/> hold produced,
+    /// and on any transition published by a host predating cause attribution.
     /// </summary>
     [Id(6)]
     public WalSaturationCause Cause { get; init; }

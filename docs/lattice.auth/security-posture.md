@@ -48,6 +48,7 @@ The layer assumes the following trust model:
 |---|---|---|
 | Data plane (external) | gRPC state / data API to the `ILattice` facade grain | The facade calls the registered access gate on every operation. |
 | Control plane (external) | The admin API (`ILatticeAuthAdmin`) | Every auth-admin call, reads included, is authorized against the reserved authorization namespace, which is fail-closed (see [Fail-closed guarantees](#fail-closed-guarantees)). |
+| App lifecycle (external) | The app control facade (`ILatticeAppsControl`) and its gRPC binding | Every facade verb except the advisory capability probe - and every app-registry and activation transition behind it, even when called directly - authorizes the scopeless `AppInstall` capability over the `*` sentinel, which is fail-closed (see [Fail-closed guarantees](#fail-closed-guarantees)). |
 | Read catalog (external) | State-API catalog and structure endpoints | Existence of a tree/view/key is hidden from a caller who cannot read the underlying source (see [Fail-closed guarantees](#fail-closed-guarantees)). |
 | Explorer (operator tool) | The Explorer's gRPC client to the state API | Credentials only attach over a transport gRPC can confirm is secure (see [Transport-security (TLS) expectations](#transport-security-tls-expectations)). |
 | Internal grain calls | Direct in-cluster calls to the shard, leaf, and write-ahead-log shard grains, to the internal coordinator and saga grains, and to the facade grain's internal-only system-tree and replication-apply interfaces | Defense-in-depth internal-origin assertion (see [Trust boundary for internal grain calls](#trust-boundary-for-internal-grain-calls)). |
@@ -66,8 +67,14 @@ path:
   bootstrap administrator (or an explicitly modelled grant) is ever an
   administrator. The same isolation governs the tenant-registry (`sys-tenant-*`)
   namespace, the app-registry (`sys-app-*`) namespace, the tenant-administration capability ids, and a cluster-wide
-  capability request on the `*` sentinel (such as `Telemetry`): each is granted
-  only by an explicit matched allow rule.
+  capability request on the `*` sentinel (such as `Telemetry` or `AppInstall`): each
+  is granted only by an explicit matched allow rule.
+- **App-owned rules are write-protected.** A policy-store write or delete of a rule
+  id in the app-owned `app:` namespace (`LatticeAppRuleIds.Prefix`) is rejected with
+  `LatticeAppOwnedRuleException` unless the caller is already running under system
+  origin, as the app compiler is; a bootstrap administrator is no exception. The
+  check runs before anything is read or written, so a rejected delete does not
+  disclose whether the rule exists.
 - **Denied mutations leave no partial state.** A denied single-key write,
   delete, range delete, CRDT apply, batch write, atomic multi-key write, or bulk
   load throws before any leg of the operation is applied. The adversarial

@@ -66,7 +66,10 @@ internal sealed class AtomicActionState
 
     /// <summary>
     /// The zero-based index of the forward step that faulted, or
-    /// <see langword="null"/> when no forward fault has occurred.
+    /// <see langword="null"/> when no forward fault has occurred. When a
+    /// compensating effect then faults past its retry budget, the saga
+    /// overwrites it with the index of the step whose compensation faulted
+    /// before parking in <see cref="AtomicActionPhase.CompensationFailed"/>.
     /// <para>
     /// Nullable rather than a <c>-1</c> sentinel (issue 1888). A grain-storage
     /// serializer omits any member equal to <c>default(T)</c>, so under an
@@ -81,7 +84,11 @@ internal sealed class AtomicActionState
     /// </summary>
     [Id(4)] public int? FailedStepIndex { get; set; }
 
-    /// <summary>The message of the originating forward fault, or <c>null</c>.</summary>
+    /// <summary>
+    /// The message of the originating forward fault, or <c>null</c>. Overwritten
+    /// with the compensating fault's message when the saga parks in
+    /// <see cref="AtomicActionPhase.CompensationFailed"/>.
+    /// </summary>
     [Id(5)] public string? FailureMessage { get; set; }
 
     /// <summary>

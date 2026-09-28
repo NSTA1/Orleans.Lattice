@@ -25,15 +25,18 @@ namespace Orleans.Lattice.GrainIndex.Registry;
 /// <description>
 /// <c>seen/{indexName}/{encodedGrainKey}</c> - the activation-path marker
 /// recording that an indexed grain has already been projected, so an activation
-/// does not re-project a grain the backfill has covered. Reserved here so the
-/// layout is fixed before the first writer exists.
+/// does not re-project a grain the backfill has covered. Written by the enroller
+/// or the outbox drain once the grain's projection is confirmed, in the same
+/// atomic batch that removes its pending-projection entry, and read by the
+/// backfill to skip grains that are already indexed.
 /// </description>
 /// </item>
 /// <item>
 /// <description>
 /// <c>ckpt/{indexName}</c> - the backfill resume checkpoint, so a rebuild that
 /// is interrupted restarts where it stopped rather than from the beginning.
-/// Reserved on the same terms.
+/// Written by the index's backfill coordinator on every state change of the
+/// crawl.
 /// </description>
 /// </item>
 /// <item>

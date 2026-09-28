@@ -11,19 +11,22 @@ internal enum ShadowForwardPhase
 {
     /// <summary>
     /// Drain is in progress on this shard. The source shard is authoritative
-    /// for reads and writes; every accepted mutation is mirrored in parallel
-    /// to the destination shard. A background drain concurrently copies the
-    /// source shard's existing entries to the destination using the raw-entry
-    /// bulk-load path; LWW convergence is guaranteed because both the live
-    /// forwards and the drain entries carry their original HLC timestamps.
+    /// for reads and writes; each of its last-writer-wins mutations (not a
+    /// typed CRDT delta or a bulk append) is mirrored in parallel to the
+    /// destination shard with the same index. A background drain concurrently
+    /// copies the source shard's existing entries to the destination with a
+    /// last-writer-wins merge. The drained entries keep their source HLC
+    /// timestamps, but a live forward is stamped by the destination leaf's own
+    /// clock (see the shadow-forward notes on <c>ShardRootGrain</c>), so which
+    /// version of a key survives can depend on which of the two arrives first.
     /// </summary>
     Draining = 1,
 
     /// <summary>
     /// The background drain has completed for this shard, but the alias has
-    /// not yet been swapped. The shard continues to mirror every accepted
-    /// mutation so that writes landing during the remaining swap window are
-    /// not lost. Reads are still served locally.
+    /// not yet been swapped. The shard continues to mirror the same mutations
+    /// as in <see cref="Draining"/>, so that those writes landing during the
+    /// remaining swap window are not lost. Reads are still served locally.
     /// </summary>
     Drained = 2,
 

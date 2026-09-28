@@ -138,7 +138,7 @@ internal sealed class ReplicationMaintenanceGrain(
                 // promises. Without this, a transient WriteStateAsync
                 // failure latches the dirty in-memory stamp at nowTicks
                 // and the GC pass is skipped for the full
-                // MaintenanceGcInterval (default many minutes).
+                // MaintenanceGcInterval (5 seconds by default).
                 state.State.LastGcTicks = prevGcTicks;
                 Logger.LogWarning(ex,
                     "WAL garbage-collection pass failed for {Context}; will retry on next phase tick",

@@ -27,10 +27,12 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
     Task EnsureActiveAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Best-effort writer-side doorbell signalling that
-    /// ShardedReplogSink just appended a fresh WalRecord. The
-    /// shipper short-circuits its next steady-state timer wait and
-    /// pumps immediately. Idempotent and non-blocking.
+    /// Best-effort writer-side doorbell signalling that a commit appended fresh
+    /// entries to the tree's write-ahead log. Returns immediately and ships
+    /// nothing itself: its only effect is to (re)activate the shipper, whose
+    /// phase timer - armed on every activation, with an immediate first tick -
+    /// performs the drain. An already-active shipper drains on its next phase
+    /// tick regardless. Idempotent and non-blocking.
     /// </summary>
     Task OnDoorbellAsync(CancellationToken cancellationToken);
 

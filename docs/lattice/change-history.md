@@ -37,8 +37,9 @@ live stream lets a reader follow new revisions as they happen:
    for ad-hoc inspection, but it is bounded by WAL garbage collection, so older
    revisions may already have been trimmed.
 3. **Live feed (forward-only).** Independently of either stored source, a reader
-   can subscribe to a tree's live mutation stream (`ObserveChangesAsync` on the
-   State API) to be notified of new revisions in real time. The Explorer's History
+   can subscribe to a tree's live mutation stream (`ILatticeStateObserver.ObserveAsync`
+   on the State API, or `ObserveChangesAsync` on its gRPC client) to be notified of
+   new revisions in real time. The Explorer's History
    timeline uses this for its live-follow mode: it renders the stored revisions once,
    then appends new revisions as they arrive rather than polling for them.
 

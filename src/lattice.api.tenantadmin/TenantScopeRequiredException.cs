@@ -6,10 +6,12 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// wire-supplied tenant id: it derives the operating tenant solely from the
 /// ambient <see cref="Orleans.Lattice.LatticeActiveTenantContext"/>, so a call
 /// made outside a validated active-tenant scope has no namespace to confine to
-/// and is refused fail-closed rather than silently defaulting to a tenant. A
-/// transport binding surfaces this as an unauthenticated / failed-precondition
-/// outcome. Mirrors the sibling tenant-admin exceptions: a plain exception
-/// deriving directly from <see cref="Exception"/>.
+/// and is refused fail-closed rather than silently defaulting to a tenant. No
+/// shipped transport binding exposes the tenant-scoped facade or maps this
+/// exception to a transport status; a host that exposes the facade should surface
+/// it as a failed-precondition outcome rather than as an internal fault. Mirrors
+/// the sibling tenant-admin exceptions: a plain exception deriving directly from
+/// <see cref="Exception"/>.
 /// </summary>
 public sealed class TenantScopeRequiredException : Exception
 {

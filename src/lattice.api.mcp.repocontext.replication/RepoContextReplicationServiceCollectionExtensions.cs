@@ -24,21 +24,27 @@ public static class RepoContextReplicationServiceCollectionExtensions
     /// peers, secrets, per-tree options) through <paramref name="configure"/> exactly
     /// as it would for
     /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>,
-    /// which this method calls. The reserved repository-context tree-mode map (see
-    /// <see cref="RepoContextReplicatedTrees"/>) is then merged in afterwards through a
+    /// which this method calls. The reserved repository-context tree-mode map is then
+    /// merged in afterwards through a
     /// <c>PostConfigureAll</c>, so the correct modes win regardless of the order in
     /// which the host configures its own replicated-trees map.
     /// </para>
     /// <para>
-    /// <b>Membership is pinned.</b> The vector-membership presence tree
-    /// (<see cref="RepoContextTrees.VectorMembership"/>) is <b>force-enrolled</b> under
-    /// the add-wins <see cref="LatticeMergeMode.OrFlag"/> even if the host declared it
+    /// <b>Membership and memory are pinned.</b> The vector-membership presence tree
+    /// (<c>repo-context-vector-membership</c>) is <b>force-enrolled</b> under the
+    /// add-wins <see cref="LatticeMergeMode.OrFlag"/> even if the host declared it
     /// under a different mode: it is authored as an <see cref="Orleans.Lattice.OrFlag"/>
     /// and must converge add-wins by CRDT merge, because a source embedded on one
     /// cluster and pruned on another would otherwise resolve delete-wins and silently
-    /// lose the embedding. Every other repository-context tree defaults to
+    /// lose the embedding. The agent-memory tree (<c>repo-context-memory</c>) is likewise
+    /// force-enrolled under the multi-value <see cref="LatticeMergeMode.MvRegister"/>, so
+    /// two clusters' concurrent writes to the same memory key both survive instead of one
+    /// being lost last-writer-wins. Every other repository-context tree defaults to
     /// <see cref="LatticeMergeMode.LwwRegister"/> - the mode matching its whole-value
-    /// authoring - but a deliberate per-tree host override is respected.
+    /// authoring. A host override is respected only for the per-session reuse tree
+    /// (<c>repo-context-session</c>): overriding a source-derived index-plane tree
+    /// (structural, symbol, content, cross-reference, or the vector payload and metadata
+    /// projections) to any other mode is rejected by options validation.
     /// </para>
     /// <para>
     /// The cross-cluster embedding-gap scanner stays local to each cluster; this helper

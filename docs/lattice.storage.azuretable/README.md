@@ -69,6 +69,8 @@ siloBuilder.AddAzureTableWalStorage(o =>
 });
 ```
 
+The WAL is only half of a durable tree: each leaf's state row and its snapshots live in the grain storage provider `AddLattice` registers, and the WAL garbage collector trims entries once a snapshot there covers them, so a production deployment pairs this provider with a durable grain storage provider too.
+
 ## Reference
 
 For day-to-day use and operations:

@@ -96,6 +96,13 @@ under default settings; see
 [API Reference - Scan reliability](api.md#scan-reliability) for tuning
 guidance.
 
+Independently of topology, a multi-key read (`GetManyAsync`, the counts,
+and the key and entry scans) that reaches a key carrying a prepared saga
+mutation while the transaction registry cannot be reached throws the
+retryable `LatticeTransactionOutcomeUnavailableException` instead of
+guessing that key's value. A read whose keys carry no prepared mutation
+completes normally while the registry is unreachable.
+
 The streaming scan wrappers (`ScanKeysAsync`, `ScanEntriesAsync`)
 additionally recover from mid-scan enumeration aborts (silo failover,
 idle expiry, cold start, scale-down, and - in proportion to concurrent load
@@ -112,9 +119,9 @@ saga-decision view.
 | Operation | Guarantee | Notes |
 |-----------|-----------|-------|
 | `BulkLoadAsync` | **Linearizable on an empty tree** | Throws if any shard already has data. After return, all entries are visible under the guarantees above. |
-| `SnapshotAsync(Offline)` | **Linearizable point-in-time copy** | Every source shard is locked (reads and writes throw `InvalidOperationException`) when the copy starts, and each is unlocked as soon as its own copy completes, so the source becomes available again shard by shard. The destination is an exact snapshot of the source at the lock instant. |
-| `SnapshotAsync(Online)` | **Strongly consistent** | The source tree remains available for linearizable point traffic and strongly-consistent scans throughout. The destination converges to a consistent view of the source at the drain's completion instant regardless of how live writes interleave with the drain. |
-| `ResizeAsync` / `UndoResizeAsync` | **Linearizable (online)** | Point operations and strongly-consistent scans continue throughout. Callers observe at most a single transparent retry at the alias swap. Zero data loss under concurrent load. |
+| `SnapshotAsync(Offline)` | **Linearizable point-in-time copy, within the limits noted** | The source's physical shards `0` to `ShardCount - 1` of its pinned shard count are locked (reads and writes throw `InvalidOperationException`) when the copy starts, and each is unlocked as soon as its own copy completes, so the source becomes available again shard by shard. The destination holds the live entries those shards held when they were locked; tombstones and expired entries are not copied. That is an exact copy only while the source's shard map is still the default: a shard an adaptive split allocated from `ShardCount` upward is neither locked nor copied, so writes to the keys it holds continue during the copy and do not reach the destination, and because the destination routes by the default shard map, a key in any slot the source's map no longer assigns to its default shard - every key on a split-added shard included - reads on the destination as missing or at an out-of-date value (explained below the table). |
+| `SnapshotAsync(Online)` | **Strongly consistent, within the limits noted** | The source tree remains available for linearizable point traffic and strongly-consistent scans throughout. The source's shards `0` to `ShardCount - 1` mirror their writes to the destination shard of the same index while the drain copies their live entries, and for the writes the mirror carries, the destination converges to the source's live entries at the drain's completion instant regardless of how those writes interleave with the drain. The mirror does not carry typed CRDT deltas (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync`, and every typed CRDT accessor, all of which write through them), so a delta applied to a key after the drain has copied it does not reach the destination. Tombstones and expired entries are not copied: a key deleted before the snapshot began, or already expired when the drain reached it, has no entry on the destination, so a mirrored merge with an older timestamp - a replicated write, for example - is applied there, whereas the source, still holding the delete or the expired entry, discards it. Split-added shards are neither mirrored nor copied, and keys in moved slots read on the destination as for `Offline`. |
+| `ResizeAsync` / `UndoResizeAsync` | **Linearizable (online), within the limits noted** | Point operations and strongly-consistent scans continue throughout. Callers observe at most a single transparent retry at the alias swap. The rebuild is an `Online` snapshot of shards `0` to `ShardCount - 1` into the resized copy, and after the swap the tree routes by the default shard map over its pinned count, so the `Online` limits carry into the tree itself: a key in any slot the old shard map did not assign to its default shard, every key on a split-added shard included, reads as missing or at an out-of-date value; a typed CRDT delta applied between the drain copying its key and the swap is lost; and deletes made before the resize, like entries already expired when the drain reached them, are not carried, so a merge with an older timestamp - a replicated write, for example - that arrives during or after the resize is applied instead of discarded. `UndoResizeAsync` after the swap restores the old physical tree and deletes the resized copy, so every write the resized tree accepted after the swap is discarded. |
 | `ReshardAsync` | **Linearizable (online)** | Reads and writes remain linearizable across every concurrent shard split. |
 | `MergeAsync(sourceTreeId)` | **Eventually convergent (LWW)** | For each key present in both trees, the entry with the higher HLC wins. On completion the destination is strongly consistent with the LWW merge of both inputs. The source tree is unmodified. |
 | `DeleteTreeAsync` | **Linearizable (takes tree offline)** | After return, every subsequent read or write throws `InvalidOperationException` until `RecoverTreeAsync`. Data is retained for `SoftDeleteDuration` before purge. |
@@ -123,6 +130,28 @@ saga-decision view.
 | `TreeExistsAsync`, `GetAllTreeIdsAsync` | **Eventually consistent (registry read)** | May briefly lag a concurrent registration or deletion observed by another client. |
 | `IsMergeCompleteAsync`, `IsSnapshotCompleteAsync`, `IsResizeCompleteAsync`, `IsReshardCompleteAsync` | **Monotonic** | Once `true` for a given operation, never returns `false` again. Vacuously `true` when no operation of that kind has ever been initiated. |
 | `DiagnoseAsync` | **Point-in-time snapshot (non-linearizable)** | A best-effort per-shard health sample for dashboards and post-mortems. Repeat calls within `LatticeOptions.DiagnosticsCacheTtl` return the same cached result. **Not for hot-path or correctness-critical decisions** - use the operation-specific APIs instead. See [Diagnostics](diagnostics.md). |
+
+Why some keys misread after a copy: `SnapshotAsync` locks (in
+`Offline` mode), mirrors (in `Online` mode) and copies the source's physical
+shards `0` to `ShardCount - 1` of its pinned shard count, each into the
+destination shard of the same index, and it registers the destination with
+the default routing over that count - the default map over 4096 virtual
+slots - rather than with the source's `ShardMap`; `ResizeAsync` rebuilds a
+tree through the same copy and drops the old shard map at the swap. That
+placement agrees with the destination's routing only for slots the source's
+map still assigns to their default shard. A tree an installed app created
+with a `virtualShardCount` in its manifest routes over that slot count from
+its first registration, so if that count is not 4096 its keys all land where
+the destination's routing looks for them only when its pinned shard count
+divides both slot counts; otherwise some are misplaced even on a tree no
+split has touched. An adaptive split moves slots to a shard numbered from
+`ShardCount` upward without changing the pinned count; an online reshard
+repins the count when it completes, but the map its splits produced is not,
+in general, the default map for the new count; and a shard consolidation
+re-points slots from one shard to another. A shard that gives up a slot keeps
+its own copy of that slot's keys, so on a tree any of these has reshaped, the
+destination serves a moved key from whatever copy its default shard held -
+an out-of-date one, or none.
 
 ---
 
@@ -142,7 +171,7 @@ across multiple grain calls:
 
 | Read path | Atomic visibility |
 |-----------|-------------------|
-| `GetAsync`, `ExistsAsync`, `GetWithVersionAsync`, `GetOrSetAsync`, `SetIfVersionAsync` | Per-key linearizable; an in-flight saga's writes stay invisible until the saga commits, at which point all of its keys flip atomically. Until then a read sees each key's pre-saga value, while `GetOrSetAsync` and `SetIfVersionAsync` treat a key carrying a pending saga write as absent. |
+| `GetAsync`, `ExistsAsync`, `GetWithVersionAsync`, `GetOrSetAsync`, `SetIfVersionAsync` | Per-key linearizable; an in-flight saga's writes stay invisible until the saga commits, at which point all of its keys flip atomically. Until then a read sees each key's pre-saga value, while `GetOrSetAsync` and `SetIfVersionAsync` treat a key carrying a pending saga write as absent. When the transaction registry reports a saga's outcome as indeterminate (for example a decision that aged out of `TxDecisionRetention`), `GetAsync`, `ExistsAsync` and `GetWithVersionAsync` read the key as absent rather than at either value; when the registry cannot be reached they throw the retryable `LatticeTransactionOutcomeUnavailableException`. |
 | `GetManyAsync`, `CountAsync`, `CountPerShardAsync` | Tree-wide for the call. |
 | `ScanKeysAsync`, `ScanEntriesAsync` | Tree-wide for each uninterrupted underlying enumeration; a transparent reconnect after an enumeration abort resumes under a freshly captured saga-decision view. |
 | Durable key/entry cursor (point-in-time mode) | Tree-wide for the lifetime of the cursor. |
@@ -277,7 +306,7 @@ window each one exists to close:
 | Operation | Why it stays atomic |
 |---|---|
 | Marking moved-away slots during a shard split | Runs immediately before the source enters Reject phase so no read crosses the Swap boundary observing an unmarked leaf. A partially-marked shard would serve a stale orphan value for a moved key. |
-| Unmarking them during a consolidation | The mirror image: the donor's leaves are unsealed only after it is frozen and drained, so no read crosses the freeze observing an unsealed leaf. |
+| Unmarking them during a consolidation | The mirror image: the survivor's leaves are unsealed only after the donor has been frozen and drained onto it, so no read crosses the freeze observing an unsealed leaf. |
 | Capturing a snapshot-cursor baseline | A baseline covering only part of the leaf chain is not a baseline, so there is no partial result to bank and resume from. The captured WAL head is read only after every leaf has frozen, which is what makes the baseline a single instant: a write that lands mid-walk precedes that head and is folded into the baseline, and every later write is excluded. The hold is bounded instead by the hard stall ceiling ([`MaxScanPageStallDuration`](configuration.md#maxscanpagestallduration)); abandoning the capture is safe because nothing is observable until the baseline is seeded. |
 | Purging a shard on tree deletion | The tree is already offline, so nothing is waiting on it; the walk is also destructive and cannot be resumed once a leaf's sibling pointer is cleared. |
 

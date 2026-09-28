@@ -58,7 +58,9 @@ public sealed record StructureRequest
     /// below <c>1</c> fall back to <see cref="DefaultMaxNodes"/>; values above
     /// <see cref="MaxNodeBudget"/> are clamped to it. When the budget is
     /// exhausted, deeper nodes are omitted and their parent is flagged
-    /// <see cref="NodeStateSummary.HasMoreChildren"/>.
+    /// <see cref="NodeStateSummary.HasMoreChildren"/>; on a whole-tree read the
+    /// remaining shard roots are omitted too, with no per-root flag (see
+    /// <see cref="TreeStructureResult.Truncated"/>).
     /// </summary>
     [Id(4)] public int MaxNodes { get; init; } = DefaultMaxNodes;
 

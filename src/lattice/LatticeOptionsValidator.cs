@@ -426,7 +426,8 @@ if (options.WalSaturationMaterialiserLagThreshold is { } materialiserLagThreshol
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalSaturationMaterialiserLagThreshold)} must be positive when set "
         + "(null disables the materialiser drain-lag classifier input entirely; a positive value sets the "
-        + "leaf-materialiser drain lag - WAL head wall-clock minus the slowest durable checkpoint frontier - above "
+        + "materialiser drain lag - WAL head wall-clock minus the slowest fresh consumer cursor in the in-memory "
+        + "WAL cursor registry, across leaf materialisers and tree-wide tailers - above "
         + "which the per-tree standing lag level counts as over-threshold for the consecutive-window classifier).");
 }
 if (options.WalSaturationMaterialiserLagSampleWindows < 1)

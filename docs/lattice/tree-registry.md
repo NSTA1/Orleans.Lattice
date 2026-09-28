@@ -46,11 +46,11 @@ Registry overrides only apply to the properties that are set (non-null). All oth
 
 `ShardRootGrain` reads the registry once on activation and caches the effective options for the grain's lifetime. This adds one async call per grain activation but zero overhead on subsequent operations.
 
-Option resolutions reach the singleton registry through a bounded, coalescing path. Concurrent resolves of the same tree on a silo share one in-flight read, and across the whole cluster at most 16 registry reads are in flight at once - each silo takes a share of that ceiling, and never less than one - with whatever queues behind the bound read together in batches of up to 64 trees. A cold start that activates many trees' background services therefore does not stampede the registry, and a quiet silo, whose reads never queue, pays no added latency.
+Option resolutions reach the singleton registry through a bounded, coalescing path. Concurrent resolves of the same tree on a silo share one in-flight read, and at most 16 registry reads are in flight at once across the whole cluster - each silo takes an equal share of that ceiling, and never less than one, so a cluster of more than 16 silos has one read in flight per silo - with whatever queues behind the bound read together in batches of up to 64 trees. A cold start that activates many trees' background services therefore does not stampede the registry, and a quiet silo, whose reads never queue, pays no added latency.
 
 ## Tree Enumeration
 
-Use `GetAllTreeIdsAsync` to list all registered trees:
+Use `GetAllTreeIdsAsync` to list the registered trees - every one except the reserved `_lattice_` system trees, pruned to the active tenant's trees when tenancy is on. The call authorizes a whole-tree read of the tree it is issued through:
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("any-tree-id");
@@ -59,7 +59,7 @@ var allIds = await tree.GetAllTreeIdsAsync();
 
 ## Tree Existence Check
 
-Use `TreeExistsAsync` to check whether a specific tree is registered:
+Use `TreeExistsAsync` to check whether a specific tree is registered. A caller without whole-tree read access to the tree gets `false`, exactly as for an unregistered tree:
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
@@ -71,30 +71,32 @@ bool exists = await tree.TreeExistsAsync();
 | Operation | Registry effect |
 |---|---|
 | First use of a new tree (anything that resolves its options, or any operation that reaches a shard root) | Tree registered (key added), with its structural pins seeded |
-| `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`) |
-| `ResizeAsync` swap phase | Registry entry rewritten with the new sizing and the pinned `ShardCount`, keeping the tree's configuration overrides and dropping the old physical tree's shard map, split allocation mark and WAL layout, then the `PhysicalTreeId` alias set |
+| `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`) and filled from the source's shards `0` to `ShardCount - 1`, each into the shard with the same index; a shard an adaptive split added above that range is not copied - see [Tree Sizing](tree-sizing.md#how-it-works) for what a resize does not carry |
+| `ResizeAsync` swap phase | Registry entry rewritten with the new sizing and the pinned `ShardCount`, keeping the tree's configuration overrides and dropping the old physical tree's shard map, split allocation mark and WAL layout, so the tree routes by the default shard map from then on; the alias is then pointed at the new physical tree |
 | `ResizeAsync` cleanup phase | Old physical tree soft-deleted; removed from registry on purge, except on a tree's first resize, where the old physical tree's ID is the logical tree ID and the purge keeps the logical tree's entry |
 | `UndoResizeAsync` | After the swap: alias removed, original entry restored, and the old tree recovered if the resize had already soft-deleted it. Either side of the swap, the new tree is deleted (removed from registry on purge) |
-| `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides); the source's alias is resolved and the physical tree it points at is the one copied |
+| `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides); the source's alias is resolved and the physical tree it points at is the one copied, its shards `0` to `ShardCount - 1` only (see [Snapshots](snapshots.md#requirements)) |
 | Adaptive shard split | Shard map rewritten under a fresh `Version`; the next physical shard index to allocate advanced |
 | Shard consolidation (automatic over-split healing) | Shard map rewritten under a fresh `Version`, reassigning the donor's slots to the survivor |
 | `ReshardAsync` | Shard map grown by the splits it drives; `ShardCount` pin updated when it completes (or at once on an empty tree) |
 | [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) | Tree registered with the supplied sizing pins (honoured only on first creation) |
 | Shadow-cutover restore (`ILatticeTreeAdmin.RestoreTreeAsync`) | Alias pointed at the restored shadow tree; a revert points it back |
-| `DeleteTreeAsync` + purge completion | Tree unregistered (key removed) |
+| `DeleteTreeAsync` + purge completion | Tree unregistered (key removed). Delete and purge do not resolve an alias - see [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree) |
 | `BulkLoadAsync` | Tree registered on first shard write |
 
 > **Note:** Physical trees created by `ResizeAsync` (e.g. `my-tree/resized/abc123`) and `SnapshotAsync` are regular registered trees and appear in `GetAllTreeIdsAsync` results. This is by design - it allows monitoring and manual intervention. When the old physical tree is purged after the `SoftDeleteDuration` window, it is automatically unregistered - unless it is a first resize's retired copy, whose ID is the logical tree ID: only its shards are purged, and the logical tree stays registered.
 
 ## Tree Aliasing
 
-A tree's registry entry can carry a physical-tree alias that redirects a logical tree ID to a different physical tree. `ResizeAsync` uses it to atomically swap a tree's data onto a new physical tree with different sizing; a shadow-cutover restore uses it to switch a tree onto its restored copy (and back, on revert); and the [schema package](../lattice.schema/README.md)'s background remediation uses it to cut a tree over to its remediated copy.
+A tree's registry entry can carry a physical-tree alias that redirects a logical tree ID to a different physical tree. `ResizeAsync` uses it to switch a tree atomically onto a copy of its data at a different sizing (see [Tree Sizing](tree-sizing.md#how-it-works) for what the copy does not carry); a shadow-cutover restore uses it to switch a tree onto its restored copy (and back, on revert); and the [schema package](../lattice.schema/README.md)'s background remediation uses it to cut a tree over to its remediated copy.
 
 ### How aliasing works
 
 1. `LatticeGrain` resolves the alias once per activation via `ILatticeRegistry.ResolveAsync(treeId)`.
 2. If `PhysicalTreeId` is set, all shard routing uses the physical tree ID instead of the logical tree ID.
 3. Only a single level of indirection is allowed - the physical tree must not itself be aliased. `SetAliasAsync` enforces this constraint.
+
+Tree deletion, recovery and purge are the exception to alias routing: they act on the shards stored under the logical tree ID and do not resolve the alias (see [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree)).
 
 ### Cache invalidation
 
@@ -110,9 +112,9 @@ Resize (and its undo), restore, and schema remediation drive the alias from insi
 
 ## Shard Map
 
-A `TreeRegistryEntry` can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a large fixed virtual space (`LatticeConstants.DefaultVirtualShardCount`, fixed at 4096), and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards.
+A tree's registry entry can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a virtual space of as many slots as the tree's shard map holds, and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards. That is 4096 slots unless the tree was created by an installed app whose manifest declares a `virtualShardCount` (`AppTreeDeclaration.VirtualShardCount`): the tree's first registration persists a map with the declared slot count, which lasts until a resize drops the map or a reshard of the still-empty tree rebuilds it with 4096 slots.
 
-When no shard map is persisted (the default state for newly created trees), the router materialises an identity map (`slot[i] = i % shardCount`) which preserves the legacy `XxHash32(key) % shardCount` routing bit-for-bit. Custom shard maps are written by topology-changing operations - adaptive shard splits (including those an online reshard drives), shard consolidation, and an empty-tree reshard's re-pin - and are cached by the router, which drops its copy when a shard reports stale shard routing (a split or consolidation has moved slots) and, together with the physical-tree-ID cache, when a shard signals a stale alias.
+When no shard map is persisted (the default state for newly created trees), the router materialises an identity map (`slot[i] = i % shardCount`), which routes exactly as the legacy `XxHash32(key) % shardCount` did whenever the virtual slot count is a whole multiple of the shard count, as it is for the default 64 shards. Custom shard maps are written by topology-changing operations - adaptive shard splits (including those an online reshard drives), shard consolidation, and an empty-tree reshard's re-pin - and by an installed app's tree registration when its declaration pins the virtual slot count; they are cached by the router, which drops its copy when a shard reports stale shard routing (a split or consolidation has moved slots) and, together with the physical-tree-ID cache, when a shard signals a stale alias.
 
 ### API
 
@@ -126,6 +128,6 @@ For operators, the [tree-administration facade](../lattice.api.treeadmin/README.
 
 ### Monotonic `ShardMap.Version`
 
-Every shard-map write - a set or a slot reassignment - increments `ShardMap.Version` by one, starting from 1 on the first persist. The default identity map materialised in memory for never-persisted trees has `Version = 0`.
+Every shard-map write - a set or a slot reassignment - increments `ShardMap.Version` by one, so the first such write stamps `Version = 1`. The default identity map materialised in memory for never-persisted trees has `Version = 0`, and so does the map an installed app's tree registration persists for a declared `virtualShardCount`, until its first set or reassignment. A resize's alias swap drops the persisted map along with the rest of the retired copy's layout, so the resized tree starts again from the identity map at `Version = 0` and the first map it persists is `Version = 1`; an undo restores the original entry, map and version included.
 
 `LatticeGrain` uses this version as a stability hint for scans (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`): a scan records the version when it starts and re-reads it before returning. If the version moved, the scan retries up to `LatticeOptions.MaxScanRetries` times. Because the registry grain is non-reentrant, the version increment is atomic with the shard-map write, so concurrent splits cannot produce torn maps or out-of-order version stamps. See [Shard Splitting](shard-splitting.md#scan-semantics-during-a-split) for the algorithm and [Consistency](consistency.md) for the resulting per-operation guarantees.

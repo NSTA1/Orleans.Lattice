@@ -72,9 +72,9 @@ internal enum ResizePhase
     /// <summary>
     /// The online snapshot to the new physical tree is in progress.
     /// The <see cref="Grains.TreeSnapshotGrain"/> handles the actual work;
-    /// during this phase every accepted mutation on the source tree is
-    /// shadow-forwarded to the destination via the shadow-forwarding
-    /// primitive.
+    /// during this phase every accepted mutation on the source tree except a
+    /// typed CRDT delta apply or a bulk append is shadow-forwarded to the
+    /// destination via the shadow-forwarding primitive.
     /// </summary>
     Snapshot = 0,
 

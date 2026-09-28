@@ -112,7 +112,7 @@ public class LatticeOptions
     /// <summary>
     /// Optional non-enforcing advisory ceiling on the live (non-tombstone) key
     /// count, used to right-size <see cref="MaxLiveKeys"/> before turning
-    /// enforcement on. A tree that exceeds this ceiling is flagged by the
+    /// enforcement on. A tree at or above this ceiling is flagged by the
     /// <c>orleans.lattice.admission.over_advisory</c> gauge and every write that
     /// <i>would</i> have been rejected at this ceiling increments the
     /// <c>orleans.lattice.admission.would_reject</c> counter - but no write is
@@ -414,12 +414,18 @@ public class LatticeOptions
 
     /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
-    /// purged. During this window the tree is inaccessible (reads and writes throw
-    /// <see cref="InvalidOperationException"/>), but its data still exists in storage
-    /// and could theoretically be recovered by clearing the <c>IsDeleted</c> flag.
+    /// purged. During this window the shards stored under the tree's id are marked
+    /// deleted (reads and writes on them throw
+    /// <see cref="InvalidOperationException"/>), but their data still exists in
+    /// storage and can be recovered with <see cref="ILattice.RecoverTreeAsync"/>.
+    /// A delete reaches only those shards, so a tree whose id is aliased to another
+    /// physical tree stays readable and writable through the alias (see
+    /// <see cref="ILattice.DeleteTreeAsync"/>).
     /// After the duration elapses, a grain reminder triggers a full purge that
     /// walks every shard and clears all leaf and internal node state.
-    /// Set to <see cref="TimeSpan.Zero"/> for immediate purge on the next reminder tick.
+    /// Set to <see cref="TimeSpan.Zero"/> to purge on the first reminder tick, one
+    /// minute after the delete, because the reminder period is clamped to at least
+    /// one minute.
     /// </summary>
     public TimeSpan SoftDeleteDuration { get; set; } = DefaultSoftDeleteDuration;
 
@@ -1315,22 +1321,27 @@ public class LatticeOptions
     /// <summary>
     /// How long a completed saga's commit/abort decision persists as a
     /// tombstone in the saga decision registry that owns its transaction id
-    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> - one
-    /// per tree, or one per registry shard when
-    /// <see cref="TxRegistryShardCount"/> is above one) after
-    /// the saga calls <c>ForgetAsync</c>. Covers the race window where a
-    /// concurrent <c>TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync</c>
-    /// installs a pending bucket on a destination shard <i>after</i> the
-    /// saga's terminal fan-out (and after the late-pickup fetch-loop in
-    /// <c>AtomicWriteGrain.BroadcastTerminalsAsync</c>) but <i>before</i>
-    /// the saga's <c>ForgetAsync</c> call: with a non-zero retention, the
-    /// sweep's post-sweep cleanup pass can still resolve the saga's
-    /// outcome via <c>GetStatusAsync</c> and apply the terminal directly,
+    /// (the transaction registry - one per tree, or one per registry shard
+    /// when <see cref="TxRegistryShardCount"/> is above one) after
+    /// the saga forgets the decision once its terminal fan-out is done.
+    /// Within the window the registry keeps reporting the recorded
+    /// decision; after it - unless an open cursor's snapshot pin still holds
+    /// the decision - status reads report the outcome as indeterminate
+    /// until a later prune removes the row, and from then on as though no
+    /// decision had been recorded.
+    /// Covers the race window where a
+    /// concurrent shard split's retroactive sweep of in-flight prepared
+    /// writes installs a pending bucket on a destination shard <i>after</i>
+    /// the saga's terminal fan-out (and after the saga's bounded late-pickup
+    /// re-fetch of its participants) but <i>before</i>
+    /// the saga forgets its decision: with a non-zero retention, the
+    /// sweep's post-sweep cleanup pass can still read the saga's
+    /// outcome from the registry and apply the terminal directly,
     /// draining the orphan pending bucket. Default is 60 seconds - long
     /// enough to absorb typical sweep durations while bounding the
     /// registry's persisted footprint. Set to <see cref="TimeSpan.Zero"/>
-    /// to disable tombstoning entirely (legacy behaviour: <c>ForgetAsync</c>
-    /// removes the decision immediately, restoring the original semantic
+    /// to disable tombstoning entirely (legacy behaviour: forgetting a
+    /// decision removes it immediately, restoring the original semantic
     /// from before the tombstone feature shipped). Increase for
     /// environments where sweep completion can exceed 60 seconds (very
     /// large shards or cascading split storms under sustained write load).
@@ -1480,12 +1491,14 @@ public class LatticeOptions
     /// <summary>
     /// Per-shard cap on the rows a zero-observable-writes snapshot cursor
     /// materialises, checked at <c>OpenSnapshot*Async</c> time. The open
-    /// fan-out captures a frozen baseline of every touched shard's
-    /// projection and fails fast with
+    /// fan-out captures a frozen baseline of every physical shard's whole
+    /// projection, whatever range the cursor covers, and fails fast with
     /// <see cref="LatticeSnapshotReplayBudgetExceededException"/> when the
     /// deepest shard's baseline row count exceeds this cap, so a snapshot
     /// cursor cannot be opened against a shard whose projection is too
-    /// large to hold for the cursor. The cost is the materialised baseline
+    /// large to hold for the cursor. The gate refuses the cursor, not the
+    /// capture: it is checked after every baseline has already been captured
+    /// and seeded in memory. The cost is the materialised baseline
     /// row count rather than the captured WAL head, because after a WAL GC
     /// trim the head can be arbitrarily large while the projection is
     /// small. Must be at least <c>1</c>; use a large value to make the gate
@@ -2519,10 +2532,12 @@ public class LatticeOptions
     /// <c>key.Length * 2 + value.Length + 128</c>, which under-counted
     /// records carrying a populated
     /// <see cref="WalRecord.VectorClock"/> and over-counted small-key
-    /// records with no vector clock; the budget is now an exact
-    /// ceiling, suitable for sizing against the Azure Table Storage
-    /// 4 MB transactional-batch limit which has zero tolerance for
-    /// under-counts.
+    /// records with no vector clock. The budget is now an exact ceiling
+    /// for any flush of more than one record, suitable for sizing against
+    /// the Azure Table Storage 4 MB transactional-batch limit which has
+    /// zero tolerance for under-counts. It does not bound a single record:
+    /// a record larger than the whole budget is not refused but flushed on
+    /// its own, so that one-record flush exceeds the budget.
     /// </para>
     /// </summary>
     public long WalMaxBatchBytes { get; set; } = DefaultWalMaxBatchBytes;
@@ -4022,15 +4037,20 @@ public class LatticeOptions
 
     /// <summary>
     /// WAL saturation input that escalates a tree to
-    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> when its
-    /// leaf-materialiser drain frontier falls more than this far behind the
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> when the
+    /// slowest of its fresh WAL consumers falls more than this far behind the
     /// WAL head - the direct "the materialiser is not keeping up with the
     /// write rate" surface that the indirect admission-depth and flush-latency
     /// inputs only approximate. The saturation sampler measures the lag each
     /// tick as
-    /// <c>walHead.WallClockTicks - materialiserFrontier.WallClockTicks</c>
-    /// (clamped at zero): the age of the oldest WAL entry the slowest fresh
-    /// leaf-materialiser checkpoint has not yet drained. Because the measure is
+    /// <c>walHead.WallClockTicks - drainFrontier.WallClockTicks</c>
+    /// (clamped at zero): the age of the oldest WAL entry that the slowest
+    /// fresh eligible consumer cursor in the in-memory WAL cursor registry has
+    /// not yet drained. The consumers are every cursor reported to that
+    /// registry - leaf materialisers and tree-wide tailers such as view
+    /// maintainers, WAL subscribers and replication shippers - less those that
+    /// have never reported a cursor, cold ones, and leaf materialisers whose
+    /// position is stale. Because the measure is
     /// a pure lag-plane classifier input, it applies
     /// <see cref="WalDrainLagConsumerFreshness"/> before reading the minimum so
     /// a cold leaf that remains registered for WAL GC safety cannot hold a live
@@ -4071,7 +4091,8 @@ public class LatticeOptions
 
     /// <summary>
     /// Number of consecutive saturation-sampler windows during which a tree's
-    /// leaf-materialiser drain lag must stay above
+    /// materialiser drain lag (see
+    /// <see cref="WalSaturationMaterialiserLagThreshold"/>) must stay above
     /// <see cref="WalSaturationMaterialiserLagThreshold"/> before the
     /// saturation classifier holds the tree at
     /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> via the

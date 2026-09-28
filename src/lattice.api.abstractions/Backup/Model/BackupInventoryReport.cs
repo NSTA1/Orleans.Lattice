@@ -22,7 +22,7 @@ public sealed record BackupInventoryReport
     /// <param name="newestBackupUtc">The capture time of the newest backup, or <c>null</c> when the catalog is empty.</param>
     /// <param name="captureFailureCount">The process-lifetime aggregate capture-failure count.</param>
     /// <param name="restoreFailureCount">The process-lifetime aggregate restore-failure count.</param>
-    /// <param name="bytesReclaimed">The process-lifetime bytes reclaimed by retention / deletion.</param>
+    /// <param name="bytesReclaimed">The process-lifetime bytes reclaimed by retention pruning; an explicit backup deletion is not counted.</param>
     public BackupInventoryReport(
         long totalBackupCount,
         long totalCatalogBytes,
@@ -69,6 +69,6 @@ public sealed record BackupInventoryReport
     /// <summary>The process-lifetime aggregate restore-failure count.</summary>
     [Id(7)] public long RestoreFailureCount { get; init; }
 
-    /// <summary>The process-lifetime bytes reclaimed by retention / deletion.</summary>
+    /// <summary>The process-lifetime bytes reclaimed by retention pruning; an explicit backup deletion is not counted.</summary>
     [Id(8)] public long BytesReclaimed { get; init; }
 }

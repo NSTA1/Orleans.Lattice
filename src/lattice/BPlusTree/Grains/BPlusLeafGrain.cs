@@ -2357,20 +2357,16 @@ internal sealed partial class BPlusLeafGrain(
                 string.CompareOrdinal(from, to) >= 0)
                 continue;
 
+            // No per-row bound re-test. [from, to) already folds every bound
+            // this scan has - scanStart carries startInclusive, scanEnd carries
+            // endExclusive and the in-progress split key - and the enumerator
+            // is half-open over exactly that window, so a row it yields has
+            // already satisfied all three. Re-testing them spent three ordinal
+            // comparisons per admitted row on answers that cannot differ. The
+            // sibling range delete in BPlusLeafGrain.Projection.cs already
+            // carries its guards this way for the same reason.
             foreach (var (key, lww) in Cache.EnumerateRange(from, to))
             {
-                if (endExclusive is not null &&
-                    string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (splitInProgress && splitKey is not null &&
-                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (startInclusive is not null &&
-                    string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
-                    continue;
-
                 if (pendingKeys.TryGetValue(key, out var pending))
                 {
                     var status = ResolveReadOutcome(outcomes, pending.txid, pendingKeys.Count);
@@ -3514,20 +3510,17 @@ internal sealed partial class BPlusLeafGrain(
 
             foreach (var (key, lww) in Cache.EnumerateRange(from, to))
             {
-                if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (splitInProgress && splitKey is not null &&
-                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
-                    continue;
-
-                if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
+                // Only afterExclusive survives as a per-row test, and only for
+                // the single row that can equal it. [from, to) already folds
+                // startInclusive, endExclusive, beforeExclusive and the
+                // in-progress split key - scanStart and scanEnd carry them and
+                // the enumerator is half-open over exactly that window - so
+                // those four re-tests spent four ordinal comparisons per
+                // admitted row on answers that cannot differ. afterExclusive is
+                // the one bound the window cannot express: a lower bound is
+                // inclusive, so a key equal to it is admitted by the range and
+                // must still be rejected here.
+                if (afterExclusive is not null && string.CompareOrdinal(key, afterExclusive) <= 0)
                     continue;
 
                 if (pendingKeys.TryGetValue(key, out var pending))
@@ -3565,6 +3558,13 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // Fresh committed pending keys not yet in Entries, respecting range filters.
+        // The windowed scan above emits in ascending ordinal order - the windows
+        // are contiguous, half-open and ascending, and each one walks the
+        // ordinally sorted backing dictionary - so this tail is the only source
+        // of disorder in the result. It is also usually empty: the overwhelmingly
+        // common read carries no prepared write at all. Record where the ordered
+        // prefix ends and sort only when the tail actually appended.
+        var orderedPrefix = keys.Count;
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
@@ -3579,7 +3579,7 @@ internal sealed partial class BPlusLeafGrain(
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             keys.Add(key);
         }
-        keys.Sort(StringComparer.Ordinal);
+        if (keys.Count != orderedPrefix) keys.Sort(StringComparer.Ordinal);
         PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
         // Issue #2823: this answer resolved prepared writes against the
         // registry, whose decisions can change with nothing written here. See
@@ -3639,20 +3639,11 @@ internal sealed partial class BPlusLeafGrain(
 
             foreach (var (key, lww) in Cache.EnumerateRange(from, to))
             {
-                if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (beforeExclusive is not null && string.Compare(key, beforeExclusive, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (splitInProgress && splitKey is not null &&
-                    string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
-                    break;
-
-                if (startInclusive is not null && string.Compare(key, startInclusive, StringComparison.Ordinal) < 0)
-                    continue;
-
-                if (afterExclusive is not null && string.Compare(key, afterExclusive, StringComparison.Ordinal) <= 0)
+                // See the sibling GetKeysAsync above: [from, to) already folds
+                // startInclusive, endExclusive, beforeExclusive and the split
+                // key, so only afterExclusive's strict exclusion - which an
+                // inclusive lower bound cannot express - survives per row.
+                if (afterExclusive is not null && string.CompareOrdinal(key, afterExclusive) <= 0)
                     continue;
 
                 if (pendingKeys.TryGetValue(key, out var pending))
@@ -3685,6 +3676,9 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // Fresh committed pending keys not yet in Entries, respecting range filters.
+        // Ordered-prefix bookkeeping exactly as GetKeysAsync above: the windowed
+        // scan emits ascending, so only this tail can disorder the result.
+        var orderedPrefix = entries.Count;
         foreach (var (key, pending) in pendingKeys)
         {
             if (Cache.ContainsKey(key)) continue;
@@ -3699,7 +3693,8 @@ internal sealed partial class BPlusLeafGrain(
             TrackEarliestExpiry(ref earliestExpiry, pending.value.ExpiresAtTicks);
             entries.Add(new KeyValuePair<string, byte[]>(key, pending.value.Value!));
         }
-        entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
+        if (entries.Count != orderedPrefix)
+            entries.Sort(static (a, b) => StringComparer.Ordinal.Compare(a.Key, b.Key));
         PublishLeafExpiryHorizon(context.GrainId, earliestExpiry);
         // Issue #2823: see the sibling GetKeysAsync above.
         if (pendingKeys.Count > 0)

@@ -1107,7 +1107,9 @@ request.
 Do not read the 300-second figure as the value in force. It is a default, not a
 constant, and a deployment may raise it: on the reference deployment a claim
 requesting 1800 seconds was measured being **granted** 1800 seconds, so the
-ceiling there is at least that. Read the `leaseSeconds` your own grant returns
+ceiling there is at least that. The bundled RepoContext container host, for one,
+raises it to 1800 seconds by default through `LATTICE_MAX_LOCK_LEASE_SECONDS`
+(accepted range 30 to 7200). Read the `leaseSeconds` your own grant returns
 and reason from it. A quarantine measured in lease multiples is no protection
 wherever the clamp is short, because the window it names has already elapsed in
 the ordinary case.

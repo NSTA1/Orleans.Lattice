@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// <para>
 /// with each operator credential supplied as an environment variable
 /// (<c>LATTICE_STATE_USER_alice=pbkdf2-sha256$...</c>) produced by the
-/// credential-generation helper scripts under <c>tools/</c>.
+/// credential-generation helper <c>tools/New-LatticeStateCredential.ps1</c>.
 /// </para>
 /// </remarks>
 public static class EnvVarCredentialAuthorizerServiceCollectionExtensions

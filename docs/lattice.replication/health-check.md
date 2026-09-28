@@ -21,7 +21,7 @@ siloBuilder.Services
     .AddLatticeReplicationHealthCheck();
 ```
 
-`AddLatticeReplicationHealthCheck` must be called **after** `AddLatticeReplication`: the check reads the cluster-wide singleton `ReplicationPeerStats` registered by the latter, so the registration order matters. The default registered name is `"orleans.lattice.replication"` (the same string as `LatticeReplicationHealthCheckOptions.DefaultName`). Override the name and tags when the host has more than one health check (for example, to expose the replication probe under a `ready` ASP.NET Core tag):
+`AddLatticeReplicationHealthCheck` needs `AddLatticeReplication` on the same service collection: the check reads the cluster-wide singleton `ReplicationPeerStats` that `AddLatticeReplication` registers, and resolves it when the check is first constructed at probe time, so the relative order of the two calls does not matter but omitting `AddLatticeReplication` makes every probe fail. The default registered name is `"orleans.lattice.replication"` (the same string as `LatticeReplicationHealthCheckOptions.DefaultName`). Override the name and tags when the host has more than one health check (for example, to expose the replication probe under a `ready` ASP.NET Core tag):
 
 ```csharp verify
 siloBuilder.Services

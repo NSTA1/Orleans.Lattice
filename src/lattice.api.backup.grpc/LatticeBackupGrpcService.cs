@@ -571,8 +571,10 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         catch (LatticeRestoreValidationException ex)
         {
             // A restore failed its pre-apply trust-boundary validation (a missing
-            // manifest or artifact, a digest mismatch, an out-of-scope request, or
-            // a coordinated saga that aborted because a peer could not prepare).
+            // manifest or artifact, a digest mismatch, an out-of-scope request, a
+            // coordinated restore refused before it starts because the target is
+            // infeasible on the coordinator cluster or a peer is unreachable, or a
+            // coordinated saga that aborted because a peer could not prepare).
             // It is a precondition failure, not an internal fault, and its message
             // is safe and actionable (it names backups / trees, no secrets), so
             // surface it as FailedPrecondition instead of the opaque Internal

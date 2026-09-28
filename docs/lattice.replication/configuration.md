@@ -227,7 +227,7 @@ Enables measurement of redundant payloads by content hash. It is observability-o
 
 ### `ContentHashDedupCacheSize`
 
-Number of content hashes retained for dedup measurement and optional elision.
+Number of content hashes retained for dedup measurement and optional elision. Must be `>= 64`.
 
 ### `PreShipCoalescingEnabled`
 
@@ -419,7 +419,7 @@ Step used when increasing an adaptive batch cap.
 
 ### `AdaptiveBatchDecreaseFactor`
 
-Multiplicative factor used when decreasing an adaptive batch cap after slow or pressured sends.
+Multiplicative factor used when decreasing an adaptive batch cap after slow or pressured sends. Must lie in the open interval `(0.0, 1.0)`.
 
 ### `AdaptiveBatchLatencyThreshold`
 

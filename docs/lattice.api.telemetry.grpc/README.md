@@ -66,7 +66,9 @@ app.MapLatticeTelemetryApiGrpc();
 ```
 
 `AddLatticeTelemetryApi()` is idempotent, so ordering between the two is not
-load-bearing.
+load-bearing. `AddLatticeTelemetryApiGrpc()` is not idempotent in one respect: every
+other registration it makes is a `TryAdd`, but each call appends the authorization
+interceptor to the gRPC pipeline again, so call it once.
 
 The binding resolves on a host with **only** `ILatticeTelemetry` registered - no
 access gate, no membership context, no tenant-context resolver. A constructor
@@ -149,8 +151,11 @@ query id it already supplied.
 ## Wire aliases
 
 Serializable types in this package use the reserved `oitlg.` alias prefix, which
-is disjoint from the contract's `oitl.` set. Four aliases only - the binding adds
-nothing else to the wire. Aliases are wire format: never rename or remove one.
+is disjoint from the contract's `oitl.` set; the constants live in the public
+`GrpcTelemetryTypeAliases` class. Four aliases only - `TelemetryCatalogRequest`,
+`AuthSchemeAdvertisementRequest`, `AuthSchemeDescriptor`, and
+`AuthSchemeAdvertisement` - so the binding adds nothing else to the wire. Aliases are
+wire format: never rename or remove one.
 
 ## See also
 

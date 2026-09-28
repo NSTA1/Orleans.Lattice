@@ -101,9 +101,7 @@ siloBuilder.ConfigureLatticeTenancy(options =>
   namespaces. The tenant prefix is a third reserved namespace with its own
   user-write guard: a user-origin write may name a `t/` id only when the id's
   structural owner is the caller's own active tenant - which is exactly what the
-  facades compose - so a caller can never name another tenant's namespace, and with
-  tenancy off (where there is no active tenant) the namespace is uncreatable through
-  the public surface. The app-tree prefix `a/` used by
+  facades compose - so a caller can never name another tenant's namespace. The app-tree prefix `a/` used by
   [installable apps](../lattice.apps/README.md) is deliberately **not** reserved or
   treated as qualified: an app tree `a/{app}/{tree}` is an ordinary unqualified name,
   so it composes to `t/{tenantId}/a/{app}/{tree}` and each tenant gets its own copy of
@@ -185,7 +183,10 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   reserved `default` tenant, which is what keeps legacy adoption
   non-destructive; on a tenant-owned (`t/...`) tree that unasserted request is
   denied instead, because the uninitialised "no tenant" value can never be an
-  active tenant.
+  active tenant. Asserting `default` explicitly is not the same as asserting
+  nothing: it is validated like any other assertion, and because the reserved
+  tenant is seeded with no admin subjects (and the control plane refuses to add
+  any) that assertion fails validation.
 - **Tenant id grammar.** A `TenantId` matches `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
   (lower-case alphanumeric and hyphen, 1-63 chars). This guarantees a tenant id can
   never contain the `/` segment separator and never begins with `_`, so it cannot
@@ -279,8 +280,9 @@ Each tenant carries **aggregate quotas** across all of its trees, expressed by
 | Burst | `BurstPercent` | Percentage overage above the steady-state caps. |
 
 A `null` cap on a dimension means unlimited on that dimension. The reserved
-`default` tenant and every newly created tenant start with no caps until an
-operator sets them, so opt-in never suddenly throttles an existing workload.
+`default` tenant is permanently unbounded (it can never be given quotas), and every
+newly created tenant starts with no caps until an operator sets them, so opt-in
+never suddenly throttles an existing workload.
 
 - **Compiled quota policy.** Steady-state enforcement uses a compiled policy
   snapshot with a monotonic epoch, refreshed off the `sys-tenant-*` change feed and
@@ -291,12 +293,16 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   above the cap and at or below `cap x (1 + burst%)` is admitted and **metered as
   overage** - a first-class, billing-ready signal distinct from ordinary usage;
   usage above `cap x (1 + burst%)` is refused with `LatticeQuotaExceededException`
-  carrying the tenant id and dimension. A tenant with burst `0` refuses as soon as
-  usage exceeds the cap.
+  carrying the tenant id and dimension (`Dimension` is `bytes`, `keys`, `memory`, or
+  `trees`, and `ops-per-second` for the request-rate budget). A tenant with burst `0` refuses as soon as
+  usage exceeds the cap. The refusal gates new writes only: usage that already sits
+  above the cap - for example after a cap is lowered - keeps accruing overage on
+  every metering tick, in whichever band it sits.
   Over the [data gRPC binding](../lattice.api.data.grpc/README.md#quota-refusals)
   the refusal reaches a remote caller as `ResourceExhausted` carrying the breached
-  dimension as a trailer; the tenant id is not echoed back, because the caller
-  asserted its own active tenant on the request.
+  dimension as a trailer; the tenant id is not added as a trailer (only the status
+  message names it), because the caller asserted its own active tenant on the
+  request.
 - **Metering drives enforcement, on a cadence.** A footprint quota (bytes, keys,
   memory, and the tree count an ordinary write is checked against) is admitted
   against the tenant's *metered* usage, so it binds only once a usage sample lands;
@@ -306,7 +312,8 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   `TenantUsageAccountingOptions.MeterInterval` (default 30 seconds) that walks each
   tenant's own trees - a bounded range scan over the tenant's `t/{tenant}/` key
   range, not a read of the whole catalog - samples their footprint, and rolls the
-  result up into that tenant's per-cluster usage slot. Admission deliberately
+  result up into that tenant's per-cluster usage slot. The reserved `default`
+  tenant is skipped: it can carry no quotas, so it is never metered. Admission deliberately
   **fails open** for a tenant with no landed sample yet, so a cold silo never
   spuriously refuses; that means enforcement arms one cycle after a tenant first
   has usage. Setting `MeterInterval` to zero disables metering entirely and leaves
@@ -406,7 +413,10 @@ override):
   equals this cluster's own sample. Enforcement admits against the global fold,
   giving a single global budget rather than `limit x clusters`, with bounded
   transient overshoot. The monotonic overage tallies use grow-only `GCounter`s (one
-  per bytes, keys, memory, and tree-count dimension). Slots are republished on a
+  per bytes, keys, memory, and tree-count dimension), but they are not metered from
+  the global fold: whatever the scope, each cluster accrues the overage of its own
+  local usage above the tenant's whole steady-state cap into its own component, and
+  the converged tally sums the components. Slots are republished on a
   cadence with hysteresis so continuous usage does not flood the replication path.
 - **`PerCluster` (fallback).** Each cluster admits against only its own local usage
   slot, so effective global capacity is `limit x clusters`. Selectable, cluster-wide,
@@ -448,6 +458,24 @@ a remote caller as a `ResourceExhausted` `RpcException` carrying the breached
 dimension as a trailer, so a client can tell a retryable rate breach from a
 footprint breach that will not clear on its own.
 
+## Store write contention
+
+Every write to the three `sys-tenant-*` stores is an optimistic read-merge-write:
+the store reads the tenant's record with its version, folds the change in with the
+record's CRDT join, and writes back only if the version has not moved. A write that
+loses that race re-reads (now seeing the competing write) and merges again, at once
+and with no backoff, so a concurrent change is never dropped. After a small, fixed
+number of lost races on the same tenant's record the store gives up and throws one
+of three public exceptions, each carrying the `Tenant` and the number of `Attempts`
+it made. The retries absorb ordinary contention; each exception signals sustained
+write contention on one tenant.
+
+| Exception | Raised by | What happens |
+|---|---|---|
+| `TenantRegistryConcurrencyException` | `ITenantRegistry.PutAsync`: every registry write, including every mutation the [tenant-administration facades](../lattice.api.tenantadmin/README.md) make | The change is not applied and the exception reaches the caller, which may retry. The tenant-administration gRPC binding has no arm for it, so a remote caller sees `Internal`. |
+| `TenantUsageConcurrencyException` | The metering cycle's usage-slot publish | Caught and logged for that tenant: its overage accrual is skipped for the tick too, the rest of the pass continues, and the next tick retries. |
+| `TenantOverageConcurrencyException` | The metering cycle's overage accrual | Caught and logged for that tenant: that tick's overage is not recorded - the tally is a per-tick sum, so it is not recovered later - and the next tick accrues as normal. |
+
 ## Region residency
 
 Which regions a tenant lives in is a per-tenant, runtime-mutable choice layered on
@@ -468,9 +496,12 @@ surface:
 The union of *allowed* and *resident* is the tenant's **actionable set**: the regions
 it is in, plus the regions it may move into. A tenant admin never needs the physical
 list - `SetResidencyAsync` refuses anything outside the allowed set - so tenant-facing
-surfaces scope discovery to the actionable set rather than the physical topology. See
+discovery never shows a tenant caller more than its actionable set plus the region
+serving the call. See
 [MCP security](../lattice.api.mcp/security.md#3b-tenant-scoped-region-discovery) for
-how that scoping applies to region discovery.
+how that scoping applies to region discovery, and
+[Tenant-aware surfaces](#tenant-aware-surfaces) for what a tenant-asserting caller is
+shown today.
 
 - **Allowed vs resident.** A platform operator authorizes, per tenant, the *allowed*
   region set; the tenant's delegated admin selects its *residency set* (the subset it
@@ -516,7 +547,10 @@ a region stays at the status `SetResidencyAsync` gave it. A tenant whose residen
 been set is therefore served in no region until a host advances those statuses
 itself, which it can do only through the public `ITenantRegistry` and
 `TenantRecord.SetRegionStatus`, one legal step at a time as `TenantRegionLifecycle`
-defines them.
+defines them. `SetRegionStatus` does not check the step itself - it applies any
+status whose stamp supersedes the region's current one - so the host must take the
+next status from `TenantRegionLifecycle.TryNextPromotion` and stamp each write later
+than the last.
 
 Quota accounting does not follow these statuses: the `GlobalConverged`
 fold sums every cluster slot the tenant has published, whatever the status of that
@@ -585,9 +619,20 @@ series" reads as "unlimited on that dimension" rather than "zero".
 `quota.burst_percent` is emitted for every tenant, `0` when it has no burst
 allowance. Usage gauges reflect the last landed metering sample (see
 `MeterInterval` above); a registered tenant with no sample yet reports zero usage
-rather than no series, so a zero reading can also mean "not yet metered". The
+rather than no series, so a zero reading can also mean "not yet metered" - and the
+reserved `default` tenant, which is never metered, always reads zero usage. The
 `overage.*` gauges are the billing-ready tallies: they are grow-only converged sums,
 not instantaneous readings.
+
+The same figures are readable in-process through public seams the package
+registers: `ITenantOverageBilling` returns the converged metered overage for one
+tenant or every tenant, for a billing consumer to poll; `ITenantObservabilityView`
+returns the caller's own validated active tenant's usage, quota, burst, and overage
+snapshot, and every tenant's only under an explicit
+`TenantObservabilityScope.ClusterWide(subject)` scope whose subject validates as a
+platform operator (anything else falls back to the active tenant); and `ITenantUsageReader` reads one tenant's usage by id
+with no visibility check of its own, so its consumer must authorize the caller
+against that tenant first.
 
 `MaxOpsPerSecond` has no gauge: the rate budget is enforced from silo-local token
 buckets rather than from a published aggregate, so a breach is observed through the
@@ -645,11 +690,12 @@ also match the `_lattice_` and `sys-` platform trees.
   tenant admin." The reason a tenant admin cannot perform this act is structural, not a
   matter of degree: authoring *any* authorization rule is a write to the reserved
   `sys-auth-*` policy store, which requires whole-tree `Admin` on that store - a
-  control-plane capability held only by the operators just defined. A tenant-admin
-  capability is `Admin` on its own tenant-administration scope only, honoured for that
-  one tenant and never inherited for another's, so a tenant admin can neither reach the
-  policy store to author a registry-read rule (for itself or anyone else) nor match a
-  second tenant's scope. Direct writes to `sys-tenant-*` are likewise refused off the
+  control-plane capability held only by the operators just defined. A tenant admin's
+  authority is only its membership of a tenant's admin-subject set, which the
+  tenant-tier facades check on that tenant's own record: it confers nothing on the
+  policy store and nothing over a tenant whose set does not name it, so a tenant admin
+  can neither reach the policy store to author a registry-read rule (for itself or
+  anyone else) nor act for another tenant. Direct writes to `sys-tenant-*` are likewise refused off the
   system-origin path by the reserved-prefix write guard. Consequently, granting
   cross-tenant registry visibility always requires a deliberate operator decision to
   author (or delegate the authority to author) that rule; a caller acting purely as a
@@ -698,10 +744,15 @@ tenancy keeps a byte-for-byte-unchanged UI and tool surface.
   separately gated behind `EnableTenantAdminControlTools`. Every tool in that
   group is annotated destructive and non-read-only except
   `lattice_tenant_region_status`, which is a read. Region discovery is
-  tenant-scoped too:
-  for a caller asserting a non-default tenant, `lattice_list_regions` advertises only
-  that tenant's actionable set plus the region serving the call, annotated with its
-  standing. See
+  tenant-scoped too, and fails closed: `lattice_list_regions` honours a non-default
+  tenant assertion only after re-validating it against the caller's own membership,
+  and then advertises that tenant's actionable set plus the region serving the call,
+  annotated with its standing; an assertion that does not validate is shown the
+  serving region alone, with no tenant annotation. In the shipped registrations the
+  discovery tool cannot validate an assertion - a co-hosted head carries no caller
+  credential into it, so the caller resolves as anonymous, and a split head has no
+  resolver able to validate one - so a tenant-asserting caller is currently shown
+  only the serving region. See
   [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md).
 
 ## Configuration reference

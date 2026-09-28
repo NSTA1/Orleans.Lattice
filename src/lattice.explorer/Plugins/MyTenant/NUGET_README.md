@@ -56,10 +56,10 @@ and link the plugin stylesheet from the head's document head:
 <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.MyTenant/lattice-mytenant.css" />
 ```
 
-`AddExplorerAccess()` must come **before** `AddExplorerTenantView()`: the
-navigation core registers a fail-closed placeholder platform-operator gate with
-`TryAdd`, so a head that calls them the other way round silently loses the real
-one. This plugin detects that and says so rather than degrading in silence.
+`AddExplorerAccess()` must come **before** `AddExplorerTenantView()`: the tenant
+view registers a fail-closed placeholder platform-operator gate with `TryAdd`, so
+a head that calls them the other way round silently loses the real one. This
+plugin detects that and says so rather than degrading in silence.
 
 A head that registers none of it ships no My tenant area, and a cluster without
 the tenancy add-on reports the surface unavailable so it renders nothing.

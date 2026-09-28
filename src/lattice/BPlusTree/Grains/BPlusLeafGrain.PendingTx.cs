@@ -892,8 +892,11 @@ internal sealed partial class BPlusLeafGrain
     /// entry cache.
     /// <para>
     /// Returns <see cref="TxStatus.InFlight"/> on degenerate inputs
-    /// (empty txid or unknown tree id) - the strict-isolation default,
-    /// which keeps the key hidden until the registry can be reached.
+    /// (empty txid or unknown tree id) - the strict-isolation default: the
+    /// prepared value stays invisible and the reader falls through to the
+    /// pre-saga value. (For an unknown tree id the scan path,
+    /// <see cref="SnapshotPendingForReadAsync"/>, answers
+    /// <see cref="TxStatus.Indeterminate"/> instead, which hides the key.)
     /// </para>
     /// <para>
     /// Issue #2215: a registry call that fails in transport throws
@@ -951,14 +954,20 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// The defect it closes: a saga can finish - or be abandoned - without a
     /// terminal ever reaching a bucket-holding leaf (an empty-txid write, a
-    /// shutdown-refused shard, the late-refetch wall-clock guard tripping, or a
-    /// decision expiring under a slow sweep). The prepare then stays resident
-    /// indefinitely. Its offset clamps the incremental flush ceiling
-    /// (<see cref="MinUnresolvedPrepareOffsetForPartition"/>) one below itself
-    /// once the durable ledger (issue #2165) is at capacity, so the projection
+    /// shutdown-refused shard, the saga's late-pickup participant re-fetch
+    /// exhausting its bounded rounds, or a decision expiring under a slow
+    /// sweep). The prepare then stays resident indefinitely. When it is not
+    /// durably recorded - which since issue #2183 happens only when the durable
+    /// ledger (issue #2165) is disabled, because a resident prepare is now
+    /// recorded even past the ledger's cap - its offset clamps the incremental
+    /// flush ceiling (<see cref="MinUnresolvedPrepareOffsetForPartition"/>) one
+    /// below itself, so the projection
     /// checkpoint cannot advance, the checkpoint pins the coverage-gated WAL GC,
     /// and the next activation re-reads the identical prepare and banks nothing.
-    /// The pin is self-perpetuating: nothing time-, count- or registry-driven
+    /// When it is recorded, the ceiling advances but the record holds the
+    /// persisted leaf row open for as long as the prepare stays resident.
+    /// Either way the residue is self-perpetuating: nothing time-, count- or
+    /// registry-driven
     /// removes a resident prepare, and the only removers are the two terminal
     /// paths, which by hypothesis never fire because the terminal never arrives.
     /// </para>
@@ -994,12 +1003,19 @@ internal sealed partial class BPlusLeafGrain
     /// no terminal RPC interleaves with this loop.
     /// </para>
     /// <para>
-    /// Retention boundary (issue #2190 design question 3). A decision the
-    /// registry has already forgotten - its <c>TxDecisionRetention</c> tombstone
-    /// TTL elapsed - reads back as <see cref="TxStatus.InFlight"/>, so a prepare
-    /// whose decision has aged out is left resident and the clamp is preserved
-    /// exactly as before this change: a safe no-op, never an advance on an
-    /// unresolvable prepare. Because the pin forces frequent re-activation, a
+    /// Retention boundary (issue #2190 design question 3). A decision whose
+    /// <c>TxDecisionRetention</c> tombstone TTL has elapsed reads back as
+    /// <see cref="TxStatus.Indeterminate"/> for as long as the registry still
+    /// stores its row. This sweep is not a read, so it then asks for the
+    /// recorded verdict (<see cref="ITxRegistryGrain.GetRecordedStatusAsync"/>,
+    /// through <see cref="SelfTerminaliseFromRecordedStatusAsync"/>) and applies
+    /// it; a recorded read that fails or finds no terminal row leaves the
+    /// prepare resident for a later activation. Only once the row has been
+    /// pruned - or at once under a zero retention - does the decision read back
+    /// as <see cref="TxStatus.InFlight"/>, and such a prepare is left resident
+    /// with the clamp preserved exactly as before this change: a safe no-op,
+    /// never an advance on an unresolvable prepare. Because the pin forces
+    /// frequent re-activation, a
     /// freshly orphaned prepare is normally resolved on its first post-decision
     /// activation, well inside the retention window.
     /// </para>
@@ -1031,9 +1047,11 @@ internal sealed partial class BPlusLeafGrain
             cancellationToken.ThrowIfCancellationRequested();
 
             // Resolve the saga's decision against the per-tree registry. Only a
-            // terminal decision authorises self-terminalising; InFlight -
-            // including the aged-out / forgotten-decision case, which reads back
-            // as InFlight - leaves the prepare resident and the clamp intact.
+            // terminal decision authorises self-terminalising. InFlight - which
+            // is also what a decision the registry has already pruned reads
+            // back as - leaves the prepare resident and the clamp intact;
+            // Indeterminate (a stored decision aged out of retention) is
+            // resolved from the recorded row below.
             //
             // ResolvePendingStatusAsync issues an RPC to the ITxRegistryGrain,
             // which can time out or fault when the registry is under load - the

@@ -68,11 +68,11 @@ A write refused by admission control - a per-tree ceiling ([`LatticeOptions.MaxL
 | Trailer | Value |
 |---------|-------|
 | `lattice-quota-dimension` | `keys`, `bytes`, `memory`, `trees`, or `ops-per-second`. |
-| `lattice-quota-tree` | The tree whose admission quota was breached. |
+| `lattice-quota-tree` | The tree whose admission quota was breached, as the effective tree id the call resolved to (`t/{tenant}/{name}` for a tenant-scoped tree). |
 | `lattice-quota-current` | The observed value on the breached dimension. Omitted for a dimension with no numeric ceiling. |
 | `lattice-quota-limit` | The configured ceiling on the breached dimension. Omitted for a dimension with no numeric ceiling. |
 
-The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No tenant id is echoed back: the caller asserted its own active tenant, so returning a server-side attribution adds nothing it did not already send. As with every trailer this binding emits, a key and a value are never disclosed.
+The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No trailer of its own carries the tenant id - the caller asserted its own active tenant, so a separate server-side attribution adds nothing it did not already send - but the response does not withhold it either: a refusal of the tenant's own quota or rate budget names the tenant in its status message, and the `lattice-quota-tree` trailer of a tenant-scoped tree carries it as the tree id's `t/{tenant}` segment. As with every trailer this binding emits, a key and a value are never disclosed.
 
 ## Status mapping
 

@@ -836,21 +836,29 @@ internal sealed class TreeShardSplitGrain(
     /// </para>
     /// <para>
     /// <b>Orphan-window closure.</b> Each snapshot's replay races with
-    /// the saga's own commit-phase terminal broadcast. The saga calls
-    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetParticipantsAsync"/> once at the
-    /// top of the broadcast; if that query returns BEFORE the sweep's
-    /// per-snapshot <c>SetAsync</c> registers the destination shard
-    /// (via <c>RecordAffectedLeafIfPreparedAsync</c>), the saga's
-    /// terminal fan-out goes only to source and the prepared entry we
-    /// install on the destination becomes orphaned. After the saga
-    /// runs <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.ForgetAsync"/>, the registry
-    /// status read by a later reader returns <see cref="TxStatus.InFlight"/>
-    /// (the default-when-absent fallback), the reader's dial-back
-    /// surfaces the orphaned prepared value, and a later saga's value
-    /// for the same key is shadowed - producing the
-    /// <c>unknown-round</c> chaos failure shape where an older saga's
-    /// value surfaces after newer sagas have committed. Two defenses
-    /// close this window: (1) <b>per-snapshot pre-check</b> short-
+    /// the saga's own commit-phase terminal broadcast. The saga fans out
+    /// to its touched shards, expanded through each shard's split-forward
+    /// records as they stood when it read them, and then re-fetches
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetParticipantsAsync"/> in a
+    /// bounded number of late-pickup rounds. If that expansion predates this
+    /// split's record and the saga's last participant fetch returns BEFORE
+    /// the sweep's per-snapshot <c>SetAsync</c> registers the destination
+    /// shard (via <c>RecordAffectedLeafIfPreparedAsync</c>), the saga's
+    /// terminal fan-out never reaches the destination and the prepared
+    /// entry we install there becomes orphaned. After the saga runs
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.ForgetAsync"/>, the registry
+    /// keeps reporting the recorded decision for
+    /// <see cref="LatticeOptions.TxDecisionRetention"/>, then
+    /// <see cref="TxStatus.Indeterminate"/> until the row is pruned, and
+    /// <see cref="TxStatus.InFlight"/> (the default-when-absent fallback)
+    /// after that - or at once under a zero retention. While the orphan
+    /// resolves as Committed, a reader's dial-back surfaces its prepared
+    /// value over any later saga's committed value for the same key -
+    /// producing the <c>unknown-round</c> chaos failure shape where an
+    /// older saga's value surfaces after newer sagas have committed - and
+    /// once it resolves as Indeterminate the key is hidden. Two defenses
+    /// narrow this window, closing it only while the saga's decision is
+    /// still reported: (1) <b>per-snapshot pre-check</b> short-
     /// circuits the replay when the saga's status is already
     /// terminalized at sweep-time and applies the terminal directly to
     /// the destination with the snapshot value as <c>committedValues</c>
@@ -858,7 +866,9 @@ internal sealed class TreeShardSplitGrain(
     /// <b>post-sweep cleanup</b> re-checks every replayed saga's
     /// status and, for any that have flipped to Committed/Aborted in
     /// the meantime, applies the terminal directly to drain the
-    /// pending bucket. Both calls are idempotent via the leaf-side
+    /// pending bucket. A replayed saga whose status already reads
+    /// Indeterminate or InFlight at cleanup time is left pending. Both
+    /// calls are idempotent via the leaf-side
     /// <c>_recentlyTerminal</c> dedup, so the cleanup pass is a no-op
     /// when the saga's normal broadcast already reached destination.
     /// </para>
@@ -1013,19 +1023,21 @@ internal sealed class TreeShardSplitGrain(
 
             // Post-sweep cleanup: close the orphan window for sagas
             // that were in-flight at per-snapshot pre-check time but
-            // have since terminalized. Such a saga's commit broadcast
-            // may have queried participants before the sweep registered
+            // have since terminalized. Such a saga's broadcast may have
+            // made its last participant fetch before the sweep registered
             // destination, sent the terminal only to source, and called
             // ForgetAsync - leaving the prepared entry on destination
             // orphaned. The registry's GetStatusManyAsync returns
-            // Committed/Aborted if the decision is still persisted,
-            // and InFlight (the default fallback) if the saga has been
-            // forgotten. For Committed/Aborted we apply the terminal
-            // directly. For InFlight at this point we leave the entry
-            // pending - either the saga is genuinely still in flight
-            // (its eventual broadcast will reach destination, which is
-            // now registered as a participant) or it has been forgotten
-            // and the entry is a true orphan. The latter is shadowed by
+            // Committed/Aborted while the decision is still reported -
+            // including for TxDecisionRetention after ForgetAsync
+            // tombstones it - then Indeterminate until the row is pruned,
+            // and InFlight (the default fallback) once it is gone. For
+            // Committed/Aborted we apply the terminal directly. For
+            // anything else we leave the entry pending - either the saga
+            // is genuinely still in flight (its eventual broadcast will
+            // reach destination, which is now registered as a
+            // participant) or its decision is no longer reported and the
+            // entry is a true orphan. The latter is shadowed by
             // any later prepare for the same key via the highest-HLC
             // tie-break in TryFindPendingForKey.
             if (perTxSnapshots is { Count: > 0 })

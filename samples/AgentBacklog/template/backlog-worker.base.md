@@ -146,8 +146,12 @@ These are non-negotiable. Each encodes a specific failure mode.
     Every wasted tick costs a whole agent session.
 
 11. **GitHub auth and text hygiene.** This repository is `{owner}/{repo}`, and
-    every `gh` call runs as **{ghAccount}**: clear
-    the ambient token (`$env:GH_TOKEN=''`) then `gh auth switch --user {ghAccount}`. No
+    every `gh` call runs as **{ghAccount}**: select the account on each command by
+    putting its token on it (`$env:GH_TOKEN = (gh auth token --user {ghAccount})`)
+    rather than with `gh auth switch`, which changes the active account for every
+    other session sharing the machine's `gh` configuration, and push with that token
+    embedded in the remote URL and the git credential helper disabled for that one
+    push, since the helper can authenticate as a different identity. No
     em-dash (U+2014) and no mojibake in any issue comment, memory entry, commit
     message or tracked file you write. Plain ASCII hyphens only.
 
@@ -747,8 +751,9 @@ release last.**
    event anywhere to explain it.
 4. Mirror the outcome: post the `outcome ... result=complete` comment on the
    issue and close it if the merged pull request did not already.
-5. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale
-   or missing release reports `released: false` rather than erroring.
+5. `repocontext_release_claim(key, fencingToken)`. Release is idempotent; a stale,
+   missing or unclaimed release reports `released: false`, with that `reason`,
+   rather than erroring.
 
 **If you were deployed directly against an issue rather than by draining the
 backlog**, there is no item, no claim and no fencing token, so steps 2 and 5 have

@@ -50,8 +50,10 @@ Every administrative operation authorizes the caller **before** it changes
 anything (the tenant-tier gate reads only the target tenant's record to decide) - the tenant lifecycle and the
 allowed-region set as a cluster-wide administrative operation, the tenant-tier
 operations (residency, admin subjects, cross-tenant grants, usage) for the platform
-operator or a live admin subject of the tenant - and an explicitly supplied admin
-subject is validated against the identity directory when one is configured. An unauthenticated or unauthorized
+operator or a live admin subject of the tenant - and a subject added through
+`ILatticeTenantAccessAdmin` must resolve in the identity directory (only resolution
+is checked, not the principal's kind) when one is configured and requires
+validation. An unauthenticated or unauthorized
 caller is refused without learning whether a tenant exists. The reserved default
 tenant can never be suspended, deleted, given quotas, have its admin subjects
 changed, or be named in a cross-tenant grant offer, and a tenant id that shadows a

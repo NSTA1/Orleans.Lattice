@@ -44,7 +44,7 @@ await history.TickAsync("replica-B", cancellationToken);
 VersionVector current = await history.GetAsync(cancellationToken);
 var other = new VersionVector();
 other.Tick("replica-C");
-bool seenEverythingInOther = current.DominatesOrEquals(other); // false: C:1 unseen
+bool seenEverythingInOther = current.DominatesOrEquals(other); // false: replica-C's entry is unseen
 ```
 
 See also: [MV-Register](mvregister.md), which tags each value with a causal dot

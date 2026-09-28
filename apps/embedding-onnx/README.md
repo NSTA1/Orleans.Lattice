@@ -68,8 +68,9 @@ name and **0.473** for ordinary French text.
 
 This is why the csproj sets `InvariantGlobalization` to `false` and the runtime
 stage uses the `-extra` chiseled base image, which is the variant that carries
-ICU. `GlobalizationGuard` re-checks the capability at startup and refuses to
-serve if it is missing, so neither setting can regress into silent corruption;
+ICU. A startup check re-verifies the capability - it folds an accented probe
+word and refuses to serve unless the ASCII form comes back - so neither setting
+can regress into silent corruption;
 `GlobalizationGuardTests` and
 `Encode_folds_accents_exactly_as_the_reference_tokenizer_does` pin it in CI.
 
@@ -244,8 +245,8 @@ in for the Onyx one.
 ## Tests
 
 The covering tests live in [`tests/`](./tests) and run in CI's `apps` lane
-whenever this directory changes. They need neither the model nor a network: the
-golden token fixture and the vocabulary are committed.
+whenever a non-markdown file in this directory changes. They need neither the
+model nor a network: the golden token fixture and the vocabulary are committed.
 
 ```bash
 dotnet test apps/embedding-onnx/tests/Orleans.Lattice.Embedding.Onnx.Host.Tests.csproj

@@ -132,42 +132,51 @@ internal sealed partial class LatticeGrain
     /// Shared open path for zero-observable-writes snapshot cursors.
     /// Both <see cref="LatticeCursorKind.Keys"/> and
     /// <see cref="LatticeCursorKind.Entries"/> route here; the spec
-    /// carries the kind through to the cursor grain. Snapshot cursors
-    /// are also point-in-time so saga decisions captured at open time
-    /// are frozen alongside the per-shard WAL offsets - see
+    /// carries the kind through to the cursor grain. Saga visibility is
+    /// fixed by the frozen per-shard baselines, not by a registry-decision
+    /// snapshot: each shard's baseline is folded to one uniform WAL head, so
+    /// a saga whose commit terminal lands beyond that head stays pending, and
+    /// invisible, on every leaf of that shard it touched - see
     /// <see cref="LatticeSnapshotCoordinate"/>.
     /// <para>
-    /// Capture is a four-step fan-out:
+    /// After the saturation shed below, the open runs these steps in order:
     /// </para>
     /// <list type="number">
     /// <item><description>
-    /// Resolve current routing (<see cref="GetRoutingAsync(CancellationToken)"/>)
-    /// to pin the <see cref="ShardMap.Version"/> the cursor will route
-    /// against for its lifetime.
+    /// Resolve routing force-refreshed from the registry
+    /// (<see cref="GetRoutingAsync(bool, CancellationToken)"/>) to pin the
+    /// <see cref="ShardMap.Version"/> the cursor will route against for its
+    /// lifetime.
     /// </description></item>
     /// <item><description>
     /// Fan out <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>
-    /// across every physical shard to freeze a per-cursor frozen baseline
-    /// (each shard's leaf-chain projection at a uniform per-partition captured
-    /// WAL head) concurrently, seeded in memory into transient per-shard
-    /// snapshot leaves (persisted only once the cursor pages past its first
-    /// page). The cursor serves those rows with no WAL replay, so it does not
-    /// depend on WAL retention.
-    /// </description></item>
-    /// <item><description>
-    /// Take a registry-decision snapshot via the per-tree
-    /// <see cref="ITxRegistryGrain"/> so saga decisions captured at open
-    /// time are frozen for the cursor's lifetime, mirroring the
-    /// point-in-time cursor path.
+    /// across every physical shard, whatever range the cursor covers and at
+    /// most <see cref="LatticeOptions.MaxConcurrentSnapshotCaptures"/> at a
+    /// time, to freeze a per-cursor baseline (each shard's leaf-chain
+    /// projection at a uniform per-partition captured WAL head), seeded in
+    /// memory into transient per-shard snapshot leaves (persisted only once
+    /// the cursor pages past its first page). The cursor serves those rows
+    /// with no WAL replay, so it does not depend on WAL retention.
     /// </description></item>
     /// <item><description>
     /// Gate the open against
     /// <see cref="LatticeOptions.MaxSnapshotReplayEntries"/> using the
-    /// largest per-shard frozen-baseline row count as a conservative
-    /// per-shard cost projection (the snapshot leaf materialises exactly
-    /// these rows; it no longer replays the WAL at serve time). Fail-fast
-    /// with <see cref="LatticeSnapshotReplayBudgetExceededException"/> so an
-    /// expensive open does not silently consume per-shard memory.
+    /// largest per-shard baseline row count (the snapshot leaf serves exactly
+    /// these rows; it no longer replays the WAL at serve time), failing with
+    /// <see cref="LatticeSnapshotReplayBudgetExceededException"/> before any
+    /// cursor is opened. The gate runs after the capture, so when it refuses
+    /// the baselines have already been materialised and seeded in memory;
+    /// they are never persisted.
+    /// </description></item>
+    /// <item><description>
+    /// Fetch a registry-decision snapshot. Only the anchor derived from it,
+    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>, reaches the
+    /// coordinate, and that is currently always
+    /// <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/>; the decisions
+    /// themselves are not carried to the cursor.
+    /// </description></item>
+    /// <item><description>
+    /// Build the coordinate and open the cursor grain with it.
     /// </description></item>
     /// </list>
     /// </summary>
@@ -226,8 +235,10 @@ internal sealed partial class LatticeGrain
         // Step 2: per-shard frozen-baseline capture, concurrent across
         // shards. Each shard freezes its leaf chain, captures a uniform
         // per-partition WAL head, folds each leaf's own (frontier, head]
-        // tail exactly once, and persists the materialised per-shard
-        // baseline keyed by this open's baseline token. Serving the cursor
+        // tail exactly once, and seeds the materialised per-shard baseline,
+        // keyed by this open's baseline token, into the transient snapshot
+        // leaf's memory (persisted only once the cursor pages past its first
+        // page, issue #916). Serving the cursor
         // then reads those frozen rows with no WAL replay, so a later WAL
         // GC that trims the prefix cannot turn the scan empty/partial (the
         // bug this fixes). Per-shard ShardActivationRetry wrap: a single
@@ -264,13 +275,15 @@ internal sealed partial class LatticeGrain
             if (capture.RowCount > maxBaselineRows) maxBaselineRows = capture.RowCount;
         }
 
-        // Step 4: replay-budget gate. With the frozen-baseline store the
+        // Step 3: replay-budget gate. With the frozen-baseline store the
         // per-shard cost is the materialised baseline row count (what the
         // snapshot leaf seeds into memory), NOT the captured WAL head: after
         // a GC trim the head can be arbitrarily large while the real
         // projection is tiny. Compare against the deepest shard rather than
         // the sum because the baselines are seeded in parallel and the
         // operator-facing knob is "per shard", mirroring MaxLeafReplayEntries.
+        // The capture above has already seeded every baseline by now, so the
+        // gate refuses the cursor, not the capture cost.
         var opts = Options;
         if (opts.MaxSnapshotReplayEntries > 0 && maxBaselineRows > opts.MaxSnapshotReplayEntries)
         {
@@ -280,20 +293,21 @@ internal sealed partial class LatticeGrain
                 "Trigger a leaf-projection rebuild (RebuildLeafProjectionAsync) or raise the cap.");
         }
 
-        // Step 3: registry-decision snapshot, mirroring the
-        // point-in-time cursor path. A failure here returns null - the
-        // cursor grain will treat that as "no sagas captured" and
-        // proceed; the snapshot semantics weaken to "WAL-only" rather
-        // than failing the open.
+        // Step 4: registry-decision snapshot. Only the HLC anchor derived from
+        // it reaches the coordinate: the dictionary is not handed to the cursor
+        // grain, which keeps no registry snapshot for a snapshot cursor,
+        // because the frozen baselines captured above already fix saga
+        // visibility. A registry transport failure yields a null snapshot and
+        // the open proceeds; any other registry fault propagates and fails the
+        // open.
         var registrySnapshot = (await FetchRegistrySnapshotAsync()).Snap;
         cancellationToken.ThrowIfCancellationRequested();
         // ComputeRegistrySnapshotHlc currently always returns
         // HybridLogicalClock.Zero: the registry snapshot DTO carries no
         // per-decision HLCs to take a maximum over. The cursor uses the
         // value only as a diagnostic anchor (and as its WAL cursor-registry
-        // position, where Zero holds back nothing) - the registry snapshot
-        // dictionary itself (transferred to LatticeRegistrySnapshotContext
-        // via the cursor grain) is what gates visibility.
+        // position, where Zero holds back nothing); visibility does not
+        // depend on it.
         var registryHlc = ComputeRegistrySnapshotHlc(registrySnapshot);
 
         var coordinate = new LatticeSnapshotCoordinate(
@@ -379,16 +393,17 @@ internal sealed partial class LatticeGrain
     /// cursor's WAL cursor-registry position (which therefore holds back no
     /// trimming). The backup capture does not take its consistency-cut HLC from
     /// this anchor alone; it uses the highest HLC over the entries it captured.
-    /// Visibility gating is driven by the snapshot dictionary itself, not by this
-    /// anchor.
+    /// Visibility gating is driven by neither this anchor nor the snapshot
+    /// dictionary, which is discarded here: a snapshot cursor's saga visibility
+    /// is fixed by its frozen per-shard baselines.
     /// </summary>
     private static Orleans.Lattice.HybridLogicalClock ComputeRegistrySnapshotHlc(
         Dictionary<Guid, TxStatus>? snapshot)
     {
         // The registry's per-decision HLCs are not exposed on the
-        // current snapshot DTO, so we anchor at Zero when the snapshot
-        // is null or empty and let the cursor grain treat the captured
-        // dictionary as the authoritative gating input. A richer anchor
+        // current snapshot DTO, so we always anchor at Zero, and the
+        // dictionary is not passed on: the cursor grain keeps no registry
+        // snapshot for a snapshot cursor. A richer anchor
         // (e.g. the head HLC of the registry tree at capture time)
         // would require a new registry-side accessor and is not
         // required for correctness here.

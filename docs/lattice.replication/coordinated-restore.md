@@ -12,8 +12,9 @@ Coordinated restore closes that gap. When the restore target is currently
 replicated, the restore is promoted into an **all-or-nothing cross-cluster
 saga**: every participating cluster prepares the restored data, then a single
 global decision either cuts every cluster over together or rolls every cluster
-back. No peer re-advances the restored cut, and no reader ever observes a torn
-or half-restored tree.
+back (subject to the fence-timer bound described under
+[The saga phases](#the-saga-phases)). No peer re-advances the restored cut,
+and no reader ever observes a torn or half-restored tree.
 
 ## When a restore becomes a saga
 
@@ -32,6 +33,17 @@ A **backup set** (multiple trees captured together) restores as one unit: if any
 member tree is replicated, the whole set restores under a single saga spanning
 the local cluster and every current replication peer, so every member tree flips
 together on every participating cluster or none does.
+
+The initiating cluster authorizes the restore with the caller's identity before
+it decides whether to dispatch a saga, so an unauthorized caller never reaches a
+peer: it checks the `Restore` capability over the target tree (over every member
+tree for a set) and, when a single-tree restore retargets onto a different tree,
+the `Backup` capability over the tree the backup was captured from. A refused
+capability check throws `LatticeAuthorizationDeniedException`. A single-tree
+restore into a replicated target then runs the capacity check on the initiating
+cluster and refuses an infeasible target with a
+`LatticeRestoreValidationException` that names the refusal but not the target's
+stored size or shard count.
 
 Before any cluster prepares, the coordinator probes every current peer over the
 saga control channel and refuses to start - with a
@@ -73,28 +85,37 @@ Two guarantees make this safe under failure:
 
 - **Single global decision.** The coordinator reaches exactly one
   commit-or-abort decision after collecting every vote, and delivers that one
-  decision to every participant. A participant never observes a mixed outcome.
+  decision to every cluster that voted to commit; a cluster that voted to abort
+  has already compensated its own prepared work. A participant never observes a
+  mixed outcome.
 - **Bounded fence-timer auto-compensation.** A prepared participant waits for
   the decision under a bounded cutover-fence timer (five minutes; distinct from
   the per-tree write fence, which engages only at commit). If the coordinator is
   lost before it delivers a decision, the timer expires and the participant
-  auto-compensates (aborts), so a prepared restore can never leak after a
-  coordinator loss. The coordinator separately bounds the prepare phase: it
-  aborts a saga whose prepare is still being retried an hour after the saga
-  started.
+  auto-compensates (aborts), so a prepared single-tree restore cannot leak
+  after a coordinator loss. A backup-set restore is not covered in full: the
+  auto-compensation lifts that cluster's fence but does not garbage collect the
+  member shadows it built. The timer starts when that cluster finishes its own
+  prepare and fires whether or not the coordinator is still alive, so a commit
+  decision that reaches it more than five minutes after it prepared finds it
+  already compensated: the participant does not apply the late commit, and the
+  coordinator does not treat that refusal as a failure. The coordinator
+  separately bounds the prepare phase: it aborts a saga whose prepare is still
+  being retried an hour after the saga started.
 
 ## Reliability under duress
 
-Every participant runs an **admission pre-flight** before any shadow build
-starts: it probes the backup's self-describing size and topology and votes to
-abort if that probe fails or its capacity check refuses the target, so the saga
-fails fast with a clear vote rather than failing mid-build. The shipped capacity
-check admits every target, so today the pre-flight catches an unprobeable
-backup rather than a tree too large for the cluster. A participant whose build
-fails permanently (a missing backup or base in the chain) or exhausts its
-bounded retry budget votes to abort and garbage collects its partial shadow,
-leaving no orphaned shadow state; the whole saga then rolls back
-all-or-nothing.
+Every participant runs an **admission pre-flight** before it builds a shadow: it
+probes the backup's self-describing size and topology and votes to abort if that
+probe fails or its capacity check refuses the target, so the saga fails fast
+with a clear vote rather than failing mid-build. The shipped capacity check
+admits every target, so today the pre-flight catches an unprobeable backup
+rather than a tree too large for the cluster. A participant whose build fails
+permanently (a restore validation failure, such as an artifact absent from the
+sink or failing its content-digest check) or exhausts its bounded retry budget
+(a set restore does not retry: the first member build that fails aborts the
+whole set) votes to abort and garbage collects its partial shadow, leaving no
+orphaned shadow state; the whole saga then rolls back all-or-nothing.
 
 ## The sink must be shared, and that is checked at capture time
 

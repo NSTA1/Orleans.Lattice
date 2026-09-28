@@ -755,10 +755,9 @@ public class LatticeReplicationOptions
     /// the worst-case latency between a write being appended to the
     /// WAL and the next ship attempt picking it up; a longer period
     /// trades latency for cheaper steady-state load on the silo
-    /// scheduler when the WAL is empty. The setting only matters when
-    /// the doorbell signal (<see cref="ShipDoorbellEnabled"/>) is
-    /// disabled or fails to ring (e.g. shipper grain not yet active);
-    /// in normal operation the doorbell wakes or activates the shipper grain, and
+    /// scheduler when the WAL is empty. The setting governs drain latency
+    /// whether or not the doorbell signal (<see cref="ShipDoorbellEnabled"/>) is
+    /// enabled: a doorbell only wakes or (re)activates the shipper grain, and
     /// the next timer tick performs the drain. Defaults to
     /// <see cref="DefaultShipPhaseTimerPeriod"/>. Must be strictly
     /// greater than <see cref="TimeSpan.Zero"/>.
@@ -1046,18 +1045,21 @@ public class LatticeReplicationOptions
     public long BootstrapFallbackMaxBytes { get; set; } = DefaultBootstrapFallbackMaxBytes;
 
     /// <summary>
-    /// Whether <see cref="ShardedReplogSink"/> rings the per-peer
-    /// shipper grain after a successful WAL append, signalling that
-    /// new entries are available. Disabling the doorbell falls back
-    /// to the shipper's <see cref="ShipPhaseTimerPeriod"/>
-    /// timer-driven cadence (100 ms by default). Defaults to
+    /// Whether a committed write to a replicated tree rings that tree's per-peer
+    /// shipper grains, signalling that new entries are available. A ring only wakes
+    /// or (re)activates a shipper; the drain itself always runs on the shipper's
+    /// <see cref="ShipPhaseTimerPeriod"/> timer (100 ms by default), so disabling
+    /// the doorbell leaves an active shipper's cadence unchanged and only stops
+    /// writes from reactivating a shipper that had been deactivated. Defaults to
     /// <see langword="true"/>.
     /// <para>
     /// The doorbell is best-effort: a failure to reach a shipper
     /// activation (silo loss, transient network fault) is logged
     /// at <c>Trace</c> level and swallowed so the producer-side
     /// commit path never fails on a doorbell ring failure. A missed
-    /// doorbell only delays the affected peer by one timer tick.
+    /// doorbell costs an active shipper nothing; a shipper that had been
+    /// deactivated waits until the next doorbell, call, or its periodic keepalive
+    /// reminder reactivates it.
     /// </para>
     /// </summary>
     public bool ShipDoorbellEnabled { get; set; } = DefaultShipDoorbellEnabled;
@@ -1488,8 +1490,11 @@ public class LatticeReplicationOptions
     /// which one half-open trial pass is allowed. A successful pass at any point
     /// resets the consecutive-failure count and closes the breaker; a failed
     /// half-open trial re-opens it for another cooldown. A "failure" is a
-    /// remediation pass that threw or whose re-ship sink reported zero entries
-    /// shipped despite candidate entries having been selected.
+    /// remediation pass whose re-ship reported zero entries shipped despite
+    /// candidate entries having been selected, or whose orchestration faulted
+    /// outside the re-replay and fallback repairs. A re-replay or fallback repair
+    /// that throws is logged and treated as not attempted, so it does not count as
+    /// a failure and, like any non-failing pass, resets the count.
     /// <para>
     /// Only consulted when <see cref="AutoRemediateOnDigestMismatch"/> is
     /// <see langword="true"/>. Defaults to

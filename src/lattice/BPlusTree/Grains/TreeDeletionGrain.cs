@@ -8,8 +8,11 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Manages tree-level soft deletion and deferred purge. When a tree is deleted,
-/// all shards are marked as deleted (blocking reads/writes), and a grain reminder
+/// Manages tree-level soft deletion and deferred purge for the shards stored
+/// under this grain's tree id; it does not resolve a tree alias, so an aliased
+/// tree's live data under another physical tree is not reached. When a tree is
+/// deleted, those shards are marked as deleted (blocking reads/writes on them),
+/// and a grain reminder
 /// is registered to fire after <see cref="LatticeOptions.SoftDeleteDuration"/>.
 /// When the reminder fires and the soft-delete window has elapsed, a grain timer
 /// walks each shard one-by-one (same pattern as <see cref="TombstoneCompactionGrain"/>),
@@ -78,9 +81,13 @@ internal sealed partial class TreeDeletionGrain(
 
         if (state.State.IsDeleted && (!state.State.Delegated || state.State.PurgeComplete)) return;
 
-        // Mark all shards as deleted first - including every shard an
-        // adaptive split allocated above the pinned ShardCount, which the
-        // routing map can send keys to (see ResolveAllocatedShardCountAsync).
+        // Mark all shards stored under this id as deleted first - including
+        // every shard an adaptive split allocated above the pinned ShardCount,
+        // which the routing map can send keys to (see
+        // ResolveAllocatedShardCountAsync), unless the registry no longer
+        // records it: for a resize's retired first copy the alias swap has
+        // already dropped the shard map and split mark, so only shards up to
+        // the pinned count are marked. An alias is not resolved.
         var shardCount = await ResolveAllocatedShardCountAsync();
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)

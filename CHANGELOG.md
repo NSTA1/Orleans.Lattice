@@ -42,6 +42,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - CRDT provenance dot scans and UTF-8 transcodes.** The OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice`, `Orleans.Lattice.Caching.AzureBlob`)
+
+- **Performance - Leaf range reads, CRDT dot scans and index fingerprint.** A range read sorts only when a pending write appended out of order, drops bound re-tests the scan window already enforces, dot scans walk spans not the list indexer, and the fingerprint transcodes each name once. ([#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772)) (`Orleans.Lattice`, `Orleans.Lattice.GrainIndex`)
+
 - **Performance - Leaf scan and projection digest.** A bounded range scan retires its lower bound once met instead of retesting every row; the digest transcodes each string field once rather than twice; and a single-replica vector clock is fed straight through instead of rented and sorted per row. ([#3760](https://github.com/NSTA1/Orleans.Lattice/pull/3760)) (`Orleans.Lattice`)
 
 - **Performance - GetMany strict-pass retry capture.** The single-shard `GetManyAsync` strict-pass retry closure no longer allocates a nested parent capture, removing 24 bytes from every call. ([#3678](https://github.com/NSTA1/Orleans.Lattice/issues/3678)) (`Orleans.Lattice`)
@@ -194,6 +198,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Backup - A full backup's cut recorded HLC 0.** The consistency cut read an anchor the core always stamps as zero; it now records the highest HLC the capture read, so the first increment on a full base pins the WAL at that frontier while it drains. ([#3758](https://github.com/NSTA1/Orleans.Lattice/issues/3758)) (`Orleans.Lattice.Backup`)
 
 ### Security
+
+- **Security - A view row decoder trusted a peer-supplied count.** Under `ShipView` a view tree is replication-enrolled, so its aggregation rows reach the decoder from a peer. It pre-sized a map from a wire `Int32` and read past a truncated row; counts and reads are now bounded. ([#3784](https://github.com/NSTA1/Orleans.Lattice/pull/3784)) (`Orleans.Lattice`)
 
 - **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. ([#3747](https://github.com/NSTA1/Orleans.Lattice/pull/3747)) (`Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)
 

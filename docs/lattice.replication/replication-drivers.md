@@ -49,7 +49,11 @@ of the static map and the trees enabled at runtime, and a lightweight
 poll of the compiled configuration snapshot (every 2 seconds, doing work
 only when the snapshot has rebuilt) enrols the driver grains of any tree
 enabled after startup without a silo restart. Enrolment is additive
-only: disabling a tree at runtime does not tear its driver grains down.
+only: disabling a tree at runtime does not tear its driver grains down,
+and the shipper keeps shipping the tree - it does not consult the
+merge-mode resolver to decide whether to run (see
+[Fail-closed ambiguity](runtime-config.md#fail-closed-ambiguity) for what
+a peer does with those entries).
 
 The activation loop is **retry-with-backoff**: a freshly-started silo may
 race the Orleans runtime's own `IHostedService` ordering, so the first

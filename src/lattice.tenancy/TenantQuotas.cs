@@ -18,7 +18,11 @@ namespace Orleans.Lattice.Tenancy;
 [Immutable]
 public readonly record struct TenantQuotas
 {
-    /// <summary>The maximum total stored value bytes, or <c>null</c> for unbounded.</summary>
+    /// <summary>
+    /// The maximum total storage footprint in bytes - the write-ahead log, snapshot,
+    /// and persisted leaf-state bytes of the tenant's trees - or <c>null</c> for
+    /// unbounded.
+    /// </summary>
     [Id(0)]
     public long? MaxBytes { get; init; }
 

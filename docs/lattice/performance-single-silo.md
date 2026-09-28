@@ -10,8 +10,10 @@ regenerated together against a freshly-provisioned Azure VM by
 `benchmark/performance-report.ps1`. Layer 2 write cells reflect a fully
 durable WAL-before-Apply path with real Azure round-trips; Layer 2 read
 cells are the caller-visible envelope that includes the per-silo
-read-through leaf cache (see the read-side caching note
-below).
+read-through leaf cache, and they were measured against keys the benchmark
+never wrote, so they time lookups that miss rather than reads that return
+stored data (see the note under the Layer 2 table and the read-side caching
+note below).
 
 The figures are **steady-state averages** taken from the productive window
 of each run, with drain tails excluded. Cold starts, JIT warm-up, grain
@@ -67,6 +69,16 @@ the published cell is the **median across the N cohorts** of the BDN-reported
 p50. The marker block immediately below records the host SKU, .NET version,
 BDN fidelity, cohort-N, and measurement date; subsequent refreshes are
 mechanical and the prose around the marker is hand-editable.
+
+**Regenerating these tables is currently broken.** At the current revision
+`benchmark/performance-report.ps1` still reads a `$NamePrefix` variable that
+its parameter list no longer declares, and it runs under
+`Set-StrictMode -Version Latest`, so any Layer 1 or Layer 2 run of it -
+`-Layer1`, `-Layer2`, or the default run of both - throws while it resolves
+its name prefix, before it provisions a VM or runs a cohort. `-DryRun`,
+which re-renders these tables from the last `state.json`, is unaffected. The
+tables in this guide were measured on 2026-08-24, when the parameter still
+existed, so their numbers are not affected by the fault.
 
 <!-- perf-table:layer1:start
   schema=v1
@@ -130,7 +142,9 @@ as the **median across N cohorts** of the steady-state mean (per-second
 silo rate samples filtered to the productive window; see
 `benchmark/azure-throughput/throughput.md` section 27.1 for the exact
 formula), pulls the per-call p50/p99 from the matching duration histogram's
-last full reporter window, and tears the VM down. The full provenance
+last full reporter window, and tears the VM down (at the current revision
+that run fails before it provisions the VM; see the note under Layer 1).
+The full provenance
 (host SKU, region, .NET version, WAL options, rung, response-timeout,
 cohort-N, methodology, measurement date) is recorded in the marker block's
 meta-header below; future refreshes are mechanical and the prose around
@@ -173,6 +187,21 @@ realistic latency the storage provider contributes.
 <!-- perf-table:layer2:end -->
 
 > Measured 2026-08-24 on Standard_D4as_v5 in westus3 (.NET 10.0.111) at git sha cbc92ce3, n=1/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
+
+**The two read rows timed lookups of keys that were never written.**
+`performance-report.ps1 -Layer2` does not pass `BENCH_VEHICLE_COUNT` to
+the silo - `run-cohort.ps1` sets it only for the producer - so the silo
+takes its default of 0 and skips the read-mode pre-seed that would have
+written the keys the producer then asks for. Each cohort also runs against
+a fresh, timestamp-named tree, and the read modes issue no writes, so every
+`GetAsync`, and every key of every `GetManyAsync` call, looked up a key that
+did not exist. Those two rows therefore describe the miss path on an empty
+tree, not a read that returns a stored value: do not quote them as read
+latency or read throughput for a populated tree. Their throughput cells are
+also bounded by the offered load - 4000 vehicles at 5 Hz offers 20,000
+keys/s - so they show the silo keeping pace with that load, not a read
+ceiling. The Layer 1 read rows are unaffected, because the in-process
+harness writes its keys before it measures.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
@@ -289,9 +318,11 @@ request. (These rows also predate the optimistic shard-root point read,
 [`OptimisticShardRootPointReads`](configuration.md#optimisticshardrootpointreads),
 on by default, which serves a validated `GetAsync` from the primary leaf's
 resident state without consulting the cache; it issues no storage request
-either.) That is why the `GetAsync` and `GetManyAsync` per-call
-latencies in the Layer 2 table above are each roughly two orders of
-magnitude faster than a single Azure Tables round-trip. The
+either.) That is why the `GetAsync` per-call latency in the Layer 2 table
+above is roughly two orders of magnitude below a single Azure Tables
+round-trip, and why a `GetManyAsync` call over 4,096 keys completes in a
+few milliseconds; both rows measured lookups of keys that were never
+written (see the note under the table). The
 single-account read budget itself (the same ~2,500 transactions/sec
 empirical ceiling that gates the write path - the Azure-published
 per-account TPS target is higher but the binder for both shapes is
@@ -303,15 +334,15 @@ the read envelope grows toward the round-trip cost and the read budget
 starts to matter.
 
 **A note on read-side caching.** The `GetAsync` / `GetManyAsync` per-call cells above are the caller-visible envelope, which
-includes whatever the per-silo read-through leaf cache served. In the
-steady state of a workload that re-reads recently-written keys (the
-producer-driven telemetry stream the benchmark drives is a representative
-case - vehicles cycle through the same key set tick after tick), the
-local-silo cache absorbs most of the cost: a same-silo revision-cookie
-short-circuit skips the cross-grain delta fetch entirely, the read
-collapses to an in-memory dictionary `TryGetValue`, and
-the envelope p50 settles into the tens-of-microseconds range you see
-above. When the primary leaf has changed since the cache last
+includes whatever the per-silo read-through leaf cache served. They do
+not show the cache serving stored values: the benchmark's read cohorts
+never wrote the keys they read (see the note under the Layer 2 table), so
+the producer's stream - the same vehicle keys tick after tick - re-read
+keys that did not exist. In the steady state of a workload that re-reads
+recently-written keys, the local-silo cache absorbs most of the cost: a
+same-silo revision-cookie short-circuit skips the cross-grain delta fetch
+entirely and the read collapses to an in-memory dictionary `TryGetValue`.
+When the primary leaf has changed since the cache last
 refreshed, or is activated on another silo, the read first pulls a
 delta from it - an extra grain call, and a cross-silo hop when the leaf
 is remote (a remote pull can be rate-limited with
@@ -320,10 +351,9 @@ payload was evicted, or that an in-flight saga has pending, is read
 from the leaf directly. Either path adds a grain round-trip rather than
 a storage read, typically pushing the p99 noticeably above the p50.
 
-This is **not** a knock against the published numbers: the cache is part
-of the production read path and an honest representation of what an
-`ILattice` consumer's `await` actually waits for. But two practical
-consequences follow:
+Including the cache is not a flaw in the method: the cache is part of the
+production read path, so the envelope is what an `ILattice` consumer's
+`await` actually waits for. But two practical consequences follow:
 
 1. **Your read-side numbers will differ** if your workload has a low
    cache hit ratio (e.g. read-once-write-once analytics, large keyspace

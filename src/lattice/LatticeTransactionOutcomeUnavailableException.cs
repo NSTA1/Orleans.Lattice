@@ -15,8 +15,8 @@ namespace Orleans.Lattice;
 /// prepare outcome it could not establish:
 /// <list type="bullet">
 ///   <item><description>
-///     the registry answers that the outcome is no longer known
-///     (<see cref="TxStatus.Indeterminate"/>, for example an aged-out decision):
+///     the registry answers that the outcome is no longer known (an
+///     indeterminate answer, for example an aged-out decision):
 ///     the key reads as absent, because that condition is permanent;
 ///   </description></item>
 ///   <item><description>
@@ -28,12 +28,19 @@ namespace Orleans.Lattice;
 ///     is served on the strength of a registry that did not answer.
 ///   </description></item>
 /// </list>
-/// A multi-key read (<c>GetManyAsync</c>, the counts, key and entry
-/// enumeration) raises it only when its result actually depended on the
-/// registry - some key it read carried a prepared mutation - and only after its
-/// own bounded snapshot retry (<see cref="LatticeOptions.MaxScanRetries"/>) is
-/// exhausted. A read over keys that carry no prepared mutation completes
-/// normally while the registry is unreachable.
+/// A multi-key read raises it only when its result actually depended on the
+/// registry - some key it read carried a prepared mutation. <c>GetManyAsync</c>
+/// and the counts raise it only after their own bounded snapshot retry
+/// (<see cref="LatticeOptions.MaxScanRetries"/>) is exhausted. Key and entry
+/// enumeration does not retry: a scan resolves every page against a single
+/// registry view - the one it takes when it starts, or the one a point-in-time
+/// cursor captured at open - and when it could not obtain that view it raises
+/// this exception as soon as a page reaches a prepared key.
+/// The pages it has already yielded held no prepared key, so what the caller
+/// received is consistent. A count narrowed by an access-gate key filter is
+/// computed by enumerating keys, so it behaves like enumeration. A read over
+/// keys that carry no prepared mutation completes normally while the registry
+/// is unreachable.
 /// </para>
 /// <para>
 /// <b>The exception is retriable.</b> The condition clears as soon as the

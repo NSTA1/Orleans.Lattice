@@ -20,7 +20,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 | [PredicateOperations](../../samples/PredicateOperations/README.md) | Server-side `Expression<Func<T, bool>>` push-down so only matching keys or values cross the wire. |
 | [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
 | [SnapshotCursors](../../samples/SnapshotCursors/README.md) | Strict snapshot isolation: mid-iteration writes stay invisible to an open snapshot cursor. |
-| [Snapshots](../../samples/Snapshots/README.md) | An offline point-in-time copy of a whole tree into an independent destination tree. |
+| [Snapshots](../../samples/Snapshots/README.md) | An offline point-in-time copy of a tree into an independent destination tree. |
 | [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
 | [OnlineReshard](../../samples/OnlineReshard/README.md) | Growing the physical shard count online with reads, writes, and data intact throughout. |
 | [Resize](../../samples/Resize/README.md) | Changing `MaxLeafKeys` / `MaxInternalChildren` on a live, populated tree. |
@@ -42,6 +42,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 |---|---|
 | [SchemaEnforcement](../../samples/SchemaEnforcement/README.md) | The two opt-in `Orleans.Lattice.Schema` capabilities over the opaque-`byte[]` core: per-tree write validation (a malformed write rejected with `LatticeSchemaViolationException` and never persisted), and self-describing value versioning with read-time upcasting. |
 | [MultiTenancy](../../samples/MultiTenancy/README.md) | A single-silo tour of multi-tenancy: the tenant registry, the isolation naming seam, and the operator control-plane facade. |
+| [InstallableApps](../../samples/InstallableApps/README.md) | A single-silo tour of the installable App concept through the `ILatticeAppsControl` facade: an embedded manifest, a version-pinned operator consent binding the app's role to a membership group, app-owned authorization rules compiled on enable, and an uninstall that soft-deletes the app tree - with a direct edit of an app-owned rule refused (`LatticeAppOwnedRuleException`) and narrowed consent failing activation closed. |
 
 ### Identity and Security
 

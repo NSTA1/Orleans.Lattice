@@ -4,12 +4,21 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Online shadow-forwarding primitive for the shard root.
 /// <para>
-/// When <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.ShadowForward"/> is non-null, every accepted
-/// mutation on this shard is mirrored in parallel to the corresponding shard
-/// on <c>ShadowForwardState.DestinationPhysicalTreeId</c>. The destination
-/// tree is constrained by the coordinator to share this tree's
-/// <see cref="ShardMap"/>, so the shadow target is always at the same shard
-/// index - <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>.
+/// When <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.ShadowForward"/> is non-null, the shard's
+/// last-writer-wins mutation paths (point, batched and conditional writes,
+/// deletes, range deletes, batched merges, and atomic-write terminals) are
+/// mirrored in parallel to the shard with the same index on
+/// <c>ShadowForwardState.DestinationPhysicalTreeId</c>,
+/// <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>; the typed CRDT delta paths
+/// and bulk appends are not mirrored. The target is chosen by index alone. The
+/// snapshot coordinator registers the destination tree with this tree's pinned
+/// shard count and no <see cref="ShardMap"/> of its own
+/// (<c>TreeSnapshotGrain.InitiateSnapshotStateAsync</c>), so the destination
+/// routes keys by the default map for that count. A mirrored key therefore
+/// lands on the shard the destination routes it to only while this tree still
+/// uses that default map; once an adaptive split or a reshard has changed it,
+/// a key can be mirrored to a shard the destination does not route it to, and a
+/// shard at or above the pinned count is never given a shadow forward at all.
 /// </para>
 /// <para>
 /// The three phases <see cref="ShadowForwardPhase.Draining"/>,
@@ -18,11 +27,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <c>Draining</c> / <c>Drained</c>: every accepted mutation is forwarded
-/// in parallel via <see cref="Task.WhenAll(Task[])"/>. Correctness relies on
-/// LWW commutativity - concurrent forwards and background-drain writes
-/// converge to the same final state on the destination shard regardless of
-/// interleaving because the highest HLC wins on every key.
+/// <c>Draining</c> / <c>Drained</c>: each mirrored mutation (see above) is
+/// forwarded in parallel with its local apply, and the destination resolves
+/// every key by last-writer-wins (highest HLC). A forwarded write carries no
+/// timestamp of its own unless it already runs under an HLC override
+/// (<see cref="LatticeHlcOverrideContext"/>), so the destination leaf stamps it
+/// from its own clock, while a drained entry keeps its source HLC; a drained
+/// entry merged first advances that clock, but one merged after the forward
+/// can outrank it, so the order in which the two arrive can decide which
+/// version survives.
 /// </description></item>
 /// <item><description>
 /// <c>Rejecting</c>: every operation (read or write) throws

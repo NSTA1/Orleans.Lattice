@@ -9,7 +9,7 @@ var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.DeleteTreeAsync();
 ```
 
-After deletion, any attempt to read from or write to the tree throws `InvalidOperationException` with the message *"This tree has been deleted and is no longer accessible."*
+After deletion, any attempt to read from or write to the tree throws `InvalidOperationException` with the message *"This tree has been deleted and is no longer accessible."* The exception is an aliased tree - one a populated resize, a shadow-cutover restore or a schema-remediation cutover has pointed at another physical tree - whose live shards a delete does not reach; see [Deleting an aliased tree](#deleting-an-aliased-tree).
 
 `DeleteTreeAsync`, `RecoverTreeAsync`, and `PurgeTreeAsync` are whole-tree lifecycle operations: each is authorised as `LatticeOperation.TreeLifecycle` over the whole tree, and each rejects a reserved system tree with `LatticeReservedTreeNamespaceException` and a materialised-view tree with `InvalidOperationException`. `DeleteTreeAsync` additionally refuses, with `InvalidOperationException`, a tree that one or more [materialised views](materialised-views.md) derive from - delete the dependent views first through `ILatticeViewFactory.DeleteAsync`.
 
@@ -90,7 +90,7 @@ Step 3's routed-leaf sweep matters on a **retried** purge. A purge that fails pa
 
 `ClearGrainStateAsync()` deletes the grain's storage record - the provider reports no state for it afterwards - and retires the leaf's WAL replay barrier and unregisters its materialiser pins before it does, so a cleared leaf no longer holds the WAL trim floor down. The WAL itself is trimmed separately: each GC pass re-computes the trim floor from the pins that remain and re-issues the trim, which is idempotent, so a trim that fails is retried on the next pass rather than lost. Deleting a record and reclaiming the storage behind it are distinct: a provider may keep the freed space until its own compaction runs.
 
-After all shards are purged, the deletion grain records the purge as complete, removes the tree from the registry (so `TreeExistsAsync` returns `false` from then on), drops any leaf-materialiser cursors registered for the tree, unregisters all reminders, counts the purge on `orleans.lattice.tree.lifecycle` (`kind=purged`, with a tree event when [tree events](events.md) are enabled), and deactivates itself.
+After all shards are purged, the deletion grain records the purge as complete, removes the tree from the registry (so `TreeExistsAsync` returns `false` until something re-creates the tree - see [Reusing a purged tree ID](#reusing-a-purged-tree-id); a system tree has no entry to remove, and a resize's retired copy keeps the live tree's entry - see [Retiring a resized tree's original copy](#retiring-a-resized-trees-original-copy)), drops any leaf-materialiser cursors registered for the tree, unregisters all reminders, counts the purge on `orleans.lattice.tree.lifecycle` (`kind=purged`, with a tree event when [tree events](events.md) are enabled), and deactivates itself.
 
 ## Recovery
 
@@ -119,7 +119,7 @@ After deletion, existing cache activations may still hold stale data in memory, 
 
 ## Configuration
 
-The soft-delete window is controlled by `SoftDeleteDuration` in `LatticeOptions`. See [Configuration](configuration.md) for details.
+The soft-delete window is controlled by `SoftDeleteDuration` in `LatticeOptions`. See [Configuration](configuration.md) for details. An installed app's manifest can also set the window for one of its own (not adopted) trees through `AppTreeDeclaration.SoftDeleteDuration`, which applies to that tree in every tenant; per-tree configuration registered after `AddLatticeApps` still takes precedence. See [Installable apps](../lattice.apps/README.md).
 
 ```csharp verify
 // Global default - 72 hours
@@ -151,6 +151,8 @@ byte[]? value = await tree.GetAsync("customer-123");
 | Soft-deleted (within window) | ✅ Recovers successfully |
 | Purge in progress | Throws `InvalidOperationException` - too late to recover safely |
 | Purge complete | Throws `InvalidOperationException` - data is gone |
+
+These results follow the tree ID's deletion record, which on a resized tree, and on a tree re-created under a purged tree's ID, is not the live tree's own - see [Resized, aliased, and re-created trees](#resized-aliased-and-re-created-trees).
 
 ### Repairing an unbound node
 
@@ -195,3 +197,29 @@ await tree.PurgeTreeAsync();
 | Soft-deleted (within window) | ✅ Purges immediately |
 | Purge in progress (via reminder) | ✅ Purges every shard again from shard `0` (clearing an already-purged shard is a no-op) |
 | Purge complete | Throws `InvalidOperationException` - already purged |
+
+## Resized, aliased, and re-created trees
+
+Deletion, recovery and purge keep one deletion record per tree ID and act on the shards stored under that ID. Three situations follow from that: the original copy a resize retires, a tree whose ID is aliased to another physical tree, and a tree created again under the ID of a purged one.
+
+### Retiring a resized tree's original copy
+
+A populated tree's first `ResizeAsync` copies the tree into a new physical tree - its shards `0` to `ShardCount - 1`, within the limits [Tree Sizing](tree-sizing.md#how-it-works) describes - and aliases the tree's ID to it, which leaves the original copy under the tree's own ID. The resize's cleanup phase retires that copy through the same soft delete and deferred purge as `DeleteTreeAsync`, with two differences, because the registry entry and the compaction schedule under that ID now belong to the live, resized tree:
+
+- The retirement leaves the [tombstone compaction](tombstone-compaction.md) reminder registered; the compaction pass resolves the alias and compacts the resized copy.
+- The purge that follows clears the retired shards but never removes the tree's registry entry, so the alias and the tree's sizing survive and `TreeExistsAsync` keeps returning `true`.
+
+A later resize retires the previous resized copy, whose ID is its own, with an ordinary delete, so that copy is unregistered when its purge completes.
+
+The alias swap has already dropped the retired copy's shard map and split allocation mark from the tree's registry entry by the time the retirement runs, so the retirement walks only shards `0` through the pinned shard count less one: a shard an [adaptive shard split](shard-splitting.md) had added to the retired copy is neither marked deleted nor purged, and because the resize did not copy it either, the keys it holds stay in storage, reachable through the tree again only if the resize is undone.
+
+### Deleting an aliased tree
+
+`DeleteTreeAsync`, `RecoverTreeAsync` and `PurgeTreeAsync` do not resolve a [tree alias](tree-registry.md#tree-aliasing). On a tree whose ID is aliased to another physical tree the live data sits under the alias target, so:
+
+- **After a populated resize.** The tree's ID also names the original copy the resize retired, and that retirement is the deletion record the tree's own lifecycle calls read. `DeleteTreeAsync` therefore returns without deleting anything, and the tree stays readable and writable. While the retired copy is still inside its soft-delete window, `RecoverTreeAsync` succeeds - it recovers the retired copy and cancels its purge - rather than reporting that the tree is not deleted; once the retired copy has been purged, `RecoverTreeAsync` and `PurgeTreeAsync` throw `InvalidOperationException` as they do for any purged tree. The same holds after every later resize, because the retired first copy keeps the tree's ID.
+- **After a shadow-cutover restore or a schema-remediation cutover.** `DeleteTreeAsync` marks only the shards under the tree's own ID, so reads and writes through the alias keep succeeding throughout the soft-delete window. The purge then clears those shards and removes the tree's registry entry, alias included: the tree's ID stops resolving to the alias target, and the target's shards and registration stay in place.
+
+### Reusing a purged tree ID
+
+A tree's deletion record outlives its purge: the ID stays recorded as deleted and purged after the tree has been unregistered. A later read or write on the same ID registers a new tree with fresh shards, and it reads and writes normally, but its lifecycle calls read that record: `DeleteTreeAsync` returns without deleting anything, and `RecoverTreeAsync` and `PurgeTreeAsync` throw `InvalidOperationException` as for a purged tree.

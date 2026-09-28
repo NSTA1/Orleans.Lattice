@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text;
 using Microsoft.Extensions.Options;
 
@@ -36,6 +37,15 @@ internal static class WalMaterialiserPinRouting
     /// floor; never written.
     /// </summary>
     public const string LegacyShardSeparator = "#s";
+
+    /// <summary>
+    /// Stack budget for the consumer-id transcode in <see cref="StableHash"/>.
+    /// A constant rather than a per-call size so the one <c>stackalloc</c> that
+    /// uses it whole lowers to a fixed stack adjustment; the short path below
+    /// deliberately sizes to the string's own worst case instead, because there
+    /// the buffer is written end to end and a narrower one zero-fills less.
+    /// </summary>
+    private const int StackTranscodeBytes = 256;
 
     /// <summary>
     /// Resolves the configured shard count from the global (unkeyed) options,
@@ -404,23 +414,69 @@ internal static class WalMaterialiserPinRouting
     /// Deterministic across processes and platforms (unlike
     /// <see cref="string.GetHashCode()"/>, which is randomised per process), so a
     /// consumer always routes to the same shard across restarts.
+    /// <para>
+    /// A short value is transcoded exactly <em>once</em>. When the string's own
+    /// worst case fits the stack budget the exact byte count is not needed
+    /// before the transcode, so the <see cref="Encoding.GetByteCount(string)"/>
+    /// pass is dropped and the encoder's written count bounds the fold instead -
+    /// which is by definition the same number the separate count pass would have
+    /// produced, so the hash is byte-identical to the two-pass form this
+    /// replaced while the string is scanned half as often. A long value keeps
+    /// the two-pass shape, because renting for a long-but-mostly-ASCII string
+    /// would cost more than the second scan it saves, and the oversized case now
+    /// rents from the shared pool rather than allocating a fresh array per call.
+    /// </para>
+    /// <para>
+    /// Internal rather than private so the microbenchmark host can drive it
+    /// against a verbatim copy of the two-pass body. Widening only; no public
+    /// API surface changes.
+    /// </para>
     /// </summary>
-    private static uint StableHash(string value)
+    internal static uint StableHash(string value)
     {
         const uint offsetBasis = 2166136261;
         const uint prime = 16777619;
 
         var hash = offsetBasis;
-        var byteCount = Encoding.UTF8.GetByteCount(value);
-        Span<byte> buffer = byteCount <= 256 ? stackalloc byte[byteCount] : new byte[byteCount];
-        Encoding.UTF8.GetBytes(value, buffer);
-        for (var i = 0; i < buffer.Length; i++)
+        if (value.Length == 0) return hash;
+
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(value.Length);
+        if (maxByteCount <= StackTranscodeBytes)
         {
-            hash ^= buffer[i];
-            hash *= prime;
+            Span<byte> tight = stackalloc byte[maxByteCount];
+            var encoded = Encoding.UTF8.GetBytes(value, tight);
+            return Fold(hash, tight[..encoded], prime);
         }
 
-        return hash;
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        if (byteCount <= StackTranscodeBytes)
+        {
+            Span<byte> buffer = stackalloc byte[StackTranscodeBytes];
+            var written = Encoding.UTF8.GetBytes(value, buffer);
+            return Fold(hash, buffer[..written], prime);
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(value, rented);
+            return Fold(hash, rented.AsSpan(0, written), prime);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+
+        static uint Fold(uint hash, ReadOnlySpan<byte> bytes, uint prime)
+        {
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                hash ^= bytes[i];
+                hash *= prime;
+            }
+
+            return hash;
+        }
     }
 
     /// <summary>

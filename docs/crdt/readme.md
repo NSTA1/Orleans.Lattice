@@ -47,8 +47,8 @@ primitive whose built-in resolution rule matches what your data means.
 
 | Primitive | Accessor | Converges by | Reach for it when... |
 | --- | --- | --- | --- |
-| [G-Counter](gcounter.md) | `tree.GCounter(key)` | per-replica sum (grow-only) | you need a counter that only goes up (views, totals) and want the minimal, tombstone-free counter |
-| [PN-Counter](pncounter.md) | `tree.PnCounter(key)` | per-replica sum | you need a counter that many clusters increment and decrement at once (likes, stock, quotas) |
+| [G-Counter](gcounter.md) | `tree.GCounter(key)` | per-replica max, value is the sum (grow-only) | you need a counter that only goes up (views, totals) and want the minimal, tombstone-free counter |
+| [PN-Counter](pncounter.md) | `tree.PnCounter(key)` | per-replica max of increments and decrements, value is their difference | you need a counter that many clusters increment and decrement at once (likes, stock, quotas) |
 | [G-Set](gset.md) | `tree.GSet(key)` | set union (grow-only) | you need an append-only set (tag sets, seen-ids) and never remove elements |
 | [OR-Set](orset.md) | `tree.OrSet(key)` | add-wins observed-remove | you need a distributed set where a concurrent add and remove should keep the element |
 | [RW-Set](rwset.md) | `tree.RwSet(key)` | remove-wins observed-remove | you need a set where a removal must win the tie (revocation lists, blocklists) |

@@ -61,9 +61,10 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Rebuilds <see cref="_durableReplayWorkIndex"/> from the persisted list.
-    /// Cheap and idempotent; the list is bounded by
-    /// <c>LatticeOptions.MaxDurableUnresolvedReplayWork</c> and is empty in the
-    /// steady state.
+    /// Cheap and idempotent; the list is empty in the steady state.
+    /// <c>LatticeOptions.MaxDurableUnresolvedReplayWork</c> bounds only its
+    /// deferred terminals: resident unresolved prepares are recorded past it
+    /// (see <see cref="EnsureUnresolvedPrepareRecorded"/>).
     /// </summary>
     private HashSet<(int Partition, long Offset)> DurableReplayWorkIndex()
     {
@@ -104,9 +105,12 @@ internal sealed partial class BPlusLeafGrain
     /// below (issue #2746). An ordinary refusal is a safe degradation rather
     /// than an error: the caller then clamps exactly as it did before this
     /// change, which is slow but has shipped in every previous release. The
-    /// cap exists only for the pathological case of sagas whose terminals
-    /// never arrive, which would otherwise grow the persisted leaf row without
-    /// bound.
+    /// cap bounds the persisted leaf row against a long run of deferred
+    /// terminals. It no longer covers the pathological case of sagas whose
+    /// terminals never arrive: in production their resident prepares bypass
+    /// it (see <see cref="EnsureUnresolvedPrepareRecorded"/>, issue #2183), and
+    /// reach this method only when the ledger is disabled or through the
+    /// issue #2183 control seam.
     /// </para>
     /// <para>
     /// The write is to the in-memory state row only. It becomes durable when
@@ -280,8 +284,8 @@ internal sealed partial class BPlusLeafGrain
     /// untouched, so a restore-then-re-read cannot double it.
     /// </para>
     /// <para>
-    /// Issue #2183 observability. Recording beyond <paramref name="thresholdCap"/>
-    /// is a persist hazard on Azure Table: its 1MB entity cap rejects an
+    /// Issue #2183 observability. Recording at or beyond <paramref name="thresholdCap"/>
+    /// is a persist hazard on Azure Table: its ~960 KB grain-state limit rejects an
     /// oversized write and bounds persisted row growth. The larger SQLite
     /// limit on the default <c>local</c> profile permits growth that can exhaust
     /// memory or the read budget during activation, before grain-level repair
@@ -296,7 +300,8 @@ internal sealed partial class BPlusLeafGrain
     /// capped deferred-terminal recorder refuses at
     /// <c>work.Count &gt;= cap</c> BEFORE adding, so the ledger stops growing
     /// having reached exactly <paramref name="thresholdCap"/>, and that resting
-    /// value is the one at which terminals begin being dropped. A strict
+    /// value is the one at which deferred terminals' durable records begin being
+    /// refused (the terminals themselves stay in memory for pass 2, issue #3190). A strict
     /// <c>&gt;</c> here only ever fired at cap + 1, which a ledger held at the
     /// cap by the deferred recorder never reaches - so the signal was blind at
     /// precisely the value that matters. Inclusive is a widening of the
@@ -324,13 +329,13 @@ internal sealed partial class BPlusLeafGrain
             {
                 _warnedUnresolvedPrepareLedgerBeyondCap = true;
                 ResolveLogger()?.LogWarning(
-                    "Leaf {TreeId} has {Count} unresolved replay-work entries, beyond the "
+                    "Leaf {TreeId} has {Count} unresolved replay-work entries, at or beyond the "
                     + "MaxDurableUnresolvedReplayWork cap of {Cap} (issue #2183). A resident "
                     + "prepare is never dropped, so the row grows for as long as a saga "
                     + "leaves a prepare unresolved (registry status InFlight, or "
                     + "Indeterminate once its decision has aged out; that orphan "
-                    + "source is issue #2304). Persist risk: Azure Table rejects writes "
-                    + "above its 1MB entity cap, bounding persisted row growth. Read risk: "
+                    + "source is issue #2304). Persist risk: Azure Table grain storage rejects "
+                    + "writes above its ~960 KB grain-state limit, bounding persisted row growth. Read risk: "
                     + "the larger SQLite limit on the default `local` profile permits "
                     + "growth that can exhaust memory or the read budget during activation, "
                     + "before grain-level repair can run. Alert on every profile using "

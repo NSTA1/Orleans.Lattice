@@ -1,17 +1,19 @@
 namespace Orleans.Lattice.Membership;
 
 /// <summary>
-/// Thrown by an administrative membership-reference create path (upserting a
-/// group, adding a member to a group) when
+/// Thrown by an administrative membership-reference create path when
 /// <see cref="LatticeIdentityDirectoryOptions.ValidationRequired"/> is set, a real
 /// <see cref="ILatticeIdentityDirectory"/> provider is active (not
 /// <see cref="NullIdentityDirectory"/>), and the supplied principal id fails to
-/// validate: either it resolves to no principal, or the resolved
-/// <see cref="DirectoryPrincipal.Kind"/> does not match the
-/// <see cref="ExpectedKind"/> the operation expects (for example a user id
-/// supplied where a group id was required). The create is <b>fail-closed</b>:
-/// nothing is written before this exception is raised, so an unresolved or
-/// wrong-kind reference never leaves a partial membership edge behind.
+/// validate. Upserting a group and adding a member to a group reject an id that
+/// resolves to no principal, or whose resolved <see cref="DirectoryPrincipal.Kind"/>
+/// does not match the <see cref="ExpectedKind"/> the operation expects (for example
+/// a user id supplied where a group id was required). Adding an admin subject to a
+/// tenant rejects only an id that resolves to no principal: it reports
+/// <see cref="DirectoryPrincipalKind.User"/> as the <see cref="ExpectedKind"/> but
+/// does not check the resolved kind. The create is <b>fail-closed</b>: nothing is
+/// written before this exception is raised, so a rejected reference is never
+/// recorded.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -27,9 +27,17 @@ public sealed record RepoContextForgetResult
     public required bool Existed { get; init; }
 
     /// <summary>
-    /// For a soft lapse, the absolute UTC expiry the entry was re-written with, as
-    /// an ISO-8601 UTC timestamp (round-trip "O" format); <see langword="null"/> for
-    /// a hard delete or an absent key.
+    /// For a soft lapse, the absolute UTC expiry actually in force on the entry once
+    /// the lapse committed, read back from the store, as an ISO-8601 UTC timestamp
+    /// (round-trip "O" format). For a memory entry whose value decodes this can be
+    /// later than the lapse window: its expiry keeps the later of the existing and
+    /// the lapse expiry, so a lapse never shortens an expiry already in force. Any
+    /// other lapse - a non-memory record, or a memory entry that could not be
+    /// decoded - re-writes the entry directly with the lapse expiry, replacing any
+    /// expiry it carried. <see langword="null"/> for a hard delete or an absent key;
+    /// on a lapse, <see langword="null"/> when the read-back could not be evaluated or
+    /// found no expiry in force (for example, the entry was removed concurrently) -
+    /// the lapse itself still committed.
     /// </summary>
     public string? ExpiresAtUtc { get; init; }
 

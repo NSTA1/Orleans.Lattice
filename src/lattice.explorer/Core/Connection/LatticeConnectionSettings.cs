@@ -41,9 +41,14 @@ public sealed record LatticeConnectionSettings
     public IReadOnlyDictionary<string, string>? TransportHeaders { get; init; }
 
     /// <summary>
-    /// How long a connection may stay disrupted (connecting or reconnecting) before
-    /// degrading to <see cref="LatticeConnectionState.Faulted"/> (the visual disconnected
-    /// state). Defaults to 5 seconds.
+    /// How long a connection may keep failing transiently before degrading to
+    /// <see cref="LatticeConnectionState.Faulted"/> (the visual disconnected state).
+    /// The window starts at the first transient connection failure of a call, a live
+    /// stream, or a health probe (a call the server sheds under load does not count),
+    /// is cleared by any success or by reconfiguring the endpoint, and is checked
+    /// each time a further transient failure is observed. Merely connecting after a
+    /// configure does not start it, and a non-transient failure faults the
+    /// connection immediately. Defaults to 5 seconds.
     /// </summary>
     public TimeSpan DegradeAfter { get; init; } = TimeSpan.FromSeconds(5);
 

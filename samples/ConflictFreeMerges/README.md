@@ -12,7 +12,9 @@ To get the convergent, no-lost-update behaviour shown below you must
 **explicitly opt in** by writing through one of the typed CRDT extension
 accessors (`tree.PnCounter(key)`, `tree.OrSet(key)`, `tree.OrFlag(key)`, ...).
 The accessor picks the right merge mode for the key; a plain `SetAsync` to the
-same key would fall back to last-writer-wins.
+same key would fall back to last-writer-wins - or, on a tree declared for
+cross-cluster replication under a typed CRDT merge mode, be rejected with
+`LatticeReplicationModeMismatchException` before it commits.
 
 ## What it shows
 

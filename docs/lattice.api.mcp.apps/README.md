@@ -45,8 +45,9 @@ public static class CrmMcpTools
 `AddAppMcpTools` is idempotent. `AppMcpToolProvider` is a ready-made
 `IAppMcpToolProvider`; implement the interface directly when the tool set is built
 some other way. The surface needs the app registry projection, the app source and
-the shared access gate in the container; when any of them is missing it offers no
-app tools. The host's MCP authorizer must admit the namespaced tool names.
+the shared access gate in the container, and at least one registered
+`IAppMcpToolProvider`; when any of them is missing it offers no app tools. The
+host's MCP authorizer must admit the namespaced tool names.
 
 ## Tool names
 
@@ -76,7 +77,8 @@ registration would let a second contribution shadow the first.
 
 ## Authorization
 
-Every app tool is advertised to a caller only when the shared access gate allows
+Like every other Lattice MCP tool, app tools are offered only to an authenticated
+caller. Every app tool is advertised to a caller only when the shared access gate allows
 the caller **every** operation of the tool's declared role on at least one of that
 role's scopes. The scopes are resolved exactly as the role compiler resolves them -
 the app's own `a/{app}/{tree}`, an adopted tree, or another app's tree - and composed
@@ -91,8 +93,8 @@ App tools are served in-process by the silo that hosts the app, so a `region`
 argument is accepted only when it names the current region; a peer region is
 rejected rather than served locally under its name.
 
-The tool catalogue is rebuilt when the set of enabled apps changes; each session
-selects from the prebuilt lists.
+The tool catalogue is rebuilt whenever the app registry changes, shortly after the
+change commits; each session selects from the prebuilt lists.
 
 ## See also
 

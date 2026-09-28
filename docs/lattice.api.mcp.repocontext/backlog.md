@@ -9,14 +9,15 @@ contact.
 
 This page is the operator's view: what the mechanism is, what it guarantees, and
 where each part is defined. It does not restate the data model or the agent
-protocols, both of which live in the repository's own instruction files and would
+protocols, which live in a repository-neutral template this repository consumes
+unmodified, plus a small set of repository-specific instruction files, and would
 drift if copied here.
 
 | Concern | Defined in |
 | --- | --- |
-| Item schema, relation vocabulary, ready-set algorithm, grouping model, mirroring, gating | `.github/instructions/repocontext.instructions.md`, section *The agent-operated backlog* |
-| Worker behaviour | `.github/agents/backlog-worker.agent.md` |
-| Project-manager behaviour | `.github/agents/backlog-pm.agent.md` |
+| Item schema, relation vocabulary, ready-set algorithm, grouping model, mirroring, gating | `samples/AgentBacklog/template/backlog-protocol.md`; the two rules that bind every agent touching memory (never prune the backlog relations, never set a TTL on an item) are also restated in `.github/instructions/repocontext.instructions.md`, section *The agent-operated backlog* |
+| Worker behaviour | `samples/AgentBacklog/template/backlog-worker.base.md`, with this repository's bindings in `.github/agents/backlog-worker.agent.md` |
+| Project-manager behaviour | `samples/AgentBacklog/template/backlog-pm.base.md`, with this repository's bindings in `.github/agents/backlog-pm.agent.md` |
 | Epic branch convention and CI trigger | `.github/copilot-instructions.md` |
 | Claim and lease tools | [Tools](tools.md) |
 
@@ -140,6 +141,13 @@ returns `superseded` - by which point the worker has lost its lease mid-task
 while believing it held the claim. Treat a shortening renew as a prompt to renew
 again with an explicit length, not as success.
 
+An explicit length is still clamped: every granted or renewed lease is capped at
+`LatticeOptions.MaxLockLeaseDuration`, 5 minutes unless the host overrides it. The
+repository-context container raises that ceiling to 30 minutes, through
+`LATTICE_MAX_LOCK_LEASE_SECONDS` (accepted range 30-7200 seconds), so a claim can
+span a build-and-test cycle. Act on the returned `leaseSeconds` and
+`leaseExpiresAtUtc`, never on the length requested.
+
 ```csharp verify
 using Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -199,8 +207,8 @@ resume pointers.
 Every item is mirrored to a GitHub issue at creation and takes its id from that
 issue, so nothing can be enqueued invisibly. An item an agent proposed
 additionally opens carrying the existing `needs-specification` label and stays out
-of the ready set until a human removes it - and an agent never removes that label
-from its own item. A human can reprioritise or respecify without an agent in the
+of the ready set until a human removes it - no agent removes that label, not even
+after writing the item's specification itself. A human can reprioritise or respecify without an agent in the
 loop, because the thing they edit is the thing that is authoritative.
 
 Linking an item to the code it concerns (`anchoredTo`) captures those targets'

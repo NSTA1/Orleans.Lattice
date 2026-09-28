@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -152,9 +153,16 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (adds.TryGetValue(key, out var addDots))
             {
-                for (var i = 0; i < addDots.Count; i++)
+                // Span walk - see the type remarks. The loop appends only to
+                // result, so the scanned list's length cannot change. The
+                // element is copied rather than held by reference: the body
+                // calls into result.Add, and a byref into the span held live
+                // across a call is pinned to a GC-tracked stack slot, which
+                // measured dearer than the 16-byte copy it saves.
+                var addSpan = CollectionsMarshal.AsSpan(addDots);
+                for (var i = 0; i < addSpan.Length; i++)
                 {
-                    var dot = addDots[i];
+                    var dot = addSpan[i];
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -168,9 +176,10 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (tombstones.TryGetValue(key, out var tombDots))
             {
-                for (var i = 0; i < tombDots.Count; i++)
+                var tombSpan = CollectionsMarshal.AsSpan(tombDots);
+                for (var i = 0; i < tombSpan.Length; i++)
                 {
-                    var dot = tombDots[i];
+                    var dot = tombSpan[i];
                     if (addDots is not null && !ContainsExact(addDots, in dot))
                     {
                         // A compacted add list can retain only this replica's
@@ -256,9 +265,13 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
                 sharedReplica = SingleReplica(tomb);
                 if (sharedReplica is not null)
                 {
-                    for (var i = 0; i < tomb.Count; i++)
+                    // Span walk: this list is longer than DotIndexThreshold by
+                    // the gate above, and the body only reads.
+                    var tombSpan = CollectionsMarshal.AsSpan(tomb);
+                    for (var i = 0; i < tombSpan.Length; i++)
                     {
-                        if (tomb[i].Counter > coverCounter) coverCounter = tomb[i].Counter;
+                        var counter = tombSpan[i].Counter;
+                        if (counter > coverCounter) coverCounter = counter;
                     }
                 }
             }
@@ -270,9 +283,13 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             var hasLive = false;
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
-            for (var i = 0; i < addDots.Count; i++)
+            // Span walk: the body only reads, but it can call IsTombstoned, so
+            // the element is copied rather than held by reference (a byref into
+            // the span live across a call is pinned to a GC-tracked stack slot).
+            var addSpan = CollectionsMarshal.AsSpan(addDots);
+            for (var i = 0; i < addSpan.Length; i++)
             {
-                var dot = addDots[i];
+                var dot = addSpan[i];
                 var tombstoned = sharedReplica is not null
                     ? dot.Counter <= coverCounter
                         && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
@@ -318,14 +335,26 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
     /// membership test would wrongly cancel a live dot on replica B whose
     /// counter happens to equal a tombstoned counter on replica A.
     /// </para>
+    /// <para>
+    /// Widened to <see langword="internal"/> so the microbenchmark host can
+    /// A/B the shipped scan against its pre-span baseline directly rather than
+    /// against a copy of it.
+    /// </para>
     /// </summary>
-    private static string? SingleReplica(List<OrSetDot> dots)
+    internal static string? SingleReplica(List<OrSetDot> dots)
     {
         if (dots.Count == 0) return null;
-        var first = dots[0].ReplicaId;
-        for (var i = 1; i < dots.Count; i++)
+        // Walked as a span: OrSetDot is a struct, so the list indexer copies it
+        // per read, re-reads the mutable Count every iteration and bounds-checks
+        // each access. The body only reads, so the length cannot change while
+        // the span is alive. Callers gate this on a list longer than
+        // DotIndexThreshold, which is where the span materialisation repays.
+        var span = CollectionsMarshal.AsSpan(dots);
+        var first = span[0].ReplicaId;
+        for (var i = 1; i < span.Length; i++)
         {
-            var candidate = dots[i].ReplicaId;
+            ref readonly var dot = ref span[i];
+            var candidate = dot.ReplicaId;
             if (!ReferenceEquals(candidate, first)
                 && !string.Equals(candidate, first, StringComparison.Ordinal))
             {
@@ -339,12 +368,22 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
     private static bool IsTombstoned(List<OrSetDot>? tombstones, OrSetDot dot)
         => tombstones is not null && OrSetDotCompaction.Covers(tombstones, in dot);
 
-    private static bool ContainsExact(List<OrSetDot>? dots, in OrSetDot dot)
+    /// <summary>
+    /// Whether <paramref name="dots"/> holds this exact <c>(replica, counter)</c>
+    /// dot. Widened to <see langword="internal"/> so the microbenchmark host can
+    /// A/B the shipped scan against its pre-span baseline directly.
+    /// </summary>
+    internal static bool ContainsExact(List<OrSetDot>? dots, in OrSetDot dot)
     {
         if (dots is null) return false;
-        for (var i = 0; i < dots.Count; i++)
+        // The inner scan of DecodeState's per-element add x tombstone loop, so
+        // the per-iteration struct copy, Count re-read and bounds check this
+        // span walk removes are paid quadratically. Read-only body, so the
+        // list's length cannot change while the span is alive.
+        var span = CollectionsMarshal.AsSpan(dots);
+        for (var i = 0; i < span.Length; i++)
         {
-            var candidate = dots[i];
+            ref readonly var candidate = ref span[i];
             if (candidate.Counter == dot.Counter
                 && string.Equals(candidate.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
             {

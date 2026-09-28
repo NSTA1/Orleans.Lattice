@@ -58,7 +58,7 @@ The index itself. Constructed from `VectorIndexOptions`.
 | `VectorSearchResult(long Key, float Score)` | One hit. |
 | `VectorIndexStatus` | A snapshot of state, counts, partitioning and `BytesPerVector`. |
 | `VectorIndexSnapshot` | A snapshot plan: `Header`, `ChunkCount`, `Describe(i)`, `MeasureChunk(i)`, `WriteChunk(i, Span<byte>)`. |
-| `VectorIndexHeader` | The 56-byte durable header. `Write`, `Read`, and `TryRead` (which returns `false` rather than throwing on an unreadable version). |
+| `VectorIndexHeader` | The 56-byte durable header. `Write`, `Read`, and `TryRead` (which returns `false` rather than throwing on bytes this build cannot read: too short, the wrong marker, an unsupported version, or an out-of-range field). |
 | `VectorIndexChunkDescriptor` | Kind, partition, sequence, item count and byte count for one chunk, without rendering it. |
 | `VectorDistanceMetric` | `Cosine` or `DotProduct`. |
 | `VectorIndexState` | `Empty`, `Building`, `Ready`. |

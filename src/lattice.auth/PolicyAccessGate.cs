@@ -205,19 +205,22 @@ internal sealed class PolicyAccessGate(
     /// Evaluates a request that targets a control-plane capability namespace - the
     /// reserved authorization namespace (<c>sys-auth-*</c>), the
     /// tenant-administration capability namespace
-    /// (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/>), or the
-    /// tenant-registry system-data namespace
-    /// (<c>sys-tenant-</c>) - with
+    /// (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/>), the
+    /// tenant-registry and app-registry system-data namespaces
+    /// (<c>sys-tenant-</c>, <c>sys-app-</c>), or the all-trees sentinel
+    /// (<see cref="LatticeScope.ClusterWideTreeId"/>) that a scopeless cluster-wide
+    /// capability request targets - with
     /// <b>control-plane isolation</b>: the decision is forced closed (Deny) on every
     /// outcome that is not an explicit matched Allow, so the data-plane
     /// <see cref="LatticeAuthOptions.DefaultEffect"/> can never grant a control-plane
-    /// capability or a read of the cross-tenant registry. Bootstrap administrators
+    /// capability or a read of a cross-tenant registry. Bootstrap administrators
     /// never reach here (they are allowed earlier), so this governs only non-bootstrap
     /// callers. Such a caller is allowed only by an explicit matched allow rule on the
     /// exact id - the access-administration delegation grant on the policy tree, an
     /// ordinary whole-scope <see cref="LatticeOperation.Admin"/> grant on the caller's
-    /// own tenant-admin scope id, or a rule an operator deliberately scoped at the
-    /// registry tree; absent such a grant, the request always resolves to Deny.
+    /// own tenant-admin scope id, a rule an operator deliberately scoped at a
+    /// registry tree, or the cluster-wide grant <see cref="LatticeScope.ClusterWide"/>
+    /// authors for the sentinel; absent such a grant, the request always resolves to Deny.
     /// </summary>
     private LatticeAccessDecision EvaluateControlPlane(in LatticeAccessRequest request)
     {
@@ -237,7 +240,8 @@ internal sealed class PolicyAccessGate(
 
         return LatticeAccessDecision.Deny(
             "Control-plane isolation: a control-plane capability namespace (the reserved authorization "
-            + "namespace, a tenant-administration capability, or the tenant registry) is governed only by "
+            + "namespace, a tenant-administration capability, the tenant registry, the app registry, or a "
+            + "scopeless cluster-wide capability such as Telemetry or AppInstall) is governed only by "
             + "bootstrap administrators (or an explicit matched allow rule); an unmatched request is denied "
             + "independently of the data-plane default effect.");
     }
