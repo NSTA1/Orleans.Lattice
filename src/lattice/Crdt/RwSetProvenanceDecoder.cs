@@ -116,9 +116,16 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (adds.TryGetValue(key, out var addDots))
             {
-                for (var i = 0; i < addDots.Count; i++)
+                // Span walk - see the type remarks on the OR-set twin. The loop
+                // appends only to result, so the scanned list's length cannot
+                // change while the span is alive. The element is copied rather
+                // than held by reference: the body calls into result.Add, and a
+                // byref into the span held live across a call is pinned to a
+                // GC-tracked stack slot, which measured dearer than the copy.
+                var addSpan = CollectionsMarshal.AsSpan(addDots);
+                for (var i = 0; i < addSpan.Length; i++)
                 {
-                    var dot = addDots[i];
+                    var dot = addSpan[i];
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -132,9 +139,10 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (removes.TryGetValue(key, out var removeDots))
             {
-                for (var i = 0; i < removeDots.Count; i++)
+                var removeSpan = CollectionsMarshal.AsSpan(removeDots);
+                for (var i = 0; i < removeSpan.Length; i++)
                 {
-                    var dot = removeDots[i];
+                    var dot = removeSpan[i];
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -191,9 +199,11 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
             var hasLive = false;
-            for (var i = 0; i < addDots.Count; i++)
+            // Span walk: the selection body only reads.
+            var addSpan = CollectionsMarshal.AsSpan(addDots);
+            for (var i = 0; i < addSpan.Length; i++)
             {
-                var dot = addDots[i];
+                ref readonly var dot = ref addSpan[i];
                 if (!hasLive
                     || dot.Counter > bestCounter
                     || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
@@ -244,7 +254,10 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
 
         string? sharedReplica = null;
         var coverCounter = long.MinValue;
-        if (tomb.Count > TombstoneIndexThreshold && removeDots.Count > 1)
+        // Span walk: the coverage test only reads, so neither scanned list's
+        // length changes while a span over it is alive.
+        var removeSpan = CollectionsMarshal.AsSpan(removeDots);
+        if (tomb.Count > TombstoneIndexThreshold && removeSpan.Length > 1)
         {
             sharedReplica = SingleReplica(tomb);
             if (sharedReplica is not null)
@@ -260,9 +273,12 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
             }
         }
 
-        for (var i = 0; i < removeDots.Count; i++)
+        for (var i = 0; i < removeSpan.Length; i++)
         {
-            var dot = removeDots[i];
+            // Copied, not held by reference: the body can call into Covers, and
+            // a byref into the span live across a call is pinned to a
+            // GC-tracked stack slot.
+            var dot = removeSpan[i];
             var covered = sharedReplica is not null
                 ? dot.Counter <= coverCounter
                     && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
