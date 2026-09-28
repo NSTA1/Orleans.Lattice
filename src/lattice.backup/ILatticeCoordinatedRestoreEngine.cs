@@ -23,7 +23,10 @@ public interface ILatticeCoordinatedRestoreEngine
     /// Resolves the target backup's manifest chain and reports its self-describing
     /// size and topology, without validating artifacts, fencing, or building
     /// anything. A coordinated restore probes admission first so an infeasible
-    /// target is refused before any fence or shadow build.
+    /// target is refused before any fence or shadow build. The probe authorizes
+    /// <see cref="LatticeOperation.Restore"/> over the effective restore scope - the
+    /// requested sub-scope, or else the whole captured scope, retargeted to the
+    /// target tree - fail-closed, before it walks the chain.
     /// </summary>
     /// <param name="request">
     /// The restore request. <see cref="LatticeRestoreRequest.BackupId"/> selects the
@@ -33,7 +36,8 @@ public interface ILatticeCoordinatedRestoreEngine
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The admission report.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeRestoreValidationException">The backup or a base in its chain is missing.</exception>
+    /// <exception cref="LatticeRestoreValidationException">The backup or a base in its chain is missing, the chain contains a cycle, or the requested scope falls outside the backup's captured scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the effective restore scope.</exception>
     Task<RestoreAdmissionReport> ProbeAdmissionAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);

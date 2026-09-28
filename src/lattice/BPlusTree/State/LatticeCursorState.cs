@@ -67,11 +67,13 @@ internal sealed class LatticeCursorState
     /// <see cref="LatticeRegistrySnapshotContext.BeginScope"/> so a
     /// resumed cursor (after silo failover or activation recycling)
     /// continues to serve the same point-in-time view it opened with.
-    /// <c>null</c> for non-point-in-time cursors and on every closed /
-    /// exhausted cursor (we proactively clear it on
-    /// <see cref="LatticeCursorPhase.Closed"/> /
-    /// <see cref="LatticeCursorPhase.Exhausted"/> to free state - the
-    /// pin has already been released by then).
+    /// <c>null</c> for non-point-in-time cursors and for snapshot cursors
+    /// (<see cref="LatticeCursorSpec.ZeroObservableWrites"/>), which keep no
+    /// registry snapshot. It is cleared, and the cursor closes itself, when
+    /// the registry reports the cursor's pin evicted. An exhausted cursor
+    /// keeps it, and its registry pin stays held (subject to the pin's own
+    /// TTL), until the cursor is closed or its idle TTL fires, either of which
+    /// releases the pin and then deletes the persisted row.
     /// </summary>
     [Id(5)] public Dictionary<Guid, TxStatus>? PointInTimeSnapshot { get; set; }
 
@@ -81,21 +83,28 @@ internal sealed class LatticeCursorState
     /// eviction. Server-assigned (<see cref="Guid.NewGuid"/>) at open
     /// time, persisted so a reactivated cursor can refresh / release
     /// the same pin its snapshot belongs to. <see cref="Guid.Empty"/>
-    /// for non-point-in-time cursors.
+    /// for non-point-in-time cursors, and for a point-in-time cursor whose
+    /// snapshot captured no saga other than in-flight ones, since nothing is
+    /// pinned then. A snapshot cursor is assigned one at open but installs no
+    /// registry pin under it, because it keeps no registry snapshot.
     /// </summary>
     [Id(6)] public Guid SnapshotPinId { get; set; }
 
     /// <summary>
-    /// Tree-wide WAL coordinate captured at
-    /// <see cref="ILatticeCursorGrain.OpenAsync"/> when the cursor is
-    /// opened with
-    /// <see cref="LatticeCursorSpec.ZeroObservableWrites"/> set. Pairs
-    /// with <see cref="PointInTimeSnapshot"/> to encode "the
-    /// projection as of this tree-wide moment": the WAL offsets fix
-    /// the foreground-write view, the registry snapshot fixes saga
-    /// decisions. <c>null</c> for non-snapshot cursors. Persisted so
-    /// a reactivated cursor (after silo failover or grain recycling)
-    /// continues to serve the same snapshot view it opened with.
+    /// Tree-wide snapshot coordinate of a snapshot cursor - one opened with
+    /// <see cref="LatticeCursorSpec.ZeroObservableWrites"/> set - captured by
+    /// the tree's snapshot-open fan-out and handed to
+    /// <see cref="ILatticeCursorGrain.OpenSnapshotAsync"/>. It records the
+    /// routing-map version and per-shard WAL heads at which the per-shard
+    /// frozen baselines were captured, and the token those baselines are
+    /// stored under. The cursor serves those baselines, which also fix which
+    /// sagas it sees, so it does not pair with
+    /// <see cref="PointInTimeSnapshot"/> (always <c>null</c> for a snapshot
+    /// cursor); only a legacy coordinate with no baseline token replays the
+    /// WAL up to the recorded heads instead. <c>null</c> for non-snapshot
+    /// cursors. Persisted so a reactivated cursor (after silo failover or
+    /// grain recycling) continues to serve the same snapshot view it opened
+    /// with.
     /// </summary>
     [Id(7)] public LatticeSnapshotCoordinate? SnapshotCoordinate { get; set; }
 

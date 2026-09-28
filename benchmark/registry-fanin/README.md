@@ -166,11 +166,11 @@ arms the hot-shard monitor and the healing orchestrator once per tree, and each
 view's maintainer registers one for its view. All three of the live storm's top
 callers register with the same one-minute due time:
 
-| grain | site | due |
+| service | reminder registration | due |
 |---|---|---|
-| `HotShardMonitorGrain` | `:226-229` | 1 min |
-| `ShardHealingOrchestratorGrain` | `:96-99` | 1 min |
-| `ViewMaintainerGrain` | `:264-267` | 1 min |
+| hot-shard monitor | `src/lattice/BPlusTree/Grains/HotShardMonitorGrain.cs:265-268` | 1 min |
+| shard-healing orchestrator | `src/lattice/BPlusTree/Grains/ShardHealingOrchestratorGrain.cs:131-134` | 1 min |
+| view maintainer | `src/lattice/Views/ViewMaintainerGrain.cs:264-267` | 1 min |
 
 Those three were 87 of the 103 live timeouts. Reminders are **persistent**, so
 they survive into the next process lifetime and re-fire after a cold start with
@@ -272,7 +272,7 @@ indistinguishable from a correct read in the output.
 | `scripts/run-fanout.ps1` | **the fan-out arm** - the only arm that reaches the regime in which the fan-in bound binds, plus its ungated A/B control; see [The fan-out arm](#the-fan-out-arm-the-only-arm-that-reaches-the-bound) |
 | `scripts/run-host-pressure.ps1` | cold start at fixed K while a throwaway burner contends for the host |
 | `scripts/Test-FanInHelpers.ps1` | unit tests for the helpers (41) |
-| `results/` | committed per-run JSON results quoted below (`results/runs/` spills are gitignored) |
+| `results/` | committed per-run JSON results: the cells quoted below, plus the post-gate birth curves (`birth-K20-gated`, `birth-K80-gated`) cited in #3262 (`results/runs/` spills are gitignored) |
 
 ## Driver
 

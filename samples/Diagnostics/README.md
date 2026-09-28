@@ -6,8 +6,9 @@
 touching application data paths. The report exposes the shard count, total live keys,
 total tombstones, recent split activity, and a per-shard breakdown (B+ tree depth,
 whether the root is a leaf, live keys, tombstones, tombstone ratio, read/write
-counts, current ops/second and the window it is measured over, and whether a split
-or a bulk load is in flight).
+counts, current ops/second and the window it is measured over, whether a split
+or a bulk load is in flight, and whether the shard could not be sampled - a shard
+whose sample failed reports zero for every count because nothing was measured).
 This sample writes ten keys, deletes three (leaving tombstones), then prints a deep
 snapshot. Both report depths walk each shard's leaf chain: a deep report reads each
 leaf's full statistics, so tombstone counts are exact, while a shallow report counts

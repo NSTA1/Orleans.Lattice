@@ -28,7 +28,10 @@ core.
   no gRPC channel, and no other plugin's services.
 - **The controlled domain-model seam.** A plugin declares the single domain
   contract it operates against and the host resolves it, so a plugin's reach is
-  explicit and reviewable.
+  explicit and reviewable. Asking the host context for any other type, or for a
+  contract the plugin never declared or the container never registered, throws
+  `ExplorerPluginDomainException`; the `TryGetDomain` form reports the same cases
+  as `false` instead.
 
 ## Usage
 

@@ -11,7 +11,11 @@ namespace Orleans.Lattice;
 /// </summary>
 public interface ILatticeView
 {
-    /// <summary>The logical view name; the backing tree is <c>view-{ViewName}</c>.</summary>
+    /// <summary>
+    /// The logical view name. The backing tree is <c>view-{ViewName}</c> until a
+    /// rebuild of a locally derived view moves it onto a generation-suffixed
+    /// tree (see <see cref="RebuildAsync"/>).
+    /// </summary>
     string ViewName { get; }
 
     /// <summary>Gets the view value for <paramref name="key"/>, or <see langword="null"/> when absent.</summary>
@@ -37,22 +41,36 @@ public interface ILatticeView
     Task<long> GetLagAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Rebuilds the view from the current source state using a <em>shadow-swap</em>:
-    /// the maintainer builds a complete new generation of the view tree in the
-    /// background (re-projecting every current source entry, preserving each
-    /// entry's time-to-live), then atomically swaps the active generation over in a
-    /// single durable commit. Readers never observe a half-built or empty view -
-    /// they continue to serve the prior fully-built generation until the swap, then
-    /// flip to the rebuilt one. Used on a fall-off-log condition, a
-    /// projection-version change, or an explicit caller request.
+    /// Rebuilds the view from the current source state. For a view derived
+    /// locally from its source (<see cref="LatticeViewReplicationMode.DeriveLocally"/>)
+    /// the rebuild is a <em>shadow-swap</em>: the maintainer builds a complete new
+    /// generation of the view tree in the background (re-projecting every
+    /// current source entry, preserving each entry's time-to-live), then
+    /// atomically swaps the active generation over in a single durable commit.
+    /// Readers never observe a half-built or empty view - they continue to serve
+    /// the prior fully-built generation until the swap, then flip to the rebuilt
+    /// one.
+    /// <para>
+    /// A <see cref="LatticeViewReplicationMode.ShipView"/> view is instead rebuilt
+    /// <b>in place</b> on its producer, so that the replicated view tree keeps
+    /// one stable id: the live tree is cleared and re-projected directly, so
+    /// readers on the producer can observe it partly built, or empty, until the
+    /// rebuild completes - a transient divergence that consumers heal through
+    /// replication anti-entropy. On a consumer the call does not rebuild.
+    /// </para>
+    /// Used on a fall-off-log condition, a projection-version change, or an
+    /// explicit caller request.
     /// </summary>
     Task RebuildAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// View anti-entropy (producer / locally-derived views only): re-derives the
-    /// expected view from current source state, compares it against the live view
-    /// via a <see cref="ViewDigest"/>, and - if they diverge - repairs the view
-    /// through a shadow-swap rebuild (see <see cref="RebuildAsync"/>). Returns
+    /// expected view from current source state into a shadow generation, compares
+    /// it against the live view via a <see cref="ViewDigest"/>, and - if they
+    /// diverge - repairs the view: a locally derived view swaps the shadow in
+    /// (see <see cref="RebuildAsync"/>), while a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> producer discards the
+    /// shadow and rebuilds its live tree in place. Returns
     /// <see langword="true"/> when drift was detected and repaired,
     /// <see langword="false"/> when the view already matched the source.
     /// <para>

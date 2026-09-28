@@ -30,11 +30,15 @@ namespace Orleans.Lattice.Replication;
 /// The sink rings each per-<c>(tree, peer)</c>
 /// shipper grain's <see cref="IReplicationShipperGrain.OnDoorbellAsync"/>
 /// - gated on <see cref="LatticeReplicationOptions.ShipDoorbellEnabled"/>
-/// - so the outbound ship loop short-circuits its next steady-state
-/// timer wait and pumps immediately. Doorbell fan-out is best-effort:
-/// any per-peer failure is logged at <c>Trace</c> and swallowed so the
-/// commit path never fails on a doorbell ring failure. A missed
-/// doorbell only delays the affected peer by one timer tick (~200ms).
+/// - to (re)activate that shipper. The ring returns immediately and ships
+/// nothing itself: the shipper's phase timer does the drain, on its next tick
+/// (at most <see cref="LatticeReplicationOptions.ShipPhaseTimerPeriod"/> away,
+/// 100 ms by default, and at once on a fresh activation). Doorbell fan-out is
+/// best-effort: any per-peer failure is logged at <c>Trace</c> and swallowed so the
+/// commit path never fails on a doorbell ring failure. A missed doorbell costs an
+/// active shipper nothing, because its timer drains regardless; a shipper that had
+/// been deactivated waits until the next doorbell, call, or keepalive reminder
+/// reactivates it.
 /// </para>
 /// <para>
 /// <b>Writer-side coalescing.</b> A doorbell is an idempotent,
@@ -48,8 +52,8 @@ namespace Orleans.Lattice.Replication;
 /// This bounds the doorbell message rate the non-reentrant shipper
 /// activation sees to a small constant regardless of write throughput,
 /// preventing the activation's turn queue from blowing up, doorbell
-/// messages from being dropped as expired, and the keepalive reminder
-/// tick that drives shipping from being starved behind a backlog. The
+/// messages from being dropped as expired, and the phase-timer tick that
+/// drives shipping from being starved behind a backlog. The
 /// coalescing ratio is observable via
 /// <see cref="LatticeReplicationMetrics.DoorbellRung"/> and
 /// <see cref="LatticeReplicationMetrics.DoorbellCoalesced"/>.
@@ -89,10 +93,11 @@ internal sealed class ShardedReplogSink(
     {
         var resolved = options.CurrentValue;
 
-        // Doorbell fan-out: wake every shipper for this tree so the
-        // background log-tailing producer drains the newly-committed
-        // leaf WAL entries to peers at sub-second latency instead of
-        // waiting for its next steady-state timer tick. Peer membership
+        // Doorbell fan-out: wake every shipper for this tree - (re)activating
+        // one that had been deactivated - so its phase timer drains the
+        // newly-committed leaf WAL entries to peers; the ring itself ships
+        // nothing, and an already-active shipper drains on its next tick
+        // regardless. Peer membership
         // is sourced from IReplicationTopology, not from
         // LatticeReplicationOptions.ReplicationPeers, so a host-supplied
         // dynamic topology drives this loop without having to mirror

@@ -117,7 +117,8 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         // operator-only TenantAdminAccessAuthorizer that gates the lifecycle
         // mutations above. The identity directory is resolved optionally so a
         // granted subject id is validated against the upstream directory wherever
-        // one is configured, matching the create path's seeding contract.
+        // one is configured. (The tenant-lifecycle facade above is registered
+        // without a directory, so its create path does not validate a seed set.)
         builder.Services.TryAddSingleton<ILatticeTenantAccessAdmin>(sp => new LatticeTenantAccessAdmin(
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),

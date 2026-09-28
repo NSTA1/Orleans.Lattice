@@ -248,8 +248,10 @@ coalesced publish has landed).
 
 ```csharp verify
 // On every silo hosting the cluster, schedule a periodic poll
-// over every shard and compare digests. Divergence here means
-// at least one silo's projection has drifted from the WAL.
+// over every shard and compare digests. A mismatch is a conservative
+// trigger to investigate, not proof of drift: compare only quiescent
+// reads carrying the same Version, because digests also differ when
+// two reads were taken at different replay positions.
 var routing = await tree.GetRoutingAsync();
 foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
 {
@@ -266,10 +268,10 @@ foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
 | Condition                                                    | Exception                          |
 |--------------------------------------------------------------|------------------------------------|
 | `shardIndex` is not a physical shard of the per-tree map     | `ArgumentOutOfRangeException`      |
-| The activation's tree id starts with the reserved system prefix | `InvalidOperationException`     |
+| The tree id starts with the reserved system prefix `_lattice_` | `LatticeReservedTreeNamespaceException` (an `InvalidOperationException` subclass) |
 | `cancellationToken` was already cancelled                    | `OperationCanceledException`       |
 | Tree has `LatticeOptions.MaintainProjectionDigest = false`   | `InvalidOperationException`        |
-| An access gate is configured and does not authorise the caller to read the whole shard (a per-key partial allow is refused too) | `LatticeAuthorizationDeniedException` |
+| An access gate is configured and does not authorise the caller to read the whole tree uniformly (a digest cannot be narrowed per key, so a partial allow is refused too) | `LatticeAuthorizationDeniedException` |
 
 ### Opting out of digest maintenance
 
@@ -340,6 +342,9 @@ irreversible registry latch on the tree, reported as
 `TreeConfigurationReport.ProjectionDigestPermanentlyDisabled` by
 `ILatticeTreeAdmin.GetTreeConfigAsync` (see
 [Orleans.Lattice.Api.TreeAdmin](../lattice.api.treeadmin/README.md)).
+The stamp is best-effort: a registry failure never fails the mutation,
+and the leaf retries the stamp on its next mutation while maintenance is
+still disabled, so the latch is set only once a stamp succeeds.
 Once the latch is set, every subsequent activation resolves
 `MaintainProjectionDigest` as `false` regardless of the per-tree
 override or the silo-wide default, and
@@ -349,8 +354,8 @@ The latch exists because the digest is an XOR-fold aggregate over
 **every** mutation: any mutation accepted while maintenance was off
 permanently invalidates the persisted aggregate, and silently
 re-engaging maintenance would publish a known-stale digest as if it
-were authoritative. The one-way latch makes this impossible to
-mis-configure: an operator who turns the option back on for a tree
+were authoritative. Once stamped, the one-way latch makes this impossible
+to mis-configure: an operator who turns the option back on for a tree
 that has already accepted writes under the disabled setting will see
 the resolved value stay at `false` and the digest API stay broken,
 rather than producing a digest that disagrees silently with the
@@ -430,6 +435,11 @@ the first is fatal:
    **This is the only trigger that routes to `ProjectionRebuildPolicy`.**
    The exact loss boundary is `tail > checkpoint + 1`: the entry *at*
    the checkpoint is already applied, so trimming it loses nothing.
+   A cold activation that finds no covering snapshot hands the classifier
+   the -1 sentinel so that it replays the whole readable window, which
+   blinds this trigger; that path is guarded separately against the
+   leaf's durable checkpoint with the same boundary, and a trim past it
+   surfaces `LeafProjectionStaleException` without consulting the policy.
 2. **Replay budget.** The gap `walHead[p] - checkpoint[p]`
    exceeds `LatticeOptions.MaxLeafReplayEntries` (default `10 000`).
    This is a **cost** signal, not a loss signal, and the gap is not the
@@ -554,12 +564,12 @@ post-pass per-partition checkpoint reconciliation that advances each
 partition's `ProjectionCheckpointOffsetsByPartition[p]` to the
 highest applied offset once the saga-prepare clamp lifts.
 
-The `ProjectionRebuildPolicy` enum on `LatticeOptions` selects what
-the leaf does once a trigger fires:
+The `ProjectionRebuildPolicy` enum on `LatticeOptions` is consulted only
+when trigger 1 fires, and every value currently fails closed:
 
 | Policy | Behaviour |
 |---|---|
-| `SnapshotThenWal` *(default)* | The per-leaf snapshot rehydrate already runs in core at activation Step 0 (`TryRehydrateFromSnapshotAsync`), covering the prefix and letting the tail replay handle the remainder. What is not yet integrated is a recovery for the case where that rehydrate has *already declined* and the WAL is genuinely short: there the leaf surfaces `LeafProjectionStaleException` rather than reconstructing the lost prefix. |
+| `SnapshotThenWal` *(default)* | Intended to recover from the leaf's snapshot and then the WAL. The snapshot half is not specific to this policy: the per-leaf snapshot rehydrate runs at the start of every activation under every policy, before the classifier, covering the prefix and letting the tail replay handle the remainder. What is not yet integrated is a recovery for the case where that rehydrate has *already declined* and the WAL is genuinely short: there the leaf surfaces `LeafProjectionStaleException` rather than reconstructing the lost prefix. |
 | `FullRebuildFromWal` | Diagnostic. Intended to replay from the absolute tail of the WAL, but the policy is reached only when the WAL has been trimmed and a complete history is unavailable, so the leaf surfaces `LeafProjectionStaleException` here too; no full-rebuild recovery path is integrated. |
 | `Fail` | Surfaces a `LeafProjectionStaleException` at activation time and waits for an operator-driven rebuild. |
 
@@ -740,7 +750,9 @@ siloBuilder.ConfigureLattice(o =>
     // over-budget (a warning plus a counter - never a failure):
     o.MaxLeafReplayEntries = 100_000;
 
-    // Age at which a cold projection is flagged as stale:
+    // Age at which a cold projection would be flagged as stale. The
+    // activation path does not yet supply an age, so this does not
+    // fire today (see trigger 3 above):
     o.LeafProjectionRetention = TimeSpan.FromDays(30);
 
     // How to recover when the WAL is genuinely short:
@@ -756,10 +768,14 @@ path is the preventative safety net: while a leaf is still healthy,
 it captures a canonical-row image of its in-memory cache to a
 dedicated snapshot grain whenever any partition's WAL tail
 approaches that partition's persisted checkpoint. On the next
-activation, if the snapshot's per-partition offsets are strictly
-newer than the persisted `ProjectionCheckpointOffsetsByPartition`,
-the leaf rehydrates its cache from the blob rows and tail-replays
-each partition forward from its captured offset. Activation then
+activation the leaf rehydrates its cache from the blob rows and
+tail-replays each partition forward from its captured offset. It does
+so when the snapshot is newer than the persisted partition-0
+checkpoint, and also when the snapshot is at or behind it, provided the
+cache starts empty or any partition's WAL prefix has been trimmed: a
+snapshot may then be the only durable copy of a prefix the WAL GC
+trimmed, and each partition's checkpoint is lowered to what the
+reloaded cache holds before the tail replay. Activation then
 proceeds without ever needing to fall back into
 `SnapshotThenWal` / `FullRebuildFromWal` / `Fail` recovery, even
 when the WAL has been trimmed past the original checkpoint.
@@ -819,10 +835,10 @@ trail.
 
 A leaf that never activates while drifting below the WAL retention
 window will not be captured by this path. Such a leaf also holds no
-in-memory state to lose; the next activation runs the classifier
-and falls into the standard recovery path (`SnapshotThenWal` /
-`FullRebuildFromWal` / `Fail`) per the configured
-`ProjectionRebuildPolicy` if a hard trigger fires. The snapshot-on-
+in-memory state to lose; if the WAL has been trimmed past its
+checkpoint with no covering snapshot, its next activation refuses it
+with `LeafProjectionStaleException`, whatever the configured
+`ProjectionRebuildPolicy`. The snapshot-on-
 fall-off path is a safety net for **active** leaves.
 
 ### Resumable cold replay
@@ -931,9 +947,10 @@ health without waiting for an activation:
 ### Rebuild a shard's projection from the WAL
 
 ```csharp verify
-// Drift was detected via GetLeafProjectionDigestAsync, or an
-// integrity check flagged a leaf's projection as suspect. Force a
-// full re-materialisation of the shard's projection from the WAL.
+// GetLeafProjectionDigestAsync reported a mismatch, or an
+// integrity check flagged a leaf's projection as suspect. Force every
+// leaf in the shard to re-materialise its projection on its next
+// activation: from its snapshot where it has one, then from the WAL.
 await tree.RebuildLeafProjectionAsync(shardIndex: 0, cancellationToken);
 ```
 
@@ -947,32 +964,43 @@ projection-state slots** that the materialiser owns:
 - The persisted projection checkpoint is reset to the `-1` "nothing
   applied" sentinel (matching the WAL reader's
   `fromOffsetExclusive = -1` start-of-log convention) and the
-  per-partition checkpoints are dropped, so the next activation replays
-  every WAL partition from offset `0` inclusive. Setting `0` instead
-  would cause the materialiser to skip offset `0`, because replay reads
-  strictly past the persisted checkpoint.
+  per-partition checkpoints are dropped, so a partition that no
+  snapshot covers is replayed from offset `0` inclusive on the next
+  activation. Setting `0` instead would cause the materialiser to skip
+  offset `0`, because replay reads strictly past the persisted
+  checkpoint.
 - The persisted running projection hash is cleared.
 - In-memory pending-saga, pending-tx-offset, recently-terminal, and
   backstopped-terminal dedup buffers are dropped, together with the
   destination-side shadow markers.
 - The leaf grain is deactivated. The next activation re-materialises
-  the projection from the WAL through the standard activation-time
-  replay path, including snapshot-then-WAL recovery when the
-  configured `ProjectionRebuildPolicy` is `SnapshotThenWal`.
+  the projection through the standard activation-time path, which
+  under every `ProjectionRebuildPolicy` value first attempts to
+  rehydrate from the leaf's captured snapshot. The rebuild neither
+  clears nor bypasses that snapshot: when the leaf has a usable one,
+  its cache is reloaded from it, and each partition the snapshot
+  covers replays only the WAL entries after the snapshot's captured
+  offset.
 
 **Topology-bearing state is preserved**: `TreeId`, `ShardIndex`, the
 leaf's key range, and the sibling pointers stay intact. The rebuild
 does not re-shape the tree - it only re-derives the materialised
-projection from the WAL prefix the leaf already claims to own.
+projection for the range the leaf already owns. Only the part that no
+snapshot covers is re-derived from the WAL: a snapshot-covered prefix
+is restored from the snapshot rather than re-applied, so a row the
+snapshot captured wrongly - after a corruption or a projection bug -
+survives the rebuild unless a later WAL entry for that key replaces it.
 
 `RebuildLeafProjectionAsync` does **not** take a tree-wide
 consistency lock. Readers and writers continue to land on the shard
 during the rebuild; in-flight writes hit the leaf's standard write
 path (which goes through the WAL) and will be visible after the
-next activation re-replays them. Operators rebuilding under load
-should expect a brief window during which reads against the rebuilt
-shard see fewer entries than the steady-state projection - this is
-the cold-start tail until WAL replay catches up. Pair the rebuild
+next activation re-replays them. A read that reaches a rebuilt leaf
+waits for that leaf's activation replay to finish rather than seeing
+a partial projection, so operators rebuilding under load should
+expect a window of higher read latency rather than missing entries;
+a replay that fails fails the waiting read, and the next request
+retries it. Pair the rebuild
 with a digest re-poll after replay stabilises to confirm the
 projection converged.
 
@@ -981,7 +1009,7 @@ Error surface:
 | Condition | Exception |
 |---|---|
 | `shardIndex` is not a physical shard of the per-tree map | `ArgumentOutOfRangeException` |
-| Tree id starts with the reserved system prefix `_lattice_` | `InvalidOperationException` |
+| Tree id starts with the reserved system prefix `_lattice_` | `LatticeReservedTreeNamespaceException` (an `InvalidOperationException` subclass) |
 | `cancellationToken` was already cancelled | `OperationCanceledException` |
 | An access gate is configured and does not authorise the caller for whole-tree admin | `LatticeAuthorizationDeniedException` |
 
@@ -1051,7 +1079,7 @@ Error surface:
 
 | Condition | Exception |
 |---|---|
-| Tree id starts with the reserved system prefix `_lattice_` | `InvalidOperationException` |
+| Tree id starts with the reserved system prefix `_lattice_` | `LatticeReservedTreeNamespaceException` (an `InvalidOperationException` subclass) |
 | `cancellationToken` was already cancelled | `OperationCanceledException` |
 | An access gate is configured and does not authorise the caller to read the whole tree | `LatticeAuthorizationDeniedException` |
 
@@ -1060,8 +1088,8 @@ Error surface:
 | Scenario | Surface |
 |---|---|
 | Leaf cold-starts and the WAL has been trimmed past its checkpoint with no covering snapshot (genuine loss) | Activation refuses the leaf with `LeafProjectionStaleException` under every `ProjectionRebuildPolicy` (the automatic recovery paths are not yet integrated): restore the tree from a backup, or accept the loss of the trimmed range and run `RebuildLeafProjectionAsync` |
-| Leaf cold-starts past `MaxLeafReplayEntries` or older than `LeafProjectionRetention` with the WAL intact | Non-fatal: the leaf tail-replays and warns (`TailReplayOverBudget`); no operator action needed |
-| Operator detects a digest mismatch across silos, or an integrity check flagged a corrupted projection, or a bug fix to `ILeafProjection.Apply` requires re-materialisation | `RebuildLeafProjectionAsync` (manual, while live) |
+| Leaf cold-starts with a replay gap over `MaxLeafReplayEntries` with the WAL intact | Non-fatal: the leaf tail-replays, and warns only when the entries it actually applies exceed the budget; no operator action needed. The `LeafProjectionRetention` age trigger does not fire from activation today |
+| Operator detects a digest mismatch across silos, or an integrity check flagged a corrupted projection, or a fix to how WAL entries are applied to the projection requires re-materialisation | `RebuildLeafProjectionAsync` (manual, while live). It re-applies only the WAL no snapshot covers: a prefix the leaf's snapshot covers is restored from the snapshot, so a row the snapshot captured wrongly survives unless a later WAL entry for that key replaces it |
 | Operator wants a steady-state gauge to know whether the materialiser is keeping up | `GetMaterialiserLagAsync` |
 
 The two paths share the same replay seam: `RebuildLeafProjectionAsync`

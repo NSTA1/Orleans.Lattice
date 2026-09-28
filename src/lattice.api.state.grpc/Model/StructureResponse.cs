@@ -20,6 +20,9 @@ public sealed record StructureResponse
     /// <summary>The root nodes of the response, in deterministic key-range order.</summary>
     [Id(2)] public IReadOnlyList<NodeStateSummary> Roots { get; init; } = Array.Empty<NodeStateSummary>();
 
-    /// <summary>Whether the node-count budget was exhausted and some subtrees were truncated.</summary>
+    /// <summary>
+    /// Whether any part of the graph was cut short, by the node-count budget or
+    /// the depth limit; see <see cref="TreeStructureResult.Truncated"/>.
+    /// </summary>
     [Id(3)] public bool Truncated { get; init; }
 }

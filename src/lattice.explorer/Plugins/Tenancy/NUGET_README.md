@@ -22,7 +22,13 @@ operates against a controlled domain model rather than the raw connection.
   collapsing them into one generic failure.
 - **Availability detection.** On a cluster without the tenancy add-on the
   surface reports unavailable, so a tenancy plugin's gate resolves to the
-  four-state model's unavailable state and renders nothing at all.
+  four-state model's unavailable state and renders nothing at all. The binding
+  answers gRPC `Unimplemented` for a host that serves no tenant-administration
+  binding, and for an optional facade the cluster did not register (cross-tenant
+  grants, admin subjects, region residency, or usage against quota); the client
+  wrapper raises that as `TenancyUnavailableException`, which the seam reports
+  as `TenantOperationStatus.Unavailable` - distinct from a denial and from an
+  unreachable server.
 - **Quota figures that do not lie.** An absent ceiling stays absent rather than
   becoming a limit of zero, and an unmeasured dimension stays unmeasured rather
   than becoming a measured zero, so an unlimited tenant never renders as a full

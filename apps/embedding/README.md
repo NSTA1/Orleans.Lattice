@@ -43,10 +43,10 @@ and adds a health check. No Onyx source is vendored.
 | Context length | `512` tokens |
 | Normalization | L2-normalized (`normalize_embeddings: true`) |
 
-Request body (`EmbedRequest`): `texts: string[]`, `model_name`,
-`max_context_length`, `normalize_embeddings: true`, `text_type` = `passage` for
-stored chunks / `query` for search vectors, `provider_type: null` (local model).
-Response (`EmbedResponse`): `embeddings: float[][]`.
+Request body (the model server's embed request schema): `texts: string[]`,
+`model_name`, `max_context_length`, `normalize_embeddings: true`, `text_type` =
+`passage` for stored chunks / `query` for search vectors, `provider_type: null`
+(local model). Response body: `embeddings: float[][]`.
 
 This is Onyx's **internal, versioned** model-server API, not a stable public one.
 It is pinned to the image tag and wrapped behind the client

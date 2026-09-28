@@ -11,7 +11,7 @@ loses nothing. `docker compose down -v` does not, and takes both.
 
 | | Trees | Where it comes from | If it is destroyed |
 |---|---|---|---|
-| **Rebuildable** | `repo-context-structural`, `-content`, `-symbol`, `-xref`, `-session`, and the five `repo-context-vector-*` trees (membership, payload, metadata, the approximate index, and the coverage digest) | Derived by walking files on disk | Re-run `repocontext_add_repo`. Back in minutes. |
+| **Rebuildable** | `repo-context-structural`, `-content`, `-symbol`, `-xref`, `-session`, and the five `repo-context-vector-*` trees (membership, payload, metadata, the approximate index, and the coverage digest) | Derived by walking files on disk - apart from the session tree, which holds only expirable per-session reuse bookkeeping, and the memory entries' own vectors, which are re-embedded from the memory tree | Re-run `repocontext_add_repo`. Back in minutes. |
 | **Irreplaceable** | `repo-context-memory` | Authored by agents through `repocontext_remember` | Gone. It derives from nothing. |
 
 The names look separable and are not. A Lattice tree's durable state spans two
@@ -33,7 +33,7 @@ does not exist.
 
 ## The safe gesture for each
 
-**To rebuild an index: `repocontext_reset_index`.** It drops the structural,
+**To rebuild an index: `repocontext_reset_index`.** It drops the repository's records from the structural,
 symbol, content, cross-reference, session and vector trees and **preserves the
 memory tree outright**. There is no window and nothing to restore afterwards -
 the memory records are never touched. The repository stays registered and stays
@@ -44,8 +44,10 @@ the working files.
 
 **To destroy a repository's context entirely: `repocontext_remove_repo`.** It
 removes structural records, memory and vectors for one repository, and is the
-only verb that drops it from the listing. It requires explicit human consent
-precisely because it destroys the store of record.
+only verb that drops it from the listing. It is annotated destructive, and the
+repository's agent guidance requires explicit human consent before calling it,
+precisely because it destroys the store of record; the server itself asks for no
+consent.
 
 **`docker compose down -v` is neither of these.** It removes the volume, so it
 destroys memory and index together with no distinction between them, and it is
@@ -82,7 +84,7 @@ the host will:
 | Variable | Default | Meaning |
 |---|---|---|
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_DIR` | unset | Directory the archive is written to. **Unset disables the whole mechanism**, so it is opt-in and a host that sets nothing behaves exactly as before. |
-| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. Values below 30 are raised to 30, so a misconfiguration cannot turn the exporter into a busy loop against the store. |
+| `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_INTERVAL_SECONDS` | `300` | Export cadence. Positive values below 30 are raised to 30, so a misconfiguration cannot turn the exporter into a busy loop against the store; a zero, negative or unparseable value falls back to `300`. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_RESTORE` | `auto` | `auto` restores when the store holds no memory at all, or when its restore-state marker records that an earlier restore was left partial; `always` restores on every start; `off` never restores and leaves the archive write-only. `none` and `false` are also accepted for `off`, and `on-empty` for `auto`; any other value falls back to `auto`. |
 | `LATTICE_REPOCONTEXT_MEMORY_ARCHIVE_STOP_TIMEOUT_SECONDS` | `20` | Budget for the final export during a graceful stop, clamped to 1-60 seconds. It is deliberately a fraction of the container's stop grace period, which the drain also needs. |
 

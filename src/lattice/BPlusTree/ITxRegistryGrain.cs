@@ -64,9 +64,16 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <summary>
     /// Atomically records that the saga identified by <paramref name="txid"/>
     /// has committed. Idempotent: repeated calls with the same
-    /// <paramref name="txid"/> are no-ops. Throws
+    /// <paramref name="txid"/> are no-ops, including against a committed
+    /// decision <see cref="ForgetAsync"/> has already tombstoned (the tombstone
+    /// is left in place). Throws
     /// <see cref="InvalidOperationException"/> if the saga was previously
-    /// recorded as <see cref="TxStatus.Aborted"/>.
+    /// recorded as <see cref="TxStatus.Aborted"/> and that decision has not
+    /// been tombstoned. A commit against a tombstoned abort is instead treated
+    /// as a new authoritative outcome: the tombstone and the stale decision are
+    /// cleared and <see cref="TxStatus.Committed"/> is recorded. Once a
+    /// forgotten decision has been removed from the registry there is nothing
+    /// left to conflict with, and the call records a first decision.
     /// </summary>
     [AlwaysInterleave]
     Task MarkCommittedAsync(Guid txid);
@@ -74,9 +81,16 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <summary>
     /// Atomically records that the saga identified by <paramref name="txid"/>
     /// has aborted. Idempotent: repeated calls with the same
-    /// <paramref name="txid"/> are no-ops. Throws
+    /// <paramref name="txid"/> are no-ops, including against an aborted
+    /// decision <see cref="ForgetAsync"/> has already tombstoned (the tombstone
+    /// is left in place). Throws
     /// <see cref="InvalidOperationException"/> if the saga was previously
-    /// recorded as <see cref="TxStatus.Committed"/>.
+    /// recorded as <see cref="TxStatus.Committed"/> and that decision has not
+    /// been tombstoned. An abort against a tombstoned commit is instead treated
+    /// as a new authoritative outcome: the tombstone and the stale decision are
+    /// cleared and <see cref="TxStatus.Aborted"/> is recorded. Once a
+    /// forgotten decision has been removed from the registry there is nothing
+    /// left to conflict with, and the call records a first decision.
     /// </summary>
     [AlwaysInterleave]
     Task MarkAbortedAsync(Guid txid);

@@ -5,8 +5,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <summary>
 /// Thrown when a repository-context write is refused by the fencing check: the
 /// caller presented a superseded fencing token, presented none against a claimed
-/// record, presented a token whose claim was already released, or wrote from a
-/// region other than the one the claim was taken in.
+/// record, presented a token whose claim was already released, presented a token
+/// ahead of the record's fence that the lock did not issue and is not holding, or
+/// wrote from a region other than the one the claim was taken in.
 /// <para>
 /// It derives from <see cref="McpException"/> so the refusal travels the protocol's
 /// own error channel exactly as every other caller error on this surface does,

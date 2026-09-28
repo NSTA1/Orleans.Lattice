@@ -318,16 +318,20 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     /// </summary>
     /// <remarks>
     /// Membership of a tenant's admin-subject set <em>is</em> the tenant-admin
-    /// capability, so this is an administrative membership-reference create path
-    /// and follows the same contract as its siblings on the authorization-admin
-    /// facade (<c>UpsertGroupAsync</c> / <c>AddMemberAsync</c>): validate only when
-    /// a real directory provider is active and
+    /// capability, so this is an administrative membership-reference create path.
+    /// It shares the gating of its siblings on the authorization-admin facade
+    /// (<c>UpsertGroupAsync</c> / <c>AddMemberAsync</c>) - validate only when a real
+    /// directory provider is active and
     /// <see cref="LatticeIdentityDirectoryOptions.ValidationRequired"/> is set, and
-    /// deny an unresolvable id before any system-origin write. Without it a
+    /// deny an unresolvable id before any system-origin write - but not their kind
+    /// check: an id that resolves passes whatever kind of principal it resolves to,
+    /// where those siblings also refuse one of the wrong kind. Without it a
     /// typo'd, retired, or not-yet-provisioned id was silently accepted as a live
     /// tenant-admin grant - a dangling reference that whoever later registers that
     /// id would inherit. The caller-seeded default is not validated here: it comes
     /// from the authenticated caller's own resolved subject, not from the wire.
+    /// The shipped registration constructs this facade without an identity
+    /// directory, so in that configuration this check never runs.
     /// </remarks>
     private async Task ValidateDirectorySubjectsAsync(
         IReadOnlyList<string> adminSubjects,

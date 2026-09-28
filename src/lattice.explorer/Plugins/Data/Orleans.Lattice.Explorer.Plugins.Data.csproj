@@ -8,7 +8,7 @@
     <PackageId>Orleans.Lattice.Explorer.Plugins.Data</PackageId>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Version>9.4.0</Version>
-    <Description>The key and value drill-down per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: a cursor-paged key browser with a starts-with key search, a tag-index filter, live-following value inspection, and decoded CRDT current state. It reaches the cluster only through the IDataSurface domain contract it declares, and hands off to the revision-timeline surface by plugin id rather than by referencing it.</Description>
+    <Description>The key and value drill-down per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: a cursor-paged key browser with a starts-with key search, a tag-index filter, live-following value inspection, and decoded CRDT current state. It reaches the cluster only through the IDataSurface domain contract it declares, and hands off to the revision-timeline surface by its nested-surface id rather than by referencing it.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

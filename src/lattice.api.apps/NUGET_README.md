@@ -30,6 +30,8 @@ Behaviour:
 - Operations run in the caller's active tenant (the default tenant when tenancy
   is off). Caller-supplied tree references in a ceiling are validated and
   tenant-composed at entry, then stored in their tenant-local form.
-- Responses echo app slugs and app-local tree names only. Exception messages
-  are sanitized so no composed physical tree id crosses the facade.
-- Uninstall soft-deletes an app's structural trees; it never purges data.
+- Responses echo app slugs, app-local tree names and the pre-app ids of adopted
+  trees, never a composed physical tree id. Exception messages are sanitized so no
+  composed physical tree id crosses the facade.
+- Uninstall soft-deletes an app's structural trees and never purges them itself;
+  the core purges each soft-deleted tree once its soft-delete window elapses.

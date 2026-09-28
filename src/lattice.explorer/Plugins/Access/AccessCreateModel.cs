@@ -85,18 +85,18 @@ public sealed class AccessCreateModel
     /// grant affordance. States that the grant governs every application tree, that
     /// the server rejects a rule carrying any data-plane operation unless the cluster
     /// has all-trees grants enabled, and that a rule without data-plane operations is
-    /// still accepted: a Telemetry grant is honoured regardless, because it is a
-    /// scopeless cluster-wide capability, while Replication and Tree lifecycle grants
-    /// stay inert until the option is enabled.
+    /// still accepted: Telemetry and App install grants are honoured regardless,
+    /// because each is a scopeless cluster-wide capability, while Replication and Tree
+    /// lifecycle grants stay inert until the option is enabled.
     /// </summary>
     public const string AllTreesHelpText =
         "Grants the chosen operations on every application tree in the cluster (the reserved " +
         "authorization and system trees are always excluded). The data-plane operations require " +
         "the cluster's all-trees grants option to be enabled; if it is off, the server rejects a " +
         "rule that carries any of them. A rule without data-plane operations is still accepted: " +
-        "Telemetry is a cluster-wide capability attached to no tree, so a Telemetry grant here is " +
-        "honoured whether or not that option is on, while Replication and Tree lifecycle grants " +
-        "stay inert until it is enabled.";
+        "Telemetry and App install are cluster-wide capabilities attached to no tree, so a grant of " +
+        "either here is honoured whether or not that option is on, while Replication and Tree " +
+        "lifecycle grants stay inert until it is enabled.";
 
     /// <summary>
     /// Builds an all-trees (cluster-wide) grant: a <b>whole-tree</b> rule over the
@@ -105,7 +105,9 @@ public sealed class AccessCreateModel
     /// <paramref name="subject"/>, carrying <paramref name="operations"/> with
     /// <paramref name="effect"/>. When the cluster has all-trees grants enabled the
     /// decision engine consults this rule for every non-system tree, per the
-    /// four-tier precedence; when it is off the rule is inert.
+    /// four-tier precedence; when it is off the rule is inert for trees, although
+    /// any Telemetry or App install bit it carries still applies, because those
+    /// scopeless capabilities are checked against the all-trees sentinel itself.
     /// </summary>
     /// <param name="ruleId">A stable id for the rule. Must not be <see langword="null"/> or empty.</param>
     /// <param name="subject">The user or group to grant to. Must not be <see langword="null"/>.</param>

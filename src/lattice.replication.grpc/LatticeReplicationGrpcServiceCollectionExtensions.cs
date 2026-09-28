@@ -56,10 +56,13 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
     /// Registers the unified <c>Orleans.Lattice.Replication.Grpc</c>
     /// binding. Wires the live-push client + server, the snapshot
     /// client + server, the shared-secret auth interceptor, and the
-    /// secret-provider chain in a single call. Idempotent: a host
-    /// that calls this more than once layers the supplied
-    /// <paramref name="configure"/> delegate over the existing
-    /// options binding rather than re-registering singletons.
+    /// secret-provider chain in a single call. Call it once: the
+    /// transport seams are replaced rather than stacked and the service
+    /// registrations are TryAdd-guarded, but every call layers the
+    /// supplied <paramref name="configure"/> delegate over the options
+    /// binding and adds the shared-secret interceptor to the gRPC
+    /// pipeline again, so after two calls the secret check runs twice
+    /// on every replication RPC.
     /// </summary>
     /// <param name="services">The silo's service collection.</param>
     /// <param name="configure">
@@ -73,8 +76,8 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
     /// <see cref="ServiceCollectionDescriptorExtensions.Replace"/>
     /// so the no-op singleton registered earlier is removed before
     /// the gRPC transport is added; the snapshot transport uses the
-    /// same pattern. Subsequent calls are idempotent and do not
-    /// stack additional transports.
+    /// same pattern. Subsequent calls do not stack additional
+    /// transports.
     /// </remarks>
     public static IServiceCollection AddLatticeReplicationGrpc(
         this IServiceCollection services,

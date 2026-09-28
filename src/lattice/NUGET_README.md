@@ -11,9 +11,9 @@ The keyspace is sharded across many independent, self-balancing [B+ trees](https
 - **Atomic multi-key writes** - all-or-nothing visibility within a tree and across multiple trees; no reader ever observes a partial batch.
 - **Predicate push-down** - filter typed reads, conditional writes, scans, cursors, and range deletes with an ordinary `Expression<Func<T, bool>>` evaluated server-side.
 - **Durable, resumable cursors** - server-checkpointed iterators that survive silo failover and client restart.
-- **Snapshots** - point-in-time copies (offline or online) and snapshot-isolated cursors.
+- **Snapshots** - copies of a tree into a new tree (offline and point-in-time, or online while the source keeps serving) and snapshot-isolated cursors.
 - **Materialised & history views** - WAL-driven projections, aggregations, and per-key revision history.
-- **Bulk loading** - one-shot bottom-up build or streaming `IAsyncEnumerable` ingestion; idempotent and retryable.
+- **Bulk loading** - one-shot bottom-up build, streaming `IAsyncEnumerable` ingestion, or a resumable chunk-by-chunk load whose caller-supplied operation ids make each chunk safe to re-drive.
 - **Online resize & reshard** - change node fan-out or physical shard count on a live tree, without downtime.
 - **Tag indexes, typed queues, pluggable compression, and metrics** on the `orleans.lattice` meter.
 

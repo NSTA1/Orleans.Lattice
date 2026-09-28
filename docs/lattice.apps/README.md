@@ -18,10 +18,11 @@ The central design point is that an app's role-to-permission mapping is a
 `LatticeAuthorizationRule` records written through the authorization policy store.
 The existing access gate from [`Orleans.Lattice.Auth`](../lattice.auth/README.md)
 remains the single enforcement seam: an app never evaluates a permission itself, and
-nothing about the data path changes when an app is installed.
+installing one changes nothing about how the data path is authorized.
 
-It is a **companion package**. A host that does not reference it pays nothing, and
-core carries only two constants for the app tree namespace and the registry tree.
+It is a **companion package**. A host that does not reference it pays nothing: core
+carries only the `LatticeOperation.AppInstall` flag and two internal constants naming
+the app tree namespace and the app-registry tree prefix.
 
 The package is the engine. Operators reach it through companion packages:
 
@@ -55,9 +56,11 @@ The package is the engine. Operators reach it through companion packages:
   `app:` prefix, and the policy store rejects operator writes and deletes of those
   ids. Reconciliation replaces the app's whole owned rule set, so removing a role
   leaves no stale grant.
-- **Safe lifecycle.** Uninstall and tree drops soft-delete app trees on their
-  retention window; physical purge still needs the separate `TreeLifecycle`
-  capability, so uninstalling an app can never destroy data.
+- **Recoverable lifecycle.** Uninstall and tree drops only soft-delete app trees,
+  on each tree's `softDeleteDuration` (or the host's `SoftDeleteDuration`). The data
+  stays recoverable until that window elapses, when the core's deferred purge removes
+  it; uninstall never purges immediately, and an immediate purge still needs the
+  separate `TreeLifecycle` capability.
 - **Never wedges a silo.** A bad manifest, an over-ceiling request or a missing
   prerequisite fails that app's activation with a structured result. Silo startup
   is never affected.
@@ -130,7 +133,7 @@ properties are rejected.
 | `trees` | App-local tree names plus optional physical shape pins (`shardCount`, `virtualShardCount`, `maxLeafKeys`, `maxInternalChildren`, `walPartitions`), a `softDeleteDuration`, a `rebuildable` flag, and an optional `adoptedTreeId`. |
 | `roles` | A role name, its `operations` as an array of `LatticeOperation` member names, and one or more scope templates. |
 | `replication` | Optional per-tree merge mode, merged additively into replication enrolment when the replication add-on is registered. |
-| `schema` | Optional per-tree schema family and envelope version binding. |
+| `schema` | Optional per-tree schema family, envelope version and `strictIngest` flag. Validated and reported by the control facade's describe; activation does not apply it to the tree. |
 | `subscriptions` | Change-feed observations of the app's own trees or another app's trees. |
 | `mcpTools` | App-local MCP tool names, descriptions, and the role each tool requires. |
 
@@ -138,11 +141,16 @@ properties are rejected.
 
 A tree declaration names an **app-local** tree. The physical tree is the
 structural `a/{app}/{name}`, composed per tenant as described above. Omitted shape
-pins inherit the host's defaults. `virtualShardCount` is fixed when the tree is
-created, so a manifest upgrade may not change it or drop the pin.
+pins inherit the host's defaults. `virtualShardCount` is applied when the install
+first registers the tree, and a manifest upgrade may not change it or drop the pin.
+The tree keeps the declared slot count only until a resize of the tree once it holds
+data drops its shard map, or a reshard to a different shard count while it is still
+empty rebuilds that map with 4096 slots; it then routes over the default 4096 virtual
+slots (see [Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
 
 `rebuildable: true` marks a tree whose contents can be re-derived rather than
-restored, which drives restore-versus-rederive decisions for app-scoped backup.
+restored. It is descriptive metadata: the control facade's describe reports it, and no
+backup or restore path in this version acts on it.
 
 `adoptedTreeId` lets a first-party app adopt a tree that existed before the app
 concept (the RepoContext pilot uses this for its legacy tree names). An adopted
@@ -222,14 +230,23 @@ uninstall) requires `LatticeOperation.AppInstall`, a scopeless cluster-wide
 capability granted over `LatticeScope.ClusterWide()` and excluded from
 `LatticeAuthOperations.All`.
 
-The lifecycle states are `Installed`, `Enabled`, `Disabled` and `Uninstalled`.
-Uninstall keeps the record in the `Uninstalled` state; it does not delete data.
+The lifecycle states are `Installed`, `Enabled`, `Disabled` and `Uninstalled`. Install
+applies to an absent or `Uninstalled` app, enable to an `Installed` or `Disabled` one,
+disable only to an `Enabled` one (disabling an app that was never enabled is an
+`InvalidTransition`), and upgrade and uninstall to any live install. Repeating enable,
+disable or uninstall when its target state already holds is an idempotent success that
+writes nothing; a rejected transition returns an `AppRegistryTransitionResult` carrying
+its `AppRegistryTransitionError` instead of throwing. Uninstall keeps the record in the
+`Uninstalled` state; the registry transition itself touches no data (the activation
+pipeline's uninstall soft-deletes the app's trees, below).
 
 ## Activation
 
-`IAppActivationPipeline` applies an installed app to the cluster. Its verbs run
-serialized per app, authorize `AppInstall`, and return an `AppActivationOutcome`
-describing success or a structured failure (`AppActivationFailure`) with diagnostics.
+`IAppActivationPipeline` applies an installed app to the cluster. Its mutating verbs run
+one at a time per tenant app across the cluster, authorize `AppInstall` (system-origin
+callers skip the check), and return an `AppActivationOutcome` describing success or a
+structured failure (`AppActivationFailure`) with diagnostics. Its `GetStatusAsync` read
+is ungated and in-process, so a facade that exposes it must gate it itself.
 
 **Enable** resolves the installed version's manifest from the app source, validates
 it, compiles its roles against the pinned ceiling and bindings, provisions the app's
@@ -239,16 +256,24 @@ consent change landed while the run was in flight, it re-activates against the r
 its own transition wrote, so no grant compiled from superseded consent stays live.
 Replacing the owned rule set withdraws stale rules before writing new ones, so a
 policy-store fault part-way through never keeps a grant the current consent revoked.
+When the installed version itself cannot be activated - its manifest cannot be resolved
+or validated, its roles exceed the consented ceiling, or a binding names an undeclared
+role - any rules left from an earlier activation are withdrawn; a tree-provisioning or
+rule-write failure keeps the existing rules, so a retry is not an outage.
 
 **Disable** removes every rule the app owns and marks it `Disabled`; its trees and
 data stay in place.
 
 **Uninstall** removes the owned rules, soft-deletes the app's structural trees on
 their configured `SoftDeleteDuration`, and marks the app `Uninstalled`. Adopted
-trees are never deleted. Physical purge is not part of uninstall.
+trees are never deleted. Physical purge is not part of uninstall, but each
+soft-deleted tree is purged by the core's deferred purge once its soft-delete window
+elapses; installing and enabling the app again within the window recovers it.
 
 **Reconcile** re-applies an enabled app, for example after a consent change or an
-upgrade. A manifest upgrade that drops a tree soft-deletes that tree.
+upgrade. A manifest upgrade that drops a tree soft-deletes that tree. Reconciling an
+app in any other state withdraws its owned rules; reconcile never changes the registry
+state.
 
 Every run records its outcome, and the manifest whose trees and rules are currently
 applied, as the app's `AppActivationStatus` in a second reserved system tree,
@@ -263,15 +288,17 @@ Membership chain. Without the authorization policy store the rules cannot be
 persisted, and activation fails the same way.
 
 When `LatticeAppsOptions.ReconcileOnStartup` is `true` (the default), a background
-service reconciles every enabled app when the silo starts, retrying with
-back-off (`StartupRetryDelay` up to `StartupRetryMaxDelay`). A failure is recorded
-against the app and never stops the host.
+service reconciles every enabled app once when the silo starts. Only the registry read
+that lists the enabled apps is retried, with a doubling delay from `StartupRetryDelay`
+up to `StartupRetryMaxDelay`, until the silo can serve it. Each app's failure is
+recorded against the app and logged; it is not retried and never stops the host.
 
 ### Replication intent
 
 When the replication add-on is registered, the trees an in-image app declares in
 its `replication` section are merged **additively** into
-`LatticeReplicationOptions.ReplicatedTrees`; an operator's existing entry is never
+`LatticeReplicationOptions.ReplicatedTrees`, at configuration time and whether or not
+the app is installed or enabled; an operator's existing entry is never
 overwritten. Because only apps registered in the image are known at configuration
 time, the merge enrols the default-tenant tree names. Without the replication
 add-on, replication intent is ignored.
@@ -282,8 +309,8 @@ add-on, replication intent is ignored.
 bindings and the ceiling to an `AppRuleCompilation`. On success it holds the full
 set of `LatticeAuthorizationRule` records; on failure it lists every excess
 (`AppCeilingExcess`) and every binding that names an unknown role, and emits no
-rules. A declared role with no binding emits nothing and is reported as a
-diagnostic.
+rules. A declared role with no binding emits nothing and is listed in
+`AppRuleCompilation.UnboundRoles` without failing the compilation.
 
 - Every rule's subject is `LatticeSubjectSelector.Group(groupId)`.
 - Every rule id is `app:{slug}:{role}:{hash}`, where the hash is derived from the
@@ -304,10 +331,11 @@ app's bindings or manifest and let the compiler reconcile.
 ## App sources
 
 `IAppSource` resolves an app slug and optional version to its manifest, provenance
-and an activation handle. Resolving never runs app code; the handle is only invoked
-when the app is activated. Unknown slugs, version mismatches, invalid manifests,
-identity mismatches and duplicate registrations are returned as structured results
-(`AppSourceStatus`), never thrown.
+and an activation handle (`IAppActivationHandle`). Resolving never runs app code, and
+the activation pipeline in this version never invokes the handle: an in-image app's
+code is already present by package reference, so its handle loads nothing. Unknown
+slugs, version mismatches, invalid manifests, identity mismatches and duplicate
+registrations are returned as structured results (`AppSourceStatus`), never thrown.
 
 `InImageAppSource` is the only implementation in this version. It resolves apps
 that ship in the image by ordinary package reference and are registered with
@@ -343,34 +371,44 @@ and registers it for the subscription by app slug and subscription name with
 `AddLatticeAppSubscriptionHandler<ReindexHandler>(slug, "reindex")`.
 
 Subscriptions are realised through the core `IMutationObserver` seam. A routing
-table from tree id to subscribers is rebuilt whenever the set of enabled apps
-changes, so a mutation on a tree no app observes allocates nothing. Handlers run
-inline on the write path; a handler that throws is logged and skipped, and the write
-is never failed. Disabling or uninstalling an app stops delivery immediately.
+table from tree id to subscribers is rebuilt whenever the app registry changes, so
+a mutation on a tree no app observes allocates nothing. Handlers run inline on the
+write path; a handler that throws is logged and skipped, and the write is never
+failed. Delivery is at-most-once and covers user writes only (library maintenance
+writes are never delivered). A newly enabled app starts receiving once the rebuild
+lands; a disabled or uninstalled app stops receiving as soon as the silo's registry
+snapshot reflects the change, shortly after it commits, without waiting for the
+rebuild. A subscription the manifest declares with no registered handler, or with
+more than one, fails that app's subscription activation.
 
 A subscription to the app's own trees needs no consent. A cross-app subscription
 (and a subscription to an adopted tree) must be covered by an approved exception
 scope in the ceiling, or that app's subscriptions fail to activate with a message
-naming the observed app. Cross-tenant observation is not introduced: a subscription
-only sees trees composed for its own install's tenant.
+naming the observed app. A subscription activation failure is logged; it does not
+fail the enable and is not recorded in the app's activation status. Cross-tenant
+observation is not introduced: a subscription only sees trees composed for its own
+install's tenant.
 
 ## Security
 
 - `AppInstall` is required for every lifecycle transition and every control-facade
-  verb, and is never part of `LatticeAuthOperations.All`.
+  verb except the advisory capability probe, and is never part of
+  `LatticeAuthOperations.All`.
 - The registry (`sys-app-*`) is control-plane read isolated; the evaluator excludes
   it from all-trees wildcards, and an unmatched request fails closed even under a
   permissive default effect.
-- App rules are ordinary rules evaluated by the existing gate. The data path, the
-  gate and the enforcement helpers are unchanged by this package.
+- App rules are ordinary rules evaluated by the existing gate; this package adds no
+  enforcement path of its own.
 - App-owned rule ids cannot be edited or deleted except under system origin.
 - The role and subscription compilers never grant or observe the cluster-wide
   sentinel, a reserved or system-data tree, or a tenant-qualified id, whatever the
   ceiling approves, and never emit a scopeless capability.
 - Physical tree ids are kept out of the control facade's responses and exception
   messages (see the [facade](../lattice.api.apps/README.md)). They remain visible in
-  telemetry, storage accounting and backup artifacts, which require the `Telemetry`,
-  `Backup` and `TreeLifecycle` capabilities an app-scoped grant never confers.
+  telemetry, storage accounting and backup artifacts, each gated by its own
+  capability: no app role can carry the scopeless `Telemetry` capability, and a role
+  confers `Backup` or `TreeLifecycle` only when the manifest requests it and the
+  operator's ceiling allows it.
 
 ## Configuration reference
 
@@ -378,9 +416,15 @@ only sees trees composed for its own install's tenant.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `ReconcileOnStartup` | `true` | Reconcile every enabled app in the background when the silo starts. |
-| `StartupRetryDelay` | 250 ms | Initial back-off between startup reconcile attempts. |
-| `StartupRetryMaxDelay` | 30 s | Maximum back-off between startup reconcile attempts. |
+| `ReconcileOnStartup` | `true` | Reconcile every enabled app once, in the background, when the silo starts. |
+| `StartupRetryDelay` | 250 ms | Initial delay before retrying the startup registry read while the silo cannot yet serve it; doubles on each retry. Must be positive. |
+| `StartupRetryMaxDelay` | 30 s | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. |
+
+### `InImageAppSourceOptions`
+
+| Option | Default | Meaning |
+|---|---|---|
+| `Registrations` | empty | The apps present in the image, in registration order, each an `InImageAppRegistration` (slug, assembly, manifest resource name, and a `Publisher` that defaults to `first-party`). `AddLatticeApp` appends one, and `Register(slug, assembly, manifestResourceName)` adds one directly. Read once, when the source is constructed; a slug registered twice resolves as `DuplicateRegistration`. |
 
 ## See also
 

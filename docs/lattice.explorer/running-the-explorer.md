@@ -117,11 +117,11 @@ shared explorer libraries it builds on restore transitively:
 
 ### Mounting under a subpath
 
-Setting `BasePath` is the whole of it. The head applies the prefix itself, as a
-`PathBase` at the front of its pipeline, and maps its components, static assets
-and sign-in endpoints at the root behind it - so the pages, the Blazor Server
-circuit and the assets all resolve under the mount, and the host document is
-emitted with a matching `<base href>`.
+Setting `BasePath` is the whole of it. The head applies the prefix itself: it
+branches its pipeline at the prefix, which moves the prefix into `PathBase`, and
+maps its components, static assets and sign-in endpoints at the root of that
+branch - so the pages, the Blazor Server circuit and the assets all resolve under
+the mount, and the host document is emitted with a matching `<base href>`.
 
 Under a subpath the console is mapped inside an isolated branch pipeline rooted
 at the prefix. The branch strips the prefix before its own routing runs, so every

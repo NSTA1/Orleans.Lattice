@@ -10,9 +10,11 @@ namespace Orleans.Lattice.Schema;
 /// opt-in, per-tree, server-enforced value validation. Installing it replaces the
 /// core no-op <see cref="ILatticeWriteInterceptor"/> with the schema-enforcement
 /// interceptor, wires the reserved-tree policy and dead-letter stores, the cached
-/// policy provider, and the <see cref="LatticeOperation.SchemaAdmin"/>-gated admin
-/// surface. A tree with no policy pays a single cached lookup that short-circuits,
-/// so enforcement is zero-overhead until a policy is set.
+/// policy provider, and the in-process schema admin surface. That surface does not
+/// authorize callers itself: the <c>Orleans.Lattice.Api.Schema</c> facade enforces
+/// <see cref="LatticeOperation.SchemaAdmin"/> on changes and ordinary read authority
+/// on inspection before it calls in. A tree with no policy pays a single cached
+/// lookup that short-circuits, so enforcement is zero-overhead until a policy is set.
 /// </summary>
 public static class LatticeSchemaEnforcementServiceCollectionExtensions
 {

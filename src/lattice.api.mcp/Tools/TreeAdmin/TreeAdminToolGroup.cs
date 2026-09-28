@@ -178,8 +178,11 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Read a tree's soft-deletion status",
                 "Reads a tree's soft-deletion lifecycle status: whether it is live, soft-deleted (with the UTC "
                 + "delete time and the recovery deadline derived from the configured soft-delete window), whether a "
-                + "hard purge is in progress or has completed, and whether it can still be recovered. A pure read "
-                + "with no side effects. Requires whole-tree read authority. Read-only."),
+                + "hard purge is in progress or has completed, and whether it can still be recovered. It reads the "
+                + "deletion record kept for the tree id without resolving a tree alias, so after the first resize "
+                + "of a populated tree it reports the original copy the resize retired, and for a tree created "
+                + "again under a purged id the purged tree, while the tree itself is live. A pure read with no side "
+                + "effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetReshardStatusAsync, "lattice_treeadmin_tree_reshard_status",
                 "Read a tree's online-reshard status",
                 "Reads a tree's online-reshard status: whether a reshard is currently in flight, and the tree's "
@@ -384,22 +387,31 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "that override. Rejected for a reserved system tree id. Admin-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.DeleteTreeAsync, "lattice_treeadmin_tree_delete",
                 "Soft-delete a tree",
-                "Soft-deletes a tree: every shard is immediately marked deleted (subsequent reads and writes throw) "
-                + "and a deferred hard purge is scheduled after the configured soft-delete window, returning the "
-                + "tree's deletion status including the recovery deadline. Reversible with tree_recover until the "
-                + "window elapses or tree_purge runs. Idempotent. Rejected for a reserved system tree id. "
-                + "Tree-lifecycle-gated and destructive."));
+                "Soft-deletes a tree: the shards stored under the tree id itself are immediately marked deleted "
+                + "(subsequent reads and writes on them throw) and a deferred hard purge is scheduled after the "
+                + "configured soft-delete window, returning the tree's deletion status including the recovery "
+                + "deadline. Reversible with tree_recover until the window elapses or tree_purge runs. A call on an "
+                + "id already recorded as deleted is a no-op. The delete does not resolve a tree alias: after the "
+                + "first resize of a populated tree, or on a tree created again under a purged id, it deletes nothing "
+                + "and the tree stays readable and writable; after a shadow-cutover restore or a schema-remediation "
+                + "cutover it marks only the id's own shards, and reads and writes through the alias keep succeeding "
+                + "until the purge removes the id's registry entry, alias included. Rejected for a reserved system "
+                + "tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RecoverTreeAsync, "lattice_treeadmin_tree_recover",
                 "Recover a soft-deleted tree",
                 "Recovers a soft-deleted tree within its recovery window, restoring normal operation and cancelling "
-                + "the deferred purge, returning the tree's deletion status. Rejected when the tree is not deleted, "
-                + "a purge is in progress, or the data was already purged, and for a reserved system tree id. "
-                + "Tree-lifecycle-gated and destructive."));
+                + "the deferred purge, returning the tree's deletion status. Acts on the tree id's own deletion "
+                + "record and shards without resolving a tree alias, so after the first resize of a populated tree "
+                + "it recovers the original copy the resize retired while that copy is inside its soft-delete "
+                + "window. Rejected when the tree is not deleted, a purge is in progress, or the data was already "
+                + "purged, and for a reserved system tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.PurgeTreeAsync, "lattice_treeadmin_tree_purge",
                 "Hard-purge a soft-deleted tree",
-                "Immediately and irreversibly hard-purges a soft-deleted tree, bypassing the soft-delete window: all "
-                + "leaf and internal node state is permanently removed and the tree is unregistered, returning the "
-                + "tree's final deletion status. The confirm flag must be set to true to acknowledge the "
+                "Immediately and irreversibly hard-purges a soft-deleted tree, bypassing the soft-delete window: the "
+                + "leaf and internal node state of the shards stored under the tree id is permanently removed, and "
+                + "so is the id's registry entry, alias included (a resize's retirement of the tree's original copy "
+                + "keeps the entry, which serves the live, resized tree), returning the tree's final deletion "
+                + "status. Does not resolve a tree alias. The confirm flag must be set to true to acknowledge the "
                 + "irreversible destruction; a false or omitted value is rejected. Rejected when the tree is not "
                 + "deleted or was already purged, and for a reserved system tree id. Tree-lifecycle-gated and "
                 + "destructive."));

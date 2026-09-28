@@ -70,8 +70,10 @@ can also record earlier revisions - see [When not to use](#when-not-to-use).)
   what the source still holds: while nothing has been trimmed from the source
   write-ahead log, its first drain replays the log from the beginning and keeps
   the original clocks, but once garbage collection has trimmed the log's start it
-  seeds only one revision per live key, from current state. Enable the view
-  before the writes you need to keep, as this sample does.
+  seeds only one revision per live key, from current state. It takes the same
+  current-state seed, trimmed or not, when the source tree already resolves to a
+  different physical tree (after a resize or a restore, for example). Enable the
+  view before the writes you need to keep, as this sample does.
 
 ## Feature doc
 

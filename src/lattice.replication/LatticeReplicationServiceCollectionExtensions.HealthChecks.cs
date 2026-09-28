@@ -7,12 +7,14 @@ namespace Orleans.Lattice.Replication;
 public static partial class LatticeReplicationServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="LatticeReplicationHealthCheck"/> on the supplied
+    /// Registers the replication health check on the supplied
     /// <see cref="IHealthChecksBuilder"/>. The check reads the cluster-wide
     /// singleton <see cref="ReplicationPeerStats"/> registered by
     /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/>,
-    /// so this extension must be called <i>after</i> <c>AddLatticeReplication</c>
-    /// on the same <see cref="IServiceCollection"/>.
+    /// so it requires <c>AddLatticeReplication</c> on the same
+    /// <see cref="IServiceCollection"/>. The two calls may be made in either order:
+    /// nothing is resolved at registration, and the peer statistics are resolved
+    /// when the check is first activated, at its first probe.
     /// </summary>
     /// <param name="builder">The ASP.NET Core health-checks builder.</param>
     /// <param name="name">
@@ -32,7 +34,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <param name="tags">Optional tags applied to the registration (e.g. <c>"ready"</c>).</param>
     /// <returns>The same <paramref name="builder"/> for fluent chaining.</returns>
     /// <remarks>
-    /// <see cref="LatticeReplicationHealthCheck"/> is registered on the
+    /// The health check is registered on the
     /// underlying <see cref="IServiceCollection"/> as a <b>singleton</b>
     /// rather than the default transient lifetime that
     /// <see cref="HealthChecksBuilderAddCheckExtensions.AddCheck{T}(IHealthChecksBuilder, string, HealthStatus?, IEnumerable{string}?)"/>

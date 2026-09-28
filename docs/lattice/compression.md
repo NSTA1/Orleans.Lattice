@@ -259,7 +259,7 @@ The shipped surface covers operator-supplied (pre-trained) dictionaries, runtime
 
 ## Azure Table WAL row-payload compression
 
-The Azure Table WAL provider is the second in-tree consumer of the compression seam. Each WAL entry row has its `Payload` column compressed before it is persisted, shrinking the retained on-disk footprint - and the per-append managed allocations - of larger mutations. **Compression is enabled by default** (`Compression = LatticeCompression.Zstd`): `AddAzureTableWalStorage` registers the Zstd compressor automatically, so the default needs no extra wiring. Configure or opt out per tree via `AzureTableWalStorageOptions`:
+The Azure Table WAL provider is the second in-tree consumer of the compression seam. Each WAL entry row has its `Payload` column compressed before it is persisted, shrinking the retained on-disk footprint - and the per-append managed allocations - of larger mutations. **Compression is enabled by default** (`Compression = LatticeCompression.Zstd`): `AddAzureTableWalStorage` registers the Zstd compressor automatically, so the default needs no extra wiring. Configure or opt out through `AzureTableWalStorageOptions`, which the provider reads once, when it is constructed, so one setting covers every tree whose WAL that provider stores:
 
 ```text
 siloBuilder.AddAzureTableWalStorage(o =>
@@ -305,6 +305,7 @@ The `reason` tag on `compression_skipped` is one of:
 - `disabled` - compression is not enabled on the provider (`Compression = None`).
 
 A persistently low savings ratio whose `compression_skipped` is dominated by `below_threshold` is the signal to lower `CompressionMinPayloadBytes`; one dominated by `inflation_guard` means the payloads are genuinely incompressible and lowering the threshold would only burn CPU.
+
 ### Choosing the `CompressionMinPayloadBytes` threshold
 
 The default (`256`) was chosen empirically for JSON values, the dominant payload shape, by driving realistic JSON records through the real encode + Zstd-3 path and measuring stored-byte savings and per-row CPU across a payload-size sweep:
@@ -344,7 +345,7 @@ What *does* change dramatically with level is CPU: the same ~250-byte row costs 
 The headline benefit is not only on-disk bytes; it is a large drop in per-append managed allocations for big payloads, measured by the `EncodeWalBatch_AzureTable_Zstd` microbenchmark:
 
 - At **large values (~4 KB)**, encoding a full 99-entry batch allocates **~81% fewer bytes** with Zstd than without (~456 KB -> ~85 KB), and Gen0/Gen1 collections fall to ~0 - the compressed rows are small enough to avoid the gen-promotion and large-buffer paths the uncompressed arrays hit.
-- At **small values (~128 B)**, allocations are roughly equal: the 256-byte threshold leaves these rows uncompressed, so there is no allocation (or CPU) penalty for enabling compression on small-mutation workloads.
+- At **small values (~128 B)**, allocations are roughly equal even though the microbenchmark compresses every row (it runs with `CompressionMinPayloadBytes = 0`); at the default 256-byte threshold rows that small are stored uncompressed anyway, so enabling compression adds no allocation (or compression CPU) to small-mutation workloads.
 
 Compression never *increased* allocations at any measured size. Together with the inflation guard and the size threshold, this is why the feature is safe to enable by default: large payloads get a substantial footprint-and-allocation win, while small or incompressible payloads fall through to the verbatim path at negligible cost.
 

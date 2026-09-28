@@ -34,6 +34,17 @@ It proves the headline properties of the telemetry surface:
    backend credential the host configures (here `None`, because the sample's
    Prometheus is unauthenticated), never the caller's Lattice identity.
 
+> **Known issue: the sample registers no `ILatticeApiMcpAuthorizer`.**
+> `AddLatticeMcp` therefore falls back to the default `DenyAllMcpAuthorizer`,
+> which the discovery core consults for every group tool - the telemetry tools
+> included - when it builds the tool list and again when a tool is called;
+> `RequireAuthorization = false` does not lift that gate. As written, the agent
+> is offered only the `lattice_capabilities` meta-tool, so the four telemetry
+> tools never appear and the run cannot complete property 1 or the live queries
+> below. The anonymous caller is still offered nothing. Registering
+> `AllowAllMcpAuthorizer` (or your own `ILatticeApiMcpAuthorizer`) is the
+> missing step for the agent journey.
+
 ## Run it
 
 The sample needs a Prometheus to talk to, so start it first with Docker, then run
@@ -45,7 +56,8 @@ dotnet run --project samples/McpTelemetry/McpTelemetry.csproj
 ```
 
 The sample seeds an `agent` subject with a cluster-wide telemetry grant, drives a
-burst of writes and reads to populate the `orleans.lattice` metrics, then:
+burst of writes and reads to populate the `orleans.lattice` metrics, then is
+written to (as written it stops short - see the known issue above):
 
 - prints the four telemetry tools the agent discovered (and confirms it sees zero
   state tools),
@@ -72,8 +84,9 @@ report the silo as up, confirm `docker compose up -d` is running and that port
 Authorization on the MCP endpoint is disabled purely to keep the sample
 one-command runnable with no identity provider: a demo credential bridge maps a
 request carrying a marker header onto a fixed `agent` credential. A real
-deployment leaves `RequireAuthorization` at its secure default and lifts an
-authenticated ASP.NET Core principal onto the ambient credential instead, and
+deployment leaves `RequireAuthorization` at its secure default, registers an
+`ILatticeApiMcpAuthorizer`, and lifts an authenticated ASP.NET Core principal
+onto the ambient credential instead, and
 points the telemetry proxy at an authenticated Prometheus with a `Bearer`,
 `Basic`, or `MutualTls` backend credential, or a rotating `DynamicBearer` token.
 

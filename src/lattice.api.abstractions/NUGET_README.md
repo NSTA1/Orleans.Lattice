@@ -2,9 +2,9 @@
 
 Shared **contract** package for the
 [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) API facades. It
-holds the transport-agnostic service interfaces and their request / response
-models, and nothing else - no implementation, no registration, no background
-work.
+holds the transport-agnostic service interfaces, their request / response
+models and the typed exceptions they document, and nothing else - no
+implementation, no registration, no background work.
 
 ## Design
 

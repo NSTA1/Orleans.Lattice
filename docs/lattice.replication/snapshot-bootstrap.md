@@ -59,6 +59,13 @@ before calling `AddLatticeReplication`.
   completes. The one exception is an in-flight saga's prepared delete,
   which ships as a prepared row with `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
+- **A live key's TTL is not carried.** The default provider's
+  committed-projection row sets only `Key`, `Value`, and `Timestamp`, so
+  it leaves `ExpiresAtTicks` at `0` even though the per-key read it is
+  built from carries the key's expiry. A key that has a TTL on the source
+  is therefore installed as a durable entry on the bootstrapped peer and
+  does not expire there. Only a prepared saga row carries its
+  `ExpiresAtTicks`.
 
 ## Default implementation
 
@@ -592,7 +599,10 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   receiver folds through the primitive's state-based merge rather than
   the per-entry delta fold live-incremental entries use. A tree the
   resolver returns no mode for (and a tree declared as
-  `LwwRegister`) is stamped `LatticeMergeMode.LwwRegister`. The
+  `LwwRegister`) is stamped `LatticeMergeMode.LwwRegister`; for a tree
+  the resolver returns no mode for, the receiver's own enrollment gate
+  then drops every stamped entry as not enrolled, so such a drain applies
+  nothing. The
   mode is resolved once at the start of the drain, not per entry:
   the resolver is on the hot path's allocation budget but is
   invariant for the lifetime of a single drain.

@@ -968,7 +968,7 @@ before it can query at all - a container that does not answer `/health/live`, a
 failed MCP handshake, or a failed `repocontext_list_repos` - which exits `3`.
 
 **`retrievalPath` on a search result is not evidence about the approximate arm.**
-`AnnRepoContextSemanticIndex.RetrievalPath` is a property of the index, not of a
+The approximate index's declared retrieval path is a property of the index, not of a
 query - one index serves every repository, so a state-tracking declaration would
 be wrong the moment two repositories were in different states. It therefore
 reads `semantic.approximate` unconditionally, **including when the exact fallback
@@ -1008,7 +1008,7 @@ reading on a rig whose vector plane is down, and refusing to continue would
 suppress the very measurement the harness exists to take.
 
 **The total across all three arms is the liveness witness.** The arms partition
-the whole query population - `SearchCoreAsync` records an outcome for every
+the whole query population - the index records an outcome for every
 query including bootstrapping - so a moving total proves the instrument is
 capable of reporting, independently of which arm moved. A zero on
 `approximate` beside a non-zero total is a measured absence. A zero beside a

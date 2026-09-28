@@ -6,6 +6,8 @@ Cells executed: 46 / 46 (resume-from 0)
 
 Source plan: `scaling.md` (Phase A). Reports under `benchmark/diagnostic-reports/` are tracked in git as the per-run evidence trail.
 
+> Note (added later): `scaling.md` was a working plan that was never committed to this repository.
+
 ## Legend
 
 | Column | Source metric | Meaning |

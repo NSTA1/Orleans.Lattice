@@ -106,7 +106,10 @@ caller-chosen key prefix.
 
 Both are zero-padded so ordinal key order is numeric order, and neither is reused
 while the index's durable state survives: only a discard - the recovery path, or
-`RebuildAsync` - resets them, and it deletes everything under the prefix first.
+`RebuildAsync` - resets them, and it first deletes the manifest, the build
+checkpoint, every generation, the retirement journal and the identifier mapping
+under the prefix. The identifier watermark alone is kept (rewritten, never
+rewound), so a rebuild never hands out a key a previous build already used.
 
 ### Write order is the durability mechanism
 
@@ -128,12 +131,13 @@ asserts every persisted record stays under the bound that implies.
 
 ### Lazy partial load
 
-Opening an index applies only the centroid chunks, which are small
-(`partitionCount * dimensions` floats). A query then selects the partitions it
-would probe and fetches only those vector chunks. The answer is identical to the
-fully resident index - asserted across a query sweep - because a query is scored
-against exactly the cells it selects, and because a chunk is a slice of one
-contiguous cell rather than a gather across the corpus.
+Opening an index lazily walks its identifier mapping and reads each partition's
+commit record, but applies only the centroid chunks, which are small
+(`partitionCount * dimensions` floats), and no vector chunk. A query then selects
+the partitions it would probe and fetches only those vector chunks. The answer is
+identical to the fully resident index - asserted across a query sweep - because a
+query is scored against exactly the cells it selects, and because a chunk is a
+slice of one contiguous cell rather than a gather across the corpus.
 
 At 250,000 vectors this is about 0.52 s to open and about 75 ms for the first
 query, after which roughly 12% of the corpus is resident and repeated queries over
@@ -154,6 +158,28 @@ with nothing dirty costs a single write (the manifest); a flush after one update
 costs a handful. Each touched cell still costs its commit record, so a
 maintenance loop that batches before flushing pays for the distinct chunks and
 cells it touched rather than for the updates it applied.
+
+### Build checkpoints
+
+A background build ingests into the single cell of an untrained index, and while
+that cell is only ever appended to, every chunk but the last is immutable once
+written. Each build step therefore ends at a checkpoint that writes only the
+complete chunks that arrived since the previous one (the checkpoint that finishes
+the ingest also writes the partial last chunk), so the whole ingest costs one pass
+over the corpus rather than one per checkpoint, and no complete committed chunk is
+rewritten; the durable cursor lags by less than a chunk, which the next step
+re-consumes.
+
+A replacement or a removal during the build - one the build streams itself, or an
+`UpsertAsync` that replaces a vector or a `RemoveAsync` that retires one in the
+meantime - costs the cell that property, because it backfills or re-appends
+positions a committed chunk already holds. The next checkpoint then falls back to
+an incremental flush of the current generation: every chunk's content hash is
+compared with the one stored at the same position, and only the chunks that differ
+are written, under a fresh epoch. A checkpoint that faults part-way is retried
+against what was last committed, so the retry writes only what still differs
+rather than an image of the whole cell. A plain append from outside the build does
+not cost the property.
 
 ## Coherence with the store of record
 

@@ -180,7 +180,9 @@ public sealed class LatticeApiMcpOptions
     /// is lifecycle-read-only until the host explicitly opts lifecycle control in -
     /// either by setting this flag or by passing <c>enableLifecycle: true</c> to
     /// <c>AddTreeAdminTools(...)</c>. Every mutating tool it then contributes is
-    /// annotated destructive and non-read-only, and remains subject to the same
+    /// annotated non-read-only, and destructive except the configuration-only
+    /// compaction-trigger and retention-set tools, which are annotated
+    /// non-destructive; each remains subject to the same
     /// fail-closed whole-tree <c>Admin</c> access gate the <c>ILatticeTreeAdmin</c>
     /// facade enforces.
     /// </summary>
@@ -212,9 +214,10 @@ public sealed class LatticeApiMcpOptions
     /// and region status. The tenant-admin surface is control-gated, so the group contributes no tools
     /// until the host explicitly opts control in - either by setting this flag or
     /// by passing <c>enableControl: true</c> to <c>AddTenantAdminTools(...)</c>.
-    /// Every tool it then contributes is annotated destructive and non-read-only,
-    /// and remains subject to the same fail-closed cluster-wide <c>Admin</c> access
-    /// gate the <c>ILatticeTenantAdmin</c> facade enforces.
+    /// Every mutating tool it then contributes is annotated destructive and
+    /// non-read-only (the region-status read is annotated read-only), and each
+    /// remains subject to the same fail-closed access gate the tenant-admin
+    /// facades enforce.
     /// </summary>
     public bool EnableTenantAdminControlTools { get; set; }
 }

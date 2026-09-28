@@ -4,9 +4,10 @@ namespace Orleans.Lattice.Replication;
 /// Commit-time doorbell nudge seam. The durable replication log is now
 /// written exclusively by the foreground leaf commit-log writer in the
 /// core assembly; this sink no longer appends anything. Its sole job is
-/// to wake the background log-tailing shipper for a committed tree so
-/// the outbound ship loop pumps immediately instead of waiting for its
-/// next steady-state timer tick. The default registration is a no-op.
+/// to wake the background log-tailing shipper(s) for a committed tree -
+/// reactivating one that had been deactivated - so the shipper's phase timer
+/// drains the new entries; the sink never ships anything itself. The default
+/// registration is the doorbell-ringing <see cref="ShardedReplogSink"/>.
 /// <para>
 /// Implementations are invoked synchronously inside the grain's
 /// scheduler via the core <see cref="IMutationObserver"/> hook, so every

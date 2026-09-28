@@ -1,12 +1,12 @@
 # Anti-entropy digest probe
 
-Cross-cluster replication in `Orleans.Lattice.Replication` is eventually consistent: every mutation rides the per-tree WAL to each peer, the receiver applies it HLC-monotonically, and concurrent edits converge through the per-tree `LatticeMergeMode`. In the steady state every cluster eventually holds the same data for a given shard. Silent divergence - two clusters that have applied different effective state for the same shard and stay that way - should never happen, but a transport bug, a partial GC, or an operator mistake can produce it. The **digest probe** is the *detection* half of the anti-entropy pipeline: a low-frequency, read-only background pass that compares each shard's local content digest against every peer's digest and surfaces a metric when they disagree.
+Cross-cluster replication in `Orleans.Lattice.Replication` is eventually consistent: every mutation rides the per-tree WAL to each peer, the receiver applies it HLC-monotonically, and concurrent edits converge through the per-tree `LatticeMergeMode`. In the steady state every cluster eventually holds the same data for a given shard. Silent divergence - two clusters that have applied different effective state for the same shard and stay that way - should never happen, but a transport bug, a partial GC, or an operator mistake can produce it. The **digest probe** is the *detection* half of the anti-entropy pipeline: a low-frequency, read-only background pass that compares the local content digest of each shard below the tree's pinned shard count against every peer's digest and surfaces a metric when they disagree.
 
 The probe **detects** divergence; it does not repair it. Localisation and repair are layered on top by later anti-entropy stages. The probe never mutates data and never advances any replication cursor.
 
 ## What it compares
 
-Every shard maintains a `LeafProjectionDigest` - a hash that folds the shard's content, entry count, and highest checkpoint offset, carried alongside that entry count, that checkpoint offset, and a contribution-function `Version` - read through the core library's `ILattice.GetLeafProjectionDigestAsync(shardIndex)`. The probe asks each peer for the same shard's digest over a dedicated read-only RPC and classifies the pair:
+Every shard maintains a `LeafProjectionDigest` - a hash that folds the shard's content, entry count, and highest checkpoint offset, carried alongside that entry count, that checkpoint offset, and a contribution-function `Version` - read through the core library's `ILattice.GetLeafProjectionDigestAsync(shardIndex)`. Each pass walks shard indices `0` through the tree's pinned shard count minus one, so a shard an adaptive split has added above the pinned count is never probed. The probe asks each peer for the same shard's digest over a dedicated read-only RPC and classifies the pair:
 
 | Outcome | Meaning | Mismatch counted? |
 |---|---|---|

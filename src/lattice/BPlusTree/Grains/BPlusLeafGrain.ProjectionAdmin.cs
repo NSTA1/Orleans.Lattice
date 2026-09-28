@@ -5,7 +5,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// read-only projection-checkpoint accessor consumed by the public
 /// materialiser-lag surface and the destructive projection-rebuild seam
 /// that resets the leaf's materialised projection so the next activation
-/// re-replays the per-shard WAL from offset <c>0</c>.
+/// re-materialises it: the activation-time path reloads the leaf's snapshot
+/// where a usable one exists (the rebuild does not clear it) and replays the
+/// per-shard WAL after it, from offset <c>0</c> only for a partition no
+/// snapshot covers.
 /// <para>
 /// The rebuild seam is intentionally narrow: it clears only the
 /// projection slots (<c>Entries</c>, the
@@ -33,7 +36,8 @@ internal sealed partial class BPlusLeafGrain
     {
         // Retire the replay before anything else (issue #2871). This method IS a
         // replay reset: it clears the projection and sets the checkpoint back so
-        // the NEXT activation re-replays from zero. A replay still in flight from
+        // the NEXT activation re-materialises it (from the leaf's snapshot where
+        // one is usable, then the WAL after it). A replay still in flight from
         // THIS activation would race that - writing entries into the cache this
         // method is clearing, and advancing the checkpoint this method is about to
         // rewind - so the rebuild could complete and leave behind a projection
@@ -96,8 +100,9 @@ internal sealed partial class BPlusLeafGrain
         // already scanned through offset 0", silently skipping the very
         // first WAL entry that belongs to this leaf. The "nothing scanned"
         // sentinel is -1, matching IWalStorageProvider.GetHighestOffsetAsync's
-        // -1-for-empty-WAL contract, so the materialiser reads from
-        // offset 0 inclusive on the next activation.
+        // -1-for-empty-WAL contract, so a partition no snapshot covers is read
+        // from offset 0 inclusive on the next activation (a snapshot rehydrate
+        // instead lifts a covered partition's checkpoint to the snapshot's).
         state.State.ProjectionCheckpointOffset = -1;
         // Clear the assignment marker alongside the sentinel so the rebuilt row
         // reads as "nothing applied" through every path (issue #2703).
@@ -144,8 +149,10 @@ internal sealed partial class BPlusLeafGrain
         // routes through state.WriteStateAsync and surfaces transient
         // storage failures so the operator can retry; the leaf state
         // is left in the pre-persist (cleared) shape on a partial
-        // failure, which is benign because a retry repeats the clear
-        // before the next persist attempt.
+        // failure, which a retry repairs because it repeats the clear
+        // before the next persist attempt. Until then this activation
+        // keeps running with the cleared projection: the replay barrier
+        // is already retired and the deactivation below is not reached.
         await PersistAsync();
 
 #if LATTICE_DIAG
@@ -153,9 +160,16 @@ internal sealed partial class BPlusLeafGrain
 #endif
 
         // Step 3 - deactivate the grain. The next activation's
-        // OnActivateAsync hook drives ReplayWalSinceCheckpointAsync,
-        // which sees ProjectionCheckpointOffset = -1 and walks the
-        // WAL from offset 0 (inclusive) through the existing slice-budgeted
+        // OnActivateAsync hook starts the activation replay (in the
+        // background since issue #2871). Its step 0 snapshot rehydrate runs
+        // first, as on every activation: this method does not clear the
+        // leaf's snapshot, and against the -1 checkpoint and the empty cache
+        // of a fresh activation a usable snapshot is always accepted, so it
+        // reloads the cache and lifts each covered partition's checkpoint to
+        // the snapshot's offset.
+        // ReplayWalSinceCheckpointAsync then walks the WAL after those
+        // checkpoints - from offset 0 (inclusive) only for a partition no
+        // snapshot covers - through the existing slice-budgeted
         // materialiser. The materialiser's per-entry filter
         // (ShouldApplyDuringReplay) keys on the persisted topology
         // slots that survived the rebuild, so the replay populates

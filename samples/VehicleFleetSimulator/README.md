@@ -31,7 +31,7 @@ The full stack runs under Docker Compose:
 ./samples/VehicleFleetSimulator/run.ps1
 ```
 
-The script wipes the Azurite volume, builds any stale images, and starts Azurite + Silo + API + UI in detached mode. UI is served on `http://localhost:8090`; API gRPC endpoint is `http://localhost:8080`.
+The script wipes the Azurite volume, builds any stale images, and starts Azurite + Silo + API + UI in detached mode. UI is served on `http://localhost:8090`. The API serves its REST admin surface and gRPC-Web (the transport the UI uses) over HTTP/1.1 on `http://localhost:8080`, and native HTTP/2 gRPC on `http://localhost:8081`.
 
 ```shell
 ./samples/VehicleFleetSimulator/run.ps1 -Down

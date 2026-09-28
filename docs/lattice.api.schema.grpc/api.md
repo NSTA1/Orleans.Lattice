@@ -94,7 +94,7 @@ A `readonly struct` describing an inbound call to the authorizer.
 - Constructor: `LatticeSchemaApiAuthorizationContext(ServerCallContext call, LatticeSchemaApiOperation operation, string? targetId)`. Throws `ArgumentNullException` when `call` is null.
 - `ServerCallContext Call` - the underlying gRPC call context (headers, deadline, peer).
 - `LatticeSchemaApiOperation Operation` - the operation being invoked.
-- `string? TargetId` - the governed tree id the call targets; every protected schema RPC carries one.
+- `string? TargetId` - the governed tree id the call targets; every protected schema RPC carries one. It is the id exactly as the request carries it - the caller's tenant-local name - because the transport gate runs before the facade scopes that name into an asserted tenant's `t/{tenant}/{name}` namespace; the facade's own scope authorization then runs against the effective id.
 
 ### Authorization interceptor
 

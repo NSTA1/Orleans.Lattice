@@ -67,18 +67,20 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// <c>repocontext_add_repo</c> or <c>repocontext_bootstrap</c> path that
     /// escapes the root (via <c>..</c> or a symbolic link). When
     /// <see langword="null"/> or empty, a disabled guard is registered that
-    /// normalises but does not bound a path. Ignored unless a host registers no
-    /// guard of its own first.
+    /// normalises but does not bound a path. If a path guard was already registered
+    /// before this call, it is kept in place of the one this root would build; the
+    /// root still decides whether the path-taking tools are advertised.
     /// <para>
-    /// <b>Required by both onboarding tools.</b> A disabled guard admits every
-    /// path, so neither <c>repocontext_add_repo</c> nor
-    /// <c>repocontext_bootstrap</c> - whose paths both come from the wire - is
-    /// contributed without a root, and both refuse at invocation unless the
-    /// effective guard is enforcing. Supply a root here, or register an enforcing
-    /// <c>RepoContextWorkspaceGuard</c> before this call, whenever writes are
-    /// enabled. Without one, the write opt-in still contributes the capture and
-    /// maintenance tools (<c>repocontext_remember</c> and friends), which take no
-    /// path.
+    /// <b>Required by every path-taking tool.</b> A disabled guard admits every
+    /// path, so no tool whose path comes from the wire is contributed unless a
+    /// non-empty root is supplied here: neither onboarding tool
+    /// (<c>repocontext_add_repo</c> or <c>repocontext_bootstrap</c>, which also
+    /// need writes enabled) nor the read-only <c>repocontext_changed</c> drift
+    /// report. Supplying a root is what advertises them, and the onboarding tools
+    /// still refuse at invocation unless the effective guard is enforcing. Supply a
+    /// root whenever onboarding is wanted. Without one, the write opt-in still
+    /// contributes the capture and maintenance tools (<c>repocontext_remember</c>
+    /// and friends), which take no path.
     /// </para>
     /// </param>
     /// <param name="registerAsApp">

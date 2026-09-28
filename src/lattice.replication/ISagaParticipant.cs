@@ -42,8 +42,14 @@ namespace Orleans.Lattice.Replication;
 ///   <item><description><b>Bounded fence-timer auto-compensation.</b> A prepared
 ///   participant holds a bounded cutover fence while it waits for the decision.
 ///   If the coordinator never returns before the fence expires, the participant
-///   model auto-compensates by calling <see cref="AbortAsync"/>, so a prepared
-///   mutation can never leak after a coordinator loss.</description></item>
+///   model auto-compensates by calling <see cref="AbortAsync"/> with a request it
+///   rebuilds from the saga identity it persisted: the saga id, target, manifest id
+///   and coordinator cluster id, but not <see cref="SagaControlRequest.SetId"/>. A
+///   prepared mutation is undone after a coordinator loss only as far as the
+///   participant can compensate from those fields. The built-in restore participant
+///   compensates a single-tree restore from them, but for a backup-set restore the
+///   timed-out compensation lifts the write fence without removing the member
+///   trees' built shadows, which remain until they are deleted.</description></item>
 ///   <item><description><b>Idempotent re-attach.</b> Every method must be
 ///   idempotent: a duplicate <see cref="PrepareAsync"/>, <see cref="CommitAsync"/>,
 ///   or <see cref="AbortAsync"/> (from a retry after a mid-flight restart, or a

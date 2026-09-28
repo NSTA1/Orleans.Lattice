@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Tenancy</PackageId>
     <Version>9.8.0</Version>
-    <Description>Durable, CRDT-backed tenant registry add-on for Orleans.Lattice. Persists tenant definitions (status, quotas, burst, placement binding, tenant-admin subjects, and cross-tenant grants) in reserved sys-tenant-* Lattice trees under system-origin, converging concurrent updates with LWW-register semantics, and fails fast at startup when tenancy is enabled without the auth and membership add-ons it depends on.</Description>
+    <Description>Multi-tenancy add-on for Orleans.Lattice, built on a durable, CRDT-backed tenant registry. Persists tenant definitions (status, quotas, burst, placement binding, tenant-admin subjects, and cross-tenant grants) in reserved sys-tenant-* Lattice trees under system-origin, converging concurrent updates with last-writer-wins semantics, and enforces them: each tenant's trees live in its own t/{tenant}/ keyspace, reads and writes are held to a per-tenant request-rate limit, writes and tree creation are admitted against the tenant's quotas, usage and overage are metered, and optional per-tenant region residency refuses operations in a region where the tenant is not online; it fails fast at registration when the auth and membership add-ons it depends on have not been added first.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 

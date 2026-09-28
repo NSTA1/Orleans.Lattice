@@ -57,6 +57,12 @@ app.MapLatticeScalingSignal(); // GET /lattice/scale
 Add a `custom` scale rule of type `metrics-api` to the container app. In bicep:
 
 ```bicep
+// Built from the app name and the environment's default domain: referencing the
+// container app's own ingress FQDN inside its own declaration is a circular
+// self-reference, which Bicep rejects.
+var scaleSignalUrl = 'https://${appName}.${environment.properties.defaultDomain}/lattice/scale'
+
+// Inside the Microsoft.App/containerApps resource's properties.template:
 scale: {
   minReplicas: 2
   maxReplicas: 20
@@ -66,7 +72,7 @@ scale: {
       custom: {
         type: 'metrics-api'
         metadata: {
-          url: 'https://${containerApp.properties.configuration.ingress.fqdn}/lattice/scale'
+          url: scaleSignalUrl
           valueLocation: 'scaleValue'
           targetValue: '0.5'
           activationTargetValue: '1'

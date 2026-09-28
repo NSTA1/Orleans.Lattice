@@ -56,7 +56,7 @@ internal static class TenantObservabilityGaugeRegistry
                 LatticeTenantMetrics.UsageBytesName,
                 static () => Volatile.Read(ref _snapshot).UsageBytes,
                 unit: "By",
-                description: "Per-tenant stored value bytes (global cross-cluster fold).");
+                description: "Per-tenant storage footprint bytes: write-ahead log, snapshot and persisted leaf-state bytes of the tenant's trees (global cross-cluster fold).");
 
             meter.CreateObservableGauge(
                 LatticeTenantMetrics.UsageKeysName,

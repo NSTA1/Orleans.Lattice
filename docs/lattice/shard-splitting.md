@@ -137,10 +137,13 @@ and the `ScanKeysAsync` / `ScanEntriesAsync` streams follow two different paths.
 
 #### `CountAsync` / `CountPerShardAsync` - per-slot routing
 
-The orchestrator reads the authoritative `ShardMap`, partitions virtual
-slots by current owner (via `LatticeGrain.BuildOwnedSlotMap`), and asks
-each physical shard to count only its owned slots via
-`IShardRootGrain.CountForSlotsAsync(sortedSlots, virtualShardCount)`.
+The orchestrator reads the authoritative `ShardMap`. While its `Version`
+is still `0` - no split has ever been persisted for the tree - it sums
+each physical shard's own count and accepts the total only if the map is
+still at version `0` afterwards. Otherwise it partitions the virtual slots
+by current owner and asks each physical shard to count only the slots it
+owns (bounded to the requested range), driving each shard's work-bounded
+count batches to completion so no shard is held for its whole leaf chain.
 Because each virtual slot is counted exactly once - against whichever
 shard the map identifies as its current owner - the result is
 topology-consistent by construction, independent of the source shard's
@@ -288,9 +291,13 @@ semantics and apply on the shard axis regardless.
 
 ## Autonomic detection
 
-The per-tree `HotShardMonitorGrain` is started when the tree's `LatticeGrain`
-activates, re-attempted on every write (so an arming that lost the race with
-reminder-service startup recovers), and re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
+Each tree's hot-shard monitor is armed when the tree activates and
+re-armed from every write path until an arming attempt succeeds, and a
+keepalive reminder re-activates it after collection. The monitor arms its
+sampling timer before it registers that keepalive, so a reminder service
+that is still initialising cannot leave it claiming to run with nothing
+sampling; a keepalive registration deferred that way is retried after each
+sampling pass until it succeeds. On each tick (default every 30 s) it:
 
 1. Polls every physical shard's `GetHotnessAsync()` in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
@@ -381,7 +388,10 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
 | `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
 | `MaxClusterConcurrentAutoSplits` | `null` | Optional cluster-wide ceiling on the aggregate number of concurrent autonomic splits across **all** trees. `null` disables the gate (per-tree caps only, zero cost); a positive value opts in to a singleton admission gate enforced in addition to each tree's `MaxConcurrentAutoSplits`. |
+| `MaxConcurrentMigrations` | `4` | Maximum concurrent splits an online reshard (`ReshardAsync`) dispatches. Independent of, and additive with, `MaxConcurrentAutoSplits`. See [Online Reshard](online-reshard.md). |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
+| `BackgroundDrainLeavesPerPass` | `64` | Maximum source leaves one Drain-phase pass visits before persisting its key cursor and yielding to the next tick. `0` or less disables the bound. The authoritative drains inside Swap and Complete are never bounded. Shared with the online snapshot copy and the cross-tree merge drain. |
+| `BackgroundDrainMaxDuration` | `10 s` | Wall-clock net for one Drain-phase pass, for leaves that are individually slow. `TimeSpan.Zero` disables it and leaves the leaf count as the only bound. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
 | `HotShardMinSkewRatio` | `1.5` | Minimum ratio of the hottest shard's rate to the tree's median shard rate before any split is admitted, so a uniformly loaded tree (a bulk ingest) is never split. A value at or below `1.0` disables the clause. It is the upper edge of the split/heal dead band whose lower edge is `HotShardConsolidationSkewRatio`. |
 | `HotShardMinShardEntries` | `1024` | Minimum live entries a shard must hold to be split. `0` disables the floor and its per-candidate count probe. |

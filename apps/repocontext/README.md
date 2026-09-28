@@ -35,6 +35,15 @@ this host stays MCP-only and never embeds in-process.
   [MCP tools](../../docs/lattice.api.mcp/tools.md).
 - A durability profile selected by `LATTICE_DURABILITY` (`local` SQLite + file WAL
   by default; `azure`/`postgres` for shared deployments).
+- A named-lock lease ceiling of 30 minutes in place of the library's 5-minute
+  `LatticeOptions.MaxLockLeaseDuration` default, so a backlog claim taken through
+  `repocontext_claim` can outlast a full build-and-test cycle. Set it with
+  `LATTICE_MAX_LOCK_LEASE_SECONDS` (default `1800`, accepted `30`-`7200`; a set
+  value that is not an integer in that range fails startup).
+- Scheduled capture of the durable agent-memory tree into an external blob sink,
+  so a gesture that destroys the primary store does not destroy its only copy. It
+  is inert unless a sink is configured (the sample configures one), and it is
+  probed on `/health/backup`, which feeds neither liveness nor readiness.
 - Compaction on the churn trees, a readiness probe that reports `Draining` on
   SIGTERM, and a data-path guard that fails startup if the mount is not writable.
 

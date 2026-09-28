@@ -1,9 +1,13 @@
 # Architecture
 
 `Orleans.Lattice.Replication` layers cross-cluster replication on top of an
-existing `Orleans.Lattice` deployment. The core library is unaware of
-replication: the subsystem attaches only through first-class public extension
-points and a per-cluster push transport. This document describes the end-to-end
+existing `Orleans.Lattice` deployment. The core library does not depend on the
+replication package: the subsystem plugs into public extension points the core
+exposes, a per-cluster push transport, and - through an internals-visibility
+grant the core library extends to the replication package - core-internal
+machinery such as the per-shard WAL partitions and the core's replication-apply
+path (see [Relationship to the core library](#relationship-to-the-core-library)).
+This document describes the end-to-end
 pipeline in behavioural terms and the invariants it preserves; for the core
 data-path architecture it builds on, see
 [`../lattice/architecture.md`](../lattice/architecture.md).
@@ -23,7 +27,7 @@ flowchart LR
         Leaf -->|"step 2: apply"| Proj[(Leaf projection)]
         Leaf -->|"step 3: observe (nudge)"| Capture[IMutationObserver]
         Wal -->|"durable per-partition cursor, tailed + batched"| Ship[Per-peer shipper]
-        Capture -.->|"ring doorbell: drain now"| Ship
+        Capture -.->|"ring doorbell: wake"| Ship
         Ship --> Transport[IReplicationTransport<br/>in-process / gRPC]
     end
 
@@ -35,7 +39,7 @@ flowchart LR
     end
 ```
 
-1. **Commit-time WAL append (`ICommitLogWriter`) and replication nudge (`IMutationObserver`).** Every leaf commit on the
+1. **Commit-time WAL append (the leaf commit-log writer) and replication nudge (`IMutationObserver`).** Every leaf commit on the
    producing cluster runs the core `wal -> apply -> observe` pipeline. The
    `wal` step is the durable capture: the leaf's commit-log writer is the single
    WAL appender, writing each mutation to the per-shard log before the originating
@@ -89,29 +93,35 @@ flowchart LR
    throttle in-band - see [`receiver-flow-control.md`](receiver-flow-control.md).
 
 6. **Receiver apply (`IReplicationApplier`).** Inbound records flow through the
-   public applier seam, which first gates each entry against this receiver's own
+   public applier seam, which gates each entry against this receiver's own
    per-tree replication enrollment and locally-resolved merge mode - dropping a
    tree not enrolled here and dead-lettering an entry whose peer-supplied wire
    merge mode disagrees - and, when tenancy is on, against the tenant-isolation
    gate, which dead-letters a write for a tenant that is unknown, not resident
    in this region, or suspended. It defers an entry while a coordinated restore
    holds the tree's inbound receive fence, so the sender re-ships it once the
-   fence lifts. It then drops entries a pinned bootstrap snapshot already
+   fence lifts; a single-entry apply checks the fence after those two gates,
+   while a multi-entry batch checks it first and defers a fenced run whole. It
+   then drops entries a pinned bootstrap snapshot already
    covers, suppresses repeated records by exact `(origin, hlc, key, op)` identity
    (shadow-forward de-duplication), parks entries whose causal dependencies have
    not arrived, and performs CRDT-aware merges
    before committing through the same core leaf path that local writes use. See
    [`replication-apply.md`](replication-apply.md).
 
-7. **Bootstrap.** A peer that is new, or whose cursor has fallen behind the
-   retained WAL, seeds from a point-in-time snapshot and then switches to
-   incremental shipping at the snapshot's HLC. See
+7. **Bootstrap.** A peer seeds from a point-in-time snapshot and then
+   switches to incremental shipping at the snapshot's HLC - automatically when
+   the fall-off detector finds its per-origin high-water mark behind the
+   retained WAL, or on an explicit re-seed request, which is how a new peer is
+   seeded. See
    [`snapshot-bootstrap.md`](snapshot-bootstrap.md) and
    [`auto-bootstrap.md`](auto-bootstrap.md).
 
-8. **Dead-letter quarantine.** Poison entries - schema skew, oversized values,
-   corrupt clocks - are quarantined per tree after a configurable retry budget
-   so replication continues past them. See
+8. **Dead-letter quarantine.** An entry whose apply keeps failing is
+   quarantined per tree after a configurable retry budget, and entries the
+   merge-mode or tenant-isolation gate refuses, the causal-apply buffer evicts,
+   or the sender cannot encode are parked at once, so replication continues
+   past them. See
    [`dead-letter-queue.md`](dead-letter-queue.md).
 
 ## Invariants the pipeline preserves
@@ -131,12 +141,17 @@ flowchart LR
    entry - which keeps its source cluster's origin - is never re-shipped and a
    write replicated into and back out of a peer never loops.
 
-3. **Source HLCs are preserved on the receiver.** The persisted timestamp of an
-   applied write is the authoring cluster's HLC, verbatim; the receiving leaf
+3. **Source HLCs are preserved on the receiver.** For a last-writer-wins
+   write, the persisted timestamp of an applied write is the authoring
+   cluster's HLC, verbatim; the receiving leaf
    only advances its own clock to at least that value, so a later local write
-   still sorts after the applied one. That is what makes lexicographic
-   `(HLC, originClusterId)` last-writer-wins resolution converge identically
-   across clusters.
+   still sorts after the applied one. That is what makes last-writer-wins
+   resolution - ordered by HLC, with an exact HLC tie broken by the
+   replica-invariant tombstone, expiry, and value-byte fields before the origin
+   cluster id - converge identically across clusters. A typed CRDT delta keeps
+   its source HLC only when it is folded as part of a multi-entry batched run;
+   any other fold is written at a fresh local HLC, which the commutative join
+   makes safe (see [`replication-apply.md`](replication-apply.md)).
 
 4. **Atomic-write sagas land all-or-nothing.** A replicated multi-key atomic
    write arrives as prepared records that stay invisible until the terminal
@@ -144,27 +159,37 @@ flowchart LR
    batch - even if the inter-site link partitions mid-delivery.
 
 5. **CRDT merge modes are dispatched per tree.** A tree declared with a
-   `LatticeMergeMode` other than last-writer-wins ships typed state-merge
-   records that the receiver folds with the primitive's commutative,
+   `LatticeMergeMode` other than last-writer-wins ships typed CRDT deltas
+   that the receiver folds with the primitive's commutative,
    associative, idempotent join, so out-of-order receipt is convergent without
    any per-edge ordering guarantee. See [`deltas.md`](deltas.md) and
    [`replication-modes.md`](replication-modes.md).
 
-6. **Tree events are local-only.** Receiver-side applies do not republish the
-   per-tree event stream; each cluster emits events only for writes that
-   originated locally. See
+6. **Tree events are emitted where a write originates, with two
+   exceptions.** An inbound replicated last-writer-wins apply does not
+   republish the per-tree event stream at the receiving silo. A replicated
+   atomic batch's prepared writes and a replicated CRDT delta are applied
+   through the receiver's local write paths, so they do publish there when
+   publication is enabled; a subscriber attached at every cluster should treat
+   those as duplicates of the originating cluster's events. See
    [`../lattice/events.md`](../lattice/events.md#operations-that-deliberately-do-not-emit-events).
 
 ## Relationship to the core library
 
-The replication subsystem attaches to the core library only through public
+The replication subsystem attaches to the core library through public
 seams: `IMutationObserver` (the commit-time nudge), the per-tree
 `ILatticeMergeModeResolver`, `ILatticeOriginClusterIdResolver`, and
 `ILatticeReplicationContext` implementations `AddLatticeReplication` swaps in,
 the `ITreeAliasObserver` that rebinds shippers after an alias swap, and the
 `IWalCursorRegistry` that carries the per-peer ship cursors and receiver
 blocked floors that hold back WAL trimming; its own
-`IReplicationApplier` is the receiver-side merge seam. The
+`IReplicationApplier` is the receiver-side merge seam. It also calls
+core-internal machinery directly, through an internals-visibility grant the
+core library extends to the replication package: the shipper, the WAL
+introspection seam, and the change feed read the per-shard WAL partitions; the
+applier writes through the core's internal replication-apply path; and the
+snapshot export walks shard and leaf state and reads the per-tree transaction
+registry. The
 single-cluster and multi-cluster code paths are identical up to the point where
 the transport carries a batch across a network boundary; there is no
 "replication mode" that changes how a foreground commit durabilizes. The WAL

@@ -19,7 +19,7 @@ foreach (var shard in report.Shards)
 |---|---|
 | `TreeId` | Logical tree identifier. |
 | `ShardCount` | Number of physical shards currently owning virtual slots. |
-| `VirtualShardCount` | Fixed-size virtual slot space (4096 for all current trees). |
+| `VirtualShardCount` | Size of the tree's virtual slot space: 4096 by default, or the slot count an installed app's manifest declared for a tree it created, while that tree keeps the map it was created with. |
 | `TotalLiveKeys` | Sum of live keys across all shards. |
 | `TotalTombstones` | Sum of tombstones across all shards (always `0` when `deep: false`). |
 | `Shards` | Per-shard reports, ordered by `ShardIndex`. |

@@ -95,8 +95,10 @@ uncommitted work) or a configured git remote (opt-in, hub-only, anchored to a
 commit). From there a single idempotent pass walks or diffs, reconciles the
 structural records, projects file content, extracts symbols, maintains the
 reverse cross-reference edges, and embeds. Each stage records its own
-*processed marker* on the file node, so each has an idempotent back-fill and a
-repository indexed before a stage existed heals itself with no client call. See
+*processed marker* - on the file node for content, symbols, and cross-references,
+and as an add-wins presence flag in vector membership for embeddings - so each has
+an idempotent back-fill and a repository indexed before a stage existed heals
+itself with no client call. See
 [Index source strategies](container.md#index-source-strategies).
 
 **Retrieval.** A query is answered by the best plane available and always says

@@ -3,17 +3,19 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// <summary>
 /// Per-shard state for the online shadow-forwarding primitive used by online
 /// <c>ResizeAsync</c> (and any future online copy between physical trees).
-/// While this state is non-null on a <see cref="ShardRootState"/>, every
-/// accepted mutation is mirrored in parallel to the corresponding shard on
+/// While this state is non-null on a <see cref="ShardRootState"/>, each
+/// last-writer-wins mutation (not a typed CRDT delta or a bulk append) is
+/// mirrored in parallel to the shard with the same index on
 /// <see cref="DestinationPhysicalTreeId"/>, so that a subsequent atomic
 /// alias swap at the registry layer can hand off read and write traffic
-/// to the destination tree with zero data loss.
+/// to the destination tree.
 /// <para>
-/// <b>Correctness relies on LWW commutativity.</b> Every write carries an
-/// HLC timestamp; concurrent shadow-forwards and background drain writes
-/// converge to the same final state regardless of interleaving because
-/// the highest HLC wins on every key. This is why the primitive does not
-/// require a durable shadow-retry queue or two-phase commit.
+/// <b>Resolution is last-writer-wins.</b> The destination keeps the highest-HLC
+/// version of each key, which is why the primitive does not require a durable
+/// shadow-retry queue or two-phase commit. Drained entries keep their source
+/// HLC timestamps, but a live forward is stamped by the destination leaf's own
+/// clock (see the shadow-forward notes on <c>ShardRootGrain</c>), so which
+/// version survives can depend on which of the two arrives first.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -21,11 +23,13 @@ namespace Orleans.Lattice.BPlusTree.State;
 internal sealed class ShadowForwardState
 {
     /// <summary>
-    /// Physical tree ID of the destination tree. Each mutation on the source
-    /// shard is mirrored to <c>{DestinationPhysicalTreeId}/{shardIndex}</c>
-    /// where <c>shardIndex</c> matches the source shard's own index - the
-    /// destination tree is constrained to share the source's
-    /// <c>ShardMap</c> so this projection is identity.
+    /// Physical tree ID of the destination tree. Each mirrored mutation on the
+    /// source shard goes to <c>{DestinationPhysicalTreeId}/{shardIndex}</c>,
+    /// where <c>shardIndex</c> is the source shard's own index. The destination
+    /// is registered with the source's pinned shard count and no <c>ShardMap</c>
+    /// of its own, so it routes by the default map for that count; the
+    /// same-index projection matches the destination's routing only while the
+    /// source still uses that default map.
     /// </summary>
     [Id(0)] public string DestinationPhysicalTreeId { get; set; } = "";
 

@@ -70,7 +70,9 @@ On a cluster running the tenancy add-on, what `lattice_list_regions` returns dep
 - **A validated non-default tenant** - the current region plus only those peers in the tenant's **actionable set**: the regions its operator has authorized it into, plus the regions it is resident in. Each entry gains an additive `tenantScope` object reporting `tenantId`, `isAllowed`, `status`, and `isResident`. The current region is always listed (the caller is already talking to it) and is annotated truthfully, which may say the tenant is neither allowed into nor resident in it.
 - **A validated tenant whose standing the head's tenancy resolver cannot establish** - the current region alone, fail-closed. It never falls back to the full topology.
 
-A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`. See [the region sets](../lattice.tenancy/README.md#the-region-sets).
+In the shipped registrations the two validated-tenant cases are not reached. The discovery tool runs without the caller's credential, so on a co-hosted head the validating resolver sees an anonymous caller and refuses every non-default assertion, and a remote head registers no validating resolver at all. A non-default tenant assertion is therefore currently answered with the current region alone and no `tenantScope` annotation - or, by a remote head without the `TenantAdmin` endpoint, with the full unscoped topology.
+
+A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`, and no shipped component advances a region to `Online` (see [Tenant region residency](#tenant-region-residency-lattice_tenant_authorize_regions-lattice_tenant_set_residency-lattice_tenant_region_status)). See [the region sets](../lattice.tenancy/README.md#the-region-sets).
 
 ## State tools (`lattice_state_*`)
 
@@ -187,7 +189,7 @@ Runtime per-tree cross-cluster replication control over `ILatticeReplicationCont
 
 The control tools carry `destructiveHint = true`; the inspect tool carries `readOnlyHint = true`. Discovery is permission-scoped by the `LatticeOperation.Replication` grant, so a caller without that grant is not shown the group.
 
-`lattice_replication_get_config` reconciles **both** enrollment sources a replication-enabled host resolves against: trees enabled at runtime through `lattice_replication_enable`, and trees declared in the static deployment-time replicated-tree map. Each entry's `source` says which one is in force, so an estate configured purely at deployment time reports its trees rather than an empty set. A tree reported `Static` keeps shipping even after `lattice_replication_disable` - the static map is a floor - and is turned off by editing the deployment configuration instead. See [Runtime replication configuration](../lattice.replication/runtime-config.md).
+`lattice_replication_get_config` reconciles **both** enrollment sources a replication-enabled host resolves against: trees enabled at runtime through `lattice_replication_enable`, and trees declared in the static deployment-time replicated-tree map. Each entry's `source` says which one is in force, so an estate configured purely at deployment time reports its trees rather than an empty set. That static map always holds the `sys-replication-config` tree itself, which `enableRuntimeConfig: true` enrols under `OrMap`, so the report lists that tree as `Static` to any caller authorized to manage it. A tree reported `Static` keeps shipping even after `lattice_replication_disable` - the static map is a floor - and is turned off by editing the deployment configuration instead. See [Runtime replication configuration](../lattice.replication/runtime-config.md).
 
 ## TreeAdmin schema tools (`lattice_treeadmin_schema_*`)
 
@@ -351,14 +353,14 @@ Authorization is **two-tier and inherited from the facade**, which the tools do 
 
 Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request resolves to deny even under `DefaultEffect = Allow`.
 
-Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. Transitions are asynchronous, so a newly added region reports `Provisioning`, not `Online`; poll `lattice_tenant_region_status` until it reaches `Online` before routing traffic there with a `region` argument.
+Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. A newly added region reports `Provisioning`, not `Online`, and no shipped component advances it further: the later lifecycle steps are reserved for backfill and drain machinery that no shipped package runs, so an added region stays `Provisioning` and a dropped one `Draining` until the host advances them itself through the tenancy registry (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`, so until the host has advanced one it is served in none.
 
 The typical workflow is:
 
 1. An operator calls `lattice_tenant_authorize_regions` to widen the allowed set.
 2. A tenant admin calls `lattice_tenant_region_status` and sees the new region as `isAllowed: true` with status `None`.
 3. The tenant admin calls `lattice_tenant_set_residency` to move into it; it reports `Provisioning`.
-4. Once it reaches `Online`, `lattice_list_regions` advertises it with `tenantScope.isResident: true` and a `region`-targeted call routed there succeeds.
+4. The region stays `Provisioning` until the host advances it, one lifecycle step at a time, to `Online`; no shipped component does. Only then does a `region`-targeted call routed there succeed.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires a region-residency gRPC adapter off the same `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint.
 

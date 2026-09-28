@@ -11,7 +11,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// A region is added through <see cref="Provisioning"/> and
 /// <see cref="Backfilling"/> and becomes <see cref="Online"/> once its data has
 /// backfilled; it is removed through <see cref="Draining"/> and
-/// <see cref="Offline"/> and finally <see cref="Removed"/>. The resident set is the
+/// <see cref="Offline"/> and finally <see cref="Removed"/>. The facade itself only
+/// initiates an add (to <see cref="Provisioning"/>) or a removal (to
+/// <see cref="Draining"/>); every later step must be applied by the hosting
+/// deployment. The resident set is the
 /// regions whose status is <see cref="Provisioning"/>, <see cref="Backfilling"/>,
 /// or <see cref="Online"/>; only an <see cref="Online"/> region serves clients.
 /// </remarks>

@@ -410,9 +410,12 @@ internal sealed class ReplicationDigestProbeGrain(
     /// budget; only when all three permit does it run the targeted leaf
     /// re-replay (and, when re-replay cannot reach the localised divergence -
     /// a WAL-trimmed or below-cursor empty selection - the scoped
-    /// bootstrap-snapshot fallback). A pass that throws or whose re-ship sink reports zero entries
+    /// bootstrap-snapshot fallback). A pass whose re-ship sink reports zero entries
     /// shipped despite candidates having been selected counts as a circuit
-    /// breaker failure; any other outcome resets the breaker. Each skip records
+    /// breaker failure, as does a fault in this orchestration outside the two
+    /// repair helpers. A re-replay or fallback that throws does <b>not</b>: its
+    /// helper logs and swallows the fault and reports the pass as not attempted,
+    /// so - like every other outcome - it resets the breaker. Each skip records
     /// the <see cref="LatticeReplicationMetrics.DigestRemediationSkipped"/>
     /// counter and reports the
     /// <see cref="LatticeReplicationMetrics.DigestRemediationDisabledName"/>

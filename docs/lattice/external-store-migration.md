@@ -212,16 +212,26 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
 ### What the bulk-load path deliberately does not do
 
 - **It does not enforce the write-size bounds.** `LatticeOptions.MaxKeyLength`
-  and `LatticeOptions.MaxValueSizeBytes` are opt-in and unset by default, and
-  when set they are checked on the point and batch write boundary, not on the
-  bulk-load path. A key or value you successfully bulk-load can therefore be
-  rejected by a later `SetAsync` against the same tree. Check the bounds in the
-  producer if you have configured them.
+  and `LatticeOptions.MaxValueSizeBytes` are opt-in and unset by default. When
+  set, they are checked on entry by `SetAsync` (both overloads),
+  `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `ApplyCrdtDeltaAsync`
+  (both overloads) and `ApplyCrdtDeltaManyAsync`, and on an atomic batch only
+  when its saga writes the batch, where a violation rolls the whole batch back
+  and the call throws `InvalidOperationException`. No bulk-load path checks
+  them, and neither do `SetManyWherePredicateAsync` or `MergeAsync`. A key or
+  value you successfully bulk-load can therefore be rejected by a later
+  `SetAsync` against the same tree. Check the bounds in the producer if you
+  have configured them. See
+  [`MaxKeyLength`](configuration.md#maxkeylength) and
+  [`MaxValueSizeBytes`](configuration.md#maxvaluesizebytes).
 - **It does not enforce the admission caps.** `LatticeOptions.MaxLiveKeys` and
-  `LatticeOptions.MaxEstimatedBytes` are likewise checked only on the point,
-  batch and CRDT write paths, so a bulk load can carry a tree past them;
-  ordinary writes are then refused with `LatticeQuotaExceededException` until
-  the tree is back under the cap.
+  `LatticeOptions.MaxEstimatedBytes` are checked by the same non-atomic calls,
+  once per call, and by nothing else - an atomic batch is never checked
+  against them - so a bulk load can carry a tree past them; those calls are
+  then refused with `LatticeQuotaExceededException` until the tree's cached
+  live-key count or estimated footprint is back under the cap. See
+  [`MaxLiveKeys`](configuration.md#maxlivekeys) and
+  [`MaxEstimatedBytes`](configuration.md#maxestimatedbytes).
 - **It does not merge.** `DataEntry` carries a `MergeMode` and a `Raw` flag, but
   both are read-side fields that the write path ignores: a chunk entry is
   projected down to its key and its value before it reaches the tree. Setting

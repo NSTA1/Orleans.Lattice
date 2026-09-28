@@ -19,11 +19,17 @@ namespace Orleans.Lattice;
 ///   <b>before</b> the caller waits for anything or touches storage, so a
 ///   retry costs one more admission test against a queue that may since have
 ///   drained.</description></item>
-///   <item><description>Every other member except
-///   <see cref="TxRegistryCapacity"/> refuses <b>after</b> a wait budget
-///   has already elapsed against a tree that has just reported it is full, so a
-///   retry re-offers the same work into the regime that refused it and the
-///   feedback is positive.</description></item>
+///   <item><description><see cref="WalAdmission"/>,
+///   <see cref="AtomicWriteSaga"/> and <see cref="SetManyFanOut"/> refuse
+///   <b>after</b> a wait budget has already elapsed - against a tree that has
+///   just reported it is saturated or, for <see cref="SetManyFanOut"/>,
+///   against branches that have not settled - so a retry re-offers the same
+///   work into the regime that refused it and the feedback is
+///   positive.</description></item>
+///   <item><description><see cref="SnapshotCursorOpen"/> refuses before any
+///   work too, but as deliberate load shedding of an expensive capture on a
+///   saturated tree, so an automatic retry defeats the shed rather than costing
+///   one admission test.</description></item>
 ///   <item><description><see cref="TxRegistryCapacity"/> also refuses before
 ///   any work. The refusing registry's capacity returns only as its retention
 ///   window elapses, so with one registry shard (the default) an immediate
@@ -55,11 +61,17 @@ public enum LatticeSaturationSource
     Unspecified = 0,
 
     /// <summary>
-    /// The writer-side admission refusal from
-    /// <c>WalCommitLogWriter.PartitionTracker.AcquireAsync</c>, raised when the
-    /// per-tree <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>
-    /// elapses with the per-tree saturation signal still reporting
-    /// <see cref="WalSaturationState.Saturated"/>.
+    /// The WAL writer's pre-admission saturation refusal, raised before an
+    /// append enters its partition's admission semaphore when the saturation
+    /// verdict for that <b>partition</b> stays
+    /// <see cref="WalSaturationState.Saturated"/> past the wait the append is
+    /// allowed: <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>,
+    /// shortened to whatever remains of the enclosing call's
+    /// <see cref="LatticeOptions.WalAdmissionSaturationCallBudget"/> share. The
+    /// verdict is partition-scoped, so one saturated partition does not refuse
+    /// appends routed to its siblings; it falls back to the tree-wide verdict only
+    /// when the registered saturation signal cannot answer per partition. Every
+    /// tree-wide saturation input still reaches every partition's verdict.
     /// <para>
     /// <b>Not automatically retryable.</b> The wait budget has already been
     /// spent, so a retry is a second full attempt at work the tree just

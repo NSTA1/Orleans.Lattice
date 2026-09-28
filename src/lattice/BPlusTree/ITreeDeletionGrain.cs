@@ -3,8 +3,10 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// A grain responsible for managing tree-level soft deletion and deferred purge.
-/// One activation exists per tree, keyed by <c>{treeId}</c>.
-/// When a tree is deleted, this grain marks all shards as deleted and registers
+/// One activation exists per tree id, keyed by <c>{treeId}</c>, and it acts only
+/// on the shards stored under that id: it does not resolve a tree alias, so an
+/// aliased tree's live data under another physical tree is never reached.
+/// When a tree is deleted, this grain marks those shards as deleted and registers
 /// a reminder that fires after <see cref="LatticeOptions.SoftDeleteDuration"/>.
 /// When the reminder fires, it walks every shard (using the same timer-per-shard
 /// pattern as <see cref="ITombstoneCompactionGrain"/>) and permanently purges
@@ -14,10 +16,13 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ITreeDeletionGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Initiates a soft delete of the tree. Marks all shards as deleted so that
-    /// subsequent reads and writes throw <see cref="InvalidOperationException"/>.
+    /// Initiates a soft delete of the tree. Marks every shard stored under this
+    /// id as deleted so that subsequent reads and writes on them throw
+    /// <see cref="InvalidOperationException"/>.
     /// Registers a reminder to purge the tree after the configured soft-delete
-    /// duration. Idempotent - calling again on an already-deleted tree is a no-op.
+    /// duration. Idempotent - calling again on an id already recorded as deleted
+    /// is a no-op, including an id whose record is a resize's retired first copy
+    /// or a purged tree, even when a live tree now answers to the id.
     /// </summary>
     Task DeleteTreeAsync();
 
@@ -52,17 +57,22 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
 
     /// <summary>
     /// Recovers a soft-deleted tree, making it accessible again. Clears the
-    /// <c>IsDeleted</c> flag on all shards and unregisters the purge reminder.
+    /// <c>IsDeleted</c> flag on every shard stored under this id and unregisters
+    /// the purge reminder.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted, or if the purge has already completed (data is gone).
-    /// Idempotent during the soft-delete window - calling multiple times is safe.
+    /// deleted, while a purge is in progress, or if the purge has already
+    /// completed (data is gone). A retry after a partial failure is safe - the
+    /// per-shard unmark and re-seed are idempotent and the deletion record is
+    /// cleared only after them - but a call after a successful recovery throws,
+    /// because the tree is no longer deleted.
     /// </summary>
     Task RecoverAsync();
 
     /// <summary>
     /// Immediately triggers a full purge of a soft-deleted tree, bypassing the
-    /// <see cref="LatticeOptions.SoftDeleteDuration"/> wait. Walks every shard,
-    /// clears all leaf and internal node state, and deactivates each grain.
+    /// <see cref="LatticeOptions.SoftDeleteDuration"/> wait. Walks every shard
+    /// stored under this id, clears all leaf and internal node state, and
+    /// deactivates each grain.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed.
     /// </summary>

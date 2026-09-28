@@ -53,7 +53,10 @@ public sealed record TenantQuotaUsageReport
     /// </summary>
     [Id(3)] public bool HasUsage { get; init; }
 
-    /// <summary>Stored value bytes: consumption against <c>MaxBytes</c>.</summary>
+    /// <summary>
+    /// Storage footprint bytes (write-ahead log, snapshot, and persisted leaf state
+    /// of the tenant's trees): consumption against <c>MaxBytes</c>.
+    /// </summary>
     [Id(4)] public TenantQuotaDimensionUsage Bytes { get; init; }
 
     /// <summary>Live key count: consumption against <c>MaxKeys</c>.</summary>

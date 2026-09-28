@@ -136,7 +136,7 @@ See [Dead-Letter Queue](dead-letter-queue.md).
 | `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync` |
 | `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks` |
 
-Replay runs the parked entry through the canonical applier and removes it only when the replay returns successfully.
+Replay runs the parked entry through the canonical applier and removes it on any non-throwing, non-deferred return, whether or not the entry applied. A replay that an in-flight coordinated restore's receive fence defers leaves the entry parked, as does a thrown exception (see [Replay semantics](dead-letter-queue.md#replay-semantics)).
 
 ## Operator, admin, and WAL introspection
 
@@ -181,7 +181,7 @@ See [Observability](observability.md) and [Health Check](health-check.md).
 | `ReplicationContactDirection` | enum | Direction tag for peer contact. | `Outbound`, `Inbound` |
 | `WireVersionNegotiationState` | class | Runtime wire-version telemetry state. | `Record`, `Snapshot` |
 | `WireVersionNegotiationSnapshot` | readonly record struct | Wire-version telemetry snapshot. | `Tree`, `Peer`, `NegotiatedVersion`, `DowngradeActive`, `PeerCapabilityKnown` |
-| `LatticeReplicationHealthCheckOptions` | sealed class | Health-check thresholds. | `EntriesBehind`, `LastContactSeconds`, `ConsecutiveErrors`, `UnhealthyAfter`, `InboundDegradedAfter`, `InboundCriticalAfter`; the nested `LongTier` / `DoubleTier` threshold records; `DefaultName` |
+| `LatticeReplicationHealthCheckOptions` | sealed class | Health-check thresholds. | `EntriesBehind`, `LastContactSeconds`, `ConsecutiveErrors`, `UnhealthyAfter`, `InboundDegradedAfter`, `InboundCriticalAfter`; the nested `LongTier` / `DoubleTier` threshold records; the matching `Default*` values (`DefaultEntriesBehind`, `DefaultLastContactSeconds`, `DefaultConsecutiveErrors`, `DefaultUnhealthyAfter`, `DefaultInboundDegradedAfter`, `DefaultInboundCriticalAfter`); `DefaultName` |
 
 ## Flow control
 
@@ -193,7 +193,7 @@ See [Receiver Flow Control](receiver-flow-control.md).
 | `ReceiverFlowControlContext` | readonly record struct | Input to a flow-control policy. | `TreeName`, `OriginClusterId`, `EntryCount`, `ApplyDurationMs` |
 | `ReceiverFlowControlHint` | readonly record struct | Suggested sender limits. | `SuggestedBatchSize`, `PauseForMs`, `None` |
 | `NoOpReceiverFlowControlPolicy` | sealed class | Policy that returns no hints. | `Instance`, `EvaluateAsync` |
-| `WalSaturationReceiverFlowControlOptions` | sealed class | Tunes how the throttled and saturated WAL states map to hints (a healthy WAL returns no hint). | `ThrottledBatchRatio`, `ThrottledPauseMs`, `SaturatedBatchSize`, `SaturatedPauseMs` |
+| `WalSaturationReceiverFlowControlOptions` | sealed class | Tunes how the throttled and saturated WAL states map to hints (a healthy WAL returns no hint). | `ThrottledBatchRatio`, `ThrottledPauseMs`, `SaturatedBatchSize`, `SaturatedPauseMs`, and the matching `DefaultThrottledBatchRatio`, `DefaultThrottledPauseMs`, `DefaultSaturatedBatchSize`, `DefaultSaturatedPauseMs` constants |
 | `WalSaturationReceiverFlowControlPolicy` | sealed class | Built-in WAL-saturation-aware policy. | `EvaluateAsync` |
 
 Flow-control hints are advisory. The sender clamps its next batch size and pause to the ack it receives, but a receiver must still tolerate redelivery and retries.
@@ -288,7 +288,7 @@ The saga service-provider interfaces let a host join the coordinated cross-clust
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for the tenant its tree id names - the tenant must exist, be resident in this region, and be active - so a peer can never widen tenant or region scope. The core default is inactive; the tenancy add-on supplies a real gate. | `IsActive`, `EvaluateAsync(string, CancellationToken)` returning `ReplicationTenantIsolationDecision` |
+| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for the tenant its tree id names - the tenant must exist, be resident in this region, and be active - so a peer can never widen tenant or region scope. The replication package's default gate is inactive; the tenancy add-on supplies a real gate. | `IsActive`, `EvaluateAsync(string, CancellationToken)` returning `ReplicationTenantIsolationDecision` |
 | `ReplicationTenantIsolationDecision` | enum | The gate's verdict. | `Admit = 0`, `RejectUnknownTenant = 1`, `RejectOutOfRegion = 2`, `RejectSuspendedTenant = 3` |
 | `ILatticeReplicationConfigAuthority` | interface | The engine-level authoring seam for runtime per-tree replication config: authors enable / disable onto the `sys-replication-config` tree and reports the reconciled per-tree status (the runtime tree unioned with the static `ReplicatedTrees` map). It performs no authorization - the control facade authorizes first. Registered by `AddLatticeReplication(..., enableRuntimeConfig: true)`. See [Runtime configuration](runtime-config.md). | `EnableReplicationAsync`, `DisableReplicationAsync`, `GetTreeStatusAsync`, `GetAllTreeStatusesAsync` |
 | `LatticeReplicationEnableResult`, `LatticeReplicationDisableResult` | readonly record structs | Authority outcomes. | `TreeId`, `Mode`, `AlreadyEnabled`, `BootstrapRequested` / `TreeId`, `AlreadyDisabled` |

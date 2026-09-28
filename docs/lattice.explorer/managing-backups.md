@@ -171,8 +171,9 @@ accumulated, the backup service maintains a catalog **index** that keeps the
 list query fast: only the rows that match the active filter are read, already in
 newest-first order, one page at a time. The index is maintained automatically
 and kept in step with the catalog; you do not create, refresh, or manage it. It
-can be turned off in configuration, in which case the same list is served by a
-slower full scan with identical results.
+can be turned off in configuration (`LatticeBackupOptions.EnableBackupCatalogIndexView`,
+on by default), in which case the same list is served by a slower full scan with
+identical results.
 
 ## Backup health monitoring
 

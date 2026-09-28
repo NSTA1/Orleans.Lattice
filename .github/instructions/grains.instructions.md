@@ -128,11 +128,13 @@ So when a grain both persists via `[PersistentState]` and is addressed by a
 
 ## Options Access
 
-Resolve per-tree options via `IOptionsMonitor<LatticeOptions>`:
+Read configured per-tree options via `IOptionsMonitor<LatticeOptions>`:
 
 ```csharp
 private LatticeOptions Options => optionsMonitor.Get(TreeId);
 ```
+
+That read returns configuration only. It does not see what the tree registry pins or overrides per tree: the structural sizing (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`), the WAL partition count, and the per-tree runtime overrides (for example `MaintainProjectionDigest`, `MaxCacheValueBytes`, `WalMaxRetainedBytes`). A grain that needs any of those injects `LatticeOptionsResolver` and awaits `ResolveAsync(treeId)` (or one of its fast-path getters, such as `GetWalPartitionsAsync`), because the registry is the single source of truth for them.
 
 ## Error Handling
 

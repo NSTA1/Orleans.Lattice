@@ -31,7 +31,7 @@ public interface IChangeFeed
 
 | Parameter | Default | Semantics |
 |---|---|---|
-| `treeName` | required | Logical tree id whose change feed is being consumed. Only entries with `WalRecord.TreeId` equal to this value are yielded. |
+| `treeName` | required | Tree id whose change feed is being consumed. The feed reads the WAL partitions keyed by this id and yields their entries; it does not filter on `WalRecord.TreeId`. |
 | `cursor` (`ChangeFeedCursor`) | required | Per-partition exclusive lower bound: for each WAL partition, the offset of the next entry to read. The feed yields every entry whose partition offset is greater than or equal to the matching cursor entry; a partition absent from the cursor reads from offset `0`. `ChangeFeedCursor.Initial` reads every partition from the start. |
 | `cursor` (`HybridLogicalClock`) | required | Kept for source compatibility only. The default implementation ignores the value and reads every partition from the start, so a consumer on this overload re-reads the whole retained feed on every call and must de-duplicate entries it has already seen. |
 | `includeLocalOrigin` | `true` | When `false`, entries whose `OriginClusterId` matches the local `LatticeReplicationOptions.ClusterId` are filtered out - the cycle-break used by remote shippers. Defaults to `true` because in-process projections and background materialisers need to observe local-origin mutations. |
@@ -69,6 +69,7 @@ Entries are yielded in `HybridLogicalClock` ascending order, merged across every
 
 ## Caveats
 
+- The feed does not follow a tree's alias. It addresses the WAL partitions by the tree id it is given, while a tree's writes are logged under the physical tree it currently resolves to. After a shadow-cutover restore or a resize repoints a tree at a new physical copy, a `Subscribe` or `GetCurrentCursorAsync` call made with the logical tree id therefore reads the retired copy's log - or nothing, once that copy is purged - rather than the tree's new writes.
 - Tombstone-reap envelopes (`MutationKind.Tombstone`) are local structural clean-up records with no receiver-side apply rule, so the feed skips them.
 - Each yielded entry's `Mode` is re-stamped from the tree's merge-mode resolution (`ILatticeMergeModeResolver`) taken once per `Subscribe` call, falling back to `LwwRegister` when the tree is not replicated on this host, rather than read from the durable record - so a consumer on a host that does not replicate the tree sees `LwwRegister` even on CRDT-delta entries.
 - `DeleteRange` entries carry the producer's authoring HLC. Entries persisted by older producers carry `HybridLogicalClock.Zero` and therefore sort ahead of every timestamped entry in the HLC-ordered output.

@@ -21,7 +21,7 @@ With only this step the facade runs **in-process**, with no transport hop. The f
 
 ## 2. Add the gRPC binding
 
-To expose the surface to remote consumers, register the code-first gRPC binding. `AddLatticeStateApiGrpc` wires the gRPC service, the marshallers, the default-deny authorizer, and the authorization interceptor. It is idempotent.
+To expose the surface to remote consumers, register the code-first gRPC binding. `AddLatticeStateApiGrpc` wires the gRPC service, the marshallers, the default-deny authorizer, and the authorization interceptor. Call it once: its other registrations use `TryAdd`, but every call appends the authorization interceptor again, so a repeated call authorizes each state-API call once per registration.
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();

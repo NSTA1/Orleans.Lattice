@@ -114,7 +114,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Per-tenant stored value bytes (global cross-cluster fold), overlaid with the tenant's byte quota ceiling where one is set.",
+      "description": "Per-tenant storage footprint bytes (write-ahead log, snapshot and persisted leaf state of the tenant's trees; global cross-cluster fold), overlaid with the tenant's byte quota ceiling where one is set.",
       "gridPos": {
         "h": 8,
         "w": 18,

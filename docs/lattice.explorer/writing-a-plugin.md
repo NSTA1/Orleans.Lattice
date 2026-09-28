@@ -68,6 +68,15 @@ Implementing `IExplorerPlugin<TDomain>` rather than `IExplorerPlugin` declares
 the domain contract in the type system, so `DomainContract` is filled in for you
 and cannot drift from what the plugin actually resolves.
 
+A plugin reaches that contract through its own host context:
+`IExplorerPluginHostContext.GetDomain<TDomain>()` returns exactly the declared
+type and nothing else. It throws `ExplorerPluginDomainException` (an
+`InvalidOperationException`) when the plugin declared no contract, asks for a
+type other than the one it declared, or the declared contract is not registered
+in the container. `TryGetDomain<TDomain>(out domain)` is the non-throwing form:
+it returns `false` for every one of those cases, so prefer `GetDomain` when a
+mismatch should fail loudly rather than read as an absent domain.
+
 Register the plugin with `AddExplorerPlugin<TPlugin>()`, or with
 `AddExplorerPlugin(plugin)` for an instance you built yourself. Either call also
 registers the host machinery (`AddExplorerPluginHost()`) and is idempotent, so a

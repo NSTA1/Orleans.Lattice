@@ -72,6 +72,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `LatticeTenantAccessDeniedException` | The tenancy add-on is registered and the request asserts an active tenant the caller may not act as (an anonymous caller never can), or, under an asserted tenant, names a `sys-` tree or a malformed `t/` id, so the tenant-local `treeId` cannot be resolved. (Defined in `Orleans.Lattice`.) |
 | `LatticeReplicationModeChangeRejectedException` | An enable would change the merge mode of an already-enabled tree, or targets an enabled tree whose mode is currently ambiguous. Carries `CurrentMode`, `RequestedMode`, and `CurrentModeAmbiguous`. (Defined in `Orleans.Lattice.Replication`.) |
 | `LatticeReplicationPreconditionFailedException` | A runtime precondition for authoring the change was not met: no local replica id is configured - the config entry's flag dots are stamped with it, so both an enable and the disable of an enabled tree need one - or a flag-based merge mode is requested without one. (Defined in `Orleans.Lattice.Replication`.) |
+| `InvalidOperationException` | An enable that requests a snapshot bootstrap finds a bootstrap for the same tree already in progress from a different source cluster. The enable itself has already been written to the config tree by the time this is raised. |
 
 ## See also
 

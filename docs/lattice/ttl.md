@@ -119,11 +119,11 @@ See [Shard Splitting](shard-splitting.md) for the full split lifecycle.
 
 ## Snapshots
 
-A snapshot copies each source shard's live entries as full stored rows, HLC timestamp and absolute expiry included. An offline snapshot bulk-loads those rows into the empty destination shard; an online snapshot merges them last-writer-wins alongside the live writes it shadow-forwards. Either way TTLs cross the snapshot boundary unchanged, in both modes. See [Snapshots](snapshots.md).
+A snapshot copies the live entries of each source shard from `0` to `ShardCount - 1` as full stored rows, HLC timestamp and absolute expiry included. An offline snapshot bulk-loads those rows into the empty destination shard; an online snapshot merges them last-writer-wins alongside the live writes it shadow-forwards. Either way every entry the snapshot copies keeps its TTL unchanged, in both modes. A snapshot does not copy a shard an adaptive split added above that range, and an online snapshot does not mirror a typed CRDT delta - with or without a TTL - applied to a source shard after that shard was drained. See [Snapshots](snapshots.md).
 
 ## Resize
 
-`ResizeAsync` is implemented on top of the snapshot pipeline (copy to a new physical tree, then swap the alias). TTLs are preserved verbatim for the same reason snapshots preserve them. See [Tree Sizing](tree-sizing.md) for the resize phase machine and [Tree Storage](tree-storage.md) for sizing guidance.
+`ResizeAsync` is implemented on top of the snapshot pipeline (copy to a new physical tree, then swap the alias). TTLs are preserved verbatim on every entry the copy carries, for the same reason snapshots preserve them, and the copy has the same limits as an online snapshot. See [Tree Sizing](tree-sizing.md#how-it-works) for the resize phase machine and what it does not carry, and [Tree Storage](tree-storage.md) for sizing guidance.
 
 ## Merge (`MergeAsync`)
 

@@ -18,7 +18,10 @@ non-interactive flow:
 1. **Enable** replication for the `orders` tree under an `OrSet` merge mode. The
    merge mode is fixed at enable-time.
 2. **Report** the live per-tree config through `GetReplicationConfigAsync`,
-   showing `enabled=True mode=OrSet ambiguous=False`.
+   showing `enabled=True mode=OrSet ambiguous=False`. The report also lists the
+   `sys-replication-config` tree itself: the report covers the static
+   enrollment map as well as the runtime entries, and the config tree is
+   statically enrolled under `OrMap`.
 3. **Reject an in-place mode change.** Re-enabling `orders` under a different
    mode throws `LatticeReplicationModeChangeRejectedException`. The sanctioned
    path to change a tree's merge mode is disable, then re-enable under the new
@@ -45,8 +48,9 @@ Silo starting... ready.
 Enabling replication for tree 'orders' under OrSet...
   enabled: tree=orders mode=OrSet alreadyEnabled=False bootstrapRequested=False
 
-Replication config (1 tree(s)):
+Replication config (2 tree(s)):
   tree=orders enabled=True mode=OrSet ambiguous=False
+  tree=sys-replication-config enabled=True mode=OrMap ambiguous=False
 
 Attempting an in-place mode change to LwwRegister (expected to be rejected)...
   rejected as expected: Tree 'orders' is already enabled under merge mode 'OrSet', ...
@@ -54,8 +58,9 @@ Attempting an in-place mode change to LwwRegister (expected to be rejected)...
 Disabling replication for tree 'orders'...
   disabled: tree=orders alreadyDisabled=False
 
-Replication config (1 tree(s)):
+Replication config (2 tree(s)):
   tree=orders enabled=False mode=OrSet ambiguous=False
+  tree=sys-replication-config enabled=True mode=OrMap ambiguous=False
 
 Sample complete. Stopping silo...
 Done.

@@ -24,23 +24,34 @@ installing a new app never adds a new service, credential bridge or interceptor.
   no control logic lives here.
 - **Default-deny out of the box.** With `RequireAuthorization` left at its `true`
   default, the server interceptor consults the registered `ILatticeAppsApiAuthorizer`
-  on every app RPC, and the registered default denies every call. A host must
-  register its own `ILatticeAppsApiAuthorizer` before this surface answers at all.
-  The package deliberately ships no allow-all authorizer. A refusal is returned as
-  `PermissionDenied` before the call reaches the facade, which then applies its own
-  `AppInstall` gate on top.
+  on every app RPC, and the registered default, `DenyAppsApiAuthorizer`, denies every
+  call. A host must register its own `ILatticeAppsApiAuthorizer` (or turn
+  `RequireAuthorization` off behind an outer authentication boundary) before any RPC
+  other than `GetAuthScheme` is served. The package deliberately ships no allow-all
+  authorizer. A refusal is returned as `PermissionDenied` before the call reaches the
+  facade, which then applies its own `AppInstall` gate on top.
 - **Server-classified operations.** The authorizer receives a
-  `LatticeAppsApiAuthorizationContext` whose `Operation` is derived from the bound RPC
-  on the server, never from the payload, plus the caller-asserted app slug (or `null`
-  for the catalog and capability calls).
+  `LatticeAppsApiAuthorizationContext` whose `Operation` (a `LatticeAppsApiOperation`)
+  is derived from the bound RPC on the server, never from the payload, plus the
+  caller-asserted app slug (or `null` for the catalog and capability calls). A call
+  whose request shape does not match its bound RPC classifies as `Unknown` and is
+  refused without consulting the authorizer; streaming calls to the service are
+  refused outright.
 - **Credential isolation per call.** The caller credential is read from a configurable
-  header and bridged into the facade's authorization context for that call only.
+  header and bridged into the facade's authorization context for that call only. The
+  header bridge is the default `ILatticeAppsApiCredentialBridge`; a host may register
+  its own.
 - **Discoverable auth.** A `GetAuthScheme` RPC advertises the accepted credential
   schemes so a client can self-configure. It is exempt from the authorizer so a client
   can learn how to sign in before it holds any credential, and it returns only the
-  public scheme descriptors the host configured.
-- **Sanitised failures.** Facade exceptions are mapped to gRPC status codes without
-  forwarding stack traces or inner exceptions.
+  public scheme descriptors (`AuthSchemeDescriptor`) the host configured, through the
+  replaceable `ILatticeAppsApiAuthSchemeSource`.
+- **Sanitised failures.** Facade exceptions are mapped to gRPC status codes with a
+  fixed, generic status message, so neither the exception message nor a stack trace or
+  inner exception is forwarded: cancellation is `Cancelled`, an authorization or tenant
+  denial `PermissionDenied`, an `ArgumentException` `InvalidArgument`, a
+  `KeyNotFoundException` `NotFound`, an `InvalidOperationException`
+  `FailedPrecondition`, and anything else `Internal`.
 
 ## Service and RPCs
 
@@ -132,7 +143,7 @@ the facade runs unchanged against a remote cluster.
 | `RequireAuthorization` | `true` | Enforce the transport authorizer. Disable only behind an outer authentication boundary; the facade's `AppInstall` gate still applies. |
 | `CredentialHeaderName` | `authorization` | The metadata key the caller credential is read from. It is bridged even when transport authorization is disabled. |
 | `CredentialScheme` | `Bearer` | The optional prefix stripped from the credential and recorded as its authentication scheme. |
-| `ActiveTenantHeaderName` | the shared active-tenant header | The asserted active-tenant header; null or empty disables it. The assertion is validated by the facade, never trusted by the binding. |
+| `ActiveTenantHeaderName` | `lattice-active-tenant` (`LatticeActiveTenantAssertion.DefaultHeaderName`) | The asserted active-tenant header; null or empty disables it. The assertion is validated by the facade, never trusted by the binding. |
 | `AdvertisedAuthSchemes` | empty | The public sign-in schemes returned by `GetAuthScheme`, in preference order. Never include credentials or user-specific data. |
 
 ## See also

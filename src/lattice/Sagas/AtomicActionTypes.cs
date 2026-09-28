@@ -193,26 +193,38 @@ public enum AtomicActionStatus
     /// faulted after its retry budget. The saga cannot guarantee it undid every
     /// committed step - the caller's compensation contract was violated - so it
     /// parked in this terminal state for operator intervention.
+    /// <see cref="AtomicActionOutcome.FailedStepIndex"/> and
+    /// <see cref="AtomicActionOutcome.FailureMessage"/> then describe the
+    /// compensating fault, not the forward fault that started the rollback.
     /// </summary>
     CompensationFailed = 2,
 }
 
 /// <summary>
-/// The terminal result of an atomic-action saga: its <see cref="Status"/>, the
-/// zero-based <see cref="FailedStepIndex"/> of the forward step that faulted
-/// (or <c>-1</c> on a clean commit), and the originating <see cref="FailureMessage"/>
-/// (or <see langword="null"/> on a clean commit). Re-issuing the same operation id
-/// after the saga is terminal returns this memoized outcome without re-running any
-/// effect.
+/// The terminal result of an atomic-action saga: its <see cref="Status"/>, and the
+/// zero-based <see cref="FailedStepIndex"/> and <see cref="FailureMessage"/> of the
+/// fault that ended it - the forward step that faulted for
+/// <see cref="AtomicActionStatus.Compensated"/>, or the step whose compensating
+/// effect faulted for <see cref="AtomicActionStatus.CompensationFailed"/> - or
+/// <c>-1</c> and <see langword="null"/> on a clean commit. Re-issuing the same
+/// operation id after the saga is terminal returns this memoized outcome without
+/// re-running any effect.
 /// </summary>
 /// <param name="Status">The terminal status of the action.</param>
 /// <param name="FailedStepIndex">
-/// The index of the forward step that faulted, or <c>-1</c> when the action
-/// committed cleanly.
+/// The index of the forward step that faulted when <see cref="Status"/> is
+/// <see cref="AtomicActionStatus.Compensated"/>; the index of the step whose
+/// compensating effect faulted past its retry budget when it is
+/// <see cref="AtomicActionStatus.CompensationFailed"/>, in which case the forward
+/// step that faulted is no longer reported; <c>-1</c> when the action committed
+/// cleanly.
 /// </param>
 /// <param name="FailureMessage">
-/// The message of the originating forward fault, or <see langword="null"/> when the
-/// action committed cleanly.
+/// The message of the originating forward fault when <see cref="Status"/> is
+/// <see cref="AtomicActionStatus.Compensated"/>, or of the compensating fault when
+/// it is <see cref="AtomicActionStatus.CompensationFailed"/> (the forward fault's
+/// message is not kept then); <see langword="null"/> when the action committed
+/// cleanly.
 /// </param>
 [Immutable]
 [GenerateSerializer]

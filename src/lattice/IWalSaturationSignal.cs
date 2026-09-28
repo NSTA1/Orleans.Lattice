@@ -10,18 +10,30 @@ namespace Orleans.Lattice;
 /// The signal is computed by an internal silo-scoped sampler that
 /// ticks at <see cref="LatticeOptions.WalSaturationSampleInterval"/>
 /// (default 200 ms) and reads the writer-side admission gate's per-
-/// partition depth plus the recent rate of dispatch-timeout trips.
+/// partition depth together with the sampler's other inputs (see
+/// <see cref="WalSaturationCause"/>).
 /// Subscribers therefore observe transitions with a worst-case latency
 /// of one sample interval after the underlying signal crosses the
 /// threshold.
 /// </para>
 /// <para>
-/// <b>Idle cost.</b> The polling getters cost one
+/// <b>Idle cost.</b> <see cref="GetCurrentState"/> costs one
 /// <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey, TValue}"/>
-/// lookup returning an <see cref="WalSaturationState"/> enum and never
-/// fan out to grains. The sampler runs on its own timer; the
-/// <c>SetAsync</c> / <c>SetManyAsync</c> hot path on
-/// <see cref="ILattice"/> does not gain any per-call work.
+/// lookup returning a <see cref="WalSaturationState"/> enum, and
+/// <see cref="GetAggregateState"/> walks the states of the trees this silo
+/// has observed, stopping at the first <see cref="WalSaturationState.Saturated"/>
+/// one; neither fans out to grains. The sampler runs on its own timer. The
+/// write path is not entirely free of it: every timestamped WAL append
+/// advances an in-memory per-tree WAL-head reading that the drain-lag input
+/// reads (one lock-free dictionary update), and consults its partition's
+/// verdict before admission - a dictionary lookup each for the
+/// <see cref="WalSaturationState.Saturated"/> gate and the
+/// <see cref="WalSaturationState.Throttled"/> pace while those are enabled.
+/// An append to a Throttled partition is delayed by
+/// <see cref="LatticeOptions.WalThrottledAdmissionPace"/>, and one to a
+/// Saturated partition waits for it to recover, up to
+/// <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>, before it
+/// is refused.
 /// </para>
 /// </summary>
 public interface IWalSaturationSignal

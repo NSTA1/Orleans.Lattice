@@ -21,7 +21,7 @@ stack has been torn down. Independent of, and orthogonal to, the per-run flow.
 ./benchmark.ps1 -OpenHistory
 
 # Run scenarios as normal - they push their results.json scalars into VM
-# automatically if the history stack is reachable.
+# automatically if the history stack is reachable (-NoHistoryPush skips the push).
 ./benchmark.ps1 current-state-no-replication
 ./benchmark.ps1 current-state-single-peer
 ./benchmark.ps1 read-heavy-random
@@ -45,8 +45,8 @@ stack at `BENCH_HISTORY_VM_URL` (default `http://localhost:8428`) and
 ## Data model
 
 Each `.run/<scenario>/<run_id>/results.json` contributes one scalar sample to VM
-per non-null key in its `metrics` block - the curated `$ScalarPanelExtra` entries
-plus every auto-discovered key. Every sample is tagged:
+per non-null key in its `metrics` block, whichever of the sources under
+[Metric vocabulary](#metric-vocabulary) produced it. Every sample is tagged:
 
 | Label      | Example                | Source                                         |
 |------------|------------------------|------------------------------------------------|
@@ -63,8 +63,8 @@ benchmark plan calls for.
 ## Metric vocabulary
 
 The push helper in `benchmark.ps1` translates every key in `results.json`'s
-`metrics` block into a Prometheus gauge named `bench_<key>`. Two ingest paths
-feed it:
+`metrics` block into a Prometheus gauge named `bench_<key>`. Three sources fill
+that block on the docker-compose scenarios:
 
 1. **Explicit `$ScalarPanelExtra` entries** in `benchmark.ps1` - one row per headline
    metric with its source PromQL.
@@ -79,6 +79,12 @@ feed it:
    as its instrument names start with one of those prefixes; one that starts
    with neither also needs its prefix added to `$AutoDiscoverPrefixes` in
    `benchmark.ps1`.
+3. **`$ScalarAliases` entries** in `benchmark.ps1` - short, stable names copied from
+   auto-discovered keys after capture, with no extra query (for example
+   `replication_ship_p95_ms`, which the Replication dashboard's headline tiles read).
+
+The `microbench` scenario uses none of these: its BenchmarkDotNet exporter writes
+`microbench_<workload>_<stat>` keys into `results.json` directly.
 
 ## Dashboards
 
@@ -87,8 +93,8 @@ dashboards**, and one hand-maintained atomic-writes dashboard. The Overview is a
 single-page roll-up showing every persona's
 headline KPIs in one view (one row per persona, scoped to that persona's
 scenarios) - use it as the landing page to spot the workload class that has
-regressed, then click into the matching persona dashboard for trend strips
-and per-run barcharts.
+regressed, then open the matching persona dashboard for trend strips and
+per-run barcharts (the Overview's tiles carry no drill-down links).
 
 | Persona dashboard (`uid`)            | Scenarios it aggregates                                                                                                | What it asks                                                                  |
 |--------------------------------------|------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
@@ -101,6 +107,13 @@ and per-run barcharts.
 | `lat-hist-microbench`                | `microbench`                                                                                                            | BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster).        |
 | `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Foreground commit path: WAL-append + in-memory Apply percentiles. The legacy shadow-write tile is retained for backwards comparison, but the commit step it reads was removed in v3.4.0, so no run since pushes a value for it: it can show only pre-v3.4.0 history, never a fresh zero. |
 | `lat-hist-atomic-writes`             | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | `SetManyAtomicAsync` saga cost and saga health. Hand-maintained; `Generate-Dashboards.ps1` does not produce it. Its saga-health panels query the raw `orleans_lattice_atomic_write_completed_total` series, which the history push never writes (it imports only `bench_*` scalars), so they render empty on this stack. |
+
+The 95:5 and 50:50 read:write shapes are nominal. Each read-heavy and
+read/write-mix scenario pins the read driver's rate while writes follow the
+fleet (one sample per vehicle per 200 ms simulator tick), so those ratios hold
+only at a fleet of about 400 vehicles; at the scenario files' 2,000 vehicles
+they are about 79:21 and 1:5 - see
+[`benchmark-scenarios.md`](../benchmark-scenarios.md).
 
 ### Per-persona-dashboard layout (3 bands, top-to-bottom)
 
@@ -127,8 +140,12 @@ the regenerated Overview drops the hand-added `Atomic Writes` row (the script's
 `$Personas` table has no atomic-writes entry); restore both from git after
 regenerating. Adding or moving a
 scenario between personas is a one-line edit to the `$Personas` table at the
-top of the script - re-run, wait ~30 s for Grafana's file-provider rescan,
-done.
+top of the script, and Grafana's file provider picks the regenerated JSON up
+within ~30 s. As committed, though, the script aborts at its KPI validation
+before writing anything: the Replication persona's two headline KPIs
+(`bench_replication_ship_p95_ms`, `bench_replication_apply_lag_p95_ms`) are
+`$ScalarAliases` keys, and that check reads only the `$ScalarPanelExtra` keys
+and the auto-discovery key shapes.
 
 ## Querying directly
 

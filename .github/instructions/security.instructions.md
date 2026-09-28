@@ -139,13 +139,43 @@ gate will tell you if you forget.
   static header values (no per-response allocation). Applies to both the standalone
   and the mountable/co-hosted host.
 
+### Installable apps (`src/lattice.apps`, `src/lattice.api.apps`, `src/lattice.api.apps.grpc`, `src/lattice.api.mcp.apps`)
+- `LatticeOperation.AppInstall` is a scopeless, cluster-wide capability. It is
+  deliberately excluded from `LatticeAuthOperations.All`, it is never inherited from a
+  permissive data-plane default, and - apart from the root-of-trust
+  `LatticeAuthOptions.BootstrapAdministrators`, who are allowed every operation - it is
+  granted only by an Allow rule written over `LatticeScope.ClusterWide()`, so a
+  whole-data-plane grant never confers the authority to install, upgrade, or uninstall
+  an app. The app role compiler never emits it (or `LatticeOperation.Telemetry`) as a
+  role operation; a manifest role that asks for one is reported as an operations excess
+  whatever the install ceiling allows.
+- Every verb of the app control facade (`ILatticeAppsControl`), the read verbs
+  included, authorizes `AppInstall` over the cluster-wide scope through the shared
+  access gate before it touches registry, source, or activation state, so a denied
+  caller learns nothing about which apps exist. The registry and activation-status
+  reads beneath it are ungated in-process surfaces, so the gate belongs at the facade;
+  do not add a verb that reaches them first.
+- Rule ids in the app-owned namespace (`LatticeAppRuleIds.Prefix`, `app:`) are written
+  only from inside a system-origin scope, by the app activation path persisting the
+  rules the role compiler produced. The authorization
+  policy store rejects any other write or delete of such an id with
+  `LatticeAppOwnedRuleException` before it issues any read or write, so a rejected
+  delete does not disclose whether the rule exists.
+- App MCP tools are gated per tool on the declared role's compiled grants, and the
+  same evaluation runs when a tool is advertised and again when it is invoked, against
+  the current registry snapshot - the lock-step rule of the MCP surface above.
+- The gRPC binding is default-deny: `DenyAppsApiAuthorizer` is registered unless the
+  host supplies its own `ILatticeAppsApiAuthorizer`.
+
 ## Release-status note for security fixes
 
 When labelling or writing changelog/PR prose for a change on these surfaces, judge
 "breaking" by whether the change alters **previously shipped behaviour**, not by the
 change's surface area. Most packages in the family have shipped a release tag, but not
 all: `lattice.api.mcp.repocontext` and `lattice.api.mcp.repocontext.replication` are
-still unreleased, as are the `Orleans.Lattice.Explorer.DesignSystem` and
+still unreleased, as are the installable-app packages (`lattice.apps`,
+`lattice.api.apps`, `lattice.api.apps.grpc`, and `lattice.api.mcp.apps`) and the
+`Orleans.Lattice.Explorer.DesignSystem` and
 `Orleans.Lattice.Explorer.Plugins.*` packages built from `src/lattice.explorer/` (see
 `PACKAGES.md`), and `lattice.membership.oidc`, `lattice.api.telemetry`, and
 `lattice.api.telemetry.grpc` first shipped at 9.5.0. So verify a package's shipped

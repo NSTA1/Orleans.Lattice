@@ -8,7 +8,7 @@ the single most common source of confusion. This page separates them.
 | Concept | What it is | Where it lives |
 | --- | --- | --- |
 | **Tenant scope** | Which tenant's data you are currently looking at. It re-scopes the catalog and every surface below it. | A control in the console banner |
-| **Tenant administration** | Administering *other people's* tenants as a platform operator: lifecycle, quota, region authorization, the initial tenant-admin grant. | An area in the rail |
+| **Tenant administration** | Administering *other people's* tenants as a platform operator: lifecycle, quota, region authorization, admin subjects (including the initial tenant-admin grant made at creation), and cross-tenant grants. | An area in the rail |
 | **My tenant** | Managing *your own* tenant as its administrator: membership, cross-tenant grants, region residency, usage against quota. | An area in the rail |
 
 The first is a lens. The second and third are places. The areas were previously

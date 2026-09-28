@@ -391,7 +391,7 @@ if it lacks something you need, add it there.
 
 ## Running Tests
 
-The suite has grown past the point where running everything is a reasonable inner-loop action. There are thousands of test files across fifty test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.
+The suite has grown past the point where running everything is a reasonable inner-loop action. There are thousands of test files across dozens of test projects, and fixtures that spin up Orleans `TestCluster` instances dominate the wall-clock cost. **Use the smallest scope that still validates your change** - exhaustive coverage is CI's job, not the dev loop's.
 
 Counter-intuitively, "just run the integration tests" is the *slowest* possible loop. Integration tests are precisely what you want to defer.
 
@@ -418,7 +418,7 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
   --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI&TestCategory!=Tlc"
 ```
 
-Each package's tests live in their own project under `test/<package>/` - fifty test projects in all, alongside the shared `Orleans.Lattice.Testing` library - and they are independent: if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
+Each package's tests live in their own project under `test/<package>/` - one per `src/` package plus a few test-only projects, alongside the shared `Orleans.Lattice.Testing` library - and they are independent: if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
 
 ### Tier 3 - before committing (a few minutes)
 
@@ -541,7 +541,7 @@ The tier filters above only get sharper over time if tests are correctly categor
 - Tag tests that require an external service (Azurite, a real Azure resource, a gRPC server bound to a port, etc.) with the service name, e.g. `[Category("AzureStorageEmulator")]`.
 - Tag fixtures whose sole job is to verify documentation or sample code (e.g. `DocsSnippetCompilationTests`) with `[Category("Docs")]`.
 - Tag Coyote systematic-concurrency models (fixtures that drive a shared correctness core through `CoyoteModelHarness`) with `[Category("Coyote")]`. See "Coyote concurrency tier" below.
-- Tag fixtures that shell out to the TLA+ model checker with `[Category("Tlc")]`. They need a JVM and `tla2tools.jar`, which is the same reason `AzureStorageEmulator` exists as a category, and the Tier 2 filter excludes them so a contributor without that toolchain is not blocked. CI provisions the toolchain and the fixtures run there in the `deterministic` tier, which is the complement of `Chaos` and `Coyote` and therefore needs no matrix-planner change. Such a fixture must handle a missing toolchain asymmetrically: `Assert.Ignore` locally (a *visible* `Skipped` count - never `Assert.Inconclusive`, per the false-green trap above) but `Assert.Fail` when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a broken pipeline and a verification gate that quietly evaporates still reads as coverage. See `test/lattice/Formal/TlcModelCheckTests.cs` and [`spec/README.md`](../../spec/README.md).
+- Tag fixtures that shell out to the TLA+ model checker with `[Category("Tlc")]`. They need a JVM and `tla2tools.jar`, which is the same reason `AzureStorageEmulator` exists as a category, and the Tier 2 filter excludes them so a contributor without that toolchain is not blocked. CI provisions the toolchain and the fixtures run there in the `deterministic` tier, which is the complement of `Chaos` and `Coyote` and therefore needs no matrix-planner change. Such a fixture must handle a missing toolchain asymmetrically: `Assert.Ignore` locally (a *visible* `Skipped` count - never `Assert.Inconclusive`, per the false-green trap above) but `Assert.Fail` when `GITHUB_ACTIONS` is `true`, because in CI a missing toolchain is a broken pipeline and a verification gate that quietly evaporates still reads as coverage. See `test/lattice/Formal/TlcModelCheckTests.cs` and [`spec/README.md`](../../spec/README.md).
 - Tag browser-driven Playwright tests with `[Category("UI")]`. They live in their own project (`test/lattice.explorer.uitests/`), never in a package's test project. See "Browser UI tier" below.
 - Pure in-process unit tests (grains constructed directly with `FakePersistentState<T>`, primitive type tests, options tests) do not need a category.
 - Prefer fixture-level `[Category(...)]` over per-method tagging so the tag stays consistent across partial test files.
@@ -731,6 +731,16 @@ The reusable harness lives in the product-agnostic shared testing library
   take the nondeterministic decision as a `Func<bool>` (pass `runtime.RandomBoolean`)
   so they never reference a Coyote type and are unit-testable with scripted
   delegates.
+
+The atomic-commit models described above are the part of the tier this file
+covers in depth, not its whole population. The WAL durability models, the distributed-lock
+admission model (`LockAdmissionModel`), the atomic-action execution model
+(`AtomicActionExecutionModel`), and the reshard forward-window model
+(`ReshardForwardWindowModel`) use the same harness and category; their properties
+are catalogued in [`docs/lattice/verified-wal.md`](../../docs/lattice/verified-wal.md),
+[`docs/lattice/verified-lock.md`](../../docs/lattice/verified-lock.md),
+[`docs/lattice/verified-atomic-action.md`](../../docs/lattice/verified-atomic-action.md),
+and [`docs/lattice/verified-atomic-commit.md`](../../docs/lattice/verified-atomic-commit.md).
 
 ### How to add a new Coyote model
 

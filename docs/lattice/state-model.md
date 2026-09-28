@@ -37,7 +37,8 @@ The collapsed leaf state row carries only:
 - The owning tree id and the topology fields (sibling pointers,
   parent reference, key range, shard index, split lifecycle -
   including the durable marker of a split still in flight), plus the
-  sticky moved-away slot seal an adaptive shard split records.
+  moved-away slot seal an adaptive shard split records (a later shard
+  consolidation that folds those slots back lifts it).
 - The projection-digest XOR fold (`ProjectionHash`, 16 bytes).
 - The `ProjectionCheckpointOffset` pointing into the WAL, plus a
   per-partition offset array on a multi-partition tree and a flag

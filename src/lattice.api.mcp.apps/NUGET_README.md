@@ -39,7 +39,7 @@ builder.Services.AddSingleton<IAppMcpToolProvider>(
     new AppMcpToolProvider(AppSlug.Parse("notes"), notesTools));
 ```
 
-The surface reads the app registry projection, the app source and the access gate
-from the container (registered by `Orleans.Lattice.Apps`); without them it offers
-no app tools. The host's `ILatticeApiMcpAuthorizer` must admit the namespaced tool
-names.
+The surface reads the app registry projection and the app source (registered by
+`Orleans.Lattice.Apps`) and the shared access gate from the container; without
+them, or without any registered `IAppMcpToolProvider`, it offers no app tools. The
+host's `ILatticeApiMcpAuthorizer` must admit the namespaced tool names.

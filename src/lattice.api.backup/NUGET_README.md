@@ -30,7 +30,9 @@ transports bind over it, and it costs nothing until it is registered.
 Every operation that touches backup data authorizes its scope through the same
 backup access gate the engine uses, before touching data (the capability probe
 and the health-monitoring availability flag are advisory and never refuse). A
-capture / incremental / restore authorizes its target scope; a list / describe /
+capture / incremental / restore authorizes its target scope (a restore whose
+target cannot be resolved authorizes the reserved backup catalog tree instead,
+so the check is never skipped); a list / describe /
 delete authorizes the scope carried by each manifest, and a manifest whose scope
 the caller may not read is hidden from list and inventory results.
 

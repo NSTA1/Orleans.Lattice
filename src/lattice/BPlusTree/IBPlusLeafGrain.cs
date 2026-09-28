@@ -1055,22 +1055,28 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// and the per-leaf saga pending-tx map) to its post-activation
     /// zero state, persists the cleared projection slots in a single
     /// <c>WriteStateAsync</c> call, and
-    /// deactivates the grain so the next activation replays the
-    /// per-shard WAL from offset <c>0</c> through the existing
-    /// activation-time materialiser. Topology-bearing slots
+    /// deactivates the grain so the next activation re-materialises the
+    /// projection through the existing activation-time path: it reloads
+    /// the leaf's snapshot where a usable one exists (the rebuild does not
+    /// clear it) and replays the per-shard WAL after it, from the start of
+    /// the readable WAL only for a partition no snapshot covers. Topology-bearing slots
     /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.TreeId"/>,
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ShardIndex"/>, sibling pointers,
     /// key-range bounds, split markers, parent pointer) are preserved
     /// verbatim so the rebuild observes the same WAL-filter context the
-    /// pre-rebuild leaf used. Used after a corrupt-projection incident
-    /// or a <see cref="LatticeOptions.MaxLeafReplayEntries"/> blow-out
-    /// to recover the leaf state from the durable WAL source of truth.
+    /// pre-rebuild leaf used. Used after a corrupt-projection incident, where
+    /// it re-derives only the part no snapshot covers, or to bring back a
+    /// leaf refused with <see cref="LeafProjectionStaleException"/> once the
+    /// loss of the trimmed range is accepted; an over-budget replay against
+    /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is advisory and needs
+    /// no rebuild.
     /// <para>
     /// Asynchronous failure mode: a transient storage failure on the
-    /// persist surfaces back to the caller; the leaf state is left in
-    /// the pre-rebuild shape on a persist failure, so the operation is
-    /// safe to retry. A subsequent successful call completes the rebuild
-    /// from a clean state.
+    /// persist surfaces back to the caller with the durable row still in
+    /// its pre-rebuild shape, but with this activation's in-memory
+    /// projection already cleared and the activation not deactivated, so
+    /// the call should be retried. A subsequent successful call completes
+    /// the rebuild from a clean state.
     /// </para>
     /// </summary>
     Task RebuildProjectionFromWalAsync();

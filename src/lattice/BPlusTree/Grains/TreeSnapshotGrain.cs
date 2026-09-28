@@ -8,9 +8,23 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Snapshots a source tree into a new destination tree, copying all live entries
-/// shard-by-shard. Supports offline mode (source tree locked during copy) and
-/// online mode (source tree remains available).
+/// Snapshots a source tree into a new destination tree, copying the live
+/// entries of its physical shards <c>0</c> to <c>ShardCount - 1</c> into the
+/// destination shards with the same indices. Supports offline mode (source
+/// tree locked during copy) and online mode (source tree remains available).
+/// <para>
+/// The destination is registered with the source's pinned shard count and no
+/// shard map (see <see cref="InitiateSnapshotStateAsync"/>), so it routes by
+/// the default map for that count, and the copy is therefore faithful only
+/// while the source still uses that default map. Once a shard split has
+/// changed it: a physical shard at or above the pinned count (one a split
+/// added) is neither copied nor shadow-forwarded; the source leaves keep a
+/// sealed copy of every slot they split away, which the drain's
+/// <c>GetLiveRawEntriesAsync</c> read does not filter out, so that stale copy
+/// reaches the destination too; and after a reshard has repinned the
+/// count, entries are copied into the shard with their physical index even
+/// where the default map routes their slot to a different one.
+/// </para>
 /// <para>
 /// Follows the same reminder + keepalive + grain-timer pattern used by
 /// <see cref="TombstoneCompactionGrain"/> and <see cref="TreeResizeGrain"/>.
@@ -248,7 +262,8 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Marks all source shards as deleted. Called once when the
+    /// Marks source shards <c>0</c> to <c>ShardCount - 1</c> (the shards the
+    /// copy reads) as deleted. Called once when the
     /// <see cref="SnapshotPhase.Lock"/> phase is processed (offline mode only).
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
@@ -507,14 +522,17 @@ internal sealed class TreeSnapshotGrain(
     /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MarkDeletedAsync"/> before drain begins,
     /// so the destination shard is guaranteed empty and we can use the
     /// efficient bottom-up <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkLoadRawAsync"/>
-    /// path. For online snapshots, shadow-forwarding is active on every
-    /// source shard before drain starts, so concurrent writes land on the
-    /// destination shard via
-    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> before drain's batch
-    /// arrives. We therefore use <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
-    /// for online mode too - its LWW semantics guarantee convergence
-    /// regardless of which write wins the race: whichever carries the
-    /// higher HLC is observable in the final destination state.
+    /// path. For online snapshots, shadow-forwarding is active on every copied
+    /// source shard before drain starts, so concurrent writes can reach the
+    /// destination shard - each through its own forwarded call - before the
+    /// drain's batch arrives. We therefore merge with
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
+    /// for online mode too - its LWW semantics keep whichever version of a key
+    /// carries the higher HLC. A forwarded write is stamped by the destination
+    /// leaf rather than carrying the source's HLC (see
+    /// <see cref="ShardRootGrain"/>'s shadow-forward notes), so which version
+    /// that is can depend on whether the drained entry or the forward arrived
+    /// first.
     /// </para>
     /// <para>
     /// <b>The online copy is work-bounded and resumable; the offline copy is
@@ -527,9 +545,9 @@ internal sealed class TreeSnapshotGrain(
     /// onto. A pass boundary makes nothing observable that a shard boundary did
     /// not already: the destination tree is populated shard by shard across
     /// timer ticks anyway, shadow-forwarding mirrors concurrent writes onto it
-    /// throughout, and every entry carries its source HLC, so a partially
-    /// copied destination is a state this mode has always been able to present
-    /// and every ordering converges to the same LWW result. An online snapshot
+    /// throughout, and every copied entry carries its source HLC, so a
+    /// partially copied destination is a state this mode has always been able
+    /// to present. An online snapshot
     /// is a converging mirror, not a point-in-time image, so there is no
     /// instant of consistency for a bound to break.
     /// </para>
@@ -658,7 +676,8 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Begins shadow-forwarding on every source shard. Must complete before
+    /// Begins shadow-forwarding on source shards <c>0</c> to
+    /// <c>ShardCount - 1</c> (the shards the copy reads). Must complete before
     /// any drain reader starts so that live writes landing during drain are
     /// mirrored to the destination tree. Exposed as <c>internal</c> for unit
     /// testing.

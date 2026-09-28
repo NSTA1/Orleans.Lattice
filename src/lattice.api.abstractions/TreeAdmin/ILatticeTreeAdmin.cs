@@ -273,13 +273,28 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Soft-deletes <paramref name="treeId"/>, after authorizing the whole-tree
-    /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. Every
-    /// shard is immediately marked deleted (subsequent reads and writes throw), and
-    /// a deferred purge is scheduled after the configured soft-delete duration.
-    /// Reversible with <see cref="RecoverTreeAsync"/> until that window elapses or
-    /// an explicit <see cref="PurgeTreeAsync"/> runs. Idempotent: deleting an
-    /// already-deleted tree is a no-op. Reserved system tree ids are rejected.
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. The
+    /// delete acts on the shards stored under <paramref name="treeId"/> itself and
+    /// keeps one deletion record per tree id: each of those shards is immediately
+    /// marked deleted (subsequent reads and writes on it throw), and a deferred
+    /// purge is scheduled after the configured soft-delete duration. Reversible with
+    /// <see cref="RecoverTreeAsync"/> until that window elapses or an explicit
+    /// <see cref="PurgeTreeAsync"/> runs. A call on an id already recorded as
+    /// deleted is a no-op. Reserved system tree ids are rejected.
     /// </summary>
+    /// <remarks>
+    /// The delete does not resolve a tree alias (<see cref="SetTreeAliasAsync"/>),
+    /// so on a tree whose id is aliased to another physical tree it does not mark
+    /// the live data. After the first resize of a populated tree, the id's deletion
+    /// record already holds the original copy the resize retired, so the call
+    /// returns without deleting anything and the tree stays readable and writable;
+    /// the same holds for a tree created again under the id of a purged one. After
+    /// a <see cref="TreeRestoreMode.ShadowCutover"/> restore or a schema-remediation
+    /// cutover, only the id's own shards are marked, so reads and writes through the
+    /// alias keep succeeding until the purge, which removes the tree's registry
+    /// entry, alias included: the id stops resolving to the alias target, whose
+    /// shards and registration stay in place.
+    /// </remarks>
     /// <param name="treeId">The tree to soft-delete. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's deletion status after the soft delete.</returns>
@@ -293,7 +308,11 @@ public interface ILatticeTreeAdmin
     /// Recovers a soft-deleted <paramref name="treeId"/> within its recovery window,
     /// after authorizing the whole-tree <see cref="LatticeOperation.TreeLifecycle"/>
     /// capability fail-closed. Restores normal operation and cancels the deferred
-    /// purge. Reserved system tree ids are rejected.
+    /// purge. Like <see cref="DeleteTreeAsync"/>, it acts on the id's own deletion
+    /// record and shards without resolving a tree alias, so after the first resize
+    /// of a populated tree it recovers the original copy the resize retired while
+    /// that copy is inside its soft-delete window. Reserved system tree ids are
+    /// rejected.
     /// </summary>
     /// <param name="treeId">The tree to recover. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -308,11 +327,15 @@ public interface ILatticeTreeAdmin
     /// Immediately hard-purges a soft-deleted <paramref name="treeId"/>, bypassing
     /// the soft-delete window, after authorizing the whole-tree
     /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. This is
-    /// <b>irreversible</b>: all leaf and internal node state is permanently removed
-    /// and the tree is unregistered. As a guard against accidental destruction the
-    /// caller must pass <paramref name="confirm"/> <see langword="true"/>; a
-    /// <see langword="false"/> value is rejected before any authorization or grain
-    /// call. Reserved system tree ids are rejected.
+    /// <b>irreversible</b>: the leaf and internal node state of the shards stored
+    /// under the id is permanently removed, and so is the id's registry entry, alias
+    /// included - except when the deletion record is a resize's retirement of the
+    /// tree's original copy, whose purge leaves the registry entry in place because
+    /// it serves the live, resized tree. Like <see cref="DeleteTreeAsync"/>, the
+    /// purge does not resolve a tree alias. As a guard against accidental
+    /// destruction the caller must pass <paramref name="confirm"/>
+    /// <see langword="true"/>; a <see langword="false"/> value is rejected before
+    /// any authorization or grain call. Reserved system tree ids are rejected.
     /// </summary>
     /// <param name="treeId">The tree to purge. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="confirm">Must be <see langword="true"/> to acknowledge the irreversible purge; <see langword="false"/> is rejected.</param>
@@ -328,7 +351,11 @@ public interface ILatticeTreeAdmin
     /// Reads the soft-deletion lifecycle status of <paramref name="treeId"/> - live,
     /// soft-deleted (with the recovery deadline), purge in progress, or purged -
     /// after authorizing whole-tree <see cref="LatticeOperation.Read"/> fail-closed.
-    /// A pure read with no side effects.
+    /// A pure read with no side effects. It reads the deletion record kept for the
+    /// id without resolving a tree alias, so after the first resize of a populated
+    /// tree it reports the original copy the resize retired, and for a tree created
+    /// again under a purged id it reports the purged tree, while the tree itself is
+    /// live.
     /// </summary>
     /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

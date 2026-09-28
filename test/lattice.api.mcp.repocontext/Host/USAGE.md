@@ -17,18 +17,32 @@ All host tests are grouped under the `Host/` folder here.
 
 ## Test tiers
 
-- **Unit** (`Host/*Tests.cs`, no category): profile selection / fail-fast
+- **Unit** (`Host/*Tests.cs`, no category): among them profile selection / fail-fast
   validation, readiness-state transitions, health-check reporting, data-path
   guard, compaction constants, trusted-access constants, SQLite schema
   round-trip, durability-selector factory registration, startup-service seeding.
-- **Integration** (`RepoContextHostIntegrationTests`, `[Category("Integration")]`):
+- **Integration** (`[Category("Integration")]`): `RepoContextHostIntegrationTests`
   brings up the real host over a `TestServer` and asserts restart durability
   (WAL replay across a rebuilt host on the same data root), the health-probe
-  lifecycle, and that the scaling endpoint is served only in the azure profile.
-- **Container** (`RepoContextContainerSmokeTests`, `[Category("Container")]` +
-  `[Explicit]`): builds the image from `apps/repocontext/Dockerfile` and runs it,
-  asserting the distroless container reaches its readiness probe. Requires a
-  Docker daemon; excluded from the unit and integration tiers.
+  lifecycle, that the scaling endpoint is served only in the azure profile, that
+  the local host opts past the default-deny MCP gate and runs the transport
+  stateless, that an indexing run writes under the local agent with no ambient
+  credential, and that the metrics endpoint is mapped and serves a recorded
+  instrument value.
+  The other fixtures in this tier cover the ambient-configuration entry point
+  `Program.cs` calls (`RepoContextHostBuilderAmbientConfigurationTests`), the
+  process-exit-code wiring into the drain signal (`RepoContextExitCodeWiringTests`),
+  memory surviving the destruction of the store (`RepoContextMemoryBackupRecoveryTests`),
+  the orphaned-leaf repair being invocable rather than merely advertised
+  (`RepoContextOrphanedLeafRepairReachabilityTests`), and the Orleans instrument
+  name the activation census reads (`RepoContextActivationCensusInstrumentNameTests`).
+- **Container** (`[Category("Container")]` + `[Explicit]`): `RepoContextContainerSmokeTests`
+  builds the image from `apps/repocontext/Dockerfile` and runs it, asserting the
+  distroless container reaches its readiness probe, and
+  `RepoContextComposeShutdownBehaviourTests` brings the sample compose stack up and
+  asserts a plain `docker compose stop` returns without a kill and with a normal
+  exit code. Both require a Docker daemon; excluded from the unit and integration
+  tiers.
 
 ## Running
 

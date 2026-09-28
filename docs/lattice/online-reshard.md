@@ -28,7 +28,7 @@ You reshard when a shard's **write path** is saturated - single root grain bottl
 |---|---|
 | Availability | Reads and writes served throughout. No global lock. |
 | Direction | **Grow-only** on a tree that holds data. Shrink is not supported. |
-| Target range | `2 <= newShardCount <= 4096` (the fixed virtual shard count); a value outside it throws `ArgumentOutOfRangeException`. On a tree that holds data the target must exceed the current distinct-shard count: a smaller target throws `ArgumentOutOfRangeException`, and one equal to it is a no-op. An observably empty tree is instead re-pinned in place to any in-range count, with no coordinator. |
+| Target range | `2 <= newShardCount <= 4096` (the default virtual shard count, which bounds every tree, whatever slot count its shard map holds); a value outside it throws `ArgumentOutOfRangeException`. On a tree that holds data the target must exceed the current distinct-shard count: a smaller target throws `ArgumentOutOfRangeException`, and one equal to it is a no-op. An observably empty tree is instead re-pinned in place to any in-range count, with no coordinator. |
 | Idempotence | Repeated calls with the same target while in progress are no-ops. |
 | Concurrent target change | `InvalidOperationException` if a reshard with a different target is already in progress. |
 | Resize interlock | `InvalidOperationException` while a resize is in flight on the tree. |
@@ -56,7 +56,7 @@ Internally, `ReshardAsync` routes through a dedicated per-tree reshard coordinat
 2. **Migrating** - on each 2-second tick, read the current `ShardMap`, count virtual-slot ownership per physical shard, filter to eligible sources (owns >= 2 virtual slots and not already splitting), and dispatch up to `LatticeOptions.MaxConcurrentMigrations` (default 4) concurrent online shard-split operations against the largest-slot owners. Each underlying split atomically grows the map by one distinct physical shard via its own shadow-write, drain, swap and reject phases, inheriting all of that mechanism's online-safety guarantees. Repeats until the map contains at least the target number of distinct physical shards.
 3. **Complete** - re-pin the registry's `ShardCount` to the target, clear in-progress state, publish a reshard-completed tree event (when tree events are enabled), prompt a reconcile of any tag index covering the tree, unregister the keepalive, and deactivate.
 
-Because each underlying split is itself an independent online operation, the tree never loses availability. Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard; from the split's swap phase onwards, the source is in a `StaleShardRoutingException`-emitting reject state and the tree's router retries against the new owner.
+Because each underlying split is itself an independent online operation, the tree never loses availability. Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard; once the split has swapped the shard map, the source rejects operations on the moved slots with an internal stale shard-routing signal, and the tree's router refreshes its shard map and retries against the new owner.
 
 ## Interaction with the autonomic split monitor
 
@@ -67,11 +67,11 @@ The autonomic hot-shard split monitor polls `ILattice.IsReshardCompleteAsync` an
 | Option | Default | Effect |
 |---|---|---|
 | `LatticeOptions.MaxConcurrentMigrations` | 4 | Upper bound on the number of in-flight splits the reshard coordinator will dispatch per tick. Higher values migrate faster but increase drain I/O load. |
-| `LatticeConstants.DefaultVirtualShardCount` | 4096 | Compile-time ceiling on `newShardCount`. The reshard can never produce more distinct physical shards than there are virtual slots. Not a runtime option - the virtual space is fixed because persisted shard maps index into it. |
+| Virtual shard count (internal) | 4096 by default | The ceiling on `newShardCount`, checked against the 4096 default for every tree. Only a source shard that owns at least two virtual slots can split, so the reshard can never produce more distinct physical shards than the tree's map has slots: on an installed app's tree whose manifest declared fewer than 4096 slots and that already holds data, a target above that count passes the check but is never reached, and the reshard stays in progress (an empty tree is instead re-pinned with a rebuilt 4096-slot map). Not a runtime option - persisted shard maps index into the virtual space. |
 
 ### Practical size limits
 
-The 4096 virtual shard count is generous. The real ceiling on useful shard counts comes from scan fan-out and activation cost, not the map itself:
+The default 4096 virtual shard count is generous. The real ceiling on useful shard counts comes from scan fan-out and activation cost, not the map itself:
 
 - **Scan fan-out is linear in distinct physical shards.** Every scan issues one parallel grain call per shard. A 4096-shard tree issues 4096 concurrent calls per `ScanKeysAsync` / `ScanEntriesAsync` / `CountAsync`. See [Consistency](consistency.md) for the guarantee these scans deliver.
 - **Activation cost scales with shards x trees x silos.** Each physical shard has one per-shard root grain activation per active tree.
