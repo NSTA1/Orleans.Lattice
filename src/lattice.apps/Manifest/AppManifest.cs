@@ -24,4 +24,10 @@ public sealed record AppManifest
 
     /// <summary>App-local MCP tools; dispatch prefixes each name with the app slug and underscore.</summary>
     [Id(6)] public required AppMcpToolDeclaration[] McpTools { get; init; }
+
+    /// <summary>Optional untrusted, plain-text presentation (display name, icon and so on); null when absent.</summary>
+    [Id(7)] public AppPresentation? Presentation { get; init; }
+
+    /// <summary>Optional untrusted UI bundle and its requested bridge operations; null when absent.</summary>
+    [Id(8)] public AppUiDeclaration? Ui { get; init; }
 }
