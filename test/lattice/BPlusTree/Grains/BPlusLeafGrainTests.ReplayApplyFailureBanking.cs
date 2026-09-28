@@ -1,4 +1,5 @@
 using System.Text;
+using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -37,9 +38,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// The fix is not to swallow the failure or to skip the offending entry:
 /// skipping an entry this leaf owns is silent data loss. It is to bank the
 /// prefix that genuinely was applied before letting the failure propagate
-/// unchanged. These arms pin all three halves of that - progress is banked,
-/// it stops strictly below the entry that failed, and the exception still
-/// reaches the caller.
+/// unchanged. These arms pin that progress is banked, stops strictly below
+/// the entry that failed, and is used by the next activation without moving
+/// backwards, while the exception still reaches the caller.
 /// </para>
 /// <para>
 /// The fault is injected through a real production throw site rather than a
@@ -159,6 +160,57 @@ public partial class BPlusLeafGrainTests
             "The banked checkpoint must be exactly the last offset that was fully applied. Lower "
             + "discards progress that really was made; at or above the failed offset licenses a "
             + "resume that skips an entry this leaf owns.");
+    }
+
+    [Test]
+    public void A_second_attempt_resumes_after_the_banked_offset_without_regressing_progress()
+    {
+        var entries = EntriesWithUnapplyableAt(UnapplyableOffset);
+        var coord = BuildChunkingCoordinator(head: 13, sliceSize: 4, tail: 0, entries);
+        var store = new InMemorySnapshotStore();
+        var state = NewResumableState();
+        var initialCheckpoint = state.State.ProjectionCheckpointOffset;
+        var persistedOffsets = new List<long>();
+        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+
+        var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
+
+        Assert.ThrowsAsync<LatticeCrdtShapeNotRegisteredException>(
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
+
+        var bankedOffset = state.State.ProjectionCheckpointOffset;
+        Assert.That(bankedOffset, Is.EqualTo(UnapplyableOffset - 1));
+        Assert.That(bankedOffset, Is.GreaterThan(initialCheckpoint));
+        Assert.That(persistedOffsets, Is.EqualTo(new[] { bankedOffset }),
+            "The prefix must have been persisted, not merely updated in memory.");
+        Assert.That(store.Latest, Is.Not.Null);
+        Assert.That(store.Latest!.SnapshotOffset, Is.EqualTo(bankedOffset));
+        var firstReads = coord.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILeafReplayCoordinatorGrain.ReadSliceAsync))
+            .Select(c => (long)c.GetArguments()[0]!)
+            .ToArray();
+        Assert.That(firstReads, Is.EqualTo(new[] { -1L }),
+            "The first cold activation must read the slice containing the failing entry.");
+
+        // Keep the durable state and snapshot, but isolate calls made by the new activation.
+        coord.ClearReceivedCalls();
+        var (grain2, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
+
+        Assert.ThrowsAsync<LatticeCrdtShapeNotRegisteredException>(
+            async () => await LeafActivationHarness.ActivateAsync(grain2, CancellationToken.None));
+
+        var resumedReads = coord.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILeafReplayCoordinatorGrain.ReadSliceAsync))
+            .Select(c => (long)c.GetArguments()[0]!)
+            .ToArray();
+        Assert.That(resumedReads, Is.EqualTo(new[] { bankedOffset }),
+            "The very next slice must start at the banked offset, not re-read the old prefix. "
+            + "An empty call history or a later correct read must not hide a broken resume.");
+        Assert.That(firstReads.Concat(resumedReads), Is.Ordered.Ascending);
+        Assert.That(persistedOffsets, Is.Ordered.Ascending,
+            "Neither activation may persist a checkpoint behind an earlier banked prefix.");
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(bankedOffset),
+            "Retrying the same poison entry must retain the banked prefix without skipping the failure.");
     }
 
     [Test]
