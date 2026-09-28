@@ -1,0 +1,16 @@
+{
+  "path": "evaluate",
+  "order": 1,
+  "items": [
+    "E1"
+  ],
+  "poster": {
+    "scene": "when-lattice-fits",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "0f0e8f63b0e4",
+    "bytes": 13672031
+  }
+}

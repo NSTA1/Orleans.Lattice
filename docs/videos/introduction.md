@@ -122,7 +122,7 @@ var user = await lattice.GetAsync<User>("user/42");
 <!-- where-next:begin -->
 
 - **Build**, if you are writing code against `ILattice`: watch [Hello, Lattice](hello-lattice.md), then read [Quick start](../../README.md#quick-start) and [API reference](../lattice/api.md).
-- **Evaluate**, if you are deciding whether it fits: read [What it is and why it exists](../../README.md#what-is-it) and [A core plus seams](../../README.md#architecture-a-core-plus-seams).
+- **Evaluate**, if you are deciding whether it fits: watch [When Lattice fits, and when it doesn't](when-lattice-fits.md), then read [What it is and why it exists](../../README.md#what-is-it) and [A core plus seams](../../README.md#architecture-a-core-plus-seams).
 - **Operate**, if you are running an estate: read [Configuration](../lattice/configuration.md), [WAL](../lattice/wal.md) and [WAL storage providers](../lattice/wal-storage-providers.md).
 
 <!-- where-next:end -->
