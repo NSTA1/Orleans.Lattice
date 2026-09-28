@@ -617,8 +617,21 @@ public sealed partial class CrdtShape
         {
             return;
         }
-        foreach (var entry in source)
+
+        // Walked by index over a resolved span rather than with foreach: the
+        // parameter is typed IReadOnlyList because the delta DTOs are public
+        // wire surface, so foreach binds IEnumerable<T>.GetEnumerator and
+        // HEAP-ALLOCATES a boxed enumerator on every call - for arrays as well
+        // as for List<T>. Coalescing a delta run calls these appenders once per
+        // member per delta, so that is a real per-fold allocation on a path
+        // that otherwise allocates only its result. An implementation that is
+        // neither array nor List<T> keeps the indexer walk, which still avoids
+        // the box.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+        var count = source.Count;
+        for (var i = 0; i < count; i++)
         {
+            var entry = spanned ? span[i] : source[i];
             var replicaId = entry.ReplicaId ?? string.Empty;
             var dot = (entry.Key, replicaId, entry.Counter);
             // Single probe: the miss branch writes the freshly appended slot
@@ -661,8 +674,13 @@ public sealed partial class CrdtShape
         {
             return;
         }
-        foreach (var tombstone in source)
+        // Indexed rather than foreach so no boxed enumerator is allocated; see
+        // AppendOrMapAdds for why.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+        var count = source.Count;
+        for (var i = 0; i < count; i++)
         {
+            var tombstone = spanned ? span[i] : source[i];
             if (seen.Add((tombstone.Key, tombstone.ReplicaId ?? string.Empty, tombstone.Counter)))
             {
                 result.Add(tombstone);
@@ -677,9 +695,21 @@ public sealed partial class CrdtShape
         if (entries is { Count: > 0 })
         {
             register.Entries.Capacity = entries.Count;
-            foreach (var entry in entries)
+            // Indexed over a resolved span rather than foreach - see the
+            // comment on AppendOrMapAdds for why.
+            if (CrdtDeltaListSpan.TryGetSpan(entries, out var entrySpan))
             {
-                register.Entries.Add(entry);
+                for (var i = 0; i < entrySpan.Length; i++)
+                {
+                    register.Entries.Add(entrySpan[i]);
+                }
+            }
+            else
+            {
+                for (var i = 0; i < entries.Count; i++)
+                {
+                    register.Entries.Add(entries[i]);
+                }
             }
         }
         var context = delta.Context;
@@ -718,8 +748,13 @@ public sealed partial class CrdtShape
         {
             return;
         }
-        foreach (var element in source)
+        // Indexed rather than foreach so no boxed enumerator is allocated; see
+        // AppendOrMapAdds for why.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+        var count = source.Count;
+        for (var i = 0; i < count; i++)
         {
+            var element = spanned ? span[i] : source[i];
             if (element is null)
             {
                 continue;
@@ -753,8 +788,13 @@ public sealed partial class CrdtShape
         {
             return;
         }
-        foreach (var dot in source)
+        // Indexed rather than foreach so no boxed enumerator is allocated; see
+        // AppendOrMapAdds for why.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+        var count = source.Count;
+        for (var i = 0; i < count; i++)
         {
+            var dot = spanned ? span[i] : source[i];
             // A dot with no element is unmergeable: OrSet.MergeDelta and
             // RwSet.MergeDelta both skip it. Mapping it onto an empty element
             // would give it a legal dedup key, so a null-element dot and a
@@ -794,8 +834,13 @@ public sealed partial class CrdtShape
         {
             return;
         }
-        foreach (var node in source)
+        // Indexed rather than foreach so no boxed enumerator is allocated; see
+        // AppendOrMapAdds for why.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+        var count = source.Count;
+        for (var i = 0; i < count; i++)
         {
+            var node = spanned ? span[i] : source[i];
             if (seen.Add(node.Dot))
             {
                 result.Add(node);
@@ -810,27 +855,32 @@ public sealed partial class CrdtShape
         var bound = (a?.Count ?? 0) + (b?.Count ?? 0);
         var result = new List<OrSetDot>(bound);
         var seen = new HashSet<OrSetDot>(bound);
-        if (a is not null)
-        {
-            foreach (var dot in a)
-            {
-                if (seen.Add(dot))
-                {
-                    result.Add(dot);
-                }
-            }
-        }
-        if (b is not null)
-        {
-            foreach (var dot in b)
-            {
-                if (seen.Add(dot))
-                {
-                    result.Add(dot);
-                }
-            }
-        }
+        AppendOrSetDots(a, result, seen);
+        AppendOrSetDots(b, result, seen);
         return result;
+    }
+
+    private static void AppendOrSetDots(
+        IReadOnlyList<OrSetDot>? source,
+        List<OrSetDot> result,
+        HashSet<OrSetDot> seen)
+    {
+        if (source is null)
+        {
+            return;
+        }
+        // Indexed rather than foreach so no boxed enumerator is allocated; see
+        // AppendOrMapAdds for why.
+        var spanned = CrdtDeltaListSpan.TryGetSpan(source, out var span);
+        var count = source.Count;
+        for (var i = 0; i < count; i++)
+        {
+            var dot = spanned ? span[i] : source[i];
+            if (seen.Add(dot))
+            {
+                result.Add(dot);
+            }
+        }
     }
 
     /// <summary>
