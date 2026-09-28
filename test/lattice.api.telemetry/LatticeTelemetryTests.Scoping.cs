@@ -298,6 +298,12 @@ public sealed partial class LatticeTelemetryTests
     [Test]
     public async Task Every_authored_entry_carries_the_tenant_matcher_when_evaluated()
     {
+        // Without this floor an empty catalogue would run the loop zero times and
+        // report a pass, because every assertion in this test is inside the loop.
+        Assert.That(LatticeTelemetryQueries.Definitions, Is.Not.Empty,
+            "The authored catalogue is empty, so this test asserted nothing at all. Fix the "
+            + "catalogue (or whatever narrowed it to nothing); do not delete this floor.");
+
         foreach (var descriptor in LatticeTelemetryQueries.Definitions.Select(d => d.Descriptor))
         {
             var harness = new TelemetryFacadeHarness().ForTenant("acme");

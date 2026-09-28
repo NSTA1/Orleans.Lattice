@@ -120,6 +120,19 @@ public static class DeclaredInstruments
             }
         }
 
+        // The denominator of the scan, asserted here rather than left to each
+        // consumer. EnumerateFiles yields nothing for a root that does not exist,
+        // so a moved or renamed src/ reduces this registry to empty silently - and
+        // an empty registry makes every gate built on it report a clean pass having
+        // examined no instrument at all. Only one of the consuming fixtures floors
+        // DeclarationCount, so without this the rest are vacuous whenever they are
+        // selected on their own.
+        HygieneDenominator.RequireExamined(
+            files.Count,
+            nameof(DeclaredInstruments),
+            "source files",
+            src);
+
         var byDotted = new Dictionary<string, DeclaredInstrumentKind>(StringComparer.Ordinal);
         var unitByDotted = new Dictionary<string, string>(StringComparer.Ordinal);
         var unresolved = new List<string>();

@@ -327,9 +327,30 @@ public partial class TxRegistryGrainTests
             nameof(ITxRegistryGrain.ObserveCrossTreeInFlightAsync),
         ];
 
+        var methods = typeof(ITxRegistryGrain).GetMethods();
+
+        // Every assertion below is inside the loop, so an empty member set would
+        // report a pass having checked nothing. This is realizable rather than
+        // theoretical: GetMethods() on an interface returns only its DECLARED
+        // members, so hoisting these methods onto a base interface empties the
+        // population without touching this file.
+        Assert.That(methods, Is.Not.Empty,
+            "ITxRegistryGrain declared no methods, so the interleaving claim below was never "
+            + "checked. Members hoisted to a base interface are not returned by GetMethods(); "
+            + "widen the lookup rather than deleting this floor.");
+
+        var declaredNames = methods.Select(m => m.Name).ToHashSet(StringComparer.Ordinal);
+        var stale = nonInterleaved.Where(name => !declaredNames.Contains(name)).ToArray();
+
+        // A name in the exemption list that no longer resolves would silently stop
+        // exempting anything while still reading as a deliberate carve-out.
+        Assert.That(stale, Is.Empty,
+            "These exempted members are no longer declared on ITxRegistryGrain, so the exemption "
+            + "list is stale: " + string.Join(", ", stale));
+
         Assert.Multiple(() =>
         {
-            foreach (var method in typeof(ITxRegistryGrain).GetMethods())
+            foreach (var method in methods)
             {
                 var interleaves = method.GetCustomAttribute<AlwaysInterleaveAttribute>() is not null;
                 Assert.That(interleaves, Is.EqualTo(!nonInterleaved.Contains(method.Name)),
