@@ -200,6 +200,52 @@ public class VectorKeyDictionaryBatchingTests
     }
 
     [Test]
+    public async Task The_batched_path_issues_one_write_per_flush_where_the_unbatched_path_issues_one_per_vector()
+    {
+        // A DIRECT A/B OF THE MECHANISM, run against both code paths in one
+        // fixture. This is deliberately a WRITE COUNT and not a timing: a
+        // container A/B over a fresh volume is embedder-bound (the corpus has to
+        // be embedded before there is anything for the build to take in), so it
+        // cannot resolve this change at all. The property that actually changed
+        // is how many durable writes a build issues, and that is exact,
+        // deterministic, and free of a clock.
+        const int Ids = 500;
+
+        var unbatchedStore = new InMemoryVectorIndexStore();
+        var unbatched = new VectorKeyDictionary(unbatchedStore, Prefix, ReservationBlock);
+        for (var i = 0; i < Ids; i++)
+        {
+            await unbatched.GetOrAddAsync($"id-{i}");
+        }
+
+        var batchedStore = new InMemoryVectorIndexStore();
+        var batched = new VectorKeyDictionary(batchedStore, Prefix, ReservationBlock);
+        for (var i = 0; i < Ids; i++)
+        {
+            await batched.GetOrAddBufferedAsync($"id-{i}");
+        }
+
+        await batched.FlushPendingAsync();
+
+        // Both paths reserve identically, so the reservation writes cancel out
+        // and the difference is entirely key-map records.
+        var reservations = (int)Math.Ceiling(Ids / (double)ReservationBlock);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unbatchedStore.Writes, Is.EqualTo(Ids + reservations),
+                "the unbatched path issues one durable write per new identifier");
+            Assert.That(batchedStore.Writes, Is.EqualTo(1 + reservations),
+                "the batched path issues one durable write per flush");
+            Assert.That(batchedStore.LargestBatchEntries, Is.EqualTo(Ids));
+        });
+
+        TestContext.Out.WriteLine(
+            $"writes: unbatched={unbatchedStore.Writes} batched={batchedStore.Writes} " +
+            $"for {Ids} identifiers (reservations={reservations})");
+    }
+
+    [Test]
     public void GetOrAddBufferedAsync_rejects_a_null_or_empty_identifier()
     {
         var keys = new VectorKeyDictionary(new InMemoryVectorIndexStore(), Prefix, ReservationBlock);

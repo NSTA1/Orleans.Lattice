@@ -73,9 +73,20 @@ Write-Host ("  repository : {0} ({1})" -f $RepoId, $RepoPath)
 
 Initialize-McpSession | Out-Null
 
-$register = Invoke-McpTool -Name 'repocontext_add_repo' -Arguments @{ path = $RepoPath; repoId = $RepoId }
+$register = $null
+for ($attempt = 1; $attempt -le 10; $attempt++) {
+    $register = Invoke-McpTool -Name 'repocontext_add_repo' -Arguments @{ path = $RepoPath; repoId = $RepoId }
+    if ($register.Succeeded) { break }
+
+    # /health/live returns 200 as soon as the process and silo host are alive,
+    # which is EARLIER than the MCP surface being able to register a repository.
+    # Retrying is what stops a race at container start being scored as a failed
+    # arm, which is how the first A/B attempt lost every round.
+    Write-Host ("  add_repo attempt {0} failed ({1}); retrying" -f $attempt, $register.Reason)
+    Start-Sleep -Seconds 10
+}
 if (-not $register.Succeeded) {
-    throw "repocontext_add_repo failed: $($register.Reason)"
+    throw "repocontext_add_repo failed after retries: $($register.Reason)"
 }
 
 $started = Get-Date
@@ -115,10 +126,20 @@ while ((Get-Date) -lt $deadline) {
     }
     $samples += $sample
 
-    Write-Host ("  t+{0,7}s  ann={1,-10} vectors={2,-8} ingest={3}" -f `
-        $sample.ElapsedSeconds, $sample.AnnPhase, $sample.VectorsIndexed, $sample.IngestStatus)
+    Write-Host ("  t+{0,7}s  ann={1,-10} vectors={2,-8} coverage={3,-8} ingest={4}" -f `
+        $sample.ElapsedSeconds, $sample.AnnPhase, $sample.VectorsIndexed, $sample.CoverageCount, $sample.IngestStatus)
 
-    if ($sample.AnnPhase -eq 'Ready') {
+    # CONVERGENCE IS NOT `phase == Ready` ON ITS OWN, AND ASSUMING IT WAS MADE
+    # THIS PROBE MEASURE NOTHING. A build over a corpus that has not been
+    # embedded yet has no vectors to take in, so it reaches Ready immediately
+    # and trivially: the first run of this probe scored 10.3 s with
+    # `vectors=0` while ingest was still Running, and both arms of an A/B would
+    # have tied at the cost of starting a container. Convergence is Ready over
+    # the WHOLE corpus, so the vector count has to have caught up with the
+    # coverage the embedder has produced, and that coverage has to be non-zero.
+    $coverage = [int]($sample.CoverageCount ?? 0)
+    $indexed = [int]($sample.VectorsIndexed ?? 0)
+    if ($sample.AnnPhase -eq 'Ready' -and $coverage -gt 0 -and $indexed -ge $coverage) {
         $converged = $true
         break
     }

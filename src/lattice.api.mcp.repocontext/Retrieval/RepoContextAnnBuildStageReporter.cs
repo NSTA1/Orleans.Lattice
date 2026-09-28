@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal sealed class RepoContextAnnBuildStageReporter : IVectorIndexBuildObserver, IDisposable
 {
     /// <summary>The histogram of per-stage build-slice seconds.</summary>
-    internal const string StageDurationInstrumentName = "repocontext.ann.build.stage.duration";
+    internal const string BuildStageDurationInstrumentName = "repocontext.ann.build.stage.duration";
 
     /// <summary>The counter of source items consumed by build slices.</summary>
     internal const string SliceItemsInstrumentName = "repocontext.ann.build.slice.items";
@@ -59,7 +59,7 @@ internal sealed class RepoContextAnnBuildStageReporter : IVectorIndexBuildObserv
     {
         _meter = new Meter(RepoContextUsageRecorder.MeterName);
         _stageDuration = _meter.CreateHistogram<double>(
-            StageDurationInstrumentName,
+            BuildStageDurationInstrumentName,
             unit: "s",
             description:
                 "Seconds one stage of an approximate-index build slice took, accumulated across the items of "

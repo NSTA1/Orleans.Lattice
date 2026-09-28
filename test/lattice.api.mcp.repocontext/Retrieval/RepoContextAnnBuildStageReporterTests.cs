@@ -33,7 +33,7 @@ public sealed class RepoContextAnnBuildStageReporterTests
         using var listener = MeterListening.StartForMeter(reporter.Meter, l =>
             l.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
             {
-                if (instrument.Name != RepoContextAnnBuildStageReporter.StageDurationInstrumentName)
+                if (instrument.Name != RepoContextAnnBuildStageReporter.BuildStageDurationInstrumentName)
                 {
                     return;
                 }
