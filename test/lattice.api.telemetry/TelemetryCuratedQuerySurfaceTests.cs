@@ -126,6 +126,15 @@ public sealed class TelemetryCuratedQuerySurfaceTests
         // The end-to-end proof: drive every catalogue entry and check the text that
         // reached the backend is the entry's own template with only the scope and
         // window slots filled in.
+        //
+        // The floor is load-bearing: every assertion below lives inside the loop, so
+        // an empty catalogue would execute none of them and still report a pass. The
+        // claim "every query is derived from an authored template" is vacuously true
+        // of no queries, which is precisely the reading that must not be available.
+        Assert.That(LatticeTelemetryQueries.Definitions, Is.Not.Empty,
+            "The authored catalogue is empty, so this test asserted nothing at all. Fix the "
+            + "catalogue (or whatever narrowed it to nothing); do not delete this floor.");
+
         foreach (var definition in LatticeTelemetryQueries.Definitions)
         {
             var harness = new TelemetryFacadeHarness().ForTenant("acme");
