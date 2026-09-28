@@ -1,0 +1,24 @@
+@*
+    The cluster's access posture, read from the server: the authentication mode,
+    whether rules are enforced, the two opt-in authorization tiers and the
+    identity directory. Rendered only once the model was read; an unread model
+    is unknown and shows nothing, never "not enforced".
+*@
+@if (Model is { } model)
+{
+    <dl class="lt-access-banner" aria-label="Access posture">
+        <div class="lt-access-banner__item"><dt class="lt-access-banner__term">Authentication</dt><dd class="lt-access-banner__value">@AuthenticationLabel(model.AuthenticationMode)</dd></div>
+        <div class="lt-access-banner__item"><dt class="lt-access-banner__term">Rules</dt><dd class="lt-access-banner__value">@(model.RulesEnforced ? "Enforced" : "Recorded, not enforced")</dd></div>
+        <div class="lt-access-banner__item"><dt class="lt-access-banner__term">All-trees grants</dt><dd class="lt-access-banner__value">@OnOff(model.AllTreesGrantsEnabled)</dd></div>
+        <div class="lt-access-banner__item"><dt class="lt-access-banner__term">Access-admin delegation</dt><dd class="lt-access-banner__value">@OnOff(model.AccessAdministrationDelegationEnabled)</dd></div>
+        <div class="lt-access-banner__item"><dt class="lt-access-banner__term">Identity directory</dt><dd class="lt-access-banner__value">@(model.DirectoryAvailable ? model.DirectoryProviderId : "None")</dd></div>
+    </dl>
+    @if (!model.RulesEnforced)
+    {
+        <p class="lt-access-notice" role="note">This cluster records authorization rules but is not enforcing them. Treat the rule set as advisory until enforcement is turned on.</p>
+    }
+    @if (!model.LocalMembershipEffective)
+    {
+        <p class="lt-access-notice" role="note">Group membership on this cluster comes only from identity tokens, so groups and members defined here have no effect on access. They stay visible, and creating groups or changing members is turned off. Rules that name a group still match a group a token asserts.</p>
+    }
+}

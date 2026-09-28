@@ -1,0 +1,13 @@
+@*
+    The Access area's own navigation: Rules, Groups and Explain, drawn as the
+    tab row with the marker under the current one. It also links the area's
+    stylesheet, so every Access page carries it without a head change.
+*@
+<link rel="stylesheet" href="@AccessAssets.Stylesheet" />
+<nav class="lt-access-nav" aria-label="Access">
+    <ul class="lt-access-nav__list">
+        <li><a class="lt-access-nav__link" href="@Href(AccessRoutes.Rules)" aria-current="@CurrentFor(AccessRoutes.RulesSegment)">Rules</a></li>
+        <li><a class="lt-access-nav__link" href="@Href(AccessRoutes.Groups)" aria-current="@CurrentFor(AccessRoutes.GroupsSegment)">Groups</a></li>
+        <li><a class="lt-access-nav__link" href="@Href(AccessRoutes.Explain)" aria-current="@CurrentFor(AccessRoutes.ExplainSegment)" data-lt-command="@AccessArea.ExplainCommandId">Explain</a></li>
+    </ul>
+</nav>

@@ -1,0 +1,65 @@
+@*
+    The rule editor: id, effect, subject, scope and the operation checklist.
+    App install and Telemetry sit in their own group as scopeless cluster-wide
+    capabilities; with a narrower scope they cannot be ticked, and a draft that
+    pairs them with one is refused before it is sent.
+*@
+<form class="lt-access-form" @onsubmit="SaveAsync" novalidate>
+    <LtTextInput Label="Rule id" Mono="true" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
+                 ReadOnly="_draft.IsExisting" Error="@_errors.RuleId"
+                 Hint="@(_draft.IsExisting ? "A rule's id and governed tree are fixed once it exists." : "A stable id, unique within the governed tree.")" />
+    <LtSelect Label="Effect" Options="EffectOptions" Value="@(_draft.Effect == LatticeEffect.Deny ? "deny" : "allow")"
+              ValueChanged="@(value => _draft.Effect = value == "deny" ? LatticeEffect.Deny : LatticeEffect.Allow)"
+              Hint="Where two rules of equal standing disagree, Deny wins." />
+    <AccessSubjectPicker Label="Subject"
+                         Kind="_draft.SubjectKind"
+                         KindChanged="@(kind => _draft.SubjectKind = kind)"
+                         Id="@_draft.SubjectId"
+                         IdChanged="@(value => _draft.SubjectId = value)"
+                         Error="@_errors.Subject"
+                         DirectoryAvailable="@(Model?.DirectoryAvailable == true)"
+                         DirectoryExplanation="@Model?.DirectoryExplanation" />
+    <LtSelect Label="Scope" Options="ScopeOptions" Value="@_draft.ScopeKind" ValueChanged="OnScopeChanged" Disabled="_draft.IsExisting" Hint="@ScopeHint" />
+    @if (_draft.NeedsTree)
+    {
+        <LtTextInput Label="Tree" Mono="true" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="The logical tree id the rule governs." />
+    }
+    @if (_draft.NeedsKeyOrPrefix)
+    {
+        <LtTextInput Label="@(_draft.ScopeKind == AccessRuleDraft.KeyScope ? "Key" : "Key prefix")" Mono="true" Value="@_draft.KeyOrPrefix" ValueChanged="@(value => _draft.KeyOrPrefix = value)" ReadOnly="_draft.IsExisting" Error="@_errors.KeyOrPrefix" />
+    }
+    @foreach (var group in OperationGroups)
+    {
+        <fieldset class="lt-access-fieldset" @key="group.Key">
+            <legend class="lt-access-fieldset__legend">@GroupTitle(group.Key)</legend>
+            @if (group.Key == AccessOperationGroup.ClusterWide)
+            {
+                <p class="lt-access-fieldset__hint">Scopeless capabilities are checked against the cluster itself, so they can only be granted with the cluster-wide scope.</p>
+            }
+            <div class="lt-access-fieldset__options">
+                @foreach (var option in group)
+                {
+                    <LtCheckbox @key="option.Value"
+                                Label="@option.Label"
+                                Checked="_draft.HasOperation(option.Flag)"
+                                CheckedChanged="@(value => _draft.SetOperation(option.Flag, value))"
+                                Disabled="@(option.IsScopeless && !_draft.IsClusterWide && !_draft.HasOperation(option.Flag))"
+                                data-lt-operation="@option.Value" />
+                }
+            </div>
+        </fieldset>
+    }
+    @if (_errors.Operations is not null)
+    {
+        <p class="lt-access-form__error" role="alert" data-lt-field="operations">@_errors.Operations</p>
+    }
+    <LtTextInput Label="Condition (optional)" Mono="true" Value="@_draft.Condition" ValueChanged="@(value => _draft.Condition = value)" />
+    @if (_errors.Form is not null)
+    {
+        <p class="lt-access-form__error" role="alert" data-lt-field="form">@_errors.Form</p>
+    }
+    <div class="lt-access-form__actions">
+        <LtButton Type="LtButtonType.Submit" Disabled="_saving">Save rule</LtButton>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync" Disabled="_saving">Cancel</LtButton>
+    </div>
+</form>

@@ -1,0 +1,151 @@
+@page "/access/groups/{p1}"
+@page "/t/{tenant}/access/groups/{p1}"
+@inherits ExplorerPage
+
+@*
+    One group: its details, direct members (add and remove), the groups it
+    belongs to, and the rules that name it. Membership changes go through the
+    auth facade; an id the identity directory refuses is shown beside the field.
+*@
+
+<PageTitle>@(GroupId ?? "Group") - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@GroupId</h1>
+@if (_group?.DisplayName is { Length: > 0 } displayName)
+{
+    <p class="lt-shell-page-lede">@displayName</p>
+}
+<AccessNav Current="@AccessRoutes.GroupsSegment" />
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The group could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_group is null || _members is null)
+{
+    <LtSkeleton Lines="6" Label="Loading the group" />
+}
+else
+{
+    @if (!MembershipEditable)
+    {
+        <p class="lt-access-notice" role="note">Group membership on this cluster comes only from identity tokens, so the members listed here have no effect on access. Adding and removing members is turned off.</p>
+    }
+
+    <section class="lt-access-section" aria-labelledby="lt-access-group-details">
+        <h2 id="lt-access-group-details" class="lt-access-section__title">Details</h2>
+        <form class="lt-access-form" @onsubmit="SaveDisplayNameAsync" novalidate>
+            <div class="lt-access-form__row">
+                <LtTextInput Label="Display name" Value="@_displayName" ValueChanged="@(value => _displayName = value)" Error="@_displayNameError" />
+                <LtButton Type="LtButtonType.Submit" Disabled="_busy">Save name</LtButton>
+            </div>
+        </form>
+    </section>
+
+    <section class="lt-access-section" aria-labelledby="lt-access-group-members">
+        <h2 id="lt-access-group-members" class="lt-access-section__title">Direct members</h2>
+        <LtTable TItem="string" Items="_members" Caption="Direct members" CaptionHidden="true" RowKey="@(member => member)" DetailTitle="@(member => member)">
+            <ChildContent>
+                <LtColumn TItem="string" Title="Member" RowHeader="true" Mono="true" SortBy="@(member => member)">
+                    @if (IsKnownGroup(context))
+                    {
+                        <a href="@GroupHref(context)">@context</a>
+                    }
+                    else
+                    {
+                        @context
+                    }
+                </LtColumn>
+                <LtColumn TItem="string" Title="Kind" Value="@(member => IsKnownGroup(member) ? "Group" : "User or external")" />
+                <LtColumn TItem="string" Title="Actions" Align="LtColumnAlign.End">
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(!MembershipEditable || _busy)" OnClick="@(() => ConfirmRemove(context))" aria-label="@($"Remove {context}")">Remove</LtButton>
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent><span>This group has no direct members.</span></EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context</Primary>
+                    <Secondary>@(IsKnownGroup(context) ? "Group" : "User or external")</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <Detail>
+                <LtDefinitionList>
+                    <LtDefinition Term="Member" Mono="true">@context</LtDefinition>
+                    <LtDefinition Term="Kind">@(IsKnownGroup(context) ? "Group" : "User or external")</LtDefinition>
+                </LtDefinitionList>
+            </Detail>
+            <DetailActions>
+                @if (IsKnownGroup(context))
+                {
+                    <a class="lt-btn" href="@GroupHref(context)">Open group</a>
+                }
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(!MembershipEditable || _busy)" OnClick="@(() => ConfirmRemove(context))">Remove member</LtButton>
+            </DetailActions>
+        </LtTable>
+
+        <form class="lt-access-form" @onsubmit="AddMemberAsync" novalidate>
+            <AccessSubjectPicker Label="Member"
+                                 Kind="_memberKind"
+                                 KindChanged="@(kind => _memberKind = kind)"
+                                 Id="@_memberId"
+                                 IdChanged="@(value => _memberId = value)"
+                                 Error="@_memberError"
+                                 DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                                 DirectoryExplanation="@_model?.DirectoryExplanation"
+                                 Disabled="@(!MembershipEditable)" />
+            <div class="lt-access-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="@(!MembershipEditable || _busy)">Add member</LtButton>
+            </div>
+        </form>
+    </section>
+
+    <section class="lt-access-section" aria-labelledby="lt-access-group-parents">
+        <h2 id="lt-access-group-parents" class="lt-access-section__title">Member of</h2>
+        @if (_parents is { Count: > 0 } parents)
+        {
+            <ul class="lt-access-links">
+                @foreach (var parent in parents)
+                {
+                    <li @key="parent"><a href="@GroupHref(parent)">group:@parent</a></li>
+                }
+            </ul>
+        }
+        else
+        {
+            <p class="lt-access-fieldset__hint">This group belongs to no other group.</p>
+        }
+    </section>
+
+    <section class="lt-access-section" aria-labelledby="lt-access-group-rules">
+        <h2 id="lt-access-group-rules" class="lt-access-section__title">Rules that apply to this group</h2>
+        <p class="lt-access-caveat">Rules that name this group, or a group it belongs to, in precedence order.</p>
+        <AccessRuleTable Rules="_rules" Caption="Rules that apply to this group" CaptionHidden="true" EmptyText="No rule names this group." />
+    </section>
+
+    <div class="lt-access-actions">
+        <a class="lt-btn lt-btn--quiet" href="@ExplainHref">Explain for this group</a>
+        <LtButton Variant="LtButtonVariant.Destructive" OnClick="@(() => _deleteOpen = true)" Disabled="_busy">Delete group</LtButton>
+    </div>
+
+    <LtConfirmDestructive Open="_deleteOpen"
+                          OpenChanged="@(open => _deleteOpen = open)"
+                          Title="Delete this group"
+                          ObjectKind="group"
+                          ObjectName="@_group.GroupId"
+                          ConfirmText="Delete group"
+                          OnConfirm="DeleteAsync">
+        The group record is removed. Rules that name it stop matching anyone through it. This cannot be undone.
+    </LtConfirmDestructive>
+    <LtConfirmDestructive Open="@(_removing is not null)"
+                          OpenChanged="@(open => { if (!open) { _removing = null; } })"
+                          Title="Remove this member"
+                          ObjectKind="member"
+                          ObjectName="@(_removing ?? string.Empty)"
+                          ConfirmText="Remove member"
+                          OnConfirm="RemoveMemberAsync">
+        @_removing stops being a direct member of @_group.GroupId, and loses whatever this group grants it.
+    </LtConfirmDestructive>
+}
