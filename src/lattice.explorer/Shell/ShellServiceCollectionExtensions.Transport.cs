@@ -7,8 +7,8 @@ internal static partial class ShellServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the per-circuit transport channel and one scoped adapter per
-    /// facade the Shell consumes (T1, issue #3830). The app catalogue, workspace
-    /// and bridge clients join here through
+    /// facade the Shell consumes (T1, issue #3830). The app bridge client joins
+    /// here, once it lands, through
     /// <see cref="ShellTransportServiceCollectionExtensions.AddShellTransportClient{TFacade}"/>.
     /// </summary>
     /// <param name="services">The service collection to register into.</param>

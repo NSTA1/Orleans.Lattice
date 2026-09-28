@@ -35,6 +35,8 @@ public sealed class ShellTransportRegistrationTests
         [typeof(ILatticeReplicationControl)] = typeof(ShellReplicationControlTransport),
         [typeof(ILatticeReplicationStatus)] = typeof(ShellReplicationStatusTransport),
         [typeof(Orleans.Lattice.Api.Apps.ILatticeAppsControl)] = typeof(ShellAppsControlTransport),
+        [typeof(Orleans.Lattice.Api.Apps.ILatticeAppCatalog)] = typeof(ShellAppCatalogTransport),
+        [typeof(Orleans.Lattice.Api.Apps.ILatticeAppWorkspace)] = typeof(ShellAppWorkspaceTransport),
     };
 
     [Test]

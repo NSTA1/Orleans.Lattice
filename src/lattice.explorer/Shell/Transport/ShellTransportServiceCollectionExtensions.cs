@@ -57,6 +57,8 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeReplicationControl),
         typeof(ILatticeReplicationStatus),
         typeof(ILatticeAppsControl),
+        typeof(ILatticeAppCatalog),
+        typeof(ILatticeAppWorkspace),
     ];
 
     /// <summary>Registers the channel and every transport adapter.</summary>
@@ -85,14 +87,16 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddScoped<ILatticeReplicationControl, ShellReplicationControlTransport>();
         services.TryAddScoped<ILatticeReplicationStatus, ShellReplicationStatusTransport>();
         services.TryAddScoped<ILatticeAppsControl, ShellAppsControlTransport>();
+        services.TryAddScoped<ILatticeAppCatalog, ShellAppCatalogTransport>();
+        services.TryAddScoped<ILatticeAppWorkspace, ShellAppWorkspaceTransport>();
 
         return services;
     }
 
     /// <summary>
     /// Registers a gRPC client that implements its facade directly - for example
-    /// the app catalogue, workspace and bridge clients - as a scoped
-    /// <typeparamref name="TFacade"/> built over the circuit's channel.
+    /// the app bridge client - as a scoped <typeparamref name="TFacade"/> built
+    /// over the circuit's channel.
     /// </summary>
     /// <remarks>
     /// The client is built once per circuit over
@@ -101,9 +105,10 @@ internal static class ShellTransportServiceCollectionExtensions
     /// sign-in without being rebuilt. Its faults surface as the client itself
     /// documents them; a client that leaves raw transport faults should instead be
     /// wrapped in a <see cref="ShellTransportAdapter{TClient}"/>, as the apps
-    /// control and replication status clients are. Like every registration here it
-    /// uses <c>TryAdd</c>, and it registers the client before the transport's own
-    /// adapters, so it takes a facade those adapters would otherwise serve.
+    /// control, catalogue, workspace and replication status clients are. Like
+    /// every registration here it uses <c>TryAdd</c>, and it registers the client
+    /// before the transport's own adapters, so it takes a facade those adapters
+    /// would otherwise serve.
     /// </remarks>
     /// <typeparam name="TFacade">The facade interface the client implements.</typeparam>
     /// <param name="services">The service collection to register into.</param>
