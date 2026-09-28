@@ -8,10 +8,11 @@ using Orleans.Timers;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Manages tree-level soft deletion and deferred purge for the shards stored
-/// under this grain's tree id; it does not resolve a tree alias, so an aliased
-/// tree's live data under another physical tree is not reached. When a tree is
-/// deleted, those shards are marked as deleted (blocking reads/writes on them),
+/// Manages tree-level soft deletion and deferred purge. On an unaliased tree it
+/// acts on the shards stored under this grain's tree id; on an aliased tree the
+/// logical delete pins the owned alias target and delegates to that target's
+/// deletion grain (see <c>TreeDeletionGrain.Logical.cs</c>). When a tree is
+/// deleted, its shards are marked as deleted (blocking reads/writes on them),
 /// and a grain reminder
 /// is registered to fire after <see cref="LatticeOptions.SoftDeleteDuration"/>.
 /// When the reminder fires and the soft-delete window has elapsed, a grain timer

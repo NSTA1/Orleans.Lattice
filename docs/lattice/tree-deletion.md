@@ -211,7 +211,7 @@ A populated tree's first `ResizeAsync` copies the tree into a new physical tree 
 
 The retirement is physical maintenance, not a logical delete: it publishes no `TreeDeleted` or `TreePurged` event and records nothing on `orleans.lattice.tree.lifecycle`, and the live tree does not read as deleted while its original copy is retired.
 
-A later resize retires the previous resized copy, whose ID is its own, with an ordinary delete, so that copy is unregistered when its purge completes.
+A later resize retires the previous resized copy, whose ID is its own, with the same silent soft delete but without keeping its registry entry, so that copy is unregistered when its purge completes.
 
 The alias swap has already dropped the retired copy's shard map and split allocation mark from the tree's registry entry by the time the retirement runs, so the retirement walks only shards `0` through the pinned shard count less one: a shard an [adaptive shard split](shard-splitting.md) had added to the retired copy is neither marked deleted nor purged, and because the resize did not copy it either, the keys it holds stay in storage, reachable through the tree again only if the resize is undone.
 

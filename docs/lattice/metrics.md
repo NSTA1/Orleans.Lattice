@@ -102,7 +102,8 @@ second series under the physical id.
   independent tree's id.
 - **Gauges.** Observable gauges fold a logical tree's copies into one series
   under its id: counts such as snapshot pins are summed, and the WAL saturation
-  state reports the worst state among the copies. Per-copy state is never
+  state reports the worst state among the copies (the materialiser pin-shed
+  stall age likewise reports the longest run per pin shard). Per-copy state is never
   merged, so each copy's own WAL saturation state still governs its own writes.
 - **Tenant.** The derived `tenant` label is unchanged: a physical copy's id keeps
   its tree's tenant prefix, so both resolve to the same tenant.

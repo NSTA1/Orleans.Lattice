@@ -650,23 +650,23 @@ public interface ILattice : IGrainWithStringKey
     Task<int> BulkAppendChunkAsync(string operationId, IReadOnlyList<KeyValuePair<string, byte[]>> sortedEntries, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Soft-deletes the tree. The delete acts on the shards stored under this
-    /// tree's id and keeps one deletion record per id: each of those shards is
-    /// immediately marked deleted, so subsequent reads and writes on it throw
-    /// <see cref="InvalidOperationException"/>, and a grain reminder is registered
-    /// to permanently purge them after the configured
+    /// Soft-deletes the tree. The delete keeps one deletion record per tree id and
+    /// immediately marks the tree's shards deleted, so subsequent reads and writes
+    /// throw <see cref="InvalidOperationException"/>, and a grain reminder is
+    /// registered to permanently purge them after the configured
     /// <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed. A call on an id
-    /// already recorded as deleted is a no-op.
+    /// already recorded as deleted is a no-op, including a tree created again
+    /// under the id of a purged one.
     /// <para>
-    /// The delete does not resolve a tree alias, so on a tree whose id is aliased
-    /// to another physical tree it does not reach the live data. After the first
-    /// resize of a populated tree, the id's deletion record already holds the
-    /// original copy the resize retired, so the call returns without deleting
-    /// anything and the tree stays readable and writable; the same holds for a tree
-    /// created again under the id of a purged one. After a shadow-cutover restore
-    /// or a schema-remediation cutover, only the id's own shards are marked, so
-    /// reads and writes through the alias keep succeeding until the purge, which
-    /// removes the tree's registry entry, alias included.
+    /// The delete acts on the logical tree. On a tree a resize, a shadow-cutover
+    /// restore or a schema remediation has aliased to a physical copy, it marks the
+    /// live copy the alias targets, which must have been created for this tree and
+    /// be aliased by no other tree, and pins that copy for the recovery and purge
+    /// that follow. It throws <see cref="InvalidOperationException"/> when the alias
+    /// targets a tree this tree does not own, when another tree aliases this one,
+    /// or while a resize, restore or remediation holds the tree's alias. A resize's
+    /// retirement of its old copy is not a delete: it does not make the tree read as
+    /// deleted.
     /// </para>
     /// </summary>
     Task DeleteTreeAsync(CancellationToken cancellationToken = default);
@@ -677,21 +677,17 @@ public interface ILattice : IGrainWithStringKey
     /// accessible again. Throws <see cref="InvalidOperationException"/> if the tree
     /// has not been deleted, while a purge is in progress, or if the purge has
     /// already completed (data is gone). Like <see cref="DeleteTreeAsync"/>, it acts
-    /// on the id's own deletion record and shards without resolving a tree alias,
-    /// so after the first resize of a populated tree it recovers the original copy
-    /// the resize retired while that copy is inside its soft-delete window.
+    /// on the logical tree: on an aliased tree it recovers the live copy the delete
+    /// pinned. A live resized tree is not deleted, so recovering it throws.
     /// </summary>
     Task RecoverTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Immediately purges a soft-deleted tree without waiting for the
     /// <see cref="LatticeOptions.SoftDeleteDuration"/> window to elapse.
-    /// Permanently removes the leaf and internal node state of the shards stored
-    /// under the tree's id, and the id's registry entry, alias included - except
-    /// when the deletion record is a resize's retirement of the tree's original
-    /// copy, whose purge leaves the registry entry in place for the live, resized
-    /// tree. Like <see cref="DeleteTreeAsync"/>, it does not resolve a tree alias.
-    /// Throws <see cref="InvalidOperationException"/> if the tree has not been
+    /// Permanently removes the tree's leaf and internal node state and unregisters
+    /// it. On an aliased tree it purges the live copy the delete pinned and
+    /// unregisters both that copy and the logical tree. Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed.
     /// </summary>
     Task PurgeTreeAsync(CancellationToken cancellationToken = default);

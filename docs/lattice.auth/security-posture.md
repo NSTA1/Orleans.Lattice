@@ -66,7 +66,7 @@ path:
   decision in the reserved authorization namespace resolves to deny, so only a
   bootstrap administrator (or an explicitly modelled grant) is ever an
   administrator. The same isolation governs the tenant-registry (`sys-tenant-*`)
-  namespace, the app-registry (`sys-app-*`) namespace, the tenant-administration capability ids, and a cluster-wide
+  namespace, the installable-apps (`sys-app-*`) namespace (the app registry, activation status and `sys-app-trees` tree ownership ledger), the tenant-administration capability ids, and a cluster-wide
   capability request on the `*` sentinel (such as `Telemetry` or `AppInstall`): each
   is granted only by an explicit matched allow rule.
 - **App-owned rules are write-protected.** A policy-store write or delete of a rule
@@ -118,7 +118,12 @@ Two mechanisms harden this boundary:
    trusted from the wire) on a call that is silo-sourced or comes from this
    cluster's own in-silo hosted client. A malicious client that manually seeds
    the system-origin or internal-origin marker on its outbound `RequestContext`
-   therefore cannot smuggle a forged capability into a grain call.
+   therefore cannot smuggle a forged capability into a grain call. The filter
+   strips the routed tree-identity pair the same way - the logical and physical
+   tree ids the routing tier stamps for mutation observers, the `ol.rlt` and
+   `ol.rpt` keys - so an external client, or one presenting a forged `hosted-*`
+   client id, cannot make observers attribute its writes to another logical tree. The in-silo
+   hosted client keeps the pair.
 
 2. **The internal-origin assertion.** The shard, leaf, and write-ahead-log shard
    grains assert, on their read entry points as well as their mutation entry

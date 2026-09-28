@@ -82,8 +82,8 @@ bool exists = await tree.TreeExistsAsync();
 | [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) | Tree registered with the supplied sizing pins (honoured only on first creation) |
 | Shadow-cutover restore (`ILatticeTreeAdmin.RestoreTreeAsync`) | Shadow tree registered with `DerivedFrom` set to the target tree; alias pointed at the restored shadow tree; a revert points it back |
 | Schema remediation cut-over | Remediated copy registered with `DerivedFrom` set to the remediated tree; alias pointed at it |
-| `DeleteTreeAsync` / `RecoverTreeAsync` | On an aliased tree, the live backing tree the alias targets is resolved, checked to be owned by this logical tree, and pinned; the delete or recover is applied to it. See [Logical lifecycle across an alias](#logical-lifecycle-across-an-alias) |
-| `DeleteTreeAsync` + purge completion | The pinned backing tree's state is purged; both the backing tree and the logical tree are unregistered (key removed) |
+| `DeleteTreeAsync` / `RecoverTreeAsync` | On an aliased tree, the delete resolves the live backing tree the alias targets, checks that it is owned by this logical tree, pins it and marks it deleted; a recover unmarks the pinned tree. See [Logical lifecycle across an alias](#logical-lifecycle-across-an-alias) |
+| `DeleteTreeAsync` + purge completion | Tree unregistered (key removed). On an aliased tree the pinned backing tree's state is purged too, and both the backing tree and the logical tree are unregistered |
 | `BulkLoadAsync` | Tree registered on first shard write |
 
 > **Note:** Physical trees created by `ResizeAsync` (e.g. `my-tree/resized/abc123`) and `SnapshotAsync` are regular registered trees and appear in `GetAllTreeIdsAsync` results. This is by design - it allows monitoring and manual intervention. When the old physical tree is purged after the `SoftDeleteDuration` window, it is automatically unregistered - unless it is a first resize's retired copy, whose ID is the logical tree ID: only its shards are purged, and the logical tree stays registered.
@@ -106,11 +106,11 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 ### API
 
-Resize (and its undo), restore, and schema remediation drive the alias from inside the silo; the registry itself is internal infrastructure. For operators, the [tree-administration facade](../lattice.api.treeadmin/README.md) exposes `ILatticeTreeAdmin.SetTreeAliasAsync`, which points a logical tree at a physical tree after authorizing whole-tree administration on both the logical tree and its target, and `ILatticeTreeAdmin.ResolveTreeAliasAsync`, which returns the physical id (or the logical id when no alias is set); it offers no verb that removes an alias. Underneath, the registry exposes three operations:
+Resize (and its undo), restore, and schema remediation drive the alias from inside the silo; the registry itself is internal infrastructure. For operators, the [tree-administration facade](../lattice.api.treeadmin/README.md) exposes `ILatticeTreeAdmin.SetTreeAliasAsync`, which points a logical tree at a physical tree after authorizing whole-tree administration on both the logical tree and its target, and `ILatticeTreeAdmin.ResolveTreeAliasAsync`, which returns the physical id (or the logical id when no alias is set); it offers no verb that removes an alias. Underneath, the registry exposes four operations:
 
-- **Set** - points a logical tree id at a physical tree id, after verifying that the target differs from the logical id, is not itself aliased, and would not widen the caller's effective privilege (for example a `_lattice_` system tree, or a `sys-` tree aliased from outside the `sys-` namespace). It is also refused while either tree is logically deleted, while a logical delete of either is in flight, and when the registered [ownership guard](#ownership-bounded-aliasing) denies it.
+- **Set** - points a logical tree id at a physical tree id, after verifying that the target differs from the logical id, is not itself aliased, and would not widen the caller's effective privilege (for example a `_lattice_` system tree, or a `sys-` tree aliased from outside the `sys-` namespace). It is also refused while either tree - or the logical tree the target was derived from - is logically deleted or has a logical delete in flight, and when the registered [ownership guard](#ownership-bounded-aliasing) denies it.
 - **Resolve** - returns the physical id, or the logical id unchanged when no alias is registered.
-- **Remove** - clears the alias, reverting to the logical id.
+- **Remove** - clears the alias, reverting to the logical id. It is refused while the logical tree is logically deleted or has a logical delete in flight.
 - **Aliases targeting** - returns, in ordinal order, every logical tree id whose alias currently targets a given physical tree. It scans the authoritative registry entries rather than a separately maintained index, so it cannot go stale. Logical deletion uses it to refuse a physical tree that another tree still aliases.
 
 ### Provenance: `DerivedFrom`
