@@ -1,0 +1,304 @@
+WEBVTT
+
+1
+00:00:01.500 --> 00:00:04.327
+When Lattice fits,
+and when it doesn't: what it is for,
+
+2
+00:00:04.327 --> 00:00:07.719
+what it takes the place of,
+and where to reach for something else.
+
+3
+00:00:08.719 --> 00:00:10.334
+Think of an online shop.
+
+4
+00:00:10.334 --> 00:00:13.631
+It has to remember every basket,
+and every order.
+
+5
+00:00:13.981 --> 00:00:18.324
+Usually, that memory is spread across
+separate products: a database to keep it,
+
+6
+00:00:18.324 --> 00:00:21.567
+a cache to read it quickly,
+and a queue to pass work along.
+
+7
+00:00:21.917 --> 00:00:25.968
+Each one is run and repaired on its own,
+and each has its own idea of what is true.
+
+8
+00:00:25.968 --> 00:00:27.921
+Something has to keep them in agreement.
+
+9
+00:00:28.271 --> 00:00:32.255
+Orleans.Lattice keeps that memory
+inside the application instead:
+
+10
+00:00:32.255 --> 00:00:34.278
+one store, with one set of rules.
+
+11
+00:00:34.628 --> 00:00:38.550
+It fits when many parts of an application,
+perhaps in many places,
+
+12
+00:00:38.550 --> 00:00:42.769
+change what it remembers, and every place
+has to reach the same answer.
+
+13
+00:00:43.119 --> 00:00:44.522
+It does not fit every job.
+
+14
+00:00:44.522 --> 00:00:47.921
+When two places change the same
+plain value at the same moment,
+
+15
+00:00:47.921 --> 00:00:51.860
+only one change is kept, unless
+the value is one of the kinds that merge.
+
+16
+00:00:53.860 --> 00:00:57.426
+In technical terms, Orleans.Lattice
+is a sorted key value store,
+
+17
+00:00:57.426 --> 00:00:59.265
+embedded in your Orleans cluster.
+
+18
+00:00:59.615 --> 00:01:04.685
+Keys are strings and values are byte
+arrays, with no external database,
+
+19
+00:01:04.685 --> 00:01:07.470
+coordinator service or queue beside it.
+
+20
+00:01:07.820 --> 00:01:12.221
+A system is usually assembled from a
+database, a cache, a queue and a layer
+
+21
+00:01:12.221 --> 00:01:16.387
+of glue, each with its own failure modes
+and its own consistency story.
+
+22
+00:01:16.387 --> 00:01:18.675
+Against that, it takes three positions.
+
+23
+00:01:20.275 --> 00:01:22.444
+First: the store lives in the cluster.
+
+24
+00:01:22.444 --> 00:01:26.383
+State is held by grains in the same
+cluster as the code that uses it.
+
+25
+00:01:26.733 --> 00:01:30.841
+So a read is a grain call, not a network
+round trip to a separate tier,
+
+26
+00:01:30.841 --> 00:01:33.271
+with its own scaling and its own failures.
+
+27
+00:01:33.621 --> 00:01:37.237
+And its read cache is part of the store,
+on each silo.
+
+28
+00:01:37.237 --> 00:01:42.662
+By default it refreshes on every read,
+so a read sees the latest committed write.
+
+29
+00:01:44.262 --> 00:01:47.039
+Second: conflict resolution is algebraic.
+
+30
+00:01:47.039 --> 00:01:50.494
+Merges are commutative,
+associative and idempotent.
+
+31
+00:01:50.844 --> 00:01:55.900
+So convergence needs no distributed lock
+manager and no consensus round trip,
+
+32
+00:01:55.900 --> 00:01:58.921
+and any cluster can
+accept a write to any key.
+
+33
+00:02:00.521 --> 00:02:02.894
+Third: everything else is a seam.
+
+34
+00:02:02.894 --> 00:02:07.064
+Storage, identity, governance,
+replication, administration
+
+35
+00:02:07.064 --> 00:02:11.809
+and observability are companion packages,
+behind documented seams.
+
+36
+00:02:12.159 --> 00:02:14.170
+A host registers what it needs.
+
+37
+00:02:14.170 --> 00:02:16.829
+A capability it leaves out costs nothing,
+
+38
+00:02:16.829 --> 00:02:19.877
+and each seam can take
+your own implementation.
+
+39
+00:02:21.477 --> 00:02:26.159
+The core alone covers point reads
+and writes, ordered scans, atomic writes
+
+40
+00:02:26.159 --> 00:02:30.840
+across many keys, typed queues,
+a distributed lock and a saga coordinator.
+
+41
+00:02:31.190 --> 00:02:35.573
+Those compose into many kinds of system:
+knowledge systems, digital twins,
+
+42
+00:02:35.573 --> 00:02:38.891
+distributed control planes,
+platforms with many tenants,
+
+43
+00:02:38.891 --> 00:02:40.727
+and collaborative applications.
+
+44
+00:02:41.077 --> 00:02:43.534
+It is a platform rather than a product.
+
+45
+00:02:43.534 --> 00:02:46.180
+It is not tied to one kind of application,
+
+46
+00:02:46.180 --> 00:02:50.149
+and how it is deployed is
+a configuration decision, taken late.
+
+47
+00:02:52.149 --> 00:02:54.609
+Now, as plainly, where it does not fit.
+
+48
+00:02:54.959 --> 00:02:56.741
+It lives in an Orleans cluster.
+
+49
+00:02:56.741 --> 00:02:58.753
+Without one, it has nowhere to run.
+
+50
+00:02:59.103 --> 00:03:02.256
+Two concurrent writes
+to a plain value are not merged:
+
+51
+00:03:02.256 --> 00:03:04.357
+the write with the later clock wins.
+
+52
+00:03:04.357 --> 00:03:08.736
+To keep both, use one of its values
+that merge, such as a counter or a set.
+
+53
+00:03:09.086 --> 00:03:12.771
+When two atomic writes touch
+the same keys, the later clock wins,
+
+54
+00:03:12.771 --> 00:03:15.096
+and there is no single order across them.
+
+55
+00:03:15.096 --> 00:03:18.384
+And no one read can see several trees
+at the same instant.
+
+56
+00:03:18.734 --> 00:03:21.181
+A value has to fit
+in one entry of its log,
+
+57
+00:03:21.181 --> 00:03:24.994
+so it is capped by the log's provider
+and by the log's batch limit.
+
+58
+00:03:24.994 --> 00:03:28.921
+Store a very large value elsewhere,
+and keep a reference in the tree.
+
+59
+00:03:29.271 --> 00:03:31.797
+And it is durable only
+once you make it so.
+
+60
+00:03:31.797 --> 00:03:35.910
+The default log is held in memory,
+and is lost when the silo restarts.
+
+61
+00:03:35.910 --> 00:03:39.141
+Both the log
+and the grain storage need a durable home.
+
+62
+00:03:41.141 --> 00:03:43.114
+Next on Evaluate: The guarantees.
+
+63
+00:03:43.114 --> 00:03:46.581
+The links are on this episode's page
+in the documentation.
+
+64
+00:03:46.931 --> 00:03:51.166
+In the README, What it is and why it
+exists sets out the three positions,
+
+65
+00:03:51.166 --> 00:03:53.951
+and A core plus seams,
+the packages behind them.

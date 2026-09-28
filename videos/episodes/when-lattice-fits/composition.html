@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>When Lattice fits, and when it doesn&#39;t</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      /* A scene laid out here: the whole frame, positioned like a component. */
+      .wf-frame {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      .wf-layer {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+
+      /* A list on a spine: one node per row, as the site lists things. */
+      .wf-spine {
+        position: absolute;
+        width: var(--lv-hairline);
+        background: var(--lt-rule-strong);
+      }
+      .wf-rows {
+        position: absolute;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .wf-row {
+        position: relative;
+        padding-left: 72px;
+      }
+      .wf-row > .lv-node {
+        position: absolute;
+        left: calc(-0.5 * var(--lv-node) + 0.5 * var(--lv-hairline));
+        top: 4px;
+      }
+      .wf-row.is-filled > .lv-node,
+      .wf-statement.is-filled > .lv-node {
+        background: var(--lt-ink);
+      }
+      .wf-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-caption);
+        font-weight: var(--lt-weight-strong);
+        line-height: 1.3;
+      }
+      .wf-note {
+        margin: 6px 0 0;
+      }
+      .wf-data {
+        margin: 6px 0 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-state);
+        line-height: 1.3;
+      }
+      .wf-kicker {
+        position: absolute;
+        margin: 0;
+      }
+      .wf-statement {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+        line-height: 1.3;
+      }
+      .wf-statement > .lv-node {
+        flex: none;
+      }
+
+      /* A box: a separate product, in its own hairline frame. */
+      .wf-box {
+        position: absolute;
+        box-sizing: border-box;
+        border: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-radius: var(--lv-radius);
+        padding: 30px 32px;
+      }
+      .wf-box-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-caption);
+        font-weight: var(--lt-weight-strong);
+        line-height: 1.3;
+      }
+      .wf-box-value {
+        position: absolute;
+        left: 32px;
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-state);
+        line-height: 1.3;
+      }
+      .wf-box-label {
+        position: absolute;
+        left: 40px;
+        top: 18px;
+      }
+
+      /* Something no longer needed: pale, and struck as it is said. */
+      .wf-struck {
+        position: relative;
+        display: inline-block;
+        color: var(--lt-ink-2);
+      }
+      .wf-strike {
+        position: absolute;
+        left: -6px;
+        right: -6px;
+        top: 52%;
+        height: var(--lv-hairline);
+        background: var(--lt-ink);
+        transform-origin: left center;
+      }
+      .wf-row.is-pale > .lv-node {
+        box-shadow: inset 0 0 0 var(--lv-ring) var(--lt-rule-strong);
+      }
+
+      /* The three places of the opening, side by side. */
+      .wf-place {
+        position: absolute;
+        width: 480px;
+      }
+      .wf-place > .lv-node {
+        margin-bottom: 26px;
+      }
+
+      /* Where next, as the site lists its paths. */
+      .wf-places {
+        position: absolute;
+        left: var(--lv-safe-x);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .wf-next {
+        position: relative;
+        padding-left: 72px;
+        margin-bottom: 52px;
+      }
+      .wf-next .lv-node {
+        position: absolute;
+        left: 0;
+        top: 10px;
+      }
+      .wf-next.is-filled .lv-node {
+        background: var(--lt-ink);
+      }
+      .wf-next-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.1;
+        letter-spacing: -0.012em;
+      }
+      .wf-next-what {
+        margin: 12px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      When Lattice fits, and when it doesn't: the first episode on Evaluate
+      (episodes/when-lattice-fits/BRIEF.md), narrated from SCRIPT.md. It opens
+      on the shared title card, and says it first in plain words, with an
+      online shop drawn in the same keys the technical half uses. The store,
+      the cluster and the seams are the shared components; the rest is laid
+      out here.
+
+      Each clip says which script scene it shows (data-scene) and, for a clip
+      that arrives later in its scene, on which beat (data-from-beat). The
+      timing - each clip's data-start and data-duration, each component's
+      beats, the episode's length and the narration track - is stamped from
+      the narration by `npm run timeline -- when-lattice-fits`. Never edit
+      those by hand: change SCRIPT.md, narrate, and stamp again.
+    -->
+    <div
+      id="root"
+      data-composition-id="when-lattice-fits"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="235.951"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="when-lattice-fits"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Evaluate","title":"When Lattice fits, and when it doesn&#39;t","subtitle":"What it takes the place of, and where it does not fit","beats":"1.5","end":8.119}'
+        data-start="0"
+        data-duration="8.119"
+      ></div>
+
+      <!-- What a shop remembers: the plain-words opening. -->
+      <div id="shop" class="clip lv-scene wf-frame" data-scene="what-a-shop-remembers" data-track-index="0" data-start="8.119" data-duration="45.141">
+        <h2 class="lv-heading">What a shop remembers</h2>
+      </div>
+      <div id="shop-items" class="clip wf-layer" data-scene="what-a-shop-remembers" data-track-index="2" data-start="8.119" data-duration="45.141">
+        <div class="wf-spine" style="left: 160px; top: 312px; height: 200px"></div>
+        <ol class="wf-rows" style="left: 160px; top: 300px">
+          <li class="wf-row is-filled" style="margin-bottom: 64px">
+            <span class="lv-node"></span>
+            <p class="wf-name">A basket</p>
+            <p class="lv-mono wf-data">basket/ada &#160;3 items</p>
+          </li>
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="wf-name">An order</p>
+            <p class="lv-mono wf-data">order/1001 &#160;paid</p>
+          </li>
+        </ol>
+      </div>
+      <div id="shop-products" class="clip wf-layer" data-scene="what-a-shop-remembers" data-from-beat="1" data-track-index="3" data-start="13.981" data-duration="39.279">
+        <div class="wf-box" style="left: 800px; top: 290px; width: 324px; height: 300px">
+          <p class="wf-box-name">A database</p>
+          <p class="lv-label">to keep it</p>
+        </div>
+        <div class="wf-box" style="left: 1150px; top: 290px; width: 324px; height: 300px">
+          <p class="wf-box-name">A cache</p>
+          <p class="lv-label">to read it quickly</p>
+        </div>
+        <div class="wf-box" style="left: 1500px; top: 290px; width: 324px; height: 300px">
+          <p class="wf-box-name">A queue</p>
+          <p class="lv-label">to pass work along</p>
+        </div>
+      </div>
+      <div id="shop-disagree" class="clip wf-layer" data-scene="what-a-shop-remembers" data-from-beat="2" data-track-index="4" data-start="21.917" data-duration="31.343">
+        <p class="lv-mono wf-box-value" style="left: 832px; top: 500px">3 items</p>
+        <p class="lv-mono wf-box-value" style="left: 1182px; top: 500px">2 items</p>
+        <p class="lv-mono wf-box-value" style="left: 1532px; top: 500px">add 1 item</p>
+        <p class="wf-statement" style="left: 800px; top: 660px"><span class="lv-node"></span>Something has to keep them in agreement</p>
+      </div>
+      <div id="shop-one" class="clip wf-layer" data-scene="what-a-shop-remembers" data-from-beat="3" data-track-index="2" data-start="28.271" data-duration="24.989">
+        <div class="wf-box" style="left: 96px; top: 270px; width: 1180px; height: 500px">
+          <span class="lv-label wf-box-label">The application</span>
+        </div>
+        <div class="wf-box" style="left: 176px; top: 360px; width: 1020px; height: 330px">
+          <span class="lv-label wf-box-label">One store, one set of rules</span>
+        </div>
+        <ol class="wf-rows" style="left: 280px; top: 460px">
+          <li class="wf-row is-filled" style="margin-bottom: 40px">
+            <span class="lv-node"></span>
+            <p class="lv-mono wf-name">basket/ada &#160;3 items</p>
+          </li>
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="lv-mono wf-name">order/1001 &#160;paid</p>
+          </li>
+        </ol>
+      </div>
+      <div id="shop-places" class="clip wf-layer" data-scene="what-a-shop-remembers" data-from-beat="4" data-track-index="3" data-start="34.628" data-duration="18.632">
+        <div class="wf-place" style="left: 96px; top: 320px">
+          <span class="lv-node"></span>
+          <p class="wf-name">The website</p>
+          <p class="lv-mono wf-data">basket/ada &#160;3 items</p>
+        </div>
+        <div class="wf-place" style="left: 696px; top: 320px">
+          <span class="lv-node"></span>
+          <p class="wf-name">The phone app</p>
+          <p class="lv-mono wf-data">basket/ada &#160;3 items</p>
+        </div>
+        <div class="wf-place" style="left: 1296px; top: 320px">
+          <span class="lv-node"></span>
+          <p class="wf-name">The warehouse</p>
+          <p class="lv-mono wf-data">basket/ada &#160;3 items</p>
+        </div>
+        <p class="wf-statement is-filled" style="left: 96px; top: 640px"><span class="lv-node"></span>Every place, the same answer</p>
+      </div>
+      <div id="shop-conflict" class="clip wf-layer" data-scene="what-a-shop-remembers" data-from-beat="5" data-track-index="4" data-start="43.119" data-duration="10.141">
+        <div class="wf-place" style="left: 96px; top: 300px">
+          <span class="lv-node"></span>
+          <p class="wf-name">The website</p>
+          <p class="lv-mono wf-data">basket/ada &#160;4 items</p>
+        </div>
+        <div class="wf-place" style="left: 696px; top: 300px">
+          <span class="lv-node"></span>
+          <p class="wf-name">The phone app</p>
+          <p class="lv-mono wf-data">basket/ada &#160;2 items</p>
+        </div>
+        <p class="lv-label wf-kicker" style="left: 96px; top: 540px">At the same moment, one plain value</p>
+        <p id="shop-kept" class="wf-statement is-filled" style="left: 96px; top: 610px"><span class="lv-node"></span>Only one change is kept</p>
+        <p id="shop-merge" class="lv-label wf-kicker" style="left: 196px; top: 700px">unless the value is one of the kinds that merge</p>
+      </div>
+
+      <!-- What it is: the store, and the three positions it takes. -->
+      <div
+        id="what-it-is"
+        data-composition-id="store-overview"
+        data-composition-src="shared/components/store-overview.html"
+        data-scene="what-it-is"
+        data-track-index="0"
+        data-variable-values='{"keys":"basket/ada,basket/bo,order/1001,order/1002","keysBeat":1,"statements":"The store lives in the cluster|Conflict resolution is algebraic|Everything else is a seam","beats":"0.6,6.355,14.56","end":26.415}'
+        data-start="53.26"
+        data-duration="26.415"
+      ></div>
+
+      <!-- The store lives in the cluster, and so does its read cache. -->
+      <div
+        id="in-the-cluster"
+        data-composition-id="cluster"
+        data-composition-src="shared/components/cluster.html"
+        data-scene="the-store-lives-in-the-cluster"
+        data-track-index="0"
+        data-variable-values='{"keys":"basket/ada,basket/bo,order/1001,order/1002","beats":"0.6,7.058,13.946","end":23.987}'
+        data-start="79.675"
+        data-duration="23.987"
+      ></div>
+      <div id="cluster-cache" class="clip wf-layer" data-scene="the-store-lives-in-the-cluster" data-from-beat="2" data-track-index="2" data-start="93.621" data-duration="10.041">
+        <ol class="wf-rows" style="left: 1370px; top: 690px; width: 460px">
+          <li class="wf-row is-filled" style="padding-left: 52px">
+            <span class="lv-node" style="left: 0"></span>
+            <p class="wf-name">A read cache on each silo</p>
+            <p class="lv-label wf-note">refreshed on every read, by default</p>
+          </li>
+        </ol>
+      </div>
+
+      <!-- Conflict resolution is algebraic. -->
+      <div id="algebra" class="clip lv-scene wf-frame" data-scene="conflict-resolution-is-algebraic" data-track-index="0" data-start="103.662" data-duration="16.259">
+        <h2 class="lv-heading">Conflict resolution is algebraic</h2>
+        <p class="lv-label wf-kicker" style="left: 96px; top: 230px">A merge is</p>
+        <div id="algebra-laws">
+          <div class="wf-place" style="left: 96px; top: 300px">
+            <span class="lv-node" style="background: var(--lt-ink)"></span>
+            <p class="wf-name">Commutative</p>
+            <p class="lv-label wf-note">in any order</p>
+          </div>
+          <div class="wf-place" style="left: 696px; top: 300px">
+            <span class="lv-node" style="background: var(--lt-ink)"></span>
+            <p class="wf-name">Associative</p>
+            <p class="lv-label wf-note">in any grouping</p>
+          </div>
+          <div class="wf-place" style="left: 1296px; top: 300px">
+            <span class="lv-node" style="background: var(--lt-ink)"></span>
+            <p class="wf-name">Idempotent</p>
+            <p class="lv-label wf-note">any number of times</p>
+          </div>
+        </div>
+      </div>
+      <div id="algebra-needs" class="clip wf-layer" data-scene="conflict-resolution-is-algebraic" data-from-beat="1" data-track-index="2" data-start="110.844" data-duration="9.077">
+        <ol class="wf-rows" style="left: 160px; top: 560px">
+          <li class="wf-row is-pale" style="margin-bottom: 30px">
+            <span class="lv-node"></span>
+            <p class="wf-name wf-struck">No distributed lock manager<span class="wf-strike"></span></p>
+          </li>
+          <li class="wf-row is-pale">
+            <span class="lv-node"></span>
+            <p class="wf-name wf-struck">No consensus round trip<span class="wf-strike"></span></p>
+          </li>
+        </ol>
+        <p id="algebra-any" class="wf-statement is-filled" style="left: 96px; top: 760px"><span class="lv-node"></span>Any cluster can accept a write to any key</p>
+      </div>
+
+      <!-- Everything else is a seam. -->
+      <div
+        id="seams"
+        data-composition-id="seams"
+        data-composition-src="shared/components/seams.html"
+        data-scene="everything-else-is-a-seam"
+        data-track-index="0"
+        data-start="119.921"
+        data-duration="20.956"
+        data-variable-values='{"beats":"0.6,12.238","end":20.956}'
+      ></div>
+
+      <!-- What it composes into. -->
+      <div id="composes" class="clip lv-scene wf-frame" data-scene="what-it-composes-into" data-track-index="0" data-start="140.877" data-duration="30.672">
+        <h2 class="lv-heading">What it composes into</h2>
+      </div>
+      <div id="composes-core" class="clip wf-layer" data-scene="what-it-composes-into" data-track-index="2" data-start="140.877" data-duration="30.672">
+        <p class="lv-label wf-kicker" style="left: 96px; top: 230px">The core alone</p>
+        <div class="wf-spine" style="left: 160px; top: 312px; height: 480px"></div>
+        <ol class="wf-rows" style="left: 160px; top: 300px">
+          <li class="wf-row is-filled" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Point reads and writes</p></li>
+          <li class="wf-row is-filled" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Ordered scans</p></li>
+          <li class="wf-row is-filled" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Atomic writes across many keys</p></li>
+          <li class="wf-row is-filled" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Typed queues</p></li>
+          <li class="wf-row is-filled" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">A distributed lock</p></li>
+          <li class="wf-row is-filled"><span class="lv-node"></span><p class="wf-name">A saga coordinator</p></li>
+        </ol>
+      </div>
+      <div id="composes-kinds" class="clip wf-layer" data-scene="what-it-composes-into" data-from-beat="1" data-track-index="3" data-start="151.19" data-duration="20.359">
+        <p class="lv-label wf-kicker" style="left: 1000px; top: 230px">Composes into</p>
+        <div class="wf-spine" style="left: 1064px; top: 312px; height: 380px"></div>
+        <ol class="wf-rows" style="left: 1064px; top: 300px">
+          <li class="wf-row" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Knowledge systems</p></li>
+          <li class="wf-row" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Digital twins</p></li>
+          <li class="wf-row" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Distributed control planes</p></li>
+          <li class="wf-row" style="margin-bottom: 36px"><span class="lv-node"></span><p class="wf-name">Platforms with many tenants</p></li>
+          <li class="wf-row"><span class="lv-node"></span><p class="wf-name">Collaborative applications</p></li>
+        </ol>
+      </div>
+      <div id="composes-platform" class="clip wf-layer" data-scene="what-it-composes-into" data-from-beat="2" data-track-index="4" data-start="161.077" data-duration="10.472">
+        <p class="wf-statement is-filled" style="left: 96px; top: 380px"><span class="lv-node"></span>A platform rather than a product</p>
+        <ol class="wf-rows" style="left: 160px; top: 520px">
+          <li class="wf-row" style="margin-bottom: 36px">
+            <span class="lv-node"></span>
+            <p class="wf-name">Not tied to one kind of application</p>
+          </li>
+          <li class="wf-row">
+            <span class="lv-node"></span>
+            <p class="wf-name">How it is deployed: a configuration decision, taken late</p>
+          </li>
+        </ol>
+      </div>
+
+      <!-- Where it does not fit: one row per limit, on its cue. -->
+      <div id="limits" class="clip lv-scene wf-frame" data-scene="where-it-does-not-fit" data-track-index="0" data-start="171.549" data-duration="48.992">
+        <h2 class="lv-heading">Where it does not fit</h2>
+        <p class="lv-label wf-kicker" style="left: 96px; top: 200px">As plainly</p>
+        <div id="limits-spine" class="wf-spine" style="left: 160px; top: 282px; height: 470px"></div>
+      </div>
+      <div id="limit-1" class="clip wf-layer" data-scene="where-it-does-not-fit" data-from-beat="1" data-track-index="2" data-start="174.959" data-duration="45.582">
+        <ol class="wf-rows" style="left: 160px; top: 270px">
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="wf-name">It needs an Orleans cluster</p>
+            <p class="lv-label wf-note">Without one, it has nowhere to run</p>
+          </li>
+        </ol>
+      </div>
+      <div id="limit-2" class="clip wf-layer" data-scene="where-it-does-not-fit" data-from-beat="2" data-track-index="3" data-start="179.103" data-duration="41.438">
+        <ol class="wf-rows" style="left: 160px; top: 388px">
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="wf-name">Concurrent writes to a plain value are not merged</p>
+            <p class="lv-label wf-note">The later clock wins. To keep both, use a value that merges</p>
+          </li>
+        </ol>
+      </div>
+      <div id="limit-3" class="clip wf-layer" data-scene="where-it-does-not-fit" data-from-beat="3" data-track-index="4" data-start="189.086" data-duration="31.455">
+        <ol class="wf-rows" style="left: 160px; top: 506px">
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="wf-name">No single order across atomic writes</p>
+            <p class="lv-label wf-note">and no one read across several trees at the same instant</p>
+          </li>
+        </ol>
+      </div>
+      <div id="limit-4" class="clip wf-layer" data-scene="where-it-does-not-fit" data-from-beat="4" data-track-index="5" data-start="198.734" data-duration="21.807">
+        <ol class="wf-rows" style="left: 160px; top: 624px">
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="wf-name">A value has to fit in one entry of its log</p>
+            <p class="lv-label wf-note">Store a very large value elsewhere, and keep a reference</p>
+          </li>
+        </ol>
+      </div>
+      <div id="limit-5" class="clip wf-layer" data-scene="where-it-does-not-fit" data-from-beat="5" data-track-index="6" data-start="209.271" data-duration="11.27">
+        <ol class="wf-rows" style="left: 160px; top: 742px">
+          <li class="wf-row is-filled">
+            <span class="lv-node"></span>
+            <p class="wf-name">The default log is in memory</p>
+            <p class="lv-label wf-note">Give the log and the grain storage a durable home</p>
+          </li>
+        </ol>
+      </div>
+
+      <!-- Where next. -->
+      <div id="where-next" class="clip lv-scene wf-frame" data-scene="where-next" data-track-index="0" data-start="220.541" data-duration="15.41">
+        <h2 class="lv-heading">Where next</h2>
+        <ol class="wf-places" style="top: 250px">
+          <li class="wf-next is-filled">
+            <span class="lv-node"></span>
+            <h3 class="wf-next-name">The guarantees</h3>
+            <p class="wf-next-what">Next on Evaluate</p>
+          </li>
+        </ol>
+      </div>
+      <div id="where-next-pages" class="clip" data-scene="where-next" data-from-beat="1" data-track-index="2" data-start="226.931" data-duration="9.02">
+        <ol class="wf-places" style="top: 470px">
+          <li class="wf-next">
+            <span class="lv-node"></span>
+            <h3 class="wf-next-name">What it is and why it exists</h3>
+            <p class="wf-next-what">The three positions</p>
+          </li>
+          <li class="wf-next">
+            <span class="lv-node"></span>
+            <h3 class="wf-next-name">A core plus seams</h3>
+            <p class="wf-next-what">The packages behind them</p>
+          </li>
+        </ol>
+      </div>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/when-lattice-fits/narration.wav" data-start="0" data-duration="235.951" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        const { duration } = window.LatticeMotion;
+
+        // Every clip's window is stamped into its attributes; its motion is
+        // read from them, so it cannot drift from the narration.
+        const byId = (id) => document.getElementById(id);
+        const start = (element) => Number(element.dataset.start);
+        const end = (element) => start(element) + Number(element.dataset.duration);
+        const tl = gsap.timeline({ paused: true });
+        const ease = "lattice-out";
+
+        // A clip arrives with a short rise and leaves just before "until"
+        // (by default, just before its window closes), so nothing hard-cuts.
+        function arrive(element, delay, rise, until) {
+          const leave = until === undefined ? end(element) : until;
+          tl.fromTo(element, { opacity: 0, y: rise }, { opacity: 1, y: 0, duration: duration.slow, ease }, start(element) + delay);
+          tl.to(element, { opacity: 0, duration: duration.fast, ease: "power1.in" }, leave - duration.fast);
+        }
+
+        // Clips that take turns within a scene: each gives way to the next.
+        function turns(ids, rise) {
+          ids.forEach((id, k) => {
+            const element = byId(id);
+            const until = k + 1 < ids.length ? start(byId(ids[k + 1])) : end(element);
+            arrive(element, 0.1, rise, until);
+          });
+        }
+
+        for (const id of ["shop", "algebra", "composes", "limits", "where-next"]) {
+          arrive(byId(id), 0, 0);
+        }
+
+        // The opening: what the shop remembers stays beside the separate
+        // products while they disagree; then one store; then many places; then
+        // the one plain value two of them change at once.
+        arrive(byId("shop-items"), 0.3, 16, start(byId("shop-one")));
+        arrive(byId("shop-products"), 0.1, 16, start(byId("shop-one")));
+        arrive(byId("shop-disagree"), 0.1, 12, start(byId("shop-one")));
+        turns(["shop-one", "shop-places", "shop-conflict"], 16);
+        const conflict = byId("shop-conflict");
+        tl.from(byId("shop-kept"), { opacity: 0, x: -20, duration: duration.slow, ease }, start(conflict) + 2.2);
+        tl.from(byId("shop-merge"), { opacity: 0, duration: duration.slow, ease }, start(conflict) + 4.4);
+
+        // The read cache, beside the cluster, on its own cue.
+        arrive(byId("cluster-cache"), 0.2, 16);
+
+        // Algebra: the three laws, then what they make unnecessary.
+        const needs = byId("algebra-needs");
+        arrive(needs, 0.1, 16);
+        needs.querySelectorAll(".wf-strike").forEach((strike, i) => {
+          tl.from(strike, { scaleX: 0, duration: duration.base, ease }, start(needs) + 1.4 + i * 0.9);
+        });
+        tl.from(byId("algebra-any"), { opacity: 0, x: -20, duration: duration.slow, ease }, start(needs) + 3.4);
+        byId("algebra-laws").querySelectorAll(".wf-place").forEach((law, i) => {
+          tl.from(law, { opacity: 0, y: 16, duration: duration.base, ease }, start(byId("algebra")) + 1.2 + i * 0.8);
+        });
+
+        // What it composes into: the core, what it composes into beside it,
+        // and then what that makes it.
+        arrive(byId("composes-core"), 0.3, 16, start(byId("composes-platform")));
+        arrive(byId("composes-kinds"), 0.1, 16, start(byId("composes-platform")));
+        arrive(byId("composes-platform"), 0.2, 16);
+
+        // Where it does not fit: each limit arrives on its cue, and stays.
+        tl.from(byId("limits-spine"), { scaleY: 0, transformOrigin: "top center", duration: 1.1, ease: "lattice-draw" }, start(byId("limits")) + 0.6);
+        for (let k = 1; k <= 5; k++) {
+          arrive(byId("limit-" + k), 0.1, 16);
+        }
+
+        arrive(byId("where-next-pages"), 0.1, 16);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["when-lattice-fits"] = tl;
+      })();
+    </script>
+  </body>
+</html>
