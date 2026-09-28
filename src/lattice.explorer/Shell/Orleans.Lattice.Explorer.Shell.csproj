@@ -1,0 +1,72 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Orleans.Lattice.Explorer.Shell</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Shell</PackageId>
+    <Version>9.8.0</Version>
+    <Description>The Orleans.Lattice Explorer Shell: a Razor class library for everything outside a Lattice App's frame - the navigation and session chrome, the shell-owned native areas (Data, Apps, Access, Schema, Tenancy, Replication, Backups, Telemetry and Cluster), the order-diagram design system in its Operate register, the credential-aware transport adapters, and the app frame host and bridge broker. Its static assets are served from _content/Orleans.Lattice.Explorer.Shell. Nothing in it is an extension point: areas are compiled in, and the only third-party UI surface is a sandboxed Lattice App frame.</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+  </ItemGroup>
+
+  <!--
+    Every project reference the Shell needs across the whole of epic #3807 is
+    declared here, up front, so no later item edits this file before the
+    cutover (K1). Areas bind to the transport-neutral contracts in
+    lattice.api.abstractions; the gRPC client packages back the Explorer's own
+    credential-aware transport adapters (T1). AppKit is referenced only so its
+    static web assets flow to a head that references the Shell.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\AppKit\Orleans.Lattice.Explorer.AppKit.csproj" />
+    <ProjectReference Include="..\..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\..\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.telemetry.grpc\Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\lattice.api.apps.grpc\Orleans.Lattice.Api.Apps.Grpc.csproj" />
+  </ItemGroup>
+
+  <!--
+    The documentation site's design tokens, fonts, licences and favicon, LINKED
+    into the Shell's static web assets rather than copied (epic #3807, E10).
+    docs-site/template/public/ stays the one source of truth: the Explorer
+    serves those exact bytes at _content/Orleans.Lattice.Explorer.Shell/design/,
+    and ShellTokenParityTests fails the build if this link is ever replaced by a
+    hand-maintained copy under wwwroot/design/.
+  -->
+  <PropertyGroup>
+    <LatticeDocsSitePublic>$(MSBuildThisFileDirectory)..\..\..\docs-site\template\public\</LatticeDocsSitePublic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="$(LatticeDocsSitePublic)tokens.css" Link="wwwroot\design\tokens.css" />
+    <Content Include="$(LatticeDocsSitePublic)favicon.svg" Link="wwwroot\design\favicon.svg" />
+    <Content Include="$(LatticeDocsSitePublic)fonts\recursive-sans-linear.woff2" Link="wwwroot\design\fonts\recursive-sans-linear.woff2" />
+    <Content Include="$(LatticeDocsSitePublic)fonts\cascadia-mono.woff2" Link="wwwroot\design\fonts\cascadia-mono.woff2" />
+    <Content Include="$(LatticeDocsSitePublic)fonts\OFL-Recursive.txt" Link="wwwroot\design\fonts\OFL-Recursive.txt" />
+    <Content Include="$(LatticeDocsSitePublic)fonts\OFL-CascadiaMono.txt" Link="wwwroot\design\fonts\OFL-CascadiaMono.txt" />
+  </ItemGroup>
+
+</Project>

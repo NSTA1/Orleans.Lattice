@@ -1,0 +1,15 @@
+<div class="lt-check">
+    <input @attributes="AdditionalAttributes"
+           id="@_id"
+           class="lt-check__box"
+           type="checkbox"
+           checked="@Checked"
+           disabled="@Disabled"
+           aria-describedby="@(Hint is null ? null : HintId)"
+           @onchange="HandleChangeAsync" />
+    <label class="lt-check__label" for="@_id">@Label</label>
+    @if (Hint is not null)
+    {
+        <p id="@HintId" class="lt-field__hint lt-check__hint">@Hint</p>
+    }
+</div>

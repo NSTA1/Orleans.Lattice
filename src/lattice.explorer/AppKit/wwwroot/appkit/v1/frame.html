@@ -1,0 +1,23 @@
+<!doctype html>
+<!--
+  Placeholder for the AppKit v1 frame bootstrap document (issue #3811).
+
+  F5 (issue #3814) replaces this file with the real bootstrap: it loads the
+  loader and the in-frame lattice API from appkit/v1/, waits for the host's
+  MessageChannel port, and materialises the verified bundle as blob: URLs.
+  The placeholder exists so the frame host (issue #3817) can map and test the
+  bootstrap route and its headers before F5 lands.
+
+  It is served with "Content-Security-Policy: sandbox allow-scripts;
+  default-src 'none'; ..." (epic #3807, E4), so it must stay free of inline
+  script and inline style, and must never reference a third-party origin.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="referrer" content="no-referrer">
+  <title>Lattice App frame</title>
+</head>
+<body data-appkit-protocol="1" data-appkit-placeholder="true">
+</body>
+</html>

@@ -1,0 +1,32 @@
+@if (Open)
+{
+    <div class="lt-dialog-layer">
+        <span class="lt-dialog__sentinel" tabindex="0" @onfocus="FocusDialogAsync"></span>
+        <div @ref="_dialog"
+             class="lt-dialog"
+             role="@(Alert ? "alertdialog" : "dialog")"
+             aria-modal="true"
+             aria-labelledby="@TitleId"
+             aria-describedby="@(Description is null ? null : DescriptionId)"
+             tabindex="-1"
+             @onkeydown="HandleKeyDownAsync">
+            <div class="lt-dialog__header">
+                <h2 id="@TitleId" class="lt-dialog__title">@Title</h2>
+                @if (ShowClose)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseAsync">Close</LtButton>
+                }
+            </div>
+            @if (Description is not null)
+            {
+                <p id="@DescriptionId" class="lt-dialog__description">@Description</p>
+            }
+            <div class="lt-dialog__body">@ChildContent</div>
+            @if (Actions is not null)
+            {
+                <div class="lt-dialog__actions">@Actions</div>
+            }
+        </div>
+        <span class="lt-dialog__sentinel" tabindex="0" @onfocus="FocusDialogAsync"></span>
+    </div>
+}

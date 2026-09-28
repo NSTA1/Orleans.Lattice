@@ -1,0 +1,10 @@
+@if (Label is null)
+{
+    <ul class="lt-spine">@ChildContent</ul>
+}
+else
+{
+    <nav class="lt-spine-nav" aria-label="@Label">
+        <ul class="lt-spine">@ChildContent</ul>
+    </nav>
+}

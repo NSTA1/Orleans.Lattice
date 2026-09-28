@@ -1,0 +1,25 @@
+<div class="lt-empty">
+    <LtNode Kind="LtNodeKind.Hollow" Size="LtNodeSize.Large" />
+    <div class="lt-empty__content">
+        @switch (HeadingLevel)
+        {
+            case 2:
+                <h2 class="lt-empty__title">@Title</h2>
+                break;
+            case 3:
+                <h3 class="lt-empty__title">@Title</h3>
+                break;
+            default:
+                <h4 class="lt-empty__title">@Title</h4>
+                break;
+        }
+        @if (ChildContent is not null)
+        {
+            <div class="lt-empty__body">@ChildContent</div>
+        }
+        @if (Actions is not null)
+        {
+            <div class="lt-empty__actions">@Actions</div>
+        }
+    </div>
+</div>

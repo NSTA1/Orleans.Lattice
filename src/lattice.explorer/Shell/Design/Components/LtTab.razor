@@ -1,0 +1,8 @@
+@if (Parent.IsActive(this))
+{
+    <div class="lt-tabs__panel"
+         role="tabpanel"
+         id="@Parent.PanelElementId(this)"
+         aria-labelledby="@Parent.TabElementId(this)"
+         tabindex="0">@ChildContent</div>
+}
