@@ -231,11 +231,15 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Replication - Bootstrap dropped the TTL of committed rows.** The default snapshot export left every committed row's expiry at 0, so whole-tree bootstrap and the anti-entropy fallback installed TTL keys on the peer as durable. Committed rows now carry the source entry's absolute expiry. ([#3802](https://github.com/NSTA1/Orleans.Lattice/issues/3802)) (`Orleans.Lattice.Replication`)
 
-- **Core - Conditional batch writes skipped the write bounds.** `SetManyWherePredicateAsync` now enforces `MaxKeyLength`, `MaxValueSizeBytes` and the `MaxLiveKeys` / `MaxEstimatedBytes` admission caps like `SetManyAsync`, so adding a predicate no longer bypasses them. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803)) (`Orleans.Lattice`)
+- **Core - Conditional and atomic batches skipped the write bounds.** `SetManyWherePredicateAsync`, `SetManyAtomicAsync` and `SetManyAtomicWhereAsync` now enforce `MaxKeyLength`, `MaxValueSizeBytes` and `MaxLiveKeys` / `MaxEstimatedBytes` caps like `SetManyAsync`, atomic ones before the saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852)) (`Orleans.Lattice`)
 
 - **Performance - `performance-report.ps1` threw at startup.** Its `-NamePrefix` parameter is declared again, so Layer 1, Layer 2 and self-provisioning Layer 3 sweeps no longer fail under StrictMode, and a gate checks that every documented script parameter is declared. ([#3804](https://github.com/NSTA1/Orleans.Lattice/issues/3804)) (`repository-wide`)
 
 - **Replication - Inbound peer contact went unrecorded for single-entry pushes.** The dead-letter decorator's single-entry and per-entry retry paths bypassed the applier's only recording site, so inbound gauges and the inbound-silence health signal missed low-rate peers. Both paths now record contact. ([#3848](https://github.com/NSTA1/Orleans.Lattice/issues/3848)) (`Orleans.Lattice.Replication`)
+
+- **Observability - Replication wire-version gauges had no tenant tag.** `wire_version.negotiated` and `wire_version.downgrade_active` now carry the derived `tenant` tag like every other replication instrument, so tenant-scoped telemetry sees a tree's mixed-version peers. ([#3853](https://github.com/NSTA1/Orleans.Lattice/issues/3853)) (`Orleans.Lattice.Replication`)
+
+- **Performance - The azure-throughput rig ignored a documented `0`.** The silo now honours `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=0` (coalescing off) and the TCP producer `BENCH_DURATION_SEC=0` (run forever) instead of running the default, and a gate checks every documented `0`. ([#3854](https://github.com/NSTA1/Orleans.Lattice/issues/3854)) (`repository-wide`)
 
 ### Security
 
