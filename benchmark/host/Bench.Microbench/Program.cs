@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, sharetouch, orphanedsurvey, rowtranscodecopytrims.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, sharetouch, orphanedsurvey, rowtranscodecopytrims., ormapkeyorderfoldbox
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -552,6 +552,12 @@ if (string.Equals(suite, "ormapdotspantranscode", StringComparison.OrdinalIgnore
     return orMapDotSpanSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "ormapkeyorderfoldbox", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ormapkeyorderfoldbox (OrMapKeyOrderAndDeltaFoldBoxBenchmarks)");
+    var orMapKeyOrderSummary = BenchmarkRunner.Run<OrMapKeyOrderAndDeltaFoldBoxBenchmarks>(config);
+    return orMapKeyOrderSummary.HasCriticalValidationErrors ? 1 : 0;
+}
 if (string.Equals(suite, "rowtranscodecopytrims", StringComparison.OrdinalIgnoreCase))
 {
     Console.WriteLine("[microbench] suite   -> rowtranscodecopytrims (RowTranscodeAndCopyTrimBenchmarks)");

@@ -48,7 +48,9 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Aggregation row transcode.** A row now encodes a short string once instead of sizing it and then encoding it again, gated on a compile-time UTF-8 bound rather than a virtual `Encoding.GetMaxByteCount` call paid per string. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
 
-- **Performance - CRDT provenance decode.** The multi-value register sorts its projected result instead of sorting an intermediate copy of its input, and a flag read returns a UTF-8 literal instead of running the encoder over a string constant. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
+- **Performance - CRDT delta fold enumeration.** Eight delta-fold and shape-registry sites walk a span over the concrete backing array or list instead of the read-only list interface, which boxed an enumerator per call. The coalescing fold is 18% faster and allocates up to 896 fewer bytes. ([#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
+
+- **Performance - CRDT provenance decode.** The or-map state decoder orders distinct keys and emits their events contiguously, from a pooled scratch, instead of sorting every event by key surrogate; the multi-value register sorts its projected result, not a copy; a flag read returns a UTF-8 literal. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833), [#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
 
 - **Performance - CRDT provenance dot scans and UTF-8 transcodes.** The OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice`, `Orleans.Lattice.Caching.AzureBlob`)
 
