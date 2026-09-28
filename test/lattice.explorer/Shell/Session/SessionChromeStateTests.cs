@@ -127,6 +127,38 @@ public sealed class SessionChromeStateTests
     }
 
     [Test]
+    public void Overlay_opening_is_raised_before_each_new_surface_with_its_kind()
+    {
+        using var state = new SessionChromeState(_explorer, _auth);
+        var opening = new List<(SessionOverlayKind Kind, SessionOverlayKind OverlayAtTheTime)>();
+        state.OverlayOpening += kind => opening.Add((kind, state.Overlay));
+
+        state.OpenSignIn();
+        state.OpenSignIn();
+        state.OpenConfiguration();
+        state.CloseOverlay();
+
+        Assert.That(opening, Is.EqualTo(new[]
+        {
+            (SessionOverlayKind.SignIn, SessionOverlayKind.None),
+            (SessionOverlayKind.Configuration, SessionOverlayKind.SignIn),
+        }), "raised before the change, once per surface, and never for a close");
+    }
+
+    [Test]
+    public void Overlay_opening_is_raised_once_for_the_reauth_latch()
+    {
+        using var state = new SessionChromeState(_explorer, _auth);
+        var opening = new List<(SessionOverlayKind Kind, bool LatchedAtTheTime)>();
+        state.OverlayOpening += kind => opening.Add((kind, state.ReauthRequired));
+
+        _auth.RaiseReauthRequired();
+        _auth.RaiseReauthRequired();
+
+        Assert.That(opening, Is.EqualTo(new[] { (SessionOverlayKind.None, false) }));
+    }
+
+    [Test]
     public void Disposal_unsubscribes_from_the_sign_in_session()
     {
         var state = new SessionChromeState(_explorer, _auth);
