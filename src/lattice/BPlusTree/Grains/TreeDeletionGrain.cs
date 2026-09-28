@@ -230,6 +230,7 @@ internal sealed partial class TreeDeletionGrain(
 
     public async Task RecoverAsync()
     {
+        EnsureLifecycleOrigin();
         if (state.State.LogicalPhysicalTreeId is not null)
         {
             await RecoverLogicalAsync();
@@ -341,6 +342,7 @@ internal sealed partial class TreeDeletionGrain(
 
     public async Task PurgeNowAsync()
     {
+        EnsureLifecycleOrigin();
         if (state.State.LogicalPhysicalTreeId is not null)
         {
             await PurgeLogicalAsync();

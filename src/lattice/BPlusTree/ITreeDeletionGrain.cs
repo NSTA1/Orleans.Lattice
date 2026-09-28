@@ -37,10 +37,10 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>Retires a derived physical copy whose registry entry is disposable.</summary>
     Task DeleteDerivedPhysicalTreeAsync();
 
-    /// <summary>Reports deletion of the local physical copy, not the logical alias.</summary>
+    /// <summary>Reports deletion or partially applied delegated deletion of the local physical copy, not the logical alias.</summary>
     Task<bool> IsPhysicalDeletedAsync();
 
-    /// <summary>Recovers the retired local physical copy for resize undo.</summary>
+    /// <summary>Recovers the retired or delegated local physical copy, including partially applied shard marks.</summary>
     Task RecoverPhysicalAsync();
 
     /// <summary>Purges the retired local copy without affecting a logical alias.</summary>
@@ -52,7 +52,12 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>Reserves the logical lifecycle for an idempotent alias operation.</summary>
     Task BeginAliasChangeAsync(string operationId);
 
-    /// <summary>Releases only the matching alias-operation reservation.</summary>
+    /// <summary>
+    /// Releases only the matching alias-operation reservation. Internal-origin
+    /// control-plane callers only; an absent or different reservation is a no-op.
+    /// Owning coordinators use this after completion or to abandon a persisted
+    /// preparation while idle, never on a time-based lease expiry.
+    /// </summary>
     Task EndAliasChangeAsync(string operationId);
 
     /// <summary>Rejects alias writes while logical deletion is pending or durable.</summary>

@@ -116,11 +116,18 @@ internal sealed partial class TreeDeletionGrain
                     }
                 }
             }
-            finally
+            catch
             {
-                state.State.DeletePending = false;
-                await state.WriteStateAsync();
+                try { await ClearDeletePendingAsync(); }
+                catch (Exception cleanupFault)
+                {
+                    logger.LogError(cleanupFault,
+                        "Tree {TreeId}: failed to clear the deletion fence after a fault; retry delete to reconcile it.",
+                        TreeId);
+                }
+                throw;
             }
+            await ClearDeletePendingAsync();
         }
         if (state.State.LogicalPhysicalTreeId is null || state.State.LogicalDeleteComplete) return;
 
@@ -146,6 +153,13 @@ internal sealed partial class TreeDeletionGrain
         foreach (var alias in await registry.GetAliasesTargetingAsync(physical))
             if (alias != TreeId)
                 throw Refuse($"Cannot delete alias target '{physical}': tree '{alias}' also aliases it.");
+    }
+
+    private async Task ClearDeletePendingAsync()
+    {
+        state.State.DeletePending = false;
+        try { await state.WriteStateAsync(); }
+        catch { state.State.DeletePending = true; throw; }
     }
 
     private async Task ResetPurgedRetirementAsync()

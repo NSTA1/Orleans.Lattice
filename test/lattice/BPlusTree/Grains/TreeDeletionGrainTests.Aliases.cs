@@ -164,6 +164,10 @@ public partial class TreeDeletionGrainTests
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteTreeAsync());
         await grain.EndAliasChangeAsync("restore-1");
         await grain.EndAliasChangeAsync("restore-1");
+        await grain.BeginAliasChangeAsync("resize-2");
+        await grain.EndAliasChangeAsync("restore-1");
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteTreeAsync());
+        await grain.EndAliasChangeAsync("resize-2");
         await grain.DeleteTreeAsync();
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.BeginAliasChangeAsync("resize-2"));
     }
