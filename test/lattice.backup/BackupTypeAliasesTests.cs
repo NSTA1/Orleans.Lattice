@@ -111,12 +111,31 @@ public class BackupTypeAliasesTests
 
     // The AliasPrefix constant reserves the "olb." namespace; it is not itself a
     // type alias, so it is excluded from the constant enumeration the tests scan.
+    /// <summary>
+    /// The alias table read by reflection.
+    /// <para>
+    /// The non-emptiness guard is load-bearing rather than defensive: every caller
+    /// either iterates this table or asserts that a set derived from it is empty,
+    /// and both shapes are vacuously satisfied by an empty table. The reflection
+    /// query is narrow enough to return nothing for a reason that has nothing to do
+    /// with the aliases being correct - narrowing the binding flags, or demoting a
+    /// constant from <c>const</c> to <c>static readonly</c>, clears the filter and
+    /// the whole wire-format guard would go green while asserting nothing.
+    /// </para>
+    /// </summary>
     private static IEnumerable<(string Name, string Value)> EnumerateConstants()
     {
-        return typeof(BackupTypeAliases)
+        var constants = typeof(BackupTypeAliases)
             .GetFields(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Where(f => f.Name != nameof(BackupTypeAliases.AliasPrefix))
-            .Select(f => (f.Name, (string)f.GetValue(null)!));
+            .Select(f => (f.Name, (string)f.GetValue(null)!))
+            .ToList();
+
+        Assert.That(constants, Is.Not.Empty,
+            "Expected at least one string alias constant on BackupTypeAliases; an empty table would "
+            + "satisfy every alias assertion in this fixture without testing anything.");
+
+        return constants;
     }
 }
