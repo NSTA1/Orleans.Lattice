@@ -71,17 +71,19 @@ bool exists = await tree.TreeExistsAsync();
 | Operation | Registry effect |
 |---|---|
 | First use of a new tree (anything that resolves its options, or any operation that reaches a shard root) | Tree registered (key added), with its structural pins seeded |
-| `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`) and filled from the source's shards `0` to `ShardCount - 1`, each into the shard with the same index; a shard an adaptive split added above that range is not copied - see [Tree Sizing](tree-sizing.md#how-it-works) for what a resize does not carry |
+| `ResizeAsync` snapshot phase | New physical tree registered via snapshot (visible in `GetAllTreeIdsAsync`), with `DerivedFrom` set to the logical tree id, and filled from the source's shards `0` to `ShardCount - 1`, each into the shard with the same index; a shard an adaptive split added above that range is not copied - see [Tree Sizing](tree-sizing.md#how-it-works) for what a resize does not carry |
 | `ResizeAsync` swap phase | Registry entry rewritten with the new sizing and the pinned `ShardCount`, keeping the tree's configuration overrides and dropping the old physical tree's shard map, split allocation mark and WAL layout, so the tree routes by the default shard map from then on; the alias is then pointed at the new physical tree |
-| `ResizeAsync` cleanup phase | Old physical tree soft-deleted; removed from registry on purge, except on a tree's first resize, where the old physical tree's ID is the logical tree ID and the purge keeps the logical tree's entry |
+| `ResizeAsync` cleanup phase | Old physical tree retired: its shards are soft-deleted as physical maintenance and it is removed from the registry on purge. On a tree's first resize, the old physical tree's ID is the logical tree ID, so the purge keeps the logical tree's entry. Retirement publishes no tree lifecycle events and does not make the logical tree read as deleted |
 | `UndoResizeAsync` | After the swap: alias removed, original entry restored, and the old tree recovered if the resize had already soft-deleted it. Either side of the swap, the new tree is deleted (removed from registry on purge) |
 | `SnapshotAsync` initiation | Destination tree registered (visible in `GetAllTreeIdsAsync` with optional sizing overrides); the source's alias is resolved and the physical tree it points at is the one copied, its shards `0` to `ShardCount - 1` only (see [Snapshots](snapshots.md#requirements)) |
 | Adaptive shard split | Shard map rewritten under a fresh `Version`; the next physical shard index to allocate advanced |
 | Shard consolidation (automatic over-split healing) | Shard map rewritten under a fresh `Version`, reassigning the donor's slots to the survivor |
 | `ReshardAsync` | Shard map grown by the splits it drives; `ShardCount` pin updated when it completes (or at once on an empty tree) |
 | [`ILatticeTreeAdmin.CreateTreeAsync`](../lattice.api.treeadmin/README.md) | Tree registered with the supplied sizing pins (honoured only on first creation) |
-| Shadow-cutover restore (`ILatticeTreeAdmin.RestoreTreeAsync`) | Alias pointed at the restored shadow tree; a revert points it back |
-| `DeleteTreeAsync` + purge completion | Tree unregistered (key removed). Delete and purge do not resolve an alias - see [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree) |
+| Shadow-cutover restore (`ILatticeTreeAdmin.RestoreTreeAsync`) | Shadow tree registered with `DerivedFrom` set to the target tree; alias pointed at the restored shadow tree; a revert points it back |
+| Schema remediation cut-over | Remediated copy registered with `DerivedFrom` set to the remediated tree; alias pointed at it |
+| `DeleteTreeAsync` / `RecoverTreeAsync` | On an aliased tree, the live backing tree the alias targets is resolved, checked to be owned by this logical tree, and pinned; the delete or recover is applied to it. See [Logical lifecycle across an alias](#logical-lifecycle-across-an-alias) |
+| `DeleteTreeAsync` + purge completion | The pinned backing tree's state is purged; both the backing tree and the logical tree are unregistered (key removed) |
 | `BulkLoadAsync` | Tree registered on first shard write |
 
 > **Note:** Physical trees created by `ResizeAsync` (e.g. `my-tree/resized/abc123`) and `SnapshotAsync` are regular registered trees and appear in `GetAllTreeIdsAsync` results. This is by design - it allows monitoring and manual intervention. When the old physical tree is purged after the `SoftDeleteDuration` window, it is automatically unregistered - unless it is a first resize's retired copy, whose ID is the logical tree ID: only its shards are purged, and the logical tree stays registered.
@@ -96,7 +98,7 @@ A tree's registry entry can carry a physical-tree alias that redirects a logical
 2. If `PhysicalTreeId` is set, all shard routing uses the physical tree ID instead of the logical tree ID.
 3. Only a single level of indirection is allowed - the physical tree must not itself be aliased. `SetAliasAsync` enforces this constraint.
 
-Tree deletion, recovery and purge are the exception to alias routing: they act on the shards stored under the logical tree ID and do not resolve the alias (see [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree)).
+Tree deletion, recovery and purge resolve the alias too, but only to a target the logical tree owns; see [Logical lifecycle across an alias](#logical-lifecycle-across-an-alias) and [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree).
 
 ### Cache invalidation
 
@@ -106,9 +108,44 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 Resize (and its undo), restore, and schema remediation drive the alias from inside the silo; the registry itself is internal infrastructure. For operators, the [tree-administration facade](../lattice.api.treeadmin/README.md) exposes `ILatticeTreeAdmin.SetTreeAliasAsync`, which points a logical tree at a physical tree after authorizing whole-tree administration on both the logical tree and its target, and `ILatticeTreeAdmin.ResolveTreeAliasAsync`, which returns the physical id (or the logical id when no alias is set); it offers no verb that removes an alias. Underneath, the registry exposes three operations:
 
-- **Set** - points a logical tree id at a physical tree id, after verifying that the target differs from the logical id, is not itself aliased, and would not widen the caller's effective privilege (for example a `_lattice_` system tree, or a `sys-` tree aliased from outside the `sys-` namespace).
+- **Set** - points a logical tree id at a physical tree id, after verifying that the target differs from the logical id, is not itself aliased, and would not widen the caller's effective privilege (for example a `_lattice_` system tree, or a `sys-` tree aliased from outside the `sys-` namespace). It is also refused while either tree is logically deleted, while a logical delete of either is in flight, and when the registered [ownership guard](#ownership-bounded-aliasing) denies it.
 - **Resolve** - returns the physical id, or the logical id unchanged when no alias is registered.
 - **Remove** - clears the alias, reverting to the logical id.
+- **Aliases targeting** - returns, in ordinal order, every logical tree id whose alias currently targets a given physical tree. It scans the authoritative registry entries rather than a separately maintained index, so it cannot go stale. Logical deletion uses it to refuse a physical tree that another tree still aliases.
+
+### Provenance: `DerivedFrom`
+
+A physical tree created to back a logical tree records that logical tree's id in its registry entry's `DerivedFrom` field, stamped once at creation: a resize's new copy, a shadow-cutover restore's shadow tree, and a schema remediation's remediated copy all carry it. A tree registered any other way - an ordinary tree, a standalone `SnapshotAsync` destination, or an entry written before the field existed - has no `DerivedFrom` and is an independent tree. Registration is first-writer-wins, so the field is never backfilled or rewritten, and every consumer treats a missing value as "not derived" and fails closed.
+
+### Ownership-bounded aliasing
+
+An alias must not let one owner's logical tree read or write another owner's data. Core carries no notion of ownership itself, so the registry consults an optional `ITreeOwnershipGuard` on every alias assignment - including system-origin maintenance such as resize, restore and remediation, which are not exempt - after the namespace, target-control and lifecycle checks and before anything is written or published. The guard receives the logical tree id, the physical target id, and the target's `DerivedFrom` read from the registry (never supplied by the caller), and returns a `TreeOwnershipDecision`: `TreeOwnershipDecision.Allow()` lets the alias proceed, and `TreeOwnershipDecision.Deny(reason)` refuses it. The default value of `TreeOwnershipDecision` denies. A refusal surfaces as `LatticeTreeOwnershipDeniedException` carrying the guard's reason, and the gRPC tree-administration binding maps it to `PermissionDenied`. A failure thrown by the guard propagates without writing the alias.
+
+`AddLattice` registers an allow-all guard, so a host without an ownership provider behaves exactly as before. An add-on replaces it; the [installable apps package](../lattice.apps/README.md) registers a guard backed by its tree ownership ledger. The guard runs inside the registry's mutation turn, so an implementation must not call registry mutations or range scans (point reads are fine), and its denial reasons must be safe to show to the caller.
+
+```csharp verify
+public sealed class SingleOwnerGuard : ITreeOwnershipGuard
+{
+    public ValueTask<TreeOwnershipDecision> AuthorizeAliasAsync(
+        string logicalTreeId, string physicalTreeId, string? derivedFrom,
+        CancellationToken cancellationToken = default)
+        => new(derivedFrom is null || derivedFrom == logicalTreeId
+            ? TreeOwnershipDecision.Allow()
+            : TreeOwnershipDecision.Deny("The target was created for a different tree."));
+}
+```
+
+### Logical lifecycle across an alias
+
+`DeleteTreeAsync`, `RecoverTreeAsync` and `PurgeTreeAsync` act on the **logical** tree. On an aliased tree they resolve the live backing tree the alias targets and apply the operation to it, after checking that the target is owned by this logical tree: its `DerivedFrom` must equal the logical tree id, and no other logical tree may alias it. An administrative alias to an independent tree, or to a tree another logical tree also aliases, is refused rather than deleted through the wrong name. The resolved target is pinned in durable state before any physical effect, so a retry after an ambiguous failure continues on the same target instead of re-resolving.
+
+A logical purge removes the backing tree's state and unregisters both the backing tree and the logical tree, so `TreeExistsAsync` then reports the tree gone. A resize's retirement of its old copy is physical maintenance: it is not a logical delete, the live tree does not read as deleted during the retirement window, and a public `RecoverTreeAsync` on a live resized tree is refused.
+
+Alias-changing operations and logical deletion never overlap. Resize (and its undo), shadow-cutover restore and revert, and schema remediation each hold a durable reservation, keyed by an operation id, on the tree for the duration of their alias change; a delete refuses while one is held, and an alias change refuses while the tree is logically deleted or a delete is pending. Reservations never expire by time: each is released by the owning operation, by the matching id, and releasing an absent or different id is a no-op.
+
+### Identity seen by observers and metrics
+
+Routing through an alias does not change the tree identity reported to observers. [Mutation observers](api.md#mutation-observers) receive the logical tree id in `LatticeMutation.TreeId` across resize, restore and remediation, and the per-tree `tree` dimension on [metrics](metrics.md#tag-conventions) stays the logical id too. The WAL itself records the physical tree it belongs to.
 
 ## Shard Map
 

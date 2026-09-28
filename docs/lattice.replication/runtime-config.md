@@ -24,6 +24,10 @@ siloBuilder
 
 The existing static replicated-tree options map (`LatticeReplicationOptions.ReplicatedTrees`) stays as a **seed and fallback**, so a deployment that configures its replicated set statically is unaffected: static entries still apply, and the runtime tree layers on top.
 
+### Installed apps enrol through the runtime configuration
+
+An [installed app](../lattice.apps/README.md#replication-intent) that declares replication for its trees does not add them to `ReplicatedTrees`. Each installation enrols and unenrols its own tenant-composed trees through `ILatticeReplicationConfigAuthority` as the app is enabled, reconciled, upgraded and uninstalled, so an operator sees app trees in this runtime configuration - under the tree ids the installation actually uses - and not in the static map. App enrolment therefore requires `enableRuntimeConfig: true`; without the runtime configuration there is no authority to enrol through, and an app's replication intent has no effect. An app never disables an enrolment it did not make: a tree an operator had already enrolled before the app claimed it stays enrolled when the app is uninstalled.
+
 ## The compiled snapshot
 
 A grain call must never sit on the commit hot path, so the config tree is projected into an in-memory snapshot. The compiled-snapshot maintainer observes commits to the config tree through the core mutation-observer hook (`IMutationObserver`) and rebuilds a `treeId -> { enabled, mode, ambiguous }` projection whenever the tree advances, mirroring how the auth stack compiles its policy snapshot. A commit only schedules a coalesced background rebuild, so the snapshot is eventually consistent - an edit is reflected shortly after it commits - and a read is a lock-light lookup against a fixed epoch, not a grain round-trip.

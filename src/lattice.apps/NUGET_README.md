@@ -51,6 +51,14 @@ control characters. No exception can approve a scope on `*` or on a `_lattice_`,
 `sys-` or `t/` tree, and manifests are size-bounded (1 MiB, 256 entries per
 section) before any per-entry work.
 
+Each tree an app declares, structural or adopted, belongs to exactly one install:
+ownership is claimed at install in the reserved `sys-app-trees` ledger, re-verified
+at activation, and released on uninstall (a structural claim is held until its
+tree is purged). An install is refused for a tree another install owns, a
+pre-existing structural tree no app owns, a derived resize, restore or remediation
+copy, or another tree's alias target. Replication intent is enrolled per install
+in the runtime replication configuration as the app is activated.
+
 Tree sizing fields are optional pins; omission inherits host defaults. An install
 applies them only when it first registers a tree, so a tree that already exists
 keeps its structure. `VirtualShardCount` cannot change in an upgrade; pass the

@@ -105,7 +105,9 @@ siloBuilder.ConfigureLatticeTenancy(options =>
   [installable apps](../lattice.apps/README.md) is deliberately **not** reserved or
   treated as qualified: an app tree `a/{app}/{tree}` is an ordinary unqualified name,
   so it composes to `t/{tenantId}/a/{app}/{tree}` and each tenant gets its own copy of
-  an installed app (with tenancy off it stays the bare `a/{app}/{tree}`). Compose and inspect tenant tree ids with the core
+  an installed app (with tenancy off it stays the bare `a/{app}/{tree}`). An app that
+  declares replication enrols each tenant's composed trees per install, and they are
+  admitted by the tenant replication isolation gate like any other tenant tree. Compose and inspect tenant tree ids with the core
   `LatticeTenantTrees` helper:
 
 ```csharp verify

@@ -12,7 +12,9 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
-- **Apps - Installable apps.** An app declares its trees, roles, subscriptions and MCP tools in a manifest; enabling it compiles its roles into ordinary authorization rules within an operator-consented ceiling. See [Installable apps](docs/lattice.apps/README.md). ([#2235](https://github.com/NSTA1/Orleans.Lattice/issues/2235)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer.Access`)
+- **Apps - Installable apps.** An app declares its trees, roles, subscriptions and MCP tools in a manifest; enabling it compiles its roles into authorization rules within an operator-consented ceiling, and each install exclusively owns and replicates its trees. ([#2235](https://github.com/NSTA1/Orleans.Lattice/issues/2235), [#3764](https://github.com/NSTA1/Orleans.Lattice/issues/3764), [#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer.Access`)
+
+- **Core - Ownership-bounded aliasing.** An optional `ITreeOwnershipGuard` can refuse an alias that would cross tree ownership, for every alias change including resize, restore and remediation; a refusal throws `LatticeTreeOwnershipDeniedException`. ([#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
 
@@ -88,6 +90,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Docs - Naming registry covers RepoContext.** The naming-conventions registry gains its missing `Orleans.Lattice.Api.Mcp.RepoContext` section, and a gate fails when that section drifts from the package's public types. ([#2494](https://github.com/NSTA1/Orleans.Lattice/issues/2494)) (`repository-wide`)
 
 ### Fixed
+
+- **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)
+
+- **Observability - Logical tree id after an alias.** Mutation observers and the `tree` metric tag keep reporting the logical tree id after a resize, restore or schema remediation moves a tree to a new physical copy, so observers, dashboards and alerts keep their series. ([#3767](https://github.com/NSTA1/Orleans.Lattice/issues/3767), [#3780](https://github.com/NSTA1/Orleans.Lattice/issues/3780)) (`Orleans.Lattice`)
 
 - **Scan - Settled page reuse could serve a stale transactional outcome.** A reused scan page was guarded against writes and TTL expiry but not against a transaction decision changing by the clock alone. Reuse is now refused when the leaf read resolved pending transactional writes. ([#2823](https://github.com/NSTA1/Orleans.Lattice/issues/2823)) (`Orleans.Lattice`)
 

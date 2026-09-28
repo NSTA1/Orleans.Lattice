@@ -39,7 +39,7 @@ Every Lattice instrument draws its tags from one consistent, low-cardinality voc
 
 | Tag key | Applies to | Value |
 |---|---|---|
-| `tree` | every tree-scoped instrument - a platform-scoped instrument (for example the registry instruments, the WAL replay permit gauges, or `orleans.lattice.build.info`) carries none; see each instrument below | Logical tree id (`ILattice.TreeId`) |
+| `tree` | every tree-scoped instrument - a platform-scoped instrument (for example the registry instruments, the WAL replay permit gauges, or `orleans.lattice.build.info`) carries none; see each instrument below | Logical tree id (`ILattice.TreeId`), stable across an alias swap: see [The `tree` dimension across aliasing](#the-tree-dimension-across-aliasing) |
 | `tenant` | every instrument | Owning tenant derived from the tree id rather than measured: a tenant id, `default` for a bare legacy tree id, or the reserved `_platform_` sentinel for the `_lattice_` and `sys-` namespaces and for an instrument or arm with no tree dimension. Most descriptions below leave it out of their tag list, but every series carries it, and a hygiene gate over every emission site keeps it that way. See [The derived `tenant` label](../lattice.dashboards/metrics-to-panel-map.md#the-derived-tenant-label) |
 | `shard` | instruments whose row lists a `shard` tag, on the shard-root side (for example `orleans.lattice.shard.reads` and the `orleans.lattice.shard_root.scan_page.*` family) and on the WAL side (the WAL append pipeline, WAL GC trim, WAL compaction and recovery, and storage-provider commit instruments) | An `int` index with two meanings that are never joined: the tree's physical shard on the shard-root side, and the WAL shard - a mutation's partition, `0` to `WalPartitions - 1` - on the WAL side. Distinct from `partition` and `pin_shard` below |
 | `operation` | `orleans.lattice.leaf.scan.duration`, `orleans.lattice.registry.call.duration`, `orleans.lattice.registry.call.in_flight`, `orleans.lattice.shard_root.set_many.local_apply.duration`, `orleans.lattice.shard_root.set_many.leaf_rpc.duration` | `keys` or `entries` (leaf.scan.duration); the registry member served - `exists`, `get_entry`, `get_entries`, `resolve`, `get_shard_map`, `get_all_tree_ids`, `register`, or `unregister` - on the two registry instruments; `set_many` (unconditional `SetManyAsync`) or `set_many_where_predicate` (conditional `SetManyWherePredicateAsync`) on the two shard-root batched-write instruments |
@@ -79,6 +79,38 @@ Every Lattice instrument draws its tags from one consistent, low-cardinality voc
 
 Leaf grain ids are **not** emitted as a tag - in a large tree they would produce
 unbounded tag cardinality. All leaf instruments are aggregated to the tree level.
+
+### The `tree` dimension across aliasing
+
+A resize, a shadow-cutover restore (and its revert) and a schema remediation
+move a tree's data onto a new physical copy behind a [registry
+alias](tree-registry.md#tree-aliasing). The `tree` tag does not follow the
+physical copy: every grain that serves a physical copy created to back a logical
+tree tags its series with that logical tree's id, read once from the copy's
+[`DerivedFrom` provenance](tree-registry.md#provenance-derivedfrom) when the grain
+activates. A dashboard or alert filtered on `tree` therefore keeps its series
+through any number of resizes, restores and remediations, with no gap and no
+second series under the physical id.
+
+- **Retired copies.** Maintenance that still runs on a retired or discarded copy
+  keeps the logical owner's `tree` value it resolved at activation, so it is
+  attributed to the tree the copy belonged to.
+- **Independent trees.** A tree registered without provenance - an ordinary
+  tree, a standalone snapshot destination, or an entry written before provenance
+  existed - keeps its own id. An administrative alias does not rewrite that
+  identity: the series of a tree aliased onto an independent tree stay under the
+  independent tree's id.
+- **Gauges.** Observable gauges fold a logical tree's copies into one series
+  under its id: counts such as snapshot pins are summed, and the WAL saturation
+  state reports the worst state among the copies. Per-copy state is never
+  merged, so each copy's own WAL saturation state still governs its own writes.
+- **Tenant.** The derived `tenant` label is unchanged: a physical copy's id keeps
+  its tree's tenant prefix, so both resolve to the same tenant.
+- **System trees.** `_lattice_` trees are never aliased and keep their own id.
+
+The WAL is still written under the physical tree, and a tree's
+[mutation observers](api.md#mutation-observers) receive the logical id on the same
+terms.
 
 ## Instrument catalog
 
@@ -560,7 +592,7 @@ coordinator progress independently of whether the event stream is enabled.
 | `orleans.lattice.coordinator.completed` | `Counter<long>` | `{operation}` | Successful completion of a long-running coordinator. Tagged `tree` and `kind=snapshot`, `resize`, `reshard`, `merge`, or `compaction`. |
 | `orleans.lattice.coordinator.phase_tick.failures` | `Counter<long>` | `{failure}` | A coordinator phase-timer tick whose phase step threw and was swallowed. That tick advanced the phase machine by nothing, so the step it would have taken is retried from the start and any work it had accumulated is discarded. Tagged `kind` (the coordinator's keepalive reminder name, for example `resize-keepalive` or `reshard-keepalive` - not the bare kind `coordinator.completed` carries), `tree`, and the tenant label. **Zero-primed when a coordinator arms its phase timer**, so a flat zero on a live series is a reading - this coordinator has swallowed nothing - rather than the absence a counter reports before its first `Add`. A zero does **not** mean the coordinator is *progressing*: a tick that returns normally without advancing is a success here, so denominate against `coordinator.completed` for that question. The first two consecutive failures on one activation log at warning and the third onwards at error, because a run of them is a phase loop that has stopped advancing rather than a transient the pump absorbs. |
 | `orleans.lattice.coordinator.phase_tick.consecutive_failures` | `ObservableGauge<long>` | `{failure}` | Length of the *current run* of consecutive failed coordinator phase ticks, tagged identically to `coordinator.phase_tick.failures` so the two series join. The counter beside it cannot express consecutiveness: a coordinator that fails one tick in a thousand and one that has failed every tick since process start both present as a rising total, yet the first is a transient the pump absorbs by design and the second is a phase machine that has stopped advancing. **Every live coordinator reports, enrolling at `0` when it arms its phase timer**, so `0` means the last tick succeeded rather than no data - and, exactly as for the counter, `0` does **not** mean the coordinator is *advancing*, because a tick that returns without moving the phase machine forward is a success by this measure. Reported as the **maximum** over the activations sharing a tag set, which is coarser than the activation because a coordinator with a composite key deliberately reports under the subject alone; `max` is the correct reduction because a sum would invent a run no activation experienced and a last-writer-wins would let a healthy sibling hide a wedged one. A value that keeps returning to zero is a coordinator absorbing transients; a value that only climbs is a wedge, and its magnitude is how many ticks of work have been discarded back to back. |
-| `orleans.lattice.tree.lifecycle` | `Counter<long>` | `{event}` | Tree-lifecycle transition, recorded by the tree's soft-delete and purge manager. Tagged `tree` and `kind=deleted`, `recovered`, or `purged`. Emitted **unconditionally** - regardless of the tree's `PublishEvents` setting. |
+| `orleans.lattice.tree.lifecycle` | `Counter<long>` | `{event}` | Tree-lifecycle transition, recorded by the tree's soft-delete and purge manager. Tagged `tree` and `kind=deleted`, `recovered`, or `purged`. Emitted **unconditionally** - regardless of the tree's `PublishEvents` setting. Exactly one increment per logical delete, recover or purge, tagged with the logical tree id, including on an aliased tree; the work a logical operation delegates to the backing physical tree records nothing of its own. A resize's retirement of its old physical copy, and a resize undo's recovery or discard of a copy, are physical maintenance and record nothing. |
 | `orleans.lattice.warmup.invocations` | `Counter<long>` | `{call}` | One increment per successful `ILattice.WarmUpAsync` call. Tagged `tree`. Operators alerting on cold-start health expect to see exactly one increment per silo startup per warmed tree. |
 | `orleans.lattice.warmup.duration` | `Histogram<double>` | `ms` | End-to-end duration of `ILattice.WarmUpAsync` - the wall-clock cost of pre-activating every physical shard root via a bounded-concurrency read-only probe. Tagged `tree` and `shard_count` (the per-tree physical-shard-root probe fan-out). The p99 is the primary warm-start latency signal; sustained increases are a leading indicator of placement-directory or grain-storage cold-touch cost growth. |
 | `orleans.lattice.warmup.leaf_cache.prewarmed` | `Counter<long>` | `{leaf}` | Leaf caches successfully primed by a shard root's post-restart pre-warm. Tagged `tree`, `shard`, and the tenant label. Flat at zero only where `LatticeOptions.LeafCachePreWarmCount` has been set to `0`; the default is `8`, so the feature is on unless it is explicitly turned off. Individual priming failures are swallowed by design, so a value materially below the configured count is the only signal that they occurred. |
