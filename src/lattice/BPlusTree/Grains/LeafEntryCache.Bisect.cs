@@ -60,13 +60,18 @@ internal sealed partial class LeafEntryCache
     /// reports why a refusal occurred.
     /// <para>
     /// The reason is not diagnostic decoration. A refusal's cost depends
-    /// entirely on which one fired:
-    /// <see cref="LeafBisectRefusalReason.NoSnapshotAttached"/> on a leaf that
-    /// had a frame means the fast path was forfeited by an earlier whole-cache
-    /// operation and the fallback will materialise the whole leaf, whereas the
-    /// same reason on a leaf replayed from the write-ahead log costs nothing
-    /// extra because those rows are already resident. Without the reason - and
-    /// without <see cref="LastDetachSeam"/> to separate those two cases - a
+    /// entirely on which one fired, because it is decided by whether a frame is
+    /// still attached (issue #2856).
+    /// <see cref="LeafBisectRefusalReason.NoSnapshotAttached"/> is reported
+    /// exactly when <c>_hydration</c> is null, so every row is already resident
+    /// and the ordered-view fallback materialises nothing: on a leaf replayed
+    /// from the write-ahead log nothing was ever forfeited, and on a leaf that
+    /// had a frame <see cref="LastDetachSeam"/> names the earlier surface that
+    /// already paid for the whole leaf. By contrast
+    /// <see cref="LeafBisectRefusalReason.FrameKeyUnreadable"/> and
+    /// <see cref="LeafBisectRefusalReason.NoKeySortsBelowPivot"/> refuse with a
+    /// frame still attached, so the fallback itself materialises the whole
+    /// remainder of the leaf and detaches the frame. Without the reason a
     /// caller sees only <see langword="false"/> and cannot tell an expensive
     /// refusal from a free one.
     /// </para>
