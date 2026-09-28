@@ -18,6 +18,8 @@ public sealed class AuthConstantsControlPlaneRegistryTests
     [TestCase("sys-tenant-overage")]
     [TestCase("sys-app-registry")]
     [TestCase("sys-app-registry-history")]
+    [TestCase("sys-app-trees")]
+    [TestCase("sys-app-activation")]
     [TestCase("sys-app-")]
     public void IsControlPlaneRegistryTree_true_for_both_registry_namespaces(string treeId)
     {

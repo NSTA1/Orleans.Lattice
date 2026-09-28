@@ -18,6 +18,7 @@ public sealed class PolicyAccessGateAppRegistryIsolationTests
 {
     private const string AppRegistryTree = "sys-app-registry";
     private const string AppRegistryHistoryTree = "sys-app-registry-history";
+    private const string AppTreeLedgerTree = "sys-app-trees";
 
     private static LatticeAuthorizationRule Rule(
         LatticeScope scope,
@@ -33,6 +34,7 @@ public sealed class PolicyAccessGateAppRegistryIsolationTests
 
     [TestCase(AppRegistryTree)]
     [TestCase(AppRegistryHistoryTree)]
+    [TestCase(AppTreeLedgerTree)]
     public async Task AuthorizeAsync_app_registry_read_unmatched_is_denied_even_under_default_allow(string treeId)
     {
         var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow });
@@ -140,6 +142,41 @@ public sealed class PolicyAccessGateAppRegistryIsolationTests
         var granted = await harness.Gate.HasAnyGrantAsync(AppRegistryTree, new LatticeSubject("alice"), LatticeOperation.Read);
 
         Assert.That(granted, Is.True);
+    }
+
+    [Test]
+    public async Task AuthorizeAsync_tree_ownership_ledger_scan_unmatched_is_denied_even_under_default_allow()
+    {
+        var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow });
+        var request = new LatticeAccessRequest(AppTreeLedgerTree, LatticeOperation.RangeRead, new LatticeSubject("mallory"));
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False, "the ownership ledger names every app-owned tree and must not be enumerable");
+    }
+
+    [TestCase(LatticeOperation.Read)]
+    [TestCase(LatticeOperation.RangeRead)]
+    public async Task AuthorizeAsync_tree_ownership_ledger_denied_despite_cluster_wide_wildcard_read_grant(LatticeOperation operation)
+    {
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeAuthOperations.All, "mallory");
+        var harness = await AuthGateHarness.CreateAsync(WildcardOptions(), wildcard);
+        var request = new LatticeAccessRequest(AppTreeLedgerTree, operation, new LatticeSubject("mallory"), "a/crm/contacts");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False, "a Tree:* wildcard never reaches the tree ownership ledger");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_tree_ownership_ledger_not_surfaced_by_cluster_wide_wildcard_grant()
+    {
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeOperation.Read, "mallory");
+        var harness = await AuthGateHarness.CreateAsync(WildcardOptions(), wildcard);
+
+        var granted = await harness.Gate.HasAnyGrantAsync(AppTreeLedgerTree, new LatticeSubject("mallory"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.False);
     }
 
     [Test]
