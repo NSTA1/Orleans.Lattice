@@ -1,12 +1,11 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
-using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Apps.Tests;
 
 /// <summary>
 /// Unit tests for the configuration-time integrations of in-image apps:
-/// <see cref="InImageAppManifestCatalog"/>, <see cref="AppReplicationIntentPostConfigure"/>, and
+/// <see cref="InImageAppManifestCatalog"/> and
 /// <see cref="AppTreeOptionsConfigurator"/>.
 /// </summary>
 [TestFixture]
@@ -61,57 +60,6 @@ public sealed class InImageAppConfigurationTests
         var catalog = new InImageAppManifestCatalog(Options.Create(options), source);
 
         Assert.That(catalog.Manifests, Is.Empty);
-    }
-
-    [Test]
-    public void Replication_intent_is_merged_additively()
-    {
-        var postConfigure = new AppReplicationIntentPostConfigure(Catalog(("notes", Replicated)));
-        var options = new LatticeReplicationOptions
-        {
-            ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
-            {
-                ["operator-tree"] = LatticeMergeMode.LwwRegister,
-                ["legacy-tree"] = LatticeMergeMode.LwwRegister,
-            },
-        };
-
-        postConfigure.PostConfigure(Options.DefaultName, options);
-
-        Assert.That(options.ReplicatedTrees, Is.EquivalentTo(new Dictionary<string, LatticeMergeMode>
-        {
-            ["operator-tree"] = LatticeMergeMode.LwwRegister,
-            // An operator's entry is never overwritten, even with the app's declared mode.
-            ["legacy-tree"] = LatticeMergeMode.LwwRegister,
-            ["a/notes/records"] = LatticeMergeMode.LwwRegister,
-        }));
-    }
-
-    [Test]
-    public void Replication_intent_populates_an_empty_map()
-    {
-        var postConfigure = new AppReplicationIntentPostConfigure(Catalog(("notes", Replicated)));
-        var options = new LatticeReplicationOptions();
-
-        postConfigure.PostConfigure(Options.DefaultName, options);
-
-        Assert.That(options.ReplicatedTrees, Is.EquivalentTo(new Dictionary<string, LatticeMergeMode>
-        {
-            ["a/notes/records"] = LatticeMergeMode.LwwRegister,
-            ["legacy-tree"] = LatticeMergeMode.OrSet,
-        }));
-    }
-
-    [Test]
-    public void No_replication_intent_leaves_the_map_untouched()
-    {
-        var postConfigure = new AppReplicationIntentPostConfigure(Catalog(("notes", SourceTestManifests.Minimal("notes", "1.0.0"))));
-        var original = new Dictionary<string, LatticeMergeMode> { ["x"] = LatticeMergeMode.LwwRegister };
-        var options = new LatticeReplicationOptions { ReplicatedTrees = original };
-
-        postConfigure.PostConfigure(Options.DefaultName, options);
-
-        Assert.That(options.ReplicatedTrees, Is.SameAs(original));
     }
 
     [TestCase("a/notes/records")]

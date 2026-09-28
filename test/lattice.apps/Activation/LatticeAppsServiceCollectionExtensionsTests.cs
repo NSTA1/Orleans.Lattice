@@ -72,7 +72,7 @@ public sealed class LatticeAppsServiceCollectionExtensionsTests
         Assert.That(Count<AppActivationEngine>(services), Is.EqualTo(1));
         Assert.That(Count<AppActivationRunner>(services), Is.EqualTo(1));
         Assert.That(services.Any(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(AppStartupReconciler)), Is.True);
-        Assert.That(services.Any(d => d.ImplementationType == typeof(AppReplicationIntentPostConfigure)), Is.True);
+        Assert.That(Count<IPostConfigureOptions<LatticeReplicationOptions>>(services), Is.Zero);
         Assert.That(services.Any(d => d.ImplementationType == typeof(AppTreeOptionsConfigurator)), Is.True);
     }
 
@@ -163,19 +163,19 @@ public sealed class LatticeAppsServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void With_replication_present_declared_trees_merge_into_the_replicated_set()
+    public void Registering_an_app_does_not_enrol_its_trees_in_static_replication()
     {
         var services = CoreServices();
         services.ConfigureAll<LatticeReplicationOptions>(options => options.ReplicatedTrees =
-            new Dictionary<string, LatticeMergeMode> { ["a/notes/records"] = LatticeMergeMode.OrSet });
+            new Dictionary<string, LatticeMergeMode> { ["operator-tree"] = LatticeMergeMode.OrSet });
         services.AddLatticeApps()
             .AddLatticeApp("notes", new FakeAppAssembly(SourceTestManifests.ResourceName, ReplicatedManifest), SourceTestManifests.ResourceName);
 
         using var provider = services.BuildServiceProvider();
         var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>().Get("a/notes/records").ReplicatedTrees;
 
-        // The operator's entry wins over the app's declared mode.
-        Assert.That(trees!["a/notes/records"], Is.EqualTo(LatticeMergeMode.OrSet));
+        Assert.That(trees!.Keys, Is.EquivalentTo(new[] { "operator-tree" }));
+        Assert.That(trees["operator-tree"], Is.EqualTo(LatticeMergeMode.OrSet));
     }
 
     [Test]

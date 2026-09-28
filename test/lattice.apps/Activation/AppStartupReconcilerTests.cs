@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Apps.Tests;
 
@@ -66,6 +67,35 @@ public sealed class AppStartupReconcilerTests
         Assert.That(good.LastOutcome.Succeeded, Is.True);
         Assert.That(invalid!.LastOutcome.Failure, Is.EqualTo(AppActivationFailure.InvalidManifest));
         Assert.That(greedy!.LastOutcome.Failure, Is.EqualTo(AppActivationFailure.CeilingExceeded));
+        await reconciler.StopAsync(CancellationToken.None);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Replication_failure_is_recorded_without_faulting_startup(bool modeChange)
+    {
+        var authority = new RecordingReplicationAuthority
+        {
+            EnableFailure = modeChange
+                ? new LatticeReplicationModeChangeRejectedException("mode changed")
+                : new LatticeReplicationPreconditionFailedException("ClusterId missing"),
+        };
+        var harness = new ActivationHarness(replication: authority);
+        var manifest = ActivationHarness.Manifest() with
+        {
+            Replication = new[] { new AppReplicationDeclaration { Tree = "records", MergeMode = LatticeMergeMode.LwwRegister } },
+        };
+        await harness.InstallAsync(manifest);
+        await harness.Registry.EnableAsync(TenantId.Default, ActivationHarness.Slug);
+        using var reconciler = Create(harness.Registry, new EngineBackedPipeline(harness.Engine, harness.Status));
+
+        await reconciler.StartAsync(CancellationToken.None);
+        await reconciler.ExecuteTask!;
+
+        Assert.That(reconciler.ExecuteTask.IsCompletedSuccessfully, Is.True);
+        var status = await harness.Status.GetAsync(TenantId.Default, ActivationHarness.Slug, CancellationToken.None);
+        Assert.That(status!.LastOutcome.Failure, Is.EqualTo(modeChange
+            ? AppActivationFailure.ReplicationModeChangeRejected : AppActivationFailure.ReplicationPreconditionFailed));
         await reconciler.StopAsync(CancellationToken.None);
     }
 

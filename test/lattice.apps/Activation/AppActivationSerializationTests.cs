@@ -67,6 +67,11 @@ public sealed class AppActivationSerializationTests
             Slug = AppSlug.Parse("notes"),
             LastOutcome = Outcome(AppActivationFailure.None),
             AppliedManifest = ActivationHarness.Manifest(trees: new[] { ActivationHarness.Tree("records", virtualShards: 16) }),
+            ReplicationTrees = new Dictionary<string, bool>
+            {
+                ["t/acme/a/notes/records"] = true,
+                ["t/acme/legacy-tree"] = false,
+            },
         };
 
         var copy = serializer.Deserialize<AppActivationStatus>(serializer.SerializeToArray(source));
@@ -76,6 +81,7 @@ public sealed class AppActivationSerializationTests
         Assert.That(copy.LastOutcome.Succeeded, Is.True);
         Assert.That(copy.AppliedManifest!.Identity, Is.EqualTo(source.AppliedManifest.Identity));
         Assert.That(copy.AppliedManifest.Trees.Single().VirtualShardCount, Is.EqualTo(16));
+        Assert.That(copy.ReplicationTrees, Is.EqualTo(source.ReplicationTrees));
     }
 
     [Test]
@@ -88,6 +94,7 @@ public sealed class AppActivationSerializationTests
         var copy = serializer.Deserialize<AppActivationStatus>(serializer.SerializeToArray(source));
 
         Assert.That(copy.AppliedManifest, Is.Null);
+        Assert.That(copy.ReplicationTrees, Is.Empty);
     }
 
     [Test]
@@ -110,7 +117,10 @@ public sealed class AppActivationSerializationTests
         Assert.That((int)AppActivationFailure.None, Is.EqualTo(0));
         Assert.That((int)AppActivationFailure.MembershipNotRegistered, Is.EqualTo(4));
         Assert.That((int)AppActivationFailure.Faulted, Is.EqualTo(14));
-        Assert.That(Enum.GetValues<AppActivationFailure>(), Has.Length.EqualTo(15));
+        Assert.That((int)AppActivationFailure.ReplicationModeChangeRejected, Is.EqualTo(15));
+        Assert.That((int)AppActivationFailure.ReplicationPreconditionFailed, Is.EqualTo(16));
+        Assert.That((int)AppActivationFailure.ReplicationEnrolmentFailed, Is.EqualTo(17));
+        Assert.That(Enum.GetValues<AppActivationFailure>(), Has.Length.EqualTo(18));
     }
 
     [Test]
