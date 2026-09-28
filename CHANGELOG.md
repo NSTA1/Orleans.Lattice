@@ -46,6 +46,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Aggregation row transcode.** A row now encodes a short string once instead of sizing it and then encoding it again, gated on a compile-time UTF-8 bound rather than a virtual `Encoding.GetMaxByteCount` call paid per string. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
+
+- **Performance - CRDT provenance decode.** The multi-value register sorts its projected result instead of sorting an intermediate copy of its input, and a flag read returns a UTF-8 literal instead of running the encoder over a string constant. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
+
 - **Performance - CRDT provenance dot scans and UTF-8 transcodes.** The OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice`, `Orleans.Lattice.Caching.AzureBlob`)
 
 - **Performance - Leaf range reads, CRDT dot scans and index fingerprint.** A range read sorts only when a pending write appended out of order, drops bound re-tests the scan window already enforces, dot scans walk spans not the list indexer, and the fingerprint transcodes each name once. ([#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772)) (`Orleans.Lattice`, `Orleans.Lattice.GrainIndex`)
