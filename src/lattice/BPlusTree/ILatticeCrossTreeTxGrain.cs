@@ -34,7 +34,7 @@ internal interface ILatticeCrossTreeTxGrain : IGrainWithStringKey
     /// completes, or if the same operationId is re-submitted with a different
     /// tree-set or key-set.
     /// </summary>
-    /// <param name="batches">Per-tree slices to commit atomically. Tree ids must be distinct.</param>
+    /// <param name="batches">Per-tree slices to commit atomically. Tree ids must be distinct, and the keys within each tree's slice must be distinct.</param>
     Task<CrossTreeAtomicWriteOutcome> CommitAsync(List<LatticeTreeBatch> batches);
 
     /// <summary>
