@@ -1,0 +1,81 @@
+@if (!Capabilities.CanViewDiagnostics)
+{
+    <p class="lt-cluster-note">Your identity cannot read this tree's shards.</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Shard map">
+        @if (_map.Value is { } map)
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Physical shards">@ClusterFormat.Count(map.PhysicalShardCount)</LtDefinition>
+                <LtDefinition Term="Virtual slots">@ClusterFormat.Count(map.VirtualShardCount)</LtDefinition>
+                <LtDefinition Term="Map version">@ClusterFormat.Count(map.MapVersion)</LtDefinition>
+                <LtDefinition Term="Persisted map">@(_registry.Value is { } registry ? (registry.HasCustomMap ? $"Custom, version {ClusterFormat.Count(registry.MapVersion)}" : "Default identity map") : _registry.Error ?? "Loading...")</LtDefinition>
+            </LtDefinitionList>
+        }
+        else if (_map.Error is { } error)
+        {
+            <p class="lt-cluster-error" role="alert">@error</p>
+        }
+    </section>
+
+    <div class="lt-toolbar">
+        <LtButton OnClick="() => LoadAsync(deep: false)" Disabled="@_loading">Refresh</LtButton>
+        <LtButton data-lt-cluster="deep-diagnostics" OnClick="() => _confirmDeep = true" Disabled="@_loading">Count tombstones...</LtButton>
+        @if (_diagnostics.Value is { } diagnostics)
+        {
+            <span class="lt-cluster-note">@(diagnostics.Deep ? "Deep read" : "Live keys only") at @ClusterFormat.Instant(diagnostics.SampledAt), @ClusterFormat.Plural(diagnostics.RecentSplitCount, "recent split").</span>
+        }
+    </div>
+
+    @if (_loading && _rows.Count == 0)
+    {
+        <LtSkeleton Lines="5" Label="Loading shards" />
+    }
+    else
+    {
+        @if (_diagnostics.Error is { } diagnosticsError)
+        {
+            <p class="lt-cluster-error" role="alert">Diagnostics: @diagnosticsError</p>
+        }
+        @if (_hotness.Error is { } hotnessError)
+        {
+            <p class="lt-cluster-error" role="alert">Hotness: @hotnessError</p>
+        }
+        <LtTable Items="_rows" Caption="Shards" CaptionHidden="true" RowKey="row => row.ShardIndex" DetailTitle="@(row => $"Shard {row.ShardIndex}")">
+            <ChildContent>
+                <LtColumn TItem="ClusterShardRow" Title="Shard" RowHeader="true" Mono="true" Value="row => row.ShardIndex" SortBy="row => row.ShardIndex" />
+                <LtColumn TItem="ClusterShardRow" Title="Slots" Align="LtColumnAlign.End" Value="row => Number(row.Slots)" SortBy="row => row.Slots" />
+                <LtColumn TItem="ClusterShardRow" Title="Depth" Align="LtColumnAlign.End" Value="row => Number(row.Depth)" SortBy="row => row.Depth" />
+                <LtColumn TItem="ClusterShardRow" Title="Live keys" Align="LtColumnAlign.End" Value="row => Number(row.LiveKeys)" SortBy="row => row.LiveKeys" />
+                <LtColumn TItem="ClusterShardRow" Title="Tombstones" Align="LtColumnAlign.End" Value="row => Number(row.Tombstones)" SortBy="row => row.Tombstones" />
+                <LtColumn TItem="ClusterShardRow" Title="Reads" Align="LtColumnAlign.End" Value="row => Number(row.Reads)" SortBy="row => row.Reads" />
+                <LtColumn TItem="ClusterShardRow" Title="Writes" Align="LtColumnAlign.End" Value="row => Number(row.Writes)" SortBy="row => row.Writes" />
+                <LtColumn TItem="ClusterShardRow" Title="Ops/s" Align="LtColumnAlign.End" Value="row => row.OpsPerSecond is { } ops ? ClusterFormat.Rate(ops) : Unknown" SortBy="row => row.OpsPerSecond" />
+                <LtColumn TItem="ClusterShardRow" Title="State">
+                    <LtStatusPill State="@StateOf(context)" Text="@StateText(context)" />
+                </LtColumn>
+            </ChildContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>shard @context.ShardIndex</Primary>
+                    <Secondary>@Number(context.LiveKeys) keys, @(context.OpsPerSecond is { } ops ? ClusterFormat.Rate(ops) : Unknown) ops/s</Secondary>
+                    <State><LtStatusPill State="@StateOf(context)" Text="@StateText(context)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <EmptyContent>
+                <LtEmptyState Title="No shards reported" HeadingLevel="3">The cluster reported no shard for this tree.</LtEmptyState>
+            </EmptyContent>
+        </LtTable>
+    }
+
+    <LtConfirmDestructive @bind-Open="_confirmDeep"
+                          Title="Count tombstones"
+                          ObjectKind="tree"
+                          ObjectName="@TreeId"
+                          ConfirmText="Count tombstones"
+                          OnConfirm="() => LoadAsync(deep: true)">
+        <p>A deep read walks every leaf of every shard of this tree to count tombstones and expired entries. It changes nothing, but it is expensive on a large tree.</p>
+    </LtConfirmDestructive>
+}

@@ -1,0 +1,99 @@
+<PageTitle>Orphaned leaves - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Orphaned leaves</h1>
+<p class="lt-shell-page-lede">Find leaves spliced into a shard's sibling chain that no descent from its root reaches - left by an interrupted split, they pin the WAL so it never trims - and unsplice the ones whose keys are all readable elsewhere.</p>
+
+<div class="lt-toolbar">
+    <form class="lt-cluster-inline-form" @onsubmit="Choose" aria-label="Choose a tree">
+        <LtTextInput Label="Tree" Mono="true" @bind-Value="_tree" Error="@_treeError" />
+        <LtButton Type="LtButtonType.Submit">Choose</LtButton>
+    </form>
+</div>
+
+@if (TreeId is null)
+{
+    <LtEmptyState Title="Choose a tree" HeadingLevel="2">Name a tree above to audit it for orphaned leaves.</LtEmptyState>
+}
+else if (_accessLoad.IsLoading)
+{
+    <LtSkeleton Lines="2" Label="Loading what you may do" />
+}
+else if (!_access.CanViewDiagnostics)
+{
+    <p class="lt-cluster-note">Auditing orphaned leaves needs whole-tree read authority, which your identity does not hold over this tree.</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-labelledby="lt-cluster-orphans-pass" aria-live="polite">
+        <h2 class="lt-cluster-heading" id="lt-cluster-orphans-pass">Pass over <span class="lt-shell-mono">@TreeId</span></h2>
+        <div class="lt-toolbar">
+            <LtCheckbox Label="Survey every orphan key" Hint="A read-only census of each orphan's keys. Slower; changes nothing." @bind-Checked="_survey" Disabled="@Running" />
+            @if (Running)
+            {
+                <LtButton OnClick="Stop">Stop</LtButton>
+            }
+            else
+            {
+                <LtButton data-lt-cluster="audit" OnClick="AuditAsync">@(_pass is null ? "Audit" : "Audit again")</LtButton>
+                @if (_access.CanManageTreeLifecycle && _pass is { Complete: true } finished && finished.Repairable > 0)
+                {
+                    <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="repair" OnClick="() => _confirm = true">Repair...</LtButton>
+                }
+            }
+        </div>
+
+        @if (_pass is { } pass)
+        {
+            <div class="lt-cluster-stage">
+                <LtStatusPill State="@VerdictState(pass)" Text="@VerdictLabel(pass)" />
+                <span>@VerdictSentence(pass)</span>
+            </div>
+            <p class="lt-cluster-note">@pass.Kind: @ClusterFormat.Plural(pass.Batches, "batch", "batches"), @ClusterFormat.Plural(pass.LeavesWalked, "leaf", "leaves") walked@(pass.Complete ? "." : ", still running.")</p>
+
+            @if (pass.Gaps.Count > 0)
+            {
+                <h3 class="lt-cluster-subheading">Not judged</h3>
+                <ul class="lt-cluster-list">
+                    @foreach (var gap in pass.Gaps)
+                    {
+                        <li>Shard @gap.ShardIndex: @GapText(gap.Reason)@(gap.KeyHint is { } hint ? $", near {hint}" : string.Empty)</li>
+                    }
+                </ul>
+            }
+
+            @if (pass.Findings.Count > 0)
+            {
+                <LtTable Items="pass.Findings" Caption="Orphaned leaves" RowKey="finding => (finding.ShardIndex, finding.LeafId)" DetailTitle="@(finding => $"Leaf {finding.LeafId}")">
+                    <ChildContent>
+                        <LtColumn TItem="TreeOrphanedLeafFinding" Title="Leaf" RowHeader="true" Mono="true" Value="finding => finding.LeafId" />
+                        <LtColumn TItem="TreeOrphanedLeafFinding" Title="Shard" Align="LtColumnAlign.End" Value="finding => finding.ShardIndex" SortBy="finding => finding.ShardIndex" />
+                        <LtColumn TItem="TreeOrphanedLeafFinding" Title="Range" Mono="true" Value="finding => Range(finding)" />
+                        <LtColumn TItem="TreeOrphanedLeafFinding" Title="Keys" Align="LtColumnAlign.End" Value="finding => ClusterFormat.Count(finding.KeyCount)" SortBy="finding => finding.KeyCount" />
+                        <LtColumn TItem="TreeOrphanedLeafFinding" Title="Verified" Align="LtColumnAlign.End" Value="finding => ClusterFormat.Count(finding.VerifiedKeyCount)" />
+                        <LtColumn TItem="TreeOrphanedLeafFinding" Title="Disposition">
+                            <LtStatusPill State="@DispositionState(context.Disposition)" Text="@DispositionText(context.Disposition)" />
+                        </LtColumn>
+                    </ChildContent>
+                    <CompactRow>
+                        <LtCompactRow Mono="true">
+                            <Primary>@context.LeafId</Primary>
+                            <Secondary>shard @context.ShardIndex, @ClusterFormat.Plural(context.KeyCount, "key")</Secondary>
+                            <State><LtStatusPill State="@DispositionState(context.Disposition)" Text="@DispositionText(context.Disposition)" /></State>
+                        </LtCompactRow>
+                    </CompactRow>
+                </LtTable>
+            }
+        }
+
+        @if (_error is { } error)
+        {
+            <p class="lt-cluster-error" role="alert">@error</p>
+        }
+    </section>
+
+    <LtConfirmDestructive @bind-Open="_confirm"
+                          Title="Repair orphaned leaves" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Repair"
+                          OnConfirm="RepairAsync">
+        <p>Unsplices every orphaned leaf whose keys were all shown to be readable elsewhere. This changes the tree's structure and cannot be undone. A leaf that cannot be shown safe is left exactly as it is. The page audits again when the repair finishes.</p>
+    </LtConfirmDestructive>
+}

@@ -1,0 +1,119 @@
+<PageTitle>WAL placement - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">WAL placement</h1>
+<p class="lt-shell-page-lede">Audit which storage provider backs each write-ahead-log partition of a tree, then plan a move, execute it, and reclaim the source it leaves behind.</p>
+
+<div class="lt-toolbar">
+    <form class="lt-cluster-inline-form" @onsubmit="Audit" aria-label="Choose a tree">
+        <LtTextInput Label="Tree" Mono="true" @bind-Value="_tree" Error="@_treeError" />
+        <LtButton Type="LtButtonType.Submit">Audit</LtButton>
+    </form>
+    <LtButton data-lt-command="@ClusterArea.PlanWalMoveCommandId" OnClick="OpenPlan">Plan a move...</LtButton>
+</div>
+
+@if (TreeId is not null)
+{
+    @if (_audit.IsLoading)
+    {
+        <LtSkeleton Lines="4" Label="Auditing WAL placement" />
+    }
+    else if (_audit.Value is { } audit)
+    {
+        <section class="lt-cluster-section" aria-labelledby="lt-cluster-wal-audit">
+            <h2 class="lt-cluster-heading" id="lt-cluster-wal-audit">Audit of <span class="lt-shell-mono">@TreeId</span></h2>
+            <div class="lt-cluster-stage">
+                <LtStatusPill State="@(audit.AllResolvableOnThisSilo ? LtStateRole.Healthy : LtStateRole.Drift)" Text="@(audit.AllResolvableOnThisSilo ? "Every key resolves" : "Drift")" />
+                <span>@ClusterFormat.Plural(audit.PartitionCount, "partition"), placement version @ClusterFormat.Count(audit.Version). Known provider keys: <span class="lt-shell-mono">@KnownKeys(audit)</span>.</span>
+            </div>
+            <ClusterWalPartitions Partitions="audit.Partitions" />
+        </section>
+    }
+    else
+    {
+        <p class="lt-cluster-error" role="alert">@_audit.Error</p>
+    }
+
+    @if (Partition is { } partition && Target is { } target)
+    {
+        <section class="lt-cluster-section lt-cluster-review" aria-labelledby="lt-cluster-wal-plan" aria-live="polite">
+            <h2 class="lt-cluster-heading" id="lt-cluster-wal-plan">Move plan: partition @partition to <span class="lt-shell-mono">@target</span></h2>
+            @if (_plan.IsLoading)
+            {
+                <LtSkeleton Lines="3" Label="Planning the move" />
+            }
+            else if (_plan.Value is { } plan)
+            {
+                <LtDefinitionList>
+                    <LtDefinition Term="From" Mono="true">@KeyText(plan.FromProviderKey)</LtDefinition>
+                    <LtDefinition Term="To" Mono="true">@KeyText(plan.ToProviderKey)</LtDefinition>
+                    <LtDefinition Term="Entries to copy">@ClusterFormat.Count(plan.EntriesToCopy)</LtDefinition>
+                    <LtDefinition Term="Offsets">@ClusterFormat.Count(plan.SourceLowestOffset) to @ClusterFormat.Count(plan.SourceHighestOffset)</LtDefinition>
+                    <LtDefinition Term="Target resolves here">@(plan.TargetResolvableOnThisSilo ? "Yes" : "No: confirm the key resolves on every silo before moving")</LtDefinition>
+                    <LtDefinition Term="Placement version">@ClusterFormat.Count(plan.PlacementVersion)</LtDefinition>
+                </LtDefinitionList>
+
+                @if (_receipt is { } receipt)
+                {
+                    <p class="lt-cluster-result" role="status">@ReceiptText(receipt)</p>
+                }
+
+                @if (_access.CanManageTreeLifecycle)
+                {
+                    <div class="lt-cluster-form__actions">
+                        @if (!plan.AlreadyAtTarget && _receipt is null)
+                        {
+                            <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="execute" OnClick="() => _confirm = Verb.Execute" Disabled="@_busy">Move partition...</LtButton>
+                        }
+                        @if (ReclaimSource is not null)
+                        {
+                            <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="reclaim" OnClick="() => _confirm = Verb.Reclaim" Disabled="@_busy">Reclaim the source...</LtButton>
+                        }
+                    </div>
+                    @if (plan.AlreadyAtTarget && _receipt is null && _audit.Value is { } known)
+                    {
+                        <LtSelect Label="Orphaned source to reclaim" Options="SourceOptions(known, target)" @bind-Value="_reclaimKey" Hint="After a move, the old provider still holds the partition's log until it is reclaimed." />
+                    }
+                }
+                else
+                {
+                    <p class="lt-cluster-note">Moving and reclaiming a WAL partition needs the TreeLifecycle grant, which your identity does not hold over this tree.</p>
+                }
+            }
+            else
+            {
+                <p class="lt-cluster-error" role="alert">@_plan.Error</p>
+            }
+        </section>
+    }
+}
+else
+{
+    <LtEmptyState Title="Choose a tree" HeadingLevel="2">Name a tree above to audit its WAL placement.</LtEmptyState>
+}
+
+<LtDialog @bind-Open="_planOpen" Title="Plan a WAL move" Description="Previewing a move changes nothing: it shows the range that would be copied." Placement="@SheetPlacement">
+    <form class="lt-cluster-form" @onsubmit="ContinuePlan">
+        <LtTextInput Label="Tree" Mono="true" @bind-Value="_planTree" Error="@_planTreeError" />
+        <LtTextInput Label="Partition" Mono="true" @bind-Value="_planPartition" Error="@_planPartitionError" inputmode="numeric" />
+        <LtTextInput Label="Target provider key" Mono="true" @bind-Value="_planTarget" Error="@_planTargetError" Hint="@TargetHint" />
+        <div class="lt-dialog__actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _planOpen = false">Cancel</LtButton>
+            <LtButton Type="LtButtonType.Submit">Plan</LtButton>
+        </div>
+    </form>
+</LtDialog>
+
+@if (TreeId is not null && Partition is { } movePartition && Target is { } moveTarget)
+{
+    <LtConfirmDestructive Open="@(_confirm == Verb.Execute)" OpenChanged="Close"
+                          Title="Move WAL partition" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Move"
+                          OnConfirm="ExecuteAsync">
+        <p>Quiesces partition @movePartition briefly while its tail is copied to <span class="lt-shell-mono">@moveTarget</span>, then flips its placement. The source is kept, so the move can be reverted until you reclaim it.</p>
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive Open="@(_confirm == Verb.Reclaim)" OpenChanged="Close"
+                          Title="Reclaim WAL source" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Reclaim"
+                          OnConfirm="ReclaimAsync">
+        <p>Discards partition @movePartition's retained log on <span class="lt-shell-mono">@ReclaimSource</span>. After this the move can no longer be reverted.</p>
+    </LtConfirmDestructive>
+}

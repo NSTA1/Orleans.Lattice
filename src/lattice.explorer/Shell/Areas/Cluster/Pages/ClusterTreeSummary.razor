@@ -1,0 +1,77 @@
+@if (!Capabilities.CanViewDiagnostics)
+{
+    <p class="lt-cluster-note">Your identity cannot read this tree's diagnostics.</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Statistics">
+        @if (_stats.IsLoading)
+        {
+            <LtSkeleton Lines="4" Label="Loading statistics" />
+        }
+        else if (_stats.Value is { } stats)
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Live keys">@ClusterFormat.Count(stats.TotalLiveKeys)</LtDefinition>
+                <LtDefinition Term="Tombstones">@ClusterFormat.Count(stats.TotalTombstones)</LtDefinition>
+                <LtDefinition Term="Physical shards">@ClusterFormat.Count(stats.ShardCount)</LtDefinition>
+                <LtDefinition Term="Virtual shards">@ClusterFormat.Count(stats.VirtualShardCount)</LtDefinition>
+                <LtDefinition Term="Stored">@ClusterFormat.Bytes(stats.TotalBytes)@(stats.PartialStorage ? " (partial)" : string.Empty)</LtDefinition>
+                <LtDefinition Term="Sampled">@ClusterFormat.Instant(stats.SampledAt)</LtDefinition>
+            </LtDefinitionList>
+        }
+        else
+        {
+            <p class="lt-cluster-error" role="alert">@_stats.Error</p>
+        }
+    </section>
+
+    <section class="lt-cluster-section" aria-label="Structure">
+        <h2 class="lt-cluster-heading">Structure</h2>
+        <LtDefinitionList>
+            <LtDefinition Term="Alias">
+                @if (_alias.Value is { } alias)
+                {
+                    @(alias.IsAliased ? "Aliased: this name resolves to another physical tree, after a resize or a restore." : "Not aliased.")
+                }
+                else
+                {
+                    @(_alias.Error ?? "Loading...")
+                }
+            </LtDefinition>
+            <LtDefinition Term="Reshard">
+                @if (_reshard.Value is { } reshard)
+                {
+                    @(reshard.InProgress ? $"In progress, to {reshard.RequestedShardCount} shards." : "None in progress.")
+                    @(" ")<ClusterTreeLink TreeId="@TreeId" View="reshard" Text="Open" />
+                }
+                else
+                {
+                    @(_reshard.Error ?? "Loading...")
+                }
+            </LtDefinition>
+            <LtDefinition Term="Resize">
+                @if (_resize.Value is { } resize)
+                {
+                    @(resize.InProgress ? $"In progress, to {resize.RequestedMaxLeafKeys} keys per leaf." : $"{ClusterFormat.Count(resize.CurrentMaxLeafKeys)} keys per leaf, {ClusterFormat.Count(resize.CurrentMaxInternalChildren)} children per node.")
+                    @(" ")<ClusterTreeLink TreeId="@TreeId" View="resize" Text="Open" />
+                }
+                else
+                {
+                    @(_resize.Error ?? "Loading...")
+                }
+            </LtDefinition>
+            <LtDefinition Term="Snapshot">
+                @if (_snapshot.Value is { } snapshot)
+                {
+                    @(snapshot.InProgress ? $"In progress, into {snapshot.RequestedDestinationTreeId}." : "None in progress.")
+                    @(" ")<ClusterTreeLink TreeId="@TreeId" View="snapshot" Text="Open" />
+                }
+                else
+                {
+                    @(_snapshot.Error ?? "Loading...")
+                }
+            </LtDefinition>
+        </LtDefinitionList>
+    </section>
+}
