@@ -118,6 +118,22 @@ public sealed class ShellNonTextContrastTests
     }
 
     [Test]
+    public void Comfortable_rows_and_controls_are_touch_targets()
+    {
+        // The responsive contract (epic #3807): in the default density every row
+        // and control is at least 44 by 44 CSS pixels, so the Explorer reads and
+        // acts on a phone without a denser mode.
+        var paper = ShellStylesheets.Palette(ShellPalette.Paper);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ShellStylesheets.Pixels(paper["--lt-op-row-height-comfortable"]), Is.GreaterThanOrEqualTo(44));
+            Assert.That(ShellStylesheets.Pixels(paper["--lt-op-control-height-comfortable"]), Is.GreaterThanOrEqualTo(44));
+            Assert.That(paper["--lt-op-row-height"], Is.EqualTo(paper["--lt-op-row-height-comfortable"]), "comfortable is the default");
+            Assert.That(paper["--lt-op-control-height"], Is.EqualTo(paper["--lt-op-control-height-comfortable"]), "comfortable is the default");
+        });
+    }
+
+    [Test]
     public void Compact_density_rebinds_every_density_token()
     {
         var compact = ShellStylesheets.Block(ShellStylesheets.Operate, "[data-lt-density=\"compact\"]");

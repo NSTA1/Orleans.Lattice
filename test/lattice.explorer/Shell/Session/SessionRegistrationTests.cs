@@ -57,6 +57,10 @@ public sealed class SessionRegistrationTests
         using var provider = new ServiceCollection()
             .AddSingleton<IExplorerSession>(_ => new FakeExplorerSession(new FakeStateConnection()))
             .AddScoped<IExplorerAuthSession, FakeAuthSession>()
+            // The navigation chrome registered beside the session chrome reads the
+            // circuit's navigation manager and JavaScript runtime, which a head provides.
+            .AddScoped<Microsoft.AspNetCore.Components.NavigationManager>(_ => new Orleans.Lattice.Explorer.Tests.Shell.Navigation.TestNavigationManager())
+            .AddScoped(_ => NSubstitute.Substitute.For<Microsoft.JSInterop.IJSRuntime>())
             .AddLatticeExplorerShell()
             .BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
 

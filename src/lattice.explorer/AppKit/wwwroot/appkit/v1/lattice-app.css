@@ -48,7 +48,7 @@
    * (the Explorer's responsive contract). Table rows are not targets and keep
    * the Operate register's row heights. */
   --lt-app-control-height: 2.75rem;
-  --lt-app-row-height: 2.25rem;
+  --lt-app-row-height: 2.75rem;
   --lt-app-cell-padding-x: 0.75rem;
   --lt-app-control-border: #6f7784;
   --lt-app-focus-ring-color: var(--lt-focus);

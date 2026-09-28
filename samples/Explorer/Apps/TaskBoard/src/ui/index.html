@@ -1,0 +1,54 @@
+<main class="lt-app-stack tb-board" aria-labelledby="tb-title">
+  <header class="tb-head" id="tb-head">
+    <div class="tb-head-text">
+      <h1 id="tb-title">Task board</h1>
+      <p class="lt-app-muted" id="tb-context">Connecting to the Explorer.</p>
+    </div>
+  </header>
+
+  <p class="lt-app-notice" id="tb-status" role="status" aria-live="polite"></p>
+
+  <div class="tb-add" id="tb-add" hidden>
+    <label class="lt-app-label" for="tb-add-title">New task</label>
+    <div class="tb-add-row">
+      <input class="lt-app-input" id="tb-add-title" type="text" maxlength="200" autocomplete="off">
+      <button type="button" class="lt-app-button" id="tb-add-button">Add task</button>
+    </div>
+  </div>
+
+  <p class="lt-app-muted" id="tb-read-only" hidden>You can read this board. Your role does not let you change it.</p>
+
+  <div class="tb-columns">
+    <section class="tb-column" aria-labelledby="tb-heading-todo">
+      <h2 id="tb-heading-todo">To do <span class="tb-count" id="tb-count-todo"></span></h2>
+      <ul class="tb-cards" id="tb-cards-todo"></ul>
+    </section>
+    <section class="tb-column" aria-labelledby="tb-heading-doing">
+      <h2 id="tb-heading-doing">Doing <span class="tb-count" id="tb-count-doing"></span></h2>
+      <ul class="tb-cards" id="tb-cards-doing"></ul>
+    </section>
+    <section class="tb-column" aria-labelledby="tb-heading-done">
+      <h2 id="tb-heading-done">Done <span class="tb-count" id="tb-count-done"></span></h2>
+      <ul class="tb-cards" id="tb-cards-done"></ul>
+    </section>
+  </div>
+
+  <section class="tb-detail" id="tb-detail" aria-labelledby="tb-detail-title" hidden>
+    <h2 id="tb-detail-title" tabindex="-1"></h2>
+    <p class="lt-app-mono tb-detail-key" id="tb-detail-key"></p>
+    <p class="lt-app-muted" id="tb-detail-column"></p>
+    <div class="lt-app-row" id="tb-detail-actions" hidden>
+      <button type="button" class="lt-app-button" data-move="todo">Move to To do</button>
+      <button type="button" class="lt-app-button" data-move="doing">Move to Doing</button>
+      <button type="button" class="lt-app-button" data-move="done">Move to Done</button>
+      <button type="button" class="lt-app-button lt-app-button--destructive" id="tb-delete">Delete task</button>
+    </div>
+    <div class="lt-app-row">
+      <button type="button" class="lt-app-button lt-app-button--quiet" id="tb-close">Close</button>
+    </div>
+  </section>
+
+  <div class="lt-app-row">
+    <button type="button" class="lt-app-button lt-app-button--quiet" id="tb-refresh">Refresh</button>
+  </div>
+</main>
