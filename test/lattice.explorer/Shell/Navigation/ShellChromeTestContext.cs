@@ -1,17 +1,23 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Shell;
 using Orleans.Lattice.Explorer.Shell.Layout.Appearance;
 using Orleans.Lattice.Explorer.Shell.Navigation;
+using Orleans.Lattice.Explorer.Shell.Session;
 using Orleans.Lattice.Explorer.Tests.Shell.Design;
+using Orleans.Lattice.Explorer.Tests.Shell.Session;
 
 namespace Orleans.Lattice.Explorer.Tests.Shell.Navigation;
 
 /// <summary>
 /// The bUnit context the navigation chrome is tested under: the Shell registered
-/// exactly as a head registers it, with a manual clock (so every timeout fires
+/// exactly as a head registers it - including S2's real session slots, over the
+/// same Core fakes S2's own tests use - with a manual clock (so every timeout fires
 /// only when the test advances it), a recording appearance applier, and helpers
 /// to add scripted areas and to switch tenancy on.
 /// </summary>
@@ -30,11 +36,27 @@ public abstract class ShellChromeTestContext : ShellDesignTestContext
 
         Services.AddSingleton<TimeProvider>(Time);
         Services.AddSingleton<IShellAppearanceApplier>(Applier);
+
+        // The session chrome's Core dependencies, which a head registers and the
+        // layout's real session slots read. The session starts configured, so the
+        // session overlay's first-run connection dialog stays closed and does not
+        // stand in front of the navigation chrome under test.
+        Explorer = new FakeExplorerSession(new FakeStateConnection())
+            .Configured(SessionTestContext.RemoteConfiguration());
+        Services.AddSingleton<IExplorerSession>(Explorer);
+        Services.AddSingleton<IExplorerAuthSession>(new FakeAuthSession());
+        Services.AddSingleton<IConnectionTester>(new FakeConnectionTester());
+        Services.AddSingleton<AntiforgeryStateProvider, FakeAntiforgeryStateProvider>();
+        Services.AddSingleton<IExplorerAuthMethod, BasicExplorerAuthMethod>();
+
         Services.AddLatticeExplorerShell();
     }
 
     /// <summary>The clock every chrome timeout is measured on.</summary>
     internal ManualTimeProvider Time { get; }
+
+    /// <summary>The Explorer session the session slots read.</summary>
+    internal FakeExplorerSession Explorer { get; }
 
     /// <summary>What the appearance state applied to the document.</summary>
     internal RecordingAppearanceApplier Applier { get; }

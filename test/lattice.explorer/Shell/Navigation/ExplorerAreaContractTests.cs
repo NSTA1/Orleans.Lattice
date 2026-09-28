@@ -104,6 +104,9 @@ public sealed class ExplorerAreaContractTests
         var services = new ServiceCollection();
         services.AddSingleton<Microsoft.AspNetCore.Components.NavigationManager>(new TestNavigationManager());
         services.AddSingleton<Microsoft.JSInterop.IJSRuntime>(NSubstitute.Substitute.For<Microsoft.JSInterop.IJSRuntime>());
+        services.AddSingleton<Orleans.Lattice.Explorer.Core.Configuration.IExplorerSession>(
+            new Orleans.Lattice.Explorer.Tests.Shell.Session.FakeExplorerSession(new Orleans.Lattice.Explorer.Tests.Shell.Session.FakeStateConnection()));
+        services.AddSingleton<Orleans.Lattice.Explorer.Core.Authentication.IExplorerAuthSession>(new Orleans.Lattice.Explorer.Tests.Shell.Session.FakeAuthSession());
         services.AddLatticeExplorerShell();
         services.AddExplorerArea<ProbeArea>();
 

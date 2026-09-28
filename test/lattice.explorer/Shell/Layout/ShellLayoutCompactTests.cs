@@ -59,12 +59,12 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
             Assert.That(cut.FindAll("#lt-shell-directory"), Is.Empty, "the column is gone");
             Assert.That(cut.Find(".lt-shell").ClassList, Does.Contain("lt-shell--compact"));
             Assert.That(toggle.GetAttribute("aria-expanded"), Is.EqualTo("false"));
-            Assert.That(cut.FindAll("[role='dialog']"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty);
         });
 
         toggle.Click();
 
-        var sheet = cut.Find("[role='dialog']");
+        var sheet = cut.Find(".lt-dialog--sheet");
         Assert.Multiple(() =>
         {
             Assert.That(sheet.ClassList, Does.Contain("lt-dialog--start"));
@@ -82,9 +82,9 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
         await SetBandAsync(cut, 0);
         cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Directory").Click();
 
-        cut.Find("[role='dialog'] [data-lt-command='go.data']").Click();
+        cut.Find(".lt-dialog--sheet [data-lt-command='go.data']").Click();
 
-        Assert.That(cut.FindAll("[role='dialog']"), Is.Empty);
+        Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty);
     }
 
     [Test]
@@ -94,9 +94,9 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
         await SetBandAsync(cut, 0);
         cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Directory").Click();
 
-        cut.Find("[role='dialog']").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+        cut.Find(".lt-dialog--sheet").KeyDown(new KeyboardEventArgs { Key = "Escape" });
 
-        Assert.That(cut.FindAll("[role='dialog']"), Is.Empty);
+        Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty);
     }
 
     [Test]
@@ -107,7 +107,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         cut.FindAll(".lt-shell-skip__link")[0].Click();
 
-        Assert.That(cut.Find("[role='dialog']").ClassList, Does.Contain("lt-dialog--start"));
+        Assert.That(cut.Find(".lt-dialog--sheet").ClassList, Does.Contain("lt-dialog--start"));
     }
 
     [Test]
@@ -127,7 +127,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu").Click();
 
-        var menu = cut.Find("[role='dialog'].lt-dialog--end");
+        var menu = cut.Find(".lt-dialog--sheet.lt-dialog--end");
         Assert.Multiple(() =>
         {
             Assert.That(
@@ -151,7 +151,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.FindAll("[role='dialog']"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty);
             Assert.That(cut.FindAll(".lt-shell-header [data-probe]"), Has.Count.EqualTo(2));
             Assert.That(cut.FindAll("#lt-shell-directory"), Has.Count.EqualTo(1));
         });
@@ -166,7 +166,30 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         await SetBandAsync(cut, 0);
 
-        Assert.That(cut.FindAll("[role='dialog']"), Has.Count.EqualTo(1), "the same band does not close an open sheet");
+        Assert.That(cut.FindAll(".lt-dialog--sheet"), Has.Count.EqualTo(1), "the same band does not close an open sheet");
+    }
+
+    [Test]
+    public async Task The_real_session_slots_render_inline_in_the_header_and_folded_in_the_menu()
+    {
+        // S2's own slot components, not probes: inline beside the appearance menu
+        // while there is room, and in their folded, stacked form inside the menu
+        // sheet below the small breakpoint.
+        var cut = RenderLayout();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-shell-header [role='status'] .lt-pill"), Has.Count.EqualTo(1), "the connection indicator is in the header");
+            Assert.That(cut.FindAll(".lt-shell-header section[aria-label='Connection']"), Is.Empty, "not folded while there is room");
+        });
+
+        await SetBandAsync(cut, 0);
+        Assert.That(cut.FindAll(".lt-shell-header [role='status']"), Is.Empty, "the header folds");
+
+        cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu").Click();
+
+        Assert.That(cut.FindAll(".lt-dialog--sheet .lt-shell-overflow section[aria-label='Connection']"), Has.Count.EqualTo(1),
+            "the connection indicator renders folded in the menu");
     }
 
     [Test]
@@ -177,11 +200,11 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
         await SetBandAsync(cut, 0);
         cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu").Click();
 
-        cut.Find("[role='dialog'] [data-lt-command='appearance.theme.board']").Click();
+        cut.Find(".lt-dialog--sheet [data-lt-command='appearance.theme.board']").Click();
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.FindAll("[role='dialog']"), Is.Empty, "the sheet never stacks under an overlay a slot opens");
+            Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty, "the sheet never stacks under an overlay a slot opens");
             Assert.That(Applier.Applied.Last().Theme, Is.EqualTo(Orleans.Lattice.Explorer.Shell.Layout.Appearance.ShellTheme.Board),
                 "the control still acts before the sheet closes");
         });
