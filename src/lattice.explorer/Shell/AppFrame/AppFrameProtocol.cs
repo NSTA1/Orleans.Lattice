@@ -143,6 +143,12 @@ internal static class AppFrameProtocol
     /// <summary>The longest scan continuation, in characters.</summary>
     public const int MaxContinuationLength = AppKitProtocol.Limits.MaxContinuationLength;
 
+    /// <summary>The most role names a <c>context.read</c> result carries.</summary>
+    public const int MaxRoles = AppKitProtocol.Limits.MaxRoles;
+
+    /// <summary>The longest role name a <c>context.read</c> result carries.</summary>
+    public const int MaxRoleNameLength = AppKitProtocol.Limits.MaxRoleNameLength;
+
     /// <summary>The largest request id (2^53 - 1, the largest integer a JavaScript number holds exactly).</summary>
     public const long MaxRequestId = (1L << 53) - 1;
 
@@ -168,14 +174,25 @@ internal static class AppFrameProtocol
     /// </summary>
     /// <param name="tree">The candidate name.</param>
     /// <returns><see langword="true"/> when the name is well formed.</returns>
-    public static bool IsLogicalTreeName(ReadOnlySpan<char> tree)
+    public static bool IsLogicalTreeName(ReadOnlySpan<char> tree) => IsManifestName(tree, MaxTreeNameLength);
+
+    /// <summary>
+    /// Returns whether <paramref name="role"/> is a well-formed app role name: the same
+    /// manifest name rule as a tree (<see cref="AppKitProtocol.TreeNamePattern"/>), 1 to
+    /// <see cref="MaxRoleNameLength"/> characters.
+    /// </summary>
+    /// <param name="role">The candidate name.</param>
+    /// <returns><see langword="true"/> when the name is well formed.</returns>
+    public static bool IsRoleName(ReadOnlySpan<char> role) => IsManifestName(role, MaxRoleNameLength);
+
+    private static bool IsManifestName(ReadOnlySpan<char> name, int maxLength)
     {
-        if (tree.IsEmpty || tree.Length > MaxTreeNameLength || tree[0] is not (>= 'a' and <= 'z'))
+        if (name.IsEmpty || name.Length > maxLength || name[0] is not (>= 'a' and <= 'z'))
         {
             return false;
         }
 
-        foreach (var c in tree)
+        foreach (var c in name)
         {
             if (!IsLowerAlphanumeric(c) && c is not '_' and not '-')
             {

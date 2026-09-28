@@ -34,4 +34,14 @@ public static class GrpcAppsTypeAliases
     /// <summary>Alias for the UI asset request.</summary>
     public const string AppsUiAssetRequest = "oiag.uq";
     /// <summary>Alias for a nullable UI asset response.</summary>
-    public const string AppsUiAssetResponse = "oiag.ur";}
+    public const string AppsUiAssetResponse = "oiag.ur";
+    /// <summary>Alias for the app bridge single-key request.</summary>
+    public const string AppsBridgeKeyRequest = "oiag.bk";
+    /// <summary>Alias for a nullable app bridge read response.</summary>
+    public const string AppsBridgeGetResponse = "oiag.bg";
+    /// <summary>Alias for the app bridge scan request.</summary>
+    public const string AppsBridgeScanRequest = "oiag.bs";
+    /// <summary>Alias for the app bridge write request.</summary>
+    public const string AppsBridgeSetRequest = "oiag.bw";
+    /// <summary>Alias for the app bridge delete response.</summary>
+    public const string AppsBridgeDeleteResponse = "oiag.bd";}
