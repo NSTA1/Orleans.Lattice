@@ -1,0 +1,12 @@
+{
+  "name": "digest-tamper",
+  "description": "The manifest pins app.js, but the source serves different bytes; the host must refuse the bundle with a digest mismatch.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [],
+  "serve": { "app.js": "tampered.js" },
+  "expect": { "failure": "DigestMismatch", "toast": null }
+}

@@ -267,6 +267,9 @@ internal static class AppsControlMapping
                 Version = s.Version,
                 StrictIngest = s.StrictIngest,
             }),
+            Presentation = AppsPresentationMapping.ToWirePresentation(manifest.Presentation),
+            Ui = AppsPresentationMapping.ToWireUi(manifest),
+            SourceKey = provenance.Source,
         };
     }
 
@@ -404,7 +407,7 @@ internal static class AppsControlMapping
         };
     }
 
-    private static ImmutableArray<AppRoleDescriptor> MapRoles(AppRoleDeclaration[]? roles, AppSlug self)
+    internal static ImmutableArray<AppRoleDescriptor> MapRoles(AppRoleDeclaration[]? roles, AppSlug self)
     {
         if (roles is null || roles.Length == 0)
         {
@@ -438,7 +441,7 @@ internal static class AppsControlMapping
         return builder.MoveToImmutable();
     }
 
-    private static ImmutableArray<AppSubscriptionDescriptor> MapSubscriptions(
+    internal static ImmutableArray<AppSubscriptionDescriptor> MapSubscriptions(
         AppSubscriptionDeclaration[]? subscriptions,
         AppSlug self)
     {
@@ -483,7 +486,7 @@ internal static class AppsControlMapping
         return null;
     }
 
-    private static ImmutableArray<TOut> Map<TIn, TOut>(TIn[]? source, Func<TIn, TOut> map)
+    internal static ImmutableArray<TOut> Map<TIn, TOut>(TIn[]? source, Func<TIn, TOut> map)
     {
         if (source is null || source.Length == 0)
         {

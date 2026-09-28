@@ -1,0 +1,29 @@
+<!doctype html>
+<!--
+  AppKit bootstrap fixture page (issue #3814), run by U1's browser lane (#3832).
+
+  This page plays the Explorer host: it frames the real appkit/v1/frame.html in
+  <iframe sandbox="allow-scripts">, performs the lattice.ready / lattice.hello
+  handshake, delivers a bundle it builds and digests itself, answers bridge
+  requests, and records what the frame did. No timers decide an outcome: every
+  scenario finishes on a protocol message.
+
+  Query parameters:
+    frame     URL of the bootstrap document (default /_apps/frame/v1/frame.html)
+    scenario  one of the names in boot-fixture.js (default "order")
+
+  When a scenario finishes, <html> carries data-state="done", data-pass="true"
+  or "false", and data-result, a JSON record of the outcome. The scenario list
+  is also published as data-scenarios for a runner to enumerate.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AppKit bootstrap fixture</title>
+  <script src="boot-fixture.js" defer></script>
+</head>
+<body>
+  <h1>AppKit bootstrap fixture</h1>
+  <p id="fixture-status">Running.</p>
+</body>
+</html>

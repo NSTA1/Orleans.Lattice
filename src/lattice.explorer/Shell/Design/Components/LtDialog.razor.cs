@@ -78,7 +78,24 @@ public partial class LtDialog
     [Parameter]
     public ElementReference? ReturnFocus { get; set; }
 
+    /// <summary>
+    /// Where the dialog sits: centred (the default), or as a full-height sheet on
+    /// the inline-start or inline-end edge, which takes the full width of a narrow
+    /// screen. A sheet keeps the dialog's focus trap and focus return.
+    /// </summary>
+    [Parameter]
+    public LtDialogPlacement Placement { get; set; } = LtDialogPlacement.Center;
+
     private string TitleId => _id + "-title";
+
+    private string LayerClass => Placement == LtDialogPlacement.Center ? "lt-dialog-layer" : "lt-dialog-layer lt-dialog-layer--sheet";
+
+    private string DialogClass => Placement switch
+    {
+        LtDialogPlacement.Start => "lt-dialog lt-dialog--sheet lt-dialog--start",
+        LtDialogPlacement.End => "lt-dialog lt-dialog--sheet lt-dialog--end",
+        _ => "lt-dialog",
+    };
 
     private string DescriptionId => _id + "-description";
 

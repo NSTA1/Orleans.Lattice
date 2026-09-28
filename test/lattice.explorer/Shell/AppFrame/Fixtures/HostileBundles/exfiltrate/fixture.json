@@ -1,0 +1,11 @@
+{
+  "name": "exfiltrate",
+  "description": "The app tries every network and parent-reaching channel it can.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toast":"Hostile: fetch=blocked xhr=blocked socket=blocked parent=blocked popup=blocked cookie=blocked"}
+}

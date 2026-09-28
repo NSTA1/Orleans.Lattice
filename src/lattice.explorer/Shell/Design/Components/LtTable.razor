@@ -2,63 +2,129 @@
 @attribute [CascadingTypeParameter(nameof(TItem))]
 
 <CascadingValue Value="this" IsFixed="true">@ChildContent</CascadingValue>
-<div class="lt-table-frame" role="region" aria-labelledby="@CaptionId" tabindex="0">
-    <table class="lt-table">
-        <caption id="@CaptionId" class="@(CaptionHidden ? "lt-table__caption lt-visually-hidden" : "lt-table__caption")">@Caption</caption>
-        <thead>
-            <tr>
-                @foreach (var column in _columns)
-                {
-                    <th @key="column" scope="col" class="@HeaderClass(column)" aria-sort="@AriaSort(column)">
-                        @if (column.IsSortable)
-                        {
-                            <button type="button"
-                                    class="lt-table__sort"
-                                    data-lt-sort="@SortState(column)"
-                                    @onclick="() => SortByAsync(column)">
-                                @column.Title<span class="lt-table__sort-mark" aria-hidden="true"></span>
-                            </button>
-                        }
-                        else
-                        {
-                            @column.Title
-                        }
-                    </th>
-                }
-            </tr>
-        </thead>
-        <tbody>
+@if (IsCompactList)
+{
+    <div class="lt-table-list" role="region" aria-labelledby="@CaptionId">
+        <p id="@CaptionId" class="@(CaptionHidden ? "lt-table__caption lt-visually-hidden" : "lt-table__caption")">@Caption</p>
+        @if (SortOptions.Count > 1)
+        {
+            <div class="lt-table-list__sort">
+                <LtSelect Label="Sort by" Options="@SortOptions" Value="@SortValue" ValueChanged="SortFromValueAsync" />
+            </div>
+        }
+        <ul class="lt-table-list__rows">
             @if (_rows.Count == 0)
             {
-                <tr class="lt-table__row">
-                    <td class="lt-table__empty" colspan="@Math.Max(1, _columns.Count)">
-                        @if (EmptyContent is not null)
-                        {
-                            @EmptyContent
-                        }
-                        else
-                        {
-                            <span>No rows.</span>
-                        }
-                    </td>
-                </tr>
+                <li class="lt-table-list__empty">
+                    @if (EmptyContent is not null)
+                    {
+                        @EmptyContent
+                    }
+                    else
+                    {
+                        <span>No rows.</span>
+                    }
+                </li>
             }
             else if (Virtualize)
             {
-                <Virtualize Items="_rows" ItemSize="RowHeight" SpacerElement="tr" Context="item">
-                    @RenderRow(item)
+                <Virtualize Items="_rows" ItemSize="CompactRowHeight" SpacerElement="li" Context="item">
+                    @RenderCompactRow(item)
                 </Virtualize>
             }
             else
             {
                 @foreach (var item in _rows)
                 {
-                    @RenderRow(item)
+                    @RenderCompactRow(item)
                 }
             }
-        </tbody>
-    </table>
-</div>
+        </ul>
+    </div>
+    <LtDialog Open="_detailOpen"
+              OpenChanged="OnDetailOpenChanged"
+              Title="@DetailTitleText"
+              Placement="LtDialogPlacement.End"
+              ReturnFocus="_returnFocus"
+              Actions="@(_hasDetail && DetailActions is not null ? DetailActions(_detailItem!) : null)">
+        @if (_hasDetail)
+        {
+            @if (Detail is not null)
+            {
+                @Detail(_detailItem!)
+            }
+            else
+            {
+                <LtDefinitionList>
+                    @foreach (var column in _columns)
+                    {
+                        <LtDefinition Term="@column.Title" Mono="@column.Mono">@RenderCell(column, _detailItem!)</LtDefinition>
+                    }
+                </LtDefinitionList>
+            }
+        }
+    </LtDialog>
+}
+else
+{
+    <div class="lt-table-frame" role="region" aria-labelledby="@CaptionId" tabindex="0">
+        <table class="lt-table">
+            <caption id="@CaptionId" class="@(CaptionHidden ? "lt-table__caption lt-visually-hidden" : "lt-table__caption")">@Caption</caption>
+            <thead>
+                <tr>
+                    @foreach (var column in _columns)
+                    {
+                        <th @key="column" scope="col" class="@HeaderClass(column)" aria-sort="@AriaSort(column)">
+                            @if (column.IsSortable)
+                            {
+                                <button type="button"
+                                        class="lt-table__sort"
+                                        data-lt-sort="@SortState(column)"
+                                        @onclick="() => SortByAsync(column)">
+                                    @column.Title<span class="lt-table__sort-mark" aria-hidden="true"></span>
+                                </button>
+                            }
+                            else
+                            {
+                                @column.Title
+                            }
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @if (_rows.Count == 0)
+                {
+                    <tr class="lt-table__row">
+                        <td class="lt-table__empty" colspan="@Math.Max(1, _columns.Count)">
+                            @if (EmptyContent is not null)
+                            {
+                                @EmptyContent
+                            }
+                            else
+                            {
+                                <span>No rows.</span>
+                            }
+                        </td>
+                    </tr>
+                }
+                else if (Virtualize)
+                {
+                    <Virtualize Items="_rows" ItemSize="RowHeight" SpacerElement="tr" Context="item">
+                        @RenderRow(item)
+                    </Virtualize>
+                }
+                else
+                {
+                    @foreach (var item in _rows)
+                    {
+                        @RenderRow(item)
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+}
 
 @code {
     private RenderFragment RenderRow(TItem item) => __builder =>
@@ -76,6 +142,46 @@
                 }
             }
         </tr>
+    };
+
+    private RenderFragment RenderCompactRow(TItem item) => __builder =>
+    {
+        var key = RowKeyOf(item) ?? NullRowKey;
+        <li @key="key" class="lt-table-list__row" aria-current="@(IsCurrent?.Invoke(item) == true ? "true" : null)">
+            <button type="button"
+                    class="lt-table-list__open"
+                    aria-haspopup="dialog"
+                    @onclick="() => OpenDetail(item, key)"
+                    @ref="_rowButtons[key]">
+                @if (CompactRow is not null)
+                {
+                    @CompactRow(item)
+                }
+                else
+                {
+                    @RenderDefaultCompactRow(item)
+                }
+            </button>
+        </li>
+    };
+
+    private RenderFragment RenderDefaultCompactRow(TItem item) => __builder =>
+    {
+        var primary = PrimaryColumn;
+        <LtCompactRow Mono="@(primary?.Mono == true)">
+            <Primary>
+                @if (primary is not null)
+                {
+                    @RenderCell(primary, item)
+                }
+            </Primary>
+            <Secondary>
+                @foreach (var column in SecondaryColumns)
+                {
+                    <span class="lt-compact-row__field"><span class="lt-compact-row__term">@column.Title</span> @RenderCell(column, item)</span>
+                }
+            </Secondary>
+        </LtCompactRow>
     };
 
     private RenderFragment RenderCell(LtColumn<TItem> column, TItem item) => column.ChildContent is { } template
