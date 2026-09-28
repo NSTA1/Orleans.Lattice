@@ -58,4 +58,14 @@ internal sealed class SagaWriteFenceState
     /// </summary>
     [Id(7)]
     public long EngagedAtTicks { get; set; }
+
+    /// <summary>
+    /// The <c>{physicalTreeId}/{shardIndex}</c> shard-root keys the write fence
+    /// was engaged on, resolved from each tree's live routing at engage time.
+    /// Persisted so every lift releases exactly the fenced set, even after the
+    /// cutover's alias swap has moved the tree onto a new physical copy. Empty
+    /// for state written before the set was recorded.
+    /// </summary>
+    [Id(8)]
+    public List<string> FencedShardKeys { get; set; } = [];
 }

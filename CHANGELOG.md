@@ -183,6 +183,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Gates - Refinement note left checked properties unmapped.** `CommitIntegrity` is now mapped and `TypeOK` declared as a reasoned exclusion in `spec/Refinement.md`, and a gate fails when any property TLC checks is neither mapped nor excluded. ([#2558](https://github.com/NSTA1/Orleans.Lattice/issues/2558)) (`repository-wide`)
 
+- **Replication - The restore write fence and VC seeder missed live shards.** Both addressed `{tree}/0..ShardCount-1`, skipping an adaptive split's target and, behind an alias, naming the retired copy. They now follow the tree's live routing, and the fence lifts exactly the shards it engaged. ([#3750](https://github.com/NSTA1/Orleans.Lattice/issues/3750), [#3751](https://github.com/NSTA1/Orleans.Lattice/issues/3751)) (`Orleans.Lattice.Replication`)
+
+- **Query - Tree structure omitted split-added shards.** `GetTreeStructureAsync` listed shard roots `0..ShardCount-1` of the pinned count, so an adaptive split's target and every key routed to it were missing. It now lists every shard the routing map reaches. ([#3752](https://github.com/NSTA1/Orleans.Lattice/issues/3752)) (`Orleans.Lattice.Api.State`)
+
 ### Security
 
 - **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. ([#3747](https://github.com/NSTA1/Orleans.Lattice/pull/3747)) (`Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)

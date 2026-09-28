@@ -1426,16 +1426,27 @@ internal sealed class LatticeStateQuery(
             return TreeStructureResult.Found(request.TreeId, roots, budget.AnyTruncated);
         }
 
-        var shardCount = await ResolveShardCountAsync(registry, bindTreeId).ConfigureAwait(false);
-
-        var startShard = request.ShardIndex ?? 0;
-        var endShard = request.ShardIndex.HasValue ? request.ShardIndex.Value + 1 : shardCount;
+        // Enumerate the physical shards the routing map actually sends keys to -
+        // the same one-call source GetPhysicalShardCountAsync reads. The pinned
+        // ShardCount is not that set: an adaptive split moves slots to a shard
+        // index above the pin without changing it, so walking 0..ShardCount-1
+        // left the split target out of the structure entirely.
+        IReadOnlyList<int> shardIndices;
+        if (request.ShardIndex is { } requestedShard)
+        {
+            shardIndices = [requestedShard];
+        }
+        else
+        {
+            var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            shardIndices = routing.Map.GetPhysicalShardIndices();
+        }
 
         // One root summary per scanned shard (budget permitting), so the scanned
-        // shard span is a tight upper bound on the result - pre-size to it.
-        var rootNodes = new List<NodeStateSummary>(Math.Max(0, endShard - startShard));
+        // shard set is a tight upper bound on the result - pre-size to it.
+        var rootNodes = new List<NodeStateSummary>(shardIndices.Count);
 
-        for (var shardIndex = startShard; shardIndex < endShard; shardIndex++)
+        foreach (var shardIndex in shardIndices)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -2454,12 +2465,6 @@ internal sealed class LatticeStateQuery(
         _ when requested > _apiOptions.MaxScanValuePreviewBytes => _apiOptions.MaxScanValuePreviewBytes,
         _ => requested,
     };
-
-    private async Task<int> ResolveShardCountAsync(ILatticeRegistry registry, string treeId)
-    {
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
-        return entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
-    }
 
     private sealed class NodeBudget
     {
