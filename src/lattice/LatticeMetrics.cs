@@ -4520,7 +4520,7 @@ public static class LatticeMetrics
     /// evidence at all.
     /// </para>
     /// <para>
-    /// All five outcomes are zero-primed at the capture seam, for the reason
+    /// All six outcomes are zero-primed at the capture seam, for the reason
     /// established by issue #2756 on <see cref="LeafByteOverflows"/>: a
     /// <see cref="Counter{T}"/> exports nothing until its first
     /// <c>Add</c>, so an absent series and a measured zero are the same
@@ -4555,7 +4555,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSplitAttempts =
         Meter.CreateCounter<long>("orleans.lattice.leaf.split_attempts", unit: "{attempt}",
-            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/gate_contended/already_under_capacity/no_admissible_pivot/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
+            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/recovered/gate_contended/already_under_capacity/no_admissible_pivot/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
 
     /// <summary>Canonical name of <see cref="LeafSplitAttempts"/>.</summary>
     public const string LeafSplitAttemptsName = "orleans.lattice.leaf.split_attempts";
@@ -4566,6 +4566,28 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitDivided =
         new(TagOutcome, "divided");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>recovered</c> on
+    /// <see cref="LeafSplitAttempts"/>: a division whose intent was already
+    /// durable - left half-finished by an earlier attempt that threw, by a
+    /// deactivation, or by a crash - was resumed by the recovery path and ran
+    /// to completion. Issue #2860.
+    /// <para>
+    /// Distinct from <see cref="LeafSplitDivided"/> so that a recovered
+    /// completion is never mistaken for a fresh one, and deliberately NOT
+    /// accompanied by a second <see cref="LeafSplits"/> increment: that counter
+    /// counts initiations and already counted this division when its intent
+    /// was persisted. A grain can deactivate and reactivate for idle collection
+    /// with the process alive, so an increment there would double-count one
+    /// division in the same counter lifetime. Read together,
+    /// <c>splits - divided</c> is the divisions that were stranded mid-division
+    /// and <c>splits - divided - recovered</c> is those still stranded, within
+    /// one process lifetime.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitRecovered =
+        new(TagOutcome, "recovered");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>gate_contended</c> on
