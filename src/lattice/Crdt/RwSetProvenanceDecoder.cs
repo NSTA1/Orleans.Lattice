@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -248,9 +249,13 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
             sharedReplica = SingleReplica(tomb);
             if (sharedReplica is not null)
             {
-                for (var i = 0; i < tomb.Count; i++)
+                // Span walk: the gate above guarantees this list is longer than
+                // TombstoneIndexThreshold, and the body only reads.
+                var tombSpan = CollectionsMarshal.AsSpan(tomb);
+                for (var i = 0; i < tombSpan.Length; i++)
                 {
-                    if (tomb[i].Counter > coverCounter) coverCounter = tomb[i].Counter;
+                    var counter = tombSpan[i].Counter;
+                    if (counter > coverCounter) coverCounter = counter;
                 }
             }
         }
@@ -285,10 +290,15 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
     private static string? SingleReplica(List<OrSetDot> dots)
     {
         if (dots.Count == 0) return null;
-        var first = dots[0].ReplicaId;
-        for (var i = 1; i < dots.Count; i++)
+        // Span walk - see the OrSet decoder's twin for the rationale. Callers
+        // gate this on a list longer than TombstoneIndexThreshold, and the body
+        // only reads, so the length cannot change while the span is alive.
+        var span = CollectionsMarshal.AsSpan(dots);
+        var first = span[0].ReplicaId;
+        for (var i = 1; i < span.Length; i++)
         {
-            var candidate = dots[i].ReplicaId;
+            ref readonly var dot = ref span[i];
+            var candidate = dot.ReplicaId;
             if (!ReferenceEquals(candidate, first)
                 && !string.Equals(candidate, first, StringComparison.Ordinal))
             {
