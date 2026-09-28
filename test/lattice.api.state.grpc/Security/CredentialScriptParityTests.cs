@@ -4,14 +4,17 @@ using Orleans.Lattice.Api.State.Grpc;
 namespace Orleans.Lattice.Api.State.Grpc.Tests.Security;
 
 /// <summary>
-/// Verifies that the two credential-generation helper scripts under <c>tools/</c>
-/// and the server-side <see cref="LatticePasswordHash"/> all agree on the encoded
-/// hash for the same salt, password, and iteration count. The cross-shell legs are
-/// skipped (not failed) when the host lacks pwsh, bash, or openssl.
+/// Verifies that the credential-generation helper script
+/// <c>tools/New-LatticeStateCredential.ps1</c> and the server-side
+/// <see cref="LatticePasswordHash"/> agree on the encoded hash for the same salt,
+/// password, and iteration count, and that the script is the repository's only
+/// credential helper. The script leg is skipped (not failed) when the host lacks
+/// pwsh.
 /// </summary>
 [TestFixture]
 public class CredentialScriptParityTests
 {
+    private const string ScriptName = "New-LatticeStateCredential.ps1";
     private const string DeterministicSaltB64 = "AQIDBAUGBwgJCgsMDQ4PEA==";
     private const string Password = "Password1";
     private const string ExpectedHash =
@@ -21,7 +24,7 @@ public class CredentialScriptParityTests
     public void Bcl_encode_matches_documentedVector()
     {
         // This leg always runs: it pins the server hash to the same vector the
-        // scripts target, so the contract is enforced even on a bare CI host.
+        // script targets, so the contract is enforced even on a bare CI host.
         byte[] salt = Convert.FromBase64String(DeterministicSaltB64);
         Assert.That(LatticePasswordHash.Encode(Password, salt, 210_000), Is.EqualTo(ExpectedHash));
     }
@@ -29,11 +32,14 @@ public class CredentialScriptParityTests
     [Test]
     public void PowerShell_script_matches_documentedVector()
     {
-        var script = FindToolsScript("New-LatticeStateCredential.ps1");
-        var pwsh = FindExecutable("pwsh") ?? FindExecutable("powershell");
+        var script = Path.Combine(FindToolsDirectory(), ScriptName);
+        Assert.That(File.Exists(script), Is.True, $"tools/{ScriptName} is missing.");
+
+        // The script requires PowerShell 7.2+, so Windows PowerShell 5.1 is not a fallback.
+        var pwsh = FindExecutable("pwsh");
         if (pwsh is null)
         {
-            Assert.Ignore("Neither pwsh nor powershell is available on this host.");
+            Assert.Ignore("pwsh is not available on this host.");
         }
 
         var output = RunScript(
@@ -44,22 +50,15 @@ public class CredentialScriptParityTests
     }
 
     [Test]
-    public void Bash_script_matches_documentedVector()
+    public void PowerShell_script_is_the_only_credential_helper()
     {
-        var script = FindToolsScript("new-lattice-state-credential.sh");
-        var bash = FindBash();
-        if (bash is null)
-        {
-            Assert.Ignore("bash is not available on this host.");
-        }
+        var helpers = Directory
+            .EnumerateFiles(FindToolsDirectory())
+            .Select(Path.GetFileName)
+            .Where(name => name!.Contains("credential", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
-        // Pass a POSIX-style path to bash so Git Bash resolves it.
-        var posixScript = script.Replace('\\', '/');
-        var output = RunScript(
-            bash!,
-            $"-lc \"bash '{posixScript}' --username alice --password-env LATTICE_TEST_PW --iterations 210000 --format value\"");
-
-        Assert.That(output, Is.EqualTo(ExpectedHash));
+        Assert.That(helpers, Is.EqualTo(new[] { ScriptName }));
     }
 
     private static string RunScript(string fileName, string arguments)
@@ -88,13 +87,13 @@ public class CredentialScriptParityTests
         return stdout.Trim();
     }
 
-    private static string FindToolsScript(string name)
+    private static string FindToolsDirectory()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "tools", name);
-            if (File.Exists(candidate))
+            var candidate = Path.Combine(dir.FullName, "tools");
+            if (File.Exists(Path.Combine(candidate, "Invoke-RepositoryWideGates.ps1")))
             {
                 return candidate;
             }
@@ -102,28 +101,8 @@ public class CredentialScriptParityTests
             dir = dir.Parent;
         }
 
-        Assert.Ignore($"Could not locate tools/{name} from the test base directory.");
+        Assert.Ignore("Could not locate the repository tools/ directory from the test base directory.");
         return string.Empty; // unreachable
-    }
-
-    private static string? FindBash()
-    {
-        var candidates = new[]
-        {
-            @"C:\Program Files\Git\bin\bash.exe",
-            @"C:\Program Files\Git\usr\bin\bash.exe",
-            "/bin/bash",
-            "/usr/bin/bash",
-        };
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return FindExecutable("bash");
     }
 
     private static string? FindExecutable(string name)

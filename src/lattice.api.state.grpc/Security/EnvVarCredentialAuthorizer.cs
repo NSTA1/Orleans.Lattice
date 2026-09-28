@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// <c>&lt;prefix&gt;&lt;username&gt;</c> (the prefix defaults to
 /// <c>LATTICE_STATE_USER_</c>) whose value is an encoded
 /// <c>pbkdf2-sha256$&lt;iterations&gt;$&lt;salt&gt;$&lt;key&gt;</c> hash produced by
-/// the credential-generation helper scripts under <c>tools/</c>. The authorizer
+/// the credential-generation helper <c>tools/New-LatticeStateCredential.ps1</c>. The authorizer
 /// re-derives the presented password with the embedded salt and iteration count
 /// and compares in constant time via <see cref="LatticePasswordHash.Verify"/>.
 /// </para>

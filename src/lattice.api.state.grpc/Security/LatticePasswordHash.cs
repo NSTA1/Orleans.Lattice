@@ -7,8 +7,8 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// <summary>
 /// Encodes, parses, and verifies salted PBKDF2-HMAC-SHA256 password hashes in the
 /// portable, self-describing <c>pbkdf2-sha256$&lt;iterations&gt;$&lt;base64-salt&gt;$&lt;base64-derived-key&gt;</c>
-/// format that is the contract shared by the credential-generation helper scripts
-/// (PowerShell / bash) and the server-side <see cref="EnvVarCredentialAuthorizer"/>.
+/// format that is the contract shared by the credential-generation helper
+/// (<c>tools/New-LatticeStateCredential.ps1</c>) and the server-side <see cref="EnvVarCredentialAuthorizer"/>.
 /// </summary>
 /// <remarks>
 /// <para>

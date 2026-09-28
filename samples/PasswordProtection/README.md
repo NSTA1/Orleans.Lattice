@@ -19,7 +19,7 @@ read-only State API over gRPC:
 Each account is a salted **PBKDF2-SHA256** password hash (never the plaintext),
 published in the `LATTICE_STATE_USER_<name>` environment variable the authorizer
 looks up by username. In a real deployment an operator mints these with the
-`tools/` helper scripts and sets the variables out-of-band; the sample mints
+`tools/New-LatticeStateCredential.ps1` helper and sets the variables out-of-band; the sample mints
 them in-process so it runs with a single command.
 
 Two layers cooperate on every call:
@@ -116,9 +116,9 @@ each needs a deliberate change before this shape goes anywhere untrusted.
   one-command run. That means "change the password" would mean editing source and
   shipping a recoverable secret in the assembly. A real deployment must set the
   `LATTICE_STATE_USER_*` variables out-of-band (for example with the `tools/`
-  helper scripts) and delete the in-process minting entirely. Generate each hash
-  once with `tools/new-lattice-state-credential.sh` (or
-  `tools/New-LatticeStateCredential.ps1`) - it prints only the salted hash, never
+  credential helper) and delete the in-process minting entirely. Generate each
+  hash once with `tools/New-LatticeStateCredential.ps1` (run it with `pwsh` on
+  any platform) - it prints only the salted hash, never
   the plaintext - and inject it as the `LATTICE_STATE_USER_<username>` variable.
   When deploying with Docker, pass that variable through your orchestrator's
   secret mechanism rather than baking it into the image: a Docker/Swarm or
