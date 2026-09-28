@@ -440,13 +440,13 @@ public class BPlusLeafGrainColdActivationAdmissionTests
     [Test]
     public void A_claim_is_sized_by_the_peak_heap_a_hydration_costs_not_by_bytes_on_disk()
     {
-        // The amplification, pinned. Leaf state is persisted by the ADO.NET
-        // provider as JSON TEXT, so reading a blob back is not a byte copy: the
-        // live failing stack shows a UTF-16 System.String of the whole document
-        // built by String.Ctor from a char[] that is still live while it copies,
-        // and Newtonsoft's object graph on top of both. Four multiples are spent
-        // before the parse allocates anything, which is why the OutOfMemory
-        // lands in String.Ctor rather than in the blob read.
+        // The amplification, pinned. Reading a blob back is not a byte copy: a
+        // current binary LGB1 blob costs about 2x its frame, and a legacy JSON
+        // blob written before issue #2516 - still read as JSON, because reads
+        // route on the payload - costs roughly 10-13x, the shape of the original
+        // OutOfMemory in String.Ctor. LeafSnapshotHydrationAmplificationTests
+        // measures both paths against the factor (issue #2858); this test pins
+        // only the arithmetic that applies it.
         //
         // A gate sized against stored bytes would therefore be several times too
         // permissive and would fail in exactly the same way on the next deploy -
