@@ -49,6 +49,21 @@ internal sealed class SessionChromeState : IDisposable
     public event Action? Changed;
 
     /// <summary>
+    /// Raised just before a session modal opens, with the surface about to open:
+    /// <see cref="SessionOverlayKind.SignIn"/> or
+    /// <see cref="SessionOverlayKind.Configuration"/>, or
+    /// <see cref="SessionOverlayKind.None"/> for the re-authentication
+    /// interstitial. It is not raised when the requested surface is already open.
+    /// </summary>
+    /// <remarks>
+    /// The layout closes its own sheets (the compact overflow menu and directory)
+    /// on it, so a session modal never stacks on another. The re-authentication
+    /// case arrives on whichever thread Core raised its latch on, so a component
+    /// subscriber marshals with <c>InvokeAsync</c>.
+    /// </remarks>
+    public event Action<SessionOverlayKind>? OverlayOpening;
+
+    /// <summary>
     /// Whether the persisted configuration has been loaded and any stored
     /// credential applied, so the chrome can tell "not configured" from "not
     /// loaded yet".
@@ -105,6 +120,11 @@ internal sealed class SessionChromeState : IDisposable
             return;
         }
 
+        if (overlay != SessionOverlayKind.None)
+        {
+            OverlayOpening?.Invoke(overlay);
+        }
+
         Overlay = overlay;
         Changed?.Invoke();
     }
@@ -116,6 +136,7 @@ internal sealed class SessionChromeState : IDisposable
             return;
         }
 
+        OverlayOpening?.Invoke(SessionOverlayKind.None);
         ReauthRequired = true;
         Overlay = SessionOverlayKind.None;
         Changed?.Invoke();

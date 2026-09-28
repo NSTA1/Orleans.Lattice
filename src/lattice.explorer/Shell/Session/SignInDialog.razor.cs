@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Shell.Design.Components;
+using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 
 namespace Orleans.Lattice.Explorer.Shell.Session;
 
@@ -25,6 +26,10 @@ namespace Orleans.Lattice.Explorer.Shell.Session;
 /// own interactive challenge. On the web head the password form is a native post
 /// to the server (<see cref="SessionSignInOptions"/>), so the password never
 /// crosses the circuit.
+/// </para>
+/// <para>
+/// Below the small breakpoint it opens as a full-screen sheet rather than a
+/// centred dialog, so it works at a phone's width.
 /// </para>
 /// </remarks>
 public partial class SignInDialog
@@ -51,6 +56,11 @@ public partial class SignInDialog
 
     [Inject]
     private SessionSignInOptions Options { get; set; } = default!;
+
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
+    private LtBreakpoint? Breakpoint { get; set; }
+
+    private LtDialogPlacement Placement => SessionPresentation.DialogPlacement(Breakpoint);
 
     private string UsernameId => _id + "-username";
 
