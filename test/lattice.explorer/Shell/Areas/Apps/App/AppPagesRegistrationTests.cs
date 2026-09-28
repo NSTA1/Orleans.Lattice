@@ -1,9 +1,16 @@
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.JSInterop;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Shell;
 using Orleans.Lattice.Explorer.Shell.Areas.Apps.App;
 using Orleans.Lattice.Explorer.Shell.Navigation;
 using Orleans.Lattice.Explorer.Tests.Shell.Design;
+using Orleans.Lattice.Explorer.Tests.Shell.Navigation;
+using Orleans.Lattice.Explorer.Tests.Shell.Session;
 
 namespace Orleans.Lattice.Explorer.Tests.Shell.Areas.Apps.App;
 
@@ -19,12 +26,13 @@ public sealed class AppPagesRegistrationTests
     public async Task The_loader_is_scoped_and_reads_the_circuits_facades()
     {
         var workspace = new FakeAppPagesWorkspace().Grant(AppPageTestData.Workspace());
-        var services = new ServiceCollection();
-        services.AddSingleton<ILatticeAppWorkspace>(workspace);
+        var services = HeadServices();
         services.AddLatticeExplorerShell();
+        services.AddSingleton<ILatticeAppWorkspace>(workspace);
+        services.AddSingleton<ILatticeAppsControl>(new FakeAppPagesControl());
 
         var descriptor = services.Single(candidate => candidate.ServiceType == typeof(AppPageLoader));
-        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
         await using var first = provider.CreateAsyncScope();
         await using var second = provider.CreateAsyncScope();
         var loader = first.ServiceProvider.GetRequiredService<AppPageLoader>();
@@ -42,13 +50,31 @@ public sealed class AppPagesRegistrationTests
     [Test]
     public async Task A_host_without_the_app_facades_still_resolves_and_answers_not_found()
     {
-        var services = new ServiceCollection().AddLatticeExplorerShell();
-        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+        var services = HeadServices();
+        services.AddLatticeExplorerShell();
+        services.RemoveAll<ILatticeAppWorkspace>();
+        services.RemoveAll<ILatticeAppsControl>();
+        await using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
         await using var scope = provider.CreateAsyncScope();
 
         var load = await scope.ServiceProvider.GetRequiredService<AppPageLoader>().LoadAsync(AppPageTestData.Slug, CancellationToken.None);
 
         Assert.That(load, Is.SameAs(AppPageLoad.NotFound));
+    }
+
+    /// <summary>
+    /// The services a head provides per circuit that the rest of the Shell reads - the
+    /// navigation manager, the JavaScript runtime and Core's session seams - so a container
+    /// that registers the whole Shell validates on build.
+    /// </summary>
+    private static ServiceCollection HeadServices()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<NavigationManager>(_ => new TestNavigationManager());
+        services.AddScoped(_ => NSubstitute.Substitute.For<IJSRuntime>());
+        services.AddSingleton<IExplorerSession>(new FakeExplorerSession(new FakeStateConnection()));
+        services.AddSingleton<IExplorerAuthSession>(new FakeAuthSession());
+        return services;
     }
 
     [Test]
