@@ -41,7 +41,7 @@ internal sealed partial class ShardRootGrain
         // exactly one grain call per shard") via OpenTelemetry instead of a
         // bespoke counting harness.
         LatticeMetrics.ShardDigestReads.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
             LatticeTenantLabel.ForTree(TreeId));
 
@@ -76,7 +76,7 @@ internal sealed partial class ShardRootGrain
         cancellationToken.ThrowIfCancellationRequested();
 
         LatticeMetrics.ShardDigestReads.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
             LatticeTenantLabel.ForTree(TreeId));
 

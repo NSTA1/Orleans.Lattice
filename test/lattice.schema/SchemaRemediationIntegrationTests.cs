@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Text;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Schema.Tests;
 
@@ -35,9 +38,43 @@ public sealed class SchemaRemediationIntegrationTests
     private static string Text(byte[]? value) => value is null ? string.Empty : Encoding.UTF8.GetString(value);
 
     [Test]
+    public async Task Remediated_tree_lifecycle_deletes_recovers_and_purges_the_live_copy()
+    {
+        const string treeId = "remediation-lifecycle";
+        var tree = Grains.GetGrain<ILattice>(treeId);
+        await tree.SetAsync("key", Utf8("{\"v\":1}"));
+        var remediation = Grains.GetGrain<ILatticeSchemaRemediationGrain>(treeId);
+        var policy = new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() });
+        await remediation.StartAsync(LatticeValueTransform.Passthrough(), policy);
+        var registry = Grains.GetLatticeRegistry();
+        var physical = await registry.ResolveAsync(treeId);
+        Assert.That(physical, Is.Not.EqualTo(treeId));
+
+        await tree.DeleteTreeAsync();
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await tree.GetAsync("key"));
+        Assert.ThrowsAsync<InvalidOperationException>(() => tree.SetAsync("other", Utf8("{}")));
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            remediation.StartAsync(LatticeValueTransform.Passthrough(), policy));
+        await tree.RecoverTreeAsync();
+        Assert.That(Text(await tree.GetAsync("key")), Is.EqualTo("{\"v\":1}"));
+        await tree.DeleteTreeAsync();
+        await tree.PurgeTreeAsync();
+        Assert.That(await registry.ExistsAsync(physical), Is.False);
+        Assert.That(await tree.TreeExistsAsync(), Is.False);
+    }
+
+    [Test]
     public async Task Remediation_rewrites_values_cuts_over_and_enforces_the_new_policy()
     {
         const string treeId = "orders-success";
+        var metricTrees = new ConcurrentQueue<string>();
+        using var listener = MeterListening.StartForInstrument(LatticeMetrics.ShardWrites, current =>
+            current.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                foreach (var tag in tags)
+                    if (tag.Key == LatticeMetrics.TagTree && tag.Value is string id && id.StartsWith(treeId, StringComparison.Ordinal))
+                        metricTrees.Enqueue(id);
+            }));
         var lattice = Grains.GetGrain<ILattice>(treeId);
         await lattice.SetAsync("k1", Utf8("{\"v\":1}"));
         await lattice.SetAsync("k2", Utf8("{\"v\":2}"));
@@ -65,8 +102,11 @@ public sealed class SchemaRemediationIntegrationTests
             Throws.TypeOf<LatticeSchemaViolationException>());
 
         // A conforming write is accepted.
+        metricTrees.Clear();
         await lattice.SetAsync("k3", Utf8("{\"v\":3}"));
         Assert.That(Text(await lattice.GetAsync("k3")), Does.Contain("\"v\":3"));
+        Assert.That(metricTrees, Is.Not.Empty);
+        Assert.That(metricTrees.Distinct(), Is.EqualTo(new[] { treeId }));
 
         // Status reflects the completed remediation.
         var status = await remediation.GetStatusAsync();

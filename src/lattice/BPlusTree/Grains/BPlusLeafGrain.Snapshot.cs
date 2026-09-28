@@ -1222,7 +1222,7 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
 
         if (PrimedCoverageRepairTrees.TryAdd(treeId, 0))
@@ -1928,7 +1928,7 @@ internal sealed partial class BPlusLeafGrain
                 ? LatticeMetrics.SnapshotCaptureAbandoned
                 : LatticeMetrics.SnapshotCaptureFailed;
 
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
 
         LatticeMetrics.LeafSnapshotCaptures.Add(1, treeTag, outcome, tenantTag);
@@ -1963,7 +1963,7 @@ internal sealed partial class BPlusLeafGrain
 
         LatticeMetrics.LeafSnapshotCaptureConcurrentEntries.Add(
             alreadyInFlight > 0 ? 1 : 0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(treeId));
     }
 
@@ -2004,7 +2004,7 @@ internal sealed partial class BPlusLeafGrain
 
         LatticeMetrics.LeafSnapshotCaptureDeclines.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             reason,
             tenantTag);
     }
@@ -2030,7 +2030,7 @@ internal sealed partial class BPlusLeafGrain
 
         LatticeMetrics.LeafSnapshotDriverDeclines.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             reason,
             tenantTag);
     }
@@ -2971,7 +2971,7 @@ internal sealed partial class BPlusLeafGrain
         {
             LatticeMetrics.LeafSnapshotLoadFailures.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 resourceExhaustion
                     ? contiguityExhaustion
                         ? LatticeMetrics.SnapshotLoadFailureContiguityExhausted
@@ -3305,7 +3305,7 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
 
         if (PrimedAdmissionTrees.TryAdd(treeId, 0))
@@ -3347,7 +3347,7 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
 
         if (PrimedAdmissionTrees.TryAdd(treeId, 0))
@@ -3384,7 +3384,7 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
         tenantTag = LatticeTenantLabel.ForTree(treeId);
 
         if (PrimedSegmentTrees.TryAdd(treeId, 0))

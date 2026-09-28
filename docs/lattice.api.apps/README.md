@@ -58,6 +58,29 @@ recorded outcome of a live install's last activation run failed (a caller error 
 as an invalid transition does not count). A disabled install
 is never reported as `Failed` merely because it is disabled.
 
+A failed activation run throws `InvalidOperationException` naming the operation,
+the `AppActivationFailure` value and the first diagnostic, for example
+`The enable of app 'orders' failed (ReplicationModeChangeRejected): ...`. That
+covers `EnableAsync` and the re-application an `UpdateConsentAsync` (or an upgrade)
+runs on an enabled app; there the message is prefixed to say that the consent or
+upgrade itself was recorded before re-applying failed. The replication failures
+(`ReplicationModeChangeRejected`, `ReplicationPreconditionFailed`,
+`ReplicationEnrolmentFailed`) are described under
+[Replication intent](../lattice.apps/README.md#replication-intent); each keeps the
+app's existing rules in place, and a mode conflict is detected before any enrolment
+changes. `DescribeAsync` then reports the install as `Failed` until a later run
+succeeds.
+
+An install or upgrade whose trees are owned by another install, or that would take
+over a tree it may not own, is refused with `InvalidOperationException` naming the
+tree by its app-local name and the reason, for example
+`Could not install app 'orders' (TreeOwnershipConflict): ...`, and nothing is
+recorded. An enable or reconcile that finds such a conflict fails the same way with
+`AppActivationFailure.TreeOwnershipConflict`. `DescribeAsync` reports the conflicts
+before installation: each `AppTreeDescriptor` carries an `OwnershipConflict` message
+when the caller's tenant could not own that tree, or `null` when it could. See
+[Tree ownership](../lattice.apps/README.md#tree-ownership) for the rules.
+
 ## Authorization
 
 Every verb except the capability probe requires `LatticeOperation.AppInstall` over

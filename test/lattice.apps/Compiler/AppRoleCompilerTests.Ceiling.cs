@@ -112,7 +112,7 @@ public sealed partial class AppRoleCompilerTests
         var manifest = Manifest(Role("peer", LatticeOperation.Read, PrefixScope("items", "shared/", app: "other")));
 
         var result = AppRoleCompiler.Compile(
-            manifest, TenantId.Default, [Bind("peer", "g-a")], Ceiling(LatticeOperation.Read, LatticeScope.Prefix("a/other/items", "shared/")));
+            manifest, TenantId.Default, [Bind("peer", "g-a")], Ceiling(LatticeOperation.Read, LatticeScope.Prefix("a/other/items", "shared/")), OtherOwnsItems);
 
         Assert.That(result.Succeeded, Is.True);
         Assert.That(result.Rules.Single().Scope, Is.EqualTo(LatticeScope.Prefix("a/other/items", "shared/")));
@@ -138,7 +138,7 @@ public sealed partial class AppRoleCompilerTests
         var manifest = Manifest(Role("peer", LatticeOperation.Read, template));
         var exception = new LatticeScope(exceptionKind, "a/other/items", exceptionKey);
 
-        var result = AppRoleCompiler.Compile(manifest, TenantId.Default, [Bind("peer", "g-a")], Ceiling(LatticeOperation.Read, exception));
+        var result = AppRoleCompiler.Compile(manifest, TenantId.Default, [Bind("peer", "g-a")], Ceiling(LatticeOperation.Read, exception), OtherOwnsItems);
 
         Assert.That(result.Succeeded, Is.EqualTo(covered));
         Assert.That(result.Rules, Has.Count.EqualTo(covered ? 1 : 0));
@@ -175,7 +175,7 @@ public sealed partial class AppRoleCompilerTests
         var manifest = Manifest(Role("peer", LatticeOperation.Read, TreeScope("items", app: "other")));
 
         var result = AppRoleCompiler.Compile(
-            manifest, TenantId.Default, [Bind("peer", "g-a")], Ceiling(LatticeOperation.Read, null!, LatticeScope.Tree("a/other/items")));
+            manifest, TenantId.Default, [Bind("peer", "g-a")], Ceiling(LatticeOperation.Read, null!, LatticeScope.Tree("a/other/items")), OtherOwnsItems);
 
         Assert.That(result.Succeeded, Is.True);
     }

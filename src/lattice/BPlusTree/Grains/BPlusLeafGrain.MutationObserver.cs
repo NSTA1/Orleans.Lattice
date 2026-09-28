@@ -1,4 +1,5 @@
 using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -23,7 +24,7 @@ internal sealed partial class BPlusLeafGrain
         var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
-            TreeId = state.State.TreeId ?? string.Empty,
+            TreeId = ResolveObserverTreeId(),
             Kind = MutationKind.Set,
             Key = key,
             Value = committed.IsTombstone ? null : committed.Value,
@@ -54,7 +55,7 @@ internal sealed partial class BPlusLeafGrain
         var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
-            TreeId = state.State.TreeId ?? string.Empty,
+            TreeId = ResolveObserverTreeId(),
             Kind = MutationKind.Delete,
             Key = key,
             Timestamp = tombstone.Timestamp,
@@ -70,6 +71,15 @@ internal sealed partial class BPlusLeafGrain
             ShardIndex = state.State.ShardIndex ?? 0,
         };
         return mutationObservers.PublishAsync(mutation);
+    }
+
+    private string ResolveObserverTreeId()
+    {
+        var physicalTreeId = state.State.TreeId ?? string.Empty;
+        return RequestContext.Get(LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey) is string routedPhysical
+            && string.Equals(routedPhysical, physicalTreeId, StringComparison.Ordinal)
+            ? RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string ?? physicalTreeId
+            : physicalTreeId;
     }
 
     /// <summary>

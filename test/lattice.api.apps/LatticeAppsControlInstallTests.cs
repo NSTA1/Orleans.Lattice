@@ -105,6 +105,22 @@ public sealed class LatticeAppsControlInstallTests
     }
 
     [Test]
+    public void InstallAsync_tree_ownership_conflict_throws_invalid_operation_naming_the_owner_without_composed_ids()
+    {
+        _h.Tenants.Tenant = AppsControlHarness.Acme;
+        _h.SourceResolves();
+        _h.RegistryHas(null);
+        _h.Registry.InstallAsync(Arg.Any<AppRegistryInstallRequest>(), Arg.Any<CancellationToken>())
+            .Returns(AppsControlHarness.Rejected(
+                AppRegistryTransitionError.TreeOwnershipConflict, "Tree 'contacts' (t/acme/a/crm/contacts) is owned by app 'billing'."));
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(() => _h.Control.InstallAsync(AppsControlHarness.InstallRequest()));
+
+        Assert.That(ex!.Message, Is.EqualTo(
+            "Could not install app 'crm' (TreeOwnershipConflict): Tree 'contacts' (contacts) is owned by app 'billing'."));
+    }
+
+    [Test]
     public async Task InstallAsync_after_uninstall_installs_afresh()
     {
         _h.SourceResolves();

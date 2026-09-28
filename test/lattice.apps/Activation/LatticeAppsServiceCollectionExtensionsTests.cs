@@ -72,7 +72,7 @@ public sealed class LatticeAppsServiceCollectionExtensionsTests
         Assert.That(Count<AppActivationEngine>(services), Is.EqualTo(1));
         Assert.That(Count<AppActivationRunner>(services), Is.EqualTo(1));
         Assert.That(services.Any(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(AppStartupReconciler)), Is.True);
-        Assert.That(services.Any(d => d.ImplementationType == typeof(AppReplicationIntentPostConfigure)), Is.True);
+        Assert.That(Count<IPostConfigureOptions<LatticeReplicationOptions>>(services), Is.Zero);
         Assert.That(services.Any(d => d.ImplementationType == typeof(AppTreeOptionsConfigurator)), Is.True);
     }
 
@@ -91,6 +91,24 @@ public sealed class LatticeAppsServiceCollectionExtensionsTests
         var options = provider.GetRequiredService<IOptions<LatticeAppsOptions>>().Value;
         Assert.That(options.StartupRetryDelay, Is.EqualTo(TimeSpan.FromSeconds(1)));
         Assert.That(options.ReconcileOnStartup, Is.False);
+    }
+
+    [Test]
+    public void AddLatticeApps_replaces_the_core_allow_all_ownership_guard_with_the_ledger_backed_one()
+    {
+        var services = CoreServices();
+        var coreGuard = Substitute.For<ITreeOwnershipGuard>();
+        services.AddSingleton(coreGuard);
+
+        services.AddLatticeApps();
+        services.AddLatticeApps();
+
+        var guards = services.Where(d => d.ServiceType == typeof(ITreeOwnershipGuard)).ToArray();
+        Assert.That(guards, Has.Length.EqualTo(1));
+        Assert.That(guards[0].ImplementationType, Is.EqualTo(typeof(AppTreeOwnershipGuard)));
+        Assert.That(Count<AppTreeOwnershipLedger>(services), Is.EqualTo(1));
+        Assert.That(Count<IAppTreeLedgerStore>(services), Is.EqualTo(1));
+        Assert.That(Count<IAppTreeFacts>(services), Is.EqualTo(1));
     }
 
     [Test]
@@ -163,19 +181,19 @@ public sealed class LatticeAppsServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void With_replication_present_declared_trees_merge_into_the_replicated_set()
+    public void Registering_an_app_does_not_enrol_its_trees_in_static_replication()
     {
         var services = CoreServices();
         services.ConfigureAll<LatticeReplicationOptions>(options => options.ReplicatedTrees =
-            new Dictionary<string, LatticeMergeMode> { ["a/notes/records"] = LatticeMergeMode.OrSet });
+            new Dictionary<string, LatticeMergeMode> { ["operator-tree"] = LatticeMergeMode.OrSet });
         services.AddLatticeApps()
             .AddLatticeApp("notes", new FakeAppAssembly(SourceTestManifests.ResourceName, ReplicatedManifest), SourceTestManifests.ResourceName);
 
         using var provider = services.BuildServiceProvider();
         var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>().Get("a/notes/records").ReplicatedTrees;
 
-        // The operator's entry wins over the app's declared mode.
-        Assert.That(trees!["a/notes/records"], Is.EqualTo(LatticeMergeMode.OrSet));
+        Assert.That(trees!.Keys, Is.EquivalentTo(new[] { "operator-tree" }));
+        Assert.That(trees["operator-tree"], Is.EqualTo(LatticeMergeMode.OrSet));
     }
 
     [Test]

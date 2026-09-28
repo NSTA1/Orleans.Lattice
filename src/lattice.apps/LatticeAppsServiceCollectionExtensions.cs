@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
-using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Apps;
 
@@ -12,7 +11,7 @@ namespace Orleans.Lattice.Apps;
 /// Extension methods that register the <c>Orleans.Lattice.Apps</c> add-on on a silo: the app
 /// registry and its compiled snapshot, the <see cref="IAppSource"/> seam with its in-image
 /// default, the <see cref="IAppActivationPipeline"/>, the background startup reconcile, and the
-/// configuration-time replication and per-tree option intent of in-image apps.
+/// per-install replication and configuration-time per-tree option intent of in-image apps.
 /// </summary>
 public static partial class LatticeAppsServiceCollectionExtensions
 {
@@ -92,6 +91,16 @@ public static partial class LatticeAppsServiceCollectionExtensions
         services.TryAddSingleton<AppInstallAuthorizer>();
         services.TryAddSingleton<IAppRegistry, AppRegistry>();
 
+        // Tree ownership ledger (sys-app-trees): claimed at install and upgrade, re-verified by
+        // activation, consulted by the compilers for cross-app owners.
+        services.TryAddSingleton<IAppTreeLedgerStore, LatticeAppTreeLedgerStore>();
+        services.TryAddSingleton<IAppTreeFacts, LatticeAppTreeFacts>();
+        services.TryAddSingleton<AppTreeOwnershipLedger>();
+
+        // Core registers an allow-all ownership guard; the ledger-backed guard replaces it so every
+        // alias change is bounded by app tree ownership.
+        services.Replace(ServiceDescriptor.Singleton<ITreeOwnershipGuard, AppTreeOwnershipGuard>());
+
         // The compiled snapshot maintainer is one singleton serving both as the change-feed
         // observer and the projection, so a registry write refreshes the snapshot readers see.
         // AddSingleton<IMutationObserver> is not idempotent under TryAdd, hence the marker above.
@@ -111,11 +120,8 @@ public static partial class LatticeAppsServiceCollectionExtensions
         services.TryAddSingleton<IAppActivationPipeline, AppActivationPipeline>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, AppStartupReconciler>());
 
-        // Configuration-time intent of in-image apps. Inert when nothing resolves the options:
-        // without the replication add-on LatticeReplicationOptions is never materialised.
+        // Configuration-time per-tree options of in-image apps.
         services.TryAddSingleton<InImageAppManifestCatalog>();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IPostConfigureOptions<LatticeReplicationOptions>, AppReplicationIntentPostConfigure>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IConfigureOptions<LatticeOptions>, AppTreeOptionsConfigurator>());
 
@@ -146,9 +152,10 @@ public static partial class LatticeAppsServiceCollectionExtensions
     /// <summary>
     /// Registers an app shipped in the silo image with the in-image app source: its manifest is
     /// the embedded resource <paramref name="manifestResourceName"/> of <paramref name="assembly"/>.
-    /// Registering makes the app installable and makes its declared replication intent and
-    /// per-tree soft-delete windows known at configuration time; it does not install or enable
-    /// it. A manifest that fails to load or validate fails only that app's activation.
+    /// Registering makes the app installable and makes its per-tree soft-delete windows known
+    /// at configuration time; it does not install, enable, or enrol its trees for replication.
+    /// Replication intent is applied per install on activation when the runtime replication
+    /// authority is registered. A manifest that fails to load or validate fails only that app's activation.
     /// </summary>
     /// <param name="services">The silo service collection.</param>
     /// <param name="slug">The app slug the manifest must declare.</param>

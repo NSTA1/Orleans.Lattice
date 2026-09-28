@@ -39,7 +39,10 @@ public sealed class AppMcpScopeResolverTests
             AllowedOperations = LatticeOperation.Read,
             ApprovedExceptionScopes = [LatticeScope.Tree("a/tasks/board"), LatticeScope.Tree("old-notes")],
         };
-        var compiled = AppRoleCompiler.Compile(manifest, tenant, [AppRoleBinding.Create("mixed", "g")], ceiling);
+        var owners = AppTreeOwnerSnapshot.Create([
+            new(tenant.IsDefault ? "a/tasks/board" : $"t/{tenantId}/a/tasks/board", Tasks),
+        ]);
+        var compiled = AppRoleCompiler.Compile(manifest, tenant, [AppRoleBinding.Create("mixed", "g")], ceiling, owners);
         Assert.That(compiled.Succeeded, Is.True);
 
         var resolved = AppMcpScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, tenant);

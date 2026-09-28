@@ -127,6 +127,8 @@ public partial class TreeSnapshotGrainTests
         await h.Grain.SnapshotAsync(DestTreeId, SnapshotMode.Online);
 
         Assert.That(h.State.State.ReleasesShadowForwardOnCompletion, Is.True);
+        await h.Factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .Received(1).RegisterAsync(DestTreeId, Arg.Is<TreeRegistryEntry>(e => e.DerivedFrom == null));
     }
 
     [Test]
@@ -136,7 +138,10 @@ public partial class TreeSnapshotGrainTests
         SetupShardMocks(h.Factory, SourceTreeId);
 
         await h.Grain.SnapshotWithOperationIdAsync(DestTreeId, SnapshotMode.Online,
-            maxLeafKeys: null, maxInternalChildren: null, operationId: "resize-op", logicalTreeId: SourceTreeId);
+            maxLeafKeys: null, maxInternalChildren: null, operationId: "resize-op", logicalTreeId: "logical-source");
+
+        await h.Factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .Received(1).RegisterAsync(DestTreeId, Arg.Is<TreeRegistryEntry>(e => e.DerivedFrom == "logical-source"));
 
         Assert.Multiple(() =>
         {

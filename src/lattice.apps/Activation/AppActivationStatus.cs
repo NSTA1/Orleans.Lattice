@@ -22,4 +22,12 @@ public sealed record AppActivationStatus
     /// soft-deletes the structural trees it drops.
     /// </summary>
     [Id(3)] public AppManifest? AppliedManifest { get; init; }
+
+    /// <summary>
+    /// Effective tree ids mapped to whether this install authored or may have attempted their
+    /// enable. A false value records a pre-existing enrolment, which uninstall and upgrades
+    /// must leave intact. Written before changes so interrupted activations remain cleanable.
+    /// </summary>
+    [Id(4)] public IReadOnlyDictionary<string, bool> ReplicationTrees { get; init; } =
+        System.Collections.ObjectModel.ReadOnlyDictionary<string, bool>.Empty;
 }

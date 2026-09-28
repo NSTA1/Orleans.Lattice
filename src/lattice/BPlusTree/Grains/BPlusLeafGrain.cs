@@ -525,7 +525,7 @@ internal sealed partial class BPlusLeafGrain(
 
             LatticeMetrics.LeafDeactivationCheckpointDelta.Record(
                 delta,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagDeactivationReason, reason.ReasonCode.ToString()),
                 temperature,
                 LatticeTenantLabel.ForTree(treeId));
@@ -2595,6 +2595,7 @@ internal sealed partial class BPlusLeafGrain(
         try
         {
             if (state.State.TreeId is not null) return;
+            _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(treeId);
             var prevTreeId = state.State.TreeId;
             state.State.TreeId = treeId;
             try
@@ -2819,6 +2820,7 @@ internal sealed partial class BPlusLeafGrain(
             // Tree id: write-once.
             if (state.State.TreeId is null && init.TreeId is not null)
             {
+                _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(init.TreeId);
                 state.State.TreeId = init.TreeId;
                 changed = true;
             }
@@ -3125,7 +3127,7 @@ internal sealed partial class BPlusLeafGrain(
                     {
                         var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                         LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                             LatticeMetrics.KindCompact,
                             LatticeTenantLabel.ForTree(treeId));
                     }
@@ -3441,7 +3443,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                 LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
                     LatticeTenantLabel.ForTree(treeId));
             }
@@ -4133,7 +4135,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                 LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
                     LatticeTenantLabel.ForTree(treeId));
             }

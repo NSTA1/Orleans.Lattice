@@ -145,6 +145,8 @@ internal sealed partial class LatticeGrain(
 
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
+    private string? _metricTreeId;
+    private string MetricTreeId => _metricTreeId ?? optionsResolver.GetMetricTreeId(TreeId);
 
     // Per-silo registry read coalescer (issue #3501). Resolved lazily so a
     // directly-constructed grain in a unit test, with no registration, falls
@@ -217,7 +219,7 @@ internal sealed partial class LatticeGrain(
         {
             if (!_stageTagTreeCached)
             {
-                _stageTagTreeCache = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+                _stageTagTreeCache = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
                 _stageTagTreeCached = true;
             }
             return _stageTagTreeCache;
@@ -494,7 +496,7 @@ internal sealed partial class LatticeGrain(
     // invalidation hooks alongside the rest of the routing state. Caching the
     // record itself (rather than re-allocating on every GetRoutingAsync call)
     // is what lets GetRoutingAsync degenerate to a non-async sync-fast-path
-    // method, which in turn lets GetShardGrainAsync do the same on the
+    // method, followed by synchronous GetShardGrain on the
     // shard-cache hit path. Combined: no async state-machine box and no
     // RoutingInfo allocation on the steady-state read/write fast path.
     private RoutingInfo? _cachedRouting;
@@ -986,7 +988,7 @@ internal sealed partial class LatticeGrain(
                     var routeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                     try
                     {
-                        shard = await GetShardGrainAsync(key);
+                        shard = GetShardGrain(key, await GetRoutingAsync());
                     }
                     finally
                     {
@@ -1122,7 +1124,7 @@ internal sealed partial class LatticeGrain(
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    var shard = await GetShardGrainAsync(key);
+                    var shard = GetShardGrain(key, await GetRoutingAsync());
                     var versioned = await shard.GetWithVersionAsync(key);
                     // Read-path value-decoder boundary: strip the per-value
                     // envelope from the versioned read's value. Zero-cost when
@@ -1238,7 +1240,7 @@ internal sealed partial class LatticeGrain(
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    var shard = await GetShardGrainAsync(key);
+                    var shard = GetShardGrain(key, await GetRoutingAsync());
                     return await shard.ExistsAsync(key);
                 }
                 catch (StaleShardRoutingException)
@@ -1939,7 +1941,7 @@ internal sealed partial class LatticeGrain(
                 while (true)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var shard = await GetShardGrainAsync(key);
+                    var shard = GetShardGrain(key, await GetRoutingAsync());
 #if LATTICE_DIAG
                     setCoreAttempts++;
 #endif
@@ -2080,7 +2082,7 @@ internal sealed partial class LatticeGrain(
             (self: this, key, value, expiresAtTicks),
             static async args =>
             {
-                var shard = await args.self.GetShardGrainAsync(args.key);
+                var shard = args.self.GetShardGrain(args.key, await args.self.GetRoutingAsync());
                 await shard.SetAsync(args.key, args.value, args.expiresAtTicks);
             },
             cancellationToken);
@@ -2123,7 +2125,7 @@ internal sealed partial class LatticeGrain(
             (self: this, key, value, expectedVersion),
             static async args =>
             {
-                var shard = await args.self.GetShardGrainAsync(args.key);
+                var shard = args.self.GetShardGrain(args.key, await args.self.GetRoutingAsync());
                 return await shard.SetIfVersionAsync(args.key, args.value, args.expectedVersion);
             },
             cancellationToken);
@@ -2184,7 +2186,7 @@ internal sealed partial class LatticeGrain(
             (self: this, key, mode, deltaBytes, expiresAtTicks),
             static async args =>
             {
-                var shard = await args.self.GetShardGrainAsync(args.key);
+                var shard = args.self.GetShardGrain(args.key, await args.self.GetRoutingAsync());
                 return await shard.ApplyCrdtDeltaAsync(args.key, args.mode, args.deltaBytes, args.expiresAtTicks);
             },
             cancellationToken);
@@ -2360,7 +2362,7 @@ internal sealed partial class LatticeGrain(
             (self: this, key, value),
             static async args =>
             {
-                var shard = await args.self.GetShardGrainAsync(args.key);
+                var shard = args.self.GetShardGrain(args.key, await args.self.GetRoutingAsync());
                 return await shard.GetOrSetAsync(args.key, args.value);
             },
             cancellationToken);
@@ -3107,7 +3109,7 @@ internal sealed partial class LatticeGrain(
             (self: this, key),
             static async args =>
             {
-                var shard = await args.self.GetShardGrainAsync(args.key);
+                var shard = args.self.GetShardGrain(args.key, await args.self.GetRoutingAsync());
                 return await shard.DeleteAsync(args.key);
             },
             cancellationToken);
@@ -4142,6 +4144,7 @@ internal sealed partial class LatticeGrain(
     /// </remarks>
     public async Task OnActivateAsync(CancellationToken cancellationToken)
     {
+        _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(TreeId);
         PrimeConfigChangeArms();
 
         try
@@ -4204,11 +4207,11 @@ internal sealed partial class LatticeGrain(
         // reads literal `new KeyValuePair<string, object?>(...)` arguments on a
         // zero-valued Add, can see both arms.
         LatticeMetrics.ConfigChanged.Add(0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"),
             LatticeTenantLabel.ForTree(TreeId));
         LatticeMetrics.ConfigChanged.Add(0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
             LatticeTenantLabel.ForTree(TreeId));
     }
@@ -4298,35 +4301,29 @@ internal sealed partial class LatticeGrain(
         return _physicalTreeId;
     }
 
-    private ValueTask<IShardRootGrain> GetShardGrainAsync(string key)
-    {
-        // Stamp the routed-logical marker so a retained (shadow-cutover
-        // superseded) shard can distinguish this logical-alias-routed
-        // operation from direct-physical access / maintenance and redirect us
-        // to self-heal. One RequestContext set on the shard-resolution path;
-        // it flows to the downstream shard call in the same turn.
-        RequestContext.Set(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey, TreeId);
+    private bool? _hasMutationObservers;
 
-        // Sync fast path: if routing is already cached, resolve the shard
-        // index and look up the per-activation array cache synchronously.
-        // Skips both the async state-machine box for this method AND the
-        // RoutingInfo allocation that the async wrapper used to take through
-        // GetRoutingAsync on every call.
-        var routing = _cachedRouting;
-        if (routing is not null)
+    private bool HasMutationObservers =>
+        _hasMutationObservers ??=
+            (services.GetService(typeof(MutationObserverDispatcher)) as MutationObserverDispatcher)?.HasObservers == true;
+
+    private void StampRoutedIdentity(string physicalTreeId)
+    {
+        // The logical marker also drives retained-shard redirects. The physical
+        // companion is only needed by observers; do not add a context copy when
+        // that hook is unused.
+        RequestContext.Set(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey, TreeId);
+        if (HasMutationObservers)
         {
-            var shardIndex = routing.Map.Resolve(key);
-            var shardCache = _cachedShards;
-            if (shardCache is not null && (uint)shardIndex < (uint)shardCache.Length && shardCache[shardIndex] is { } existing)
-                return new ValueTask<IShardRootGrain>(existing);
-            return new ValueTask<IShardRootGrain>(ResolveShardSlow(routing.PhysicalTreeId, shardIndex));
+            RequestContext.Set(LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey, physicalTreeId);
         }
-        return GetShardGrainSlowAsync(key);
     }
 
-    private async ValueTask<IShardRootGrain> GetShardGrainSlowAsync(string key)
+    private IShardRootGrain GetShardGrain(string key, RoutingInfo routing)
     {
-        var routing = await GetRoutingAsync();
+        // Call synchronously AFTER the caller awaits routing: RequestContext
+        // changes inside an async resolver would not flow back to its caller.
+        StampRoutedIdentity(routing.PhysicalTreeId);
         var shardIndex = routing.Map.Resolve(key);
         var cache = _cachedShards;
         if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
@@ -4344,7 +4341,7 @@ internal sealed partial class LatticeGrain(
             // First miss: lazily size the cache to cover the largest physical
             // shard index in the active map. Every caller path reaches here
             // only after GetRoutingAsync has populated _shardMap (single-key
-            // path: GetShardGrainAsync awaits routing first; fanout path:
+            // path: the caller awaits routing before GetShardGrain; fanout path:
             // GetShardGrainByIndex is invoked from inside loops keyed by
             // physicalShards, which itself comes from _shardMap). _shardMap
             // therefore must be non-null on this path. The defensive
@@ -4385,22 +4382,22 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Returns an <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> reference for the given shard
     /// index against the resolved physical tree id. Reuses the array-keyed
-    /// per-activation cache populated by <see cref="GetShardGrainAsync"/>
+    /// per-activation cache populated by <see cref="GetShardGrain"/>
     /// (cycle 11) so multi-shard fanout sites - bulk batch, cursor, range
     /// scan, k-way-merge - that already have <c>physicalTreeId</c> and
     /// <c>shardIndex</c> in hand do not pay the
     /// <c>GetGrain&lt;IShardRootGrain&gt;(string)</c> materialisation cost on
     /// any repeat-shard hit, even when consecutive calls alternate across
     /// distinct shards. Cache invalidation is shared with
-    /// <see cref="GetShardGrainAsync"/>: <see cref="TryInvalidateStaleAlias()"/>
+    /// <see cref="GetShardGrain"/>: <see cref="TryInvalidateStaleAlias()"/>
     /// and <see cref="InvalidateShardMap"/> both null the array.
     /// </summary>
     private IShardRootGrain GetShardGrainByIndex(string physicalTreeId, int shardIndex)
     {
-        // See GetShardGrainAsync: stamp the routed-logical marker on every
+        // See GetShardGrain: stamp the routed identity on every
         // fan-out shard resolution too, so scans and multi-shard writes carry
         // the same self-heal signal to a retained shard.
-        RequestContext.Set(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey, TreeId);
+        StampRoutedIdentity(physicalTreeId);
 
         var cache = _cachedShards;
         if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)

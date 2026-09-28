@@ -113,6 +113,31 @@ public sealed class LatticeAppsControlReadTests
     }
 
     [Test]
+    public async Task DescribeAsync_reports_tree_ownership_conflicts_before_install_with_app_local_names()
+    {
+        _h.Tenants.Tenant = AppsControlHarness.Acme;
+        _h.RegistryHas(null);
+        _h.SourceResolves();
+        _h.Registry.GetTreeOwnershipConflictsAsync(Arg.Any<TenantId>(), Arg.Any<AppManifest>(), Arg.Any<AppProvenance>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<AppTreeOwnershipConflict>>(
+            [
+                new("legacy", AppTreeOwnershipConflictReason.OwnedByAnotherApp, AppSlug.Parse("billing"),
+                    "Tree 'legacy' (t/acme/legacy-contacts) is owned by app 'billing'."),
+            ]));
+
+        var d = (await _h.Control.DescribeAsync(AppsControlHarness.Slug))!;
+
+        Assert.That(d.Trees[0].OwnershipConflict, Is.Null);
+        Assert.That(d.Trees[1].OwnershipConflict, Is.EqualTo("Tree 'legacy' (legacy-contacts) is owned by app 'billing'."),
+            "the conflict is reported on the tree it concerns, with no tenant-composed id");
+        await _h.Registry.Received(1).GetTreeOwnershipConflictsAsync(
+            AppsControlHarness.Acme,
+            Arg.Is<AppManifest>(m => m.Identity.Slug == AppsControlHarness.AppSlugValue),
+            Arg.Is<AppProvenance>(p => p.Publisher == "contoso"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task DescribeAsync_installed_app_reports_state_ceiling_and_bindings_of_installed_version()
     {
         _h.RegistryHas(AppsControlHarness.Record(AppRegistryLifecycleState.Enabled));

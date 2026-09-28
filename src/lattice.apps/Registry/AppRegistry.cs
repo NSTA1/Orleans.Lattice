@@ -23,6 +23,8 @@ internal sealed class AppRegistry : IAppRegistry
 
     private readonly IAppRegistryStore _store;
     private readonly AppInstallAuthorizer _authorizer;
+    private readonly AppTreeOwnershipLedger _ownership;
+    private readonly IAppSource _source;
     private readonly string _clusterId;
     private readonly TimeProvider _time;
 
@@ -30,19 +32,27 @@ internal sealed class AppRegistry : IAppRegistry
     /// <param name="store">The record store.</param>
     /// <param name="authorizer">The <c>AppInstall</c> authorizer every transition consults.</param>
     /// <param name="clusterOptions">The cluster options, whose id is recorded in each install's isolation context.</param>
+    /// <param name="ownership">The tree ownership ledger install and upgrade claim through.</param>
+    /// <param name="source">The app source an install's manifest is resolved from to plan its claims.</param>
     /// <param name="timeProvider">The clock stamping transitions; defaults to <see cref="TimeProvider.System"/>.</param>
     /// <exception cref="ArgumentNullException">A required argument is <c>null</c>.</exception>
     public AppRegistry(
         IAppRegistryStore store,
         AppInstallAuthorizer authorizer,
         IOptions<ClusterOptions> clusterOptions,
+        AppTreeOwnershipLedger ownership,
+        IAppSource source,
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(clusterOptions);
+        ArgumentNullException.ThrowIfNull(ownership);
+        ArgumentNullException.ThrowIfNull(source);
         _store = store;
         _authorizer = authorizer;
+        _ownership = ownership;
+        _source = source;
         _clusterId = clusterOptions.Value.ClusterId ?? string.Empty;
         _time = timeProvider ?? TimeProvider.System;
     }
@@ -106,6 +116,14 @@ internal sealed class AppRegistry : IAppRegistry
         var key = AppRegistryTreeNames.ComposeKey(tenant, slug);
         var actor = await _authorizer.AuthorizeAsync(cancellationToken).ConfigureAwait(false);
 
+        // Install and upgrade claim the manifest's trees in the ownership ledger. The plan is null
+        // when the source cannot supply the exact version; activation, which needs the manifest
+        // anyway, is authoritative and claims then.
+        var claims = request is not null
+            ? await PlanClaimsAsync(tenant, slug, request.Identity.Version, cancellationToken).ConfigureAwait(false)
+            : null;
+        var claimant = request is not null ? new AppTreeOwner(tenant, slug, request.Identity.Provenance.Publisher) : default;
+
         AppRegistryRecord? current = null;
         for (var attempt = 1; attempt <= MaxTransitionAttempts; attempt++)
         {
@@ -129,12 +147,26 @@ internal sealed class AppRegistry : IAppRegistry
                 case AppLifecycleDecisionKind.Reject:
                     return AppRegistryTransitionResult.Rejected(current, decision.Error, decision.Message!);
                 case AppLifecycleDecisionKind.NoOp:
+                    if (action == AppLifecycleAction.Uninstall)
+                        await _ownership.ReleaseAdoptedAsync(AppTreeOwner.Of(current!), keep: null, cancellationToken).ConfigureAwait(false);
                     return AppRegistryTransitionResult.Success(current!, changed: false);
+            }
+
+            // A conflict visible before the write refuses the transition without recording anything.
+            if (claims is not null && attempt == 1)
+            {
+                var conflicts = await _ownership.DescribeAsync(claimant, claims, cancellationToken).ConfigureAwait(false);
+                if (conflicts.Count > 0)
+                    return AppRegistryTransitionResult.Rejected(current, AppRegistryTransitionError.TreeOwnershipConflict, conflicts[0].Message);
             }
 
             var next = BuildNext(tenant, slug, current, action, decision.NextState, request, actor);
             if (await _store.TrySetAsync(key, next, read.Version, cancellationToken).ConfigureAwait(false))
             {
+                if (claims is not null)
+                    return await ClaimAsync(key, current, next, action, claimant, claims, cancellationToken).ConfigureAwait(false);
+                if (action == AppLifecycleAction.Uninstall)
+                    await _ownership.ReleaseAdoptedAsync(AppTreeOwner.Of(current!), keep: null, cancellationToken).ConfigureAwait(false);
                 return AppRegistryTransitionResult.Success(next, changed: true);
             }
         }
@@ -143,6 +175,111 @@ internal sealed class AppRegistry : IAppRegistry
             current,
             AppRegistryTransitionError.ConcurrencyConflict,
             $"The app registry record was changed concurrently {MaxTransitionAttempts} times; retry the transition.");
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AppTreeOwnershipConflict>> GetTreeOwnershipConflictsAsync(
+        TenantId tenant,
+        AppManifest manifest,
+        AppProvenance provenance,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(manifest.Identity, nameof(manifest));
+        ArgumentNullException.ThrowIfNull(provenance);
+        AppRegistryTreeNames.RequireTenant(tenant);
+        var slug = manifest.Identity.Slug;
+        AppRegistryTreeNames.RequireSlug(slug);
+        return _ownership.DescribeAsync(
+            new AppTreeOwner(tenant, slug, provenance.Publisher),
+            AppTreeOwnershipLedger.Plan(manifest, tenant),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the exact version being consented to and plans its tree claims, or returns
+    /// <c>null</c> when the source cannot supply that version.
+    /// </summary>
+    private async Task<AppTreeClaimPlan[]?> PlanClaimsAsync(
+        TenantId tenant,
+        AppSlug slug,
+        AppVersion version,
+        CancellationToken cancellationToken)
+    {
+        var resolved = await _source.ResolveAsync(slug, version, cancellationToken).ConfigureAwait(false);
+        return resolved.IsResolved
+            && resolved.Manifest is { } manifest
+            && manifest.Identity.Slug == slug
+            && manifest.Identity.Version == version
+                ? AppTreeOwnershipLedger.Plan(manifest, tenant)
+                : null;
+    }
+
+    /// <summary>
+    /// Claims an applied install's or upgrade's trees. The record is written first, so a concurrent
+    /// claimant always sees an installed owner behind a claim; the first claimant of a tree wins and
+    /// the loser releases what it took and rolls its own record back. An upgrade then releases the
+    /// adopted claims its new version no longer declares.
+    /// </summary>
+    private async Task<AppRegistryTransitionResult> ClaimAsync(
+        string key,
+        AppRegistryRecord? previous,
+        AppRegistryRecord written,
+        AppLifecycleAction action,
+        AppTreeOwner claimant,
+        AppTreeClaimPlan[] claims,
+        CancellationToken cancellationToken)
+    {
+        var acquired = new List<string>();
+        var conflict = await _ownership.ClaimAsync(claimant, written.Revision, claims, acquired, cancellationToken).ConfigureAwait(false);
+        if (conflict is null)
+        {
+            if (action == AppLifecycleAction.Upgrade)
+            {
+                var keep = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var claim in claims)
+                    keep.Add(claim.Key);
+                await _ownership.ReleaseAdoptedAsync(claimant, keep, cancellationToken).ConfigureAwait(false);
+            }
+
+            return AppRegistryTransitionResult.Success(written, changed: true);
+        }
+
+        await _ownership.ReleaseAsync(claimant, acquired, cancellationToken).ConfigureAwait(false);
+        var restored = await RollBackAsync(key, previous, written, cancellationToken).ConfigureAwait(false);
+        return AppRegistryTransitionResult.Rejected(restored, AppRegistryTransitionError.TreeOwnershipConflict, conflict.Message);
+    }
+
+    /// <summary>
+    /// Undoes a written install or upgrade that lost a concurrent ownership claim: restores the
+    /// previous record (a fresh install becomes an uninstalled record), under a new revision so the
+    /// revision never regresses. A record some other writer already moved on is left as it is.
+    /// </summary>
+    private async Task<AppRegistryRecord?> RollBackAsync(
+        string key,
+        AppRegistryRecord? previous,
+        AppRegistryRecord written,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; attempt <= MaxTransitionAttempts; attempt++)
+        {
+            var read = await _store.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            if (read.Record is not { } stored || stored.Revision != written.Revision)
+                return read.Record;
+
+            var restored = previous is not null
+                ? previous with { Revision = written.Revision + 1 }
+                : written with
+                {
+                    State = AppRegistryLifecycleState.Uninstalled,
+                    Revision = written.Revision + 1,
+                    StateChangedAtUtc = _time.GetUtcNow(),
+                };
+            if (await _store.TrySetAsync(key, restored, read.Version, cancellationToken).ConfigureAwait(false))
+                return restored;
+        }
+
+        return written;
     }
 
     /// <summary>

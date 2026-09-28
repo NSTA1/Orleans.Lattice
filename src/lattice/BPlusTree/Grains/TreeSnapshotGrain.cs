@@ -173,6 +173,7 @@ internal sealed class TreeSnapshotGrain(
             MaxLeafKeys = maxLeafKeys,
             MaxInternalChildren = maxInternalChildren,
             ShardCount = shardCount,
+            DerivedFrom = releasesShadowForwardOnCompletion ? null : logicalTreeId,
         };
         await registry.RegisterAsync(destinationTreeId, entry);
 
@@ -867,7 +868,7 @@ internal sealed class TreeSnapshotGrain(
         await destCompaction.EnsureReminderAsync();
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, SourceTreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, LogicalMetricsTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "snapshot"),
             LatticeTenantLabel.ForTree(SourceTreeId));
 

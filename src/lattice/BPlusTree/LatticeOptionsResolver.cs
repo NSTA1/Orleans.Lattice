@@ -123,6 +123,39 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     private readonly ConcurrentDictionary<string, int> _walPartitionsCache = new(StringComparer.Ordinal);
 
+    private readonly ConcurrentDictionary<string, string> _metricTreeIds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the creation-time logical identity already loaded for a physical
+    /// tree. This never performs I/O and does not follow mutable aliases.
+    /// </summary>
+    internal string GetMetricTreeId(string treeId) =>
+        _metricTreeIds.TryGetValue(treeId, out var logicalTreeId) ? logicalTreeId : treeId;
+
+    /// <summary>
+    /// Loads metric provenance without registering a missing tree. Call at
+    /// activation or birth, before publishing metrics; retain the returned id
+    /// for retired-copy maintenance even after the registry row is removed.
+    /// System trees bypass the registry to avoid bootstrap recursion.
+    /// </summary>
+    internal async ValueTask<string> ResolveMetricTreeIdAsync(string treeId)
+    {
+        if (string.IsNullOrEmpty(treeId) ||
+            treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            return treeId;
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+        CacheMetricTreeId(treeId, entry);
+        return GetMetricTreeId(treeId);
+    }
+
+    private void CacheMetricTreeId(string treeId, State.TreeRegistryEntry? entry)
+    {
+        // Refresh at activation/birth, so reusing a purged id cannot inherit the
+        // prior lifetime's provenance. Absence retains known retired-copy identity.
+        if (entry is not null)
+            _metricTreeIds[treeId] = entry.DerivedFrom ?? treeId;
+    }
+
     /// <summary>
     /// Registry reads for a tree that are in flight right now, so that
     /// concurrent resolvers share one round trip instead of queueing one each
@@ -290,6 +323,7 @@ internal sealed class LatticeOptionsResolver(
 #endif
         }
 
+        CacheMetricTreeId(treeId, entry);
         return entry;
     }
 
@@ -408,6 +442,7 @@ internal sealed class LatticeOptionsResolver(
     private async Task<int> LoadWalPartitionsSlowAsync(string treeId)
     {
         var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+        CacheMetricTreeId(treeId, entry);
         var baseOptions = optionsMonitor.Get(treeId);
         var partitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
         // First writer wins the cache slot; if a racing ResolveAsync

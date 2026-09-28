@@ -33,9 +33,9 @@ DateTimeOffset at = evt.AtUtc;                // silo-side timestamp
 | `SnapshotCompleted` | `null` | `null` | The snapshot coordinator on terminal success. |
 | `ResizeCompleted` | `null` | `null` | The tree-resize coordinator on terminal success. |
 | `ReshardCompleted` | `null` | `null` | The reshard coordinator on terminal success. |
-| `TreeDeleted` | `null` | `null` | `ILattice.DeleteTreeAsync`. |
-| `TreeRecovered` | `null` | `null` | `ILattice.RecoverTreeAsync`. |
-| `TreePurged` | `null` | `null` | `ILattice.PurgeTreeAsync` or the soft-delete-expiry purge reminder. |
+| `TreeDeleted` | `null` | `null` | `ILattice.DeleteTreeAsync`, once per logical delete, under the logical tree id (also on an aliased tree). |
+| `TreeRecovered` | `null` | `null` | `ILattice.RecoverTreeAsync`, once per logical recovery, under the logical tree id. |
+| `TreePurged` | `null` | `null` | `ILattice.PurgeTreeAsync` or the soft-delete-expiry purge reminder, once per logical purge, under the logical tree id. |
 
 ### Correlation
 
@@ -49,9 +49,11 @@ Non-saga writes leave `OperationId` as `null`.
 
 The strict atomic-visibility cleanup avoids the older pattern of emitting reverse compensating writes - which would have generated additional `Set` / `Delete` events tagged with the same `OperationId` - because compensation writes would themselves become visible and reorder against concurrent reads. Subscribers that need stronger durability semantics (e.g. "only act on events for sagas that actually committed") should buffer per-key events keyed by `OperationId` and discard the buffer if `AtomicWriteCompleted` does not arrive within a bounded window.
 
-### A resize also publishes events for its internal steps
+### A resize publishes no lifecycle events for its internal steps
 
-`ResizeAsync` copies the tree - within the limits [Tree Sizing](tree-sizing.md#how-it-works) describes - through an internal online snapshot of its current physical tree and, after the alias swap, soft-deletes that physical tree. Those steps publish their own events, stamped with the old physical tree's id rather than the logical tree id: `SnapshotCompleted` when the copy finishes, `TreeDeleted` when the old physical tree is soft-deleted, and `TreePurged` when it is purged once `LatticeOptions.SoftDeleteDuration` has elapsed. `ResizeCompleted` itself is published under the logical tree id. For a tree that has never been resized, its physical tree id is its own id, so a subscriber to that tree receives `SnapshotCompleted` and `TreeDeleted` before `ResizeCompleted`, and `TreePurged` later; the deleted and purged tree in those events is the retired physical copy. A later resize publishes its internal events under the previous resize's physical tree id, a stream the logical tree's subscribers do not receive. `UndoResizeAsync` likewise publishes `TreeRecovered` for the old physical tree when it had already been soft-deleted, and `TreeDeleted` for the discarded copy.
+`ResizeAsync` copies the tree - within the limits [Tree Sizing](tree-sizing.md#how-it-works) describes - through an internal online snapshot of its current physical tree and, after the alias swap, retires that physical tree. The copy publishes `SnapshotCompleted` stamped with the old physical tree's id, and `ResizeCompleted` is published under the logical tree id. Retiring the old copy - its soft delete and its purge once `LatticeOptions.SoftDeleteDuration` has elapsed - is physical maintenance and publishes no `TreeDeleted` or `TreePurged` event, so a subscriber never sees a live tree reported as deleted. `UndoResizeAsync` likewise recovers or discards physical copies without publishing `TreeRecovered` or `TreeDeleted`. For a tree that has never been resized, its physical tree id is its own id, so a subscriber to that tree receives `SnapshotCompleted` before `ResizeCompleted`; a later resize publishes its `SnapshotCompleted` under the previous resize's physical tree id, a stream the logical tree's subscribers do not receive.
+
+The `TreeDeleted`, `TreeRecovered` and `TreePurged` events describe the logical operation only. Deleting, recovering or purging an aliased tree (after a resize, a shadow-cutover restore or a schema remediation) publishes exactly one event under the logical tree id; the work the operation delegates to the backing physical tree publishes nothing of its own. See [Logical lifecycle across an alias](tree-registry.md#logical-lifecycle-across-an-alias).
 
 ### Operations that deliberately do not emit events
 

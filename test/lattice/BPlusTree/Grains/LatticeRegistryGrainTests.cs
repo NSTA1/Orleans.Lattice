@@ -23,7 +23,9 @@ public partial class LatticeRegistryGrainTests
     }
 
     private static (LatticeRegistryGrain grain, ISystemLattice registryTree, RecordingTreeAliasObserver observer) CreateGrainWithAliasObserver(
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        ITreeOwnershipGuard? ownershipGuard = null,
+        ILatticeAccessGate? accessGate = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         var registryTree = Substitute.For<ISystemLattice>();
@@ -36,7 +38,8 @@ public partial class LatticeRegistryGrainTests
         var dispatcher = new TreeAliasObserverDispatcher(
             [observer], Microsoft.Extensions.Logging.Abstractions.NullLogger<TreeAliasObserverDispatcher>.Instance);
 
-        var grain = new LatticeRegistryGrain(grainFactory, optionsMonitor, placementResolver: null, aliasObservers: dispatcher);
+        var grain = new LatticeRegistryGrain(grainFactory, optionsMonitor, placementResolver: null,
+            aliasObservers: dispatcher, accessGate: accessGate, ownershipGuard: ownershipGuard);
         return (grain, registryTree, observer);
     }
 

@@ -359,7 +359,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     {
         if (!_optimisticReadTagsResolved)
         {
-            _optimisticReadTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+            _optimisticReadTreeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
             _optimisticReadTenantTag = LatticeTenantLabel.ForTree(TreeId);
             _optimisticReadTagsResolved = true;
         }

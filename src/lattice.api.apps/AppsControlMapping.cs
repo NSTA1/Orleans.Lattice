@@ -216,12 +216,14 @@ internal static class AppsControlMapping
     /// <param name="provenance">The provenance the source reported.</param>
     /// <param name="state">The matching installation state.</param>
     /// <param name="record">The matching live registry record, or null when none applies.</param>
+    /// <param name="conflicts">The tree ownership conflicts an install of this manifest would hit; null or empty when none.</param>
     /// <returns>The wire descriptor.</returns>
     public static AppDescriptor ToDescriptor(
         AppManifest manifest,
         AppProvenance provenance,
         AppLifecycleState state,
-        AppRegistryRecord? record)
+        AppRegistryRecord? record,
+        IReadOnlyList<AppTreeOwnershipConflict>? conflicts = null)
     {
         var slug = manifest.Identity.Slug;
         return new AppDescriptor
@@ -232,7 +234,7 @@ internal static class AppsControlMapping
             State = state,
             Ceiling = record is null ? null : ToWireCeiling(record.Ceiling),
             RoleBindings = record is null ? [] : ToWireBindings(record.RoleBindings),
-            Trees = Map(manifest.Trees, static t => new AppTreeDescriptor
+            Trees = Map(manifest.Trees, t => new AppTreeDescriptor
             {
                 Name = t.Name,
                 Rebuildable = t.Rebuildable,
@@ -243,6 +245,7 @@ internal static class AppsControlMapping
                 MaxInternalChildren = t.MaxInternalChildren,
                 WalPartitions = t.WalPartitions,
                 SoftDeleteDuration = t.SoftDeleteDuration,
+                OwnershipConflict = FindConflict(conflicts, t.Name, slug),
             }),
             Roles = MapRoles(manifest.Roles, slug),
             Subscriptions = MapSubscriptions(manifest.Subscriptions, slug),
@@ -461,6 +464,24 @@ internal static class AppsControlMapping
 
     private static string? ForeignApp(AppSlug? app, AppSlug self) =>
         app is { } other && other != self ? other.Value : null;
+
+    private static string? FindConflict(IReadOnlyList<AppTreeOwnershipConflict>? conflicts, string treeName, AppSlug slug)
+    {
+        if (conflicts is null)
+        {
+            return null;
+        }
+
+        foreach (var conflict in conflicts)
+        {
+            if (string.Equals(conflict.TreeName, treeName, StringComparison.Ordinal))
+            {
+                return AppsControlExceptionSanitizer.SanitizeText(conflict.Message, slug.Value);
+            }
+        }
+
+        return null;
+    }
 
     private static ImmutableArray<TOut> Map<TIn, TOut>(TIn[]? source, Func<TIn, TOut> map)
     {

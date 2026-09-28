@@ -445,7 +445,7 @@ public static class LatticeEventConstants
     /// Orleans <c>RequestContext</c> key carrying the logical tree ID that a
     /// <c>LatticeGrain</c> activation is currently routing an operation for.
     /// Stamped by the routing tier on every shard-grain resolution
-    /// (<c>GetShardGrainAsync</c> / <c>GetShardGrainByIndex</c>) with the
+    /// (<c>GetShardGrain</c> / <c>GetShardGrainByIndex</c>) with the
     /// activation's own <c>TreeId</c>, so it flows downstream to every shard
     /// call in the same turn.
     /// <para>
@@ -458,10 +458,21 @@ public static class LatticeEventConstants
     /// reading the retained tree. When the marker equals the shard's own
     /// physical tree ID (direct-physical access) or is absent (maintenance
     /// firing directly on the shard) the redirect gate is a no-op. The routing
-    /// tier overwrites any client-supplied value, so it cannot be forged.
+    /// tier overwrites any client-supplied value, and
+    /// <see cref="Orleans.Lattice.LatticeCapabilityStrippingCallFilter"/> strips it
+    /// from external client calls, so it cannot be forged.
     /// </para>
     /// </summary>
     internal const string RoutedLogicalTreeIdRequestContextKey = "ol.rlt";
+
+    /// <summary>
+    /// Physical target paired with <see cref="RoutedLogicalTreeIdRequestContextKey"/>
+    /// when mutation observers are registered. Publishers honour the logical
+    /// identity only when this value ordinally matches their own physical tree,
+    /// so inherited context cannot relabel a write to another backing tree.
+    /// Stripped from external client calls with its logical companion.
+    /// </summary>
+    internal const string RoutedPhysicalTreeIdRequestContextKey = "ol.rpt";
 
     /// <summary>
     /// Orleans <c>RequestContext</c> key that carries the caller's active

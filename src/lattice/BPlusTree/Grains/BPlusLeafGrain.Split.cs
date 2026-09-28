@@ -436,7 +436,7 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId ?? string.Empty;
         LatticeMetrics.LeafByteOverflows.Add(
             delta,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             outcome,
             LatticeTenantLabel.ForTree(treeId));
     }
@@ -558,7 +558,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var treeId = state.State.TreeId ?? string.Empty;
         LatticeMetrics.LeafSplitAttempts.Add(value,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             outcome,
             LatticeTenantLabel.ForTree(treeId));
     }
@@ -583,7 +583,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var treeId = state.State.TreeId ?? string.Empty;
         LatticeMetrics.LeafSplitAttempts.Add(value,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeMetrics.LeafSplitFaulted,
             failureClass,
             LatticeTenantLabel.ForTree(treeId));
@@ -661,7 +661,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var treeId = state.State.TreeId ?? string.Empty;
         LatticeMetrics.LeafBisectRefusals.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagReason, BisectRefusalTag(reason)),
             new KeyValuePair<string, object?>(LatticeMetrics.TagDetachSeam, DetachSeamTag(seam)),
             LatticeTenantLabel.ForTree(treeId));
@@ -940,7 +940,7 @@ internal sealed partial class BPlusLeafGrain
         await PersistAsync();
 
         LatticeMetrics.LeafSplits.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
         return await CompleteSplitAsync(walHeadsAtSplit);
     }

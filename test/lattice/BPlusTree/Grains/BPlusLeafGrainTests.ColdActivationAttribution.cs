@@ -135,8 +135,8 @@ public partial class BPlusLeafGrainTests
         state.State.ProjectionCheckpointOffset = HonestCheckpoint;
 
         // A banked hint, so Step 0 takes the field population's arm and skips
-        // its own options resolve. The sole registry read then lands inside
-        // replay admission, which is where the field's leaves take it.
+        // its own options resolve. After activation's metric-provenance read,
+        // the options read lands inside replay admission.
         state.State.SnapshotLoadHintBytes = 4096L;
 
         var grain = new BPlusLeafGrain(
@@ -176,9 +176,9 @@ public partial class BPlusLeafGrainTests
     };
 
     /// <summary>
-    /// Builds a registry whose <c>GetEntryAsync</c> blocks until
-    /// <paramref name="cts"/> is cancelled, signalling
-    /// <paramref name="entered"/> when the first call arrives.
+    /// Allows activation's metric-provenance read, then blocks the options
+    /// read until <paramref name="cts"/> is cancelled, signalling
+    /// <paramref name="entered"/> when that read arrives.
     /// </summary>
     private static IGrainFactory BlockingRegistryFactory(
         CancellationTokenSource cts, TaskCompletionSource entered)
@@ -186,8 +186,11 @@ public partial class BPlusLeafGrainTests
         var factory = Substitute.For<IGrainFactory>();
         var registry = Substitute.For<ILatticeRegistry>();
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        var reads = 0;
         registry.GetEntryAsync(Arg.Any<string>()).Returns(_ =>
         {
+            if (Interlocked.Increment(ref reads) == 1)
+                return Task.FromResult<TreeRegistryEntry?>(AttributionStructuralPin());
             entered.TrySetResult();
             var blocked = new TaskCompletionSource<TreeRegistryEntry?>();
             cts.Token.Register(() => blocked.TrySetCanceled(cts.Token));

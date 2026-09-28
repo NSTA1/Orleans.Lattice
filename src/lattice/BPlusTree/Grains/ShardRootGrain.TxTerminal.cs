@@ -159,7 +159,7 @@ internal sealed partial class ShardRootGrain
         // tree/shard pair is invariant for the activation's lifetime
         // but we still need fresh KeyValuePair instances per Record
         // call to avoid mutating shared structs).
-        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
         var stageTagTenant = LatticeTenantLabel.ForTree(TreeId);
         var stageTagShard = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex);
 
@@ -388,7 +388,7 @@ internal sealed partial class ShardRootGrain
         {
             LatticeMetrics.SagaBroadcastShardDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(shardBroadcastStartTicks).TotalMilliseconds,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
                 LatticeTenantLabel.ForTree(TreeId));
         }
@@ -628,7 +628,7 @@ internal sealed partial class ShardRootGrain
         {
             LatticeMetrics.SagaBroadcastLeafDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
                 LatticeTenantLabel.ForTree(TreeId));
         }

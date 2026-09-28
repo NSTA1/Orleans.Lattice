@@ -36,6 +36,13 @@ namespace Orleans.Lattice.Apps;
 /// is not a wildcard here. Any excess fails the whole compilation; nothing is clamped.
 /// </para>
 /// <para>
+/// <b>Cross-app owner.</b> A scope naming another app additionally requires that app to be the
+/// installed owner of the target tree in the same tenant, as recorded by the tree ownership ledger
+/// and passed in as an <see cref="AppTreeOwnerSnapshot"/>. A target the snapshot does not attribute
+/// to the named app (not installed, uninstalled, or never claimed) is reported as a scope excess, so
+/// activation fails closed.
+/// </para>
+/// <para>
 /// <b>Non-data trees.</b> No exception can approve an out-of-namespace scope on the cluster-wide
 /// sentinel, the reserved <c>_lattice_</c> or system-data <c>sys-</c> namespaces, or an already
 /// tenant-qualified <c>t/</c> id: such a scope is always reported as a scope excess, even when
@@ -88,6 +95,11 @@ public static class AppRoleCompiler
     /// <param name="tenant">The install's tenant; <see cref="TenantId.Default"/> when tenancy is off.</param>
     /// <param name="bindings">The install's role-to-group bindings.</param>
     /// <param name="ceiling">The install's pinned capability ceiling.</param>
+    /// <param name="owners">
+    /// The installed owners of the trees the manifest reaches across app boundaries, normally from the
+    /// tree ownership ledger; <c>null</c> means no tree has an installed owner, so every cross-app scope
+    /// is reported as a scope excess.
+    /// </param>
     /// <returns>The compilation result.</returns>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="manifest"/>, <paramref name="bindings"/> or <paramref name="ceiling"/> is <c>null</c>.
@@ -100,11 +112,13 @@ public static class AppRoleCompiler
         AppManifest manifest,
         TenantId tenant,
         IReadOnlyList<AppRoleBinding> bindings,
-        AppCapabilityCeiling ceiling)
+        AppCapabilityCeiling ceiling,
+        AppTreeOwnerSnapshot? owners = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(bindings);
         ArgumentNullException.ThrowIfNull(ceiling);
+        owners ??= AppTreeOwnerSnapshot.None;
         if (tenant.Value is null)
             throw new ArgumentException("An install must be attributed to a tenant.", nameof(tenant));
         var slug = manifest.Identity?.Slug ?? default;
@@ -131,7 +145,7 @@ public static class AppRoleCompiler
             var scopes = new LatticeScope[role.Scopes.Length];
             for (var i = 0; i < scopes.Length; i++)
             {
-                var local = ResolveLocalScope(slug, role.Scopes[i], adopted, out var structural);
+                var local = ResolveLocalScope(slug, role.Scopes[i], adopted, out var structural, out var crossApp);
                 if (!structural && (!AppTreeIds.IsGrantable(local.TreeId) || !IsCovered(local, exceptions)))
                 {
                     // No exception can approve a non-data tree; the failed compilation needs no
@@ -143,6 +157,17 @@ public static class AppRoleCompiler
                 }
 
                 var effectiveTree = LatticeTenantResolution.ComposeEffectiveTreeId(tenant, local.TreeId);
+
+                // A cross-app scope reaches another app's tree only while that app is installed and
+                // owns it; otherwise the target could be squatted or taken over later.
+                if (crossApp is { } other && !owners.IsOwnedBy(effectiveTree, other))
+                {
+                    if ((reportedScopes ??= []).Add(local))
+                        (excesses ??= []).Add(new(role.Name, AppCeilingExcessKind.Scope, role.Operations, local));
+                    scopes[i] = local;
+                    continue;
+                }
+
                 scopes[i] = ReferenceEquals(effectiveTree, local.TreeId) ? local : local with { TreeId = effectiveTree };
             }
 
@@ -323,13 +348,16 @@ public static class AppRoleCompiler
         AppSlug slug,
         AppScopeTemplate template,
         Dictionary<string, string>? adopted,
-        out bool structural)
+        out bool structural,
+        out AppSlug? crossApp)
     {
         string treeId;
+        crossApp = null;
         if (template.App is { } app && app != slug)
         {
             treeId = string.Concat(LatticeConstants.AppTreePrefix, app.Value, "/", template.Tree);
             structural = false;
+            crossApp = app;
         }
         else if (adopted is not null && adopted.TryGetValue(template.Tree, out var physical))
         {

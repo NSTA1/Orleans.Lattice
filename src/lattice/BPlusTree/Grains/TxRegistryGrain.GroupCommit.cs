@@ -406,9 +406,9 @@ internal sealed partial class TxRegistryGrain
     private void RecordWrite(int mutations, TimeSpan elapsed, bool ok)
     {
         var outcome = ok ? LatticeMetrics.TxRegistryWriteOutcomeOk : LatticeMetrics.TxRegistryWriteOutcomeFault;
-        LatticeMetrics.TxRegistryWrites.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
-        LatticeMetrics.TxRegistryWriteMutations.Record(mutations, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
-        LatticeMetrics.TxRegistryWriteDuration.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.TxRegistryWrites.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.TxRegistryWriteMutations.Record(mutations, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
+        LatticeMetrics.TxRegistryWriteDuration.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? TreeId), outcome, LatticeTenantLabel.ForTree(TreeId));
     }
 
     /// <summary>

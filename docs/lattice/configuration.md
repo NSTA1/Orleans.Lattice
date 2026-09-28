@@ -1252,7 +1252,7 @@ This option can be changed freely at any time. Leaves and internal nodes resolve
 
 ### `SoftDeleteDuration`
 
-How long a soft-deleted tree's data is retained in storage before being permanently purged (default: 72 hours). During this window the shards stored under the tree's own id are marked deleted - reads and writes that reach them throw `InvalidOperationException` - but their grain state still exists in the storage provider. A delete does not resolve an alias, so a resized, restored or remediated tree whose data lives behind one is not made inaccessible this way; see [Resized, aliased, and re-created trees](tree-deletion.md#resized-aliased-and-re-created-trees). After the duration elapses, a grain reminder triggers a full purge that walks every shard stored under the id, clears all leaf and internal node state, and deactivates each grain.
+How long a soft-deleted tree's data is retained in storage before being permanently purged (default: 72 hours). During this window the shards stored under the tree's own id are marked deleted - reads and writes that reach them throw `InvalidOperationException` - but their grain state still exists in the storage provider. On a resized, restored or remediated tree whose data lives behind an alias, the delete marks and later purges the live copy the alias targets; see [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree). After the duration elapses, a grain reminder triggers a full purge that walks every shard stored under the id, clears all leaf and internal node state, and deactivates each grain.
 
 Set to `TimeSpan.Zero` to purge on the first reminder tick, which fires one minute after the delete (the reminder period is clamped to a 1-minute minimum by the Orleans reminder floor).
 

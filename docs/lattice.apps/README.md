@@ -132,7 +132,7 @@ properties are rejected.
 | `identity` | `slug` (`^[a-z][a-z0-9-]{1,30}$`; `_` is reserved as the namespace separator), a Semantic Versioning 2.0 `version`, and descriptive `provenance`. |
 | `trees` | App-local tree names plus optional physical shape pins (`shardCount`, `virtualShardCount`, `maxLeafKeys`, `maxInternalChildren`, `walPartitions`), a `softDeleteDuration`, a `rebuildable` flag, and an optional `adoptedTreeId`. |
 | `roles` | A role name, its `operations` as an array of `LatticeOperation` member names, and one or more scope templates. |
-| `replication` | Optional per-tree merge mode, merged additively into replication enrolment when the replication add-on is registered. |
+| `replication` | Optional per-tree merge mode. Each install enrols these trees in the runtime replication configuration when it is activated - see [Replication intent](#replication-intent). |
 | `schema` | Optional per-tree schema family, envelope version and `strictIngest` flag. Validated and reported by the control facade's describe; activation does not apply it to the tree. |
 | `subscriptions` | Change-feed observations of the app's own trees or another app's trees. |
 | `mcpTools` | App-local MCP tool names, descriptions, and the role each tool requires. |
@@ -159,7 +159,8 @@ must appear in the install ceiling's approved exception scopes, and uninstall ne
 soft-deletes it. Adopted ids may not use the structural `a/` prefix or a reserved
 prefix (`_lattice_`, `sys-`, `t/`), may not be the cluster-wide sentinel `*`, may not
 carry leading or trailing white space or control characters, may be at most 1024
-characters, and each may be adopted only once per manifest.
+characters, and each may be adopted only once per manifest. Across installs, a tree
+can be adopted by only one install at a time; see [Tree ownership](#tree-ownership).
 
 ### Roles and scopes
 
@@ -173,7 +174,8 @@ expressible, but, like everything else, must be inside the operator's ceiling.
 Each scope template names an app-local tree declared by the app and an optional
 `kind` (`Tree`, `Key`, or `Prefix`) with its `keyOrPrefix`. A scope may instead
 name another app's tree with `app`; such a scope, like one over an adopted tree,
-requires an approved exception. No exception can approve a scope on the cluster-wide
+requires an approved exception, and compiles only while that app is installed and
+owns the tree (see [Tree ownership](#tree-ownership)). No exception can approve a scope on the cluster-wide
 sentinel `*` or on a `_lattice_`, `sys-` or `t/` tree, and no ceiling can grant a role
 `Telemetry` or `AppInstall`: the role compiler reports either as an excess even for a
 manifest that skipped validation.
@@ -240,6 +242,76 @@ its `AppRegistryTransitionError` instead of throwing. Uninstall keeps the record
 `Uninstalled` state; the registry transition itself touches no data (the activation
 pipeline's uninstall soft-deletes the app's trees, below).
 
+## Tree ownership
+
+Every tree an app uses - its structural `a/{app}/{tree}` trees and every tree it
+adopts - belongs to **exactly one install** at a time: a structural tree for its
+whole lifetime, including its soft-delete window, and an adopted tree until the
+install that adopted it releases it. Two installs can never share a tree, whichever app they are
+and whatever the operator approves, so one app's data is never readable or writable
+under another app's name.
+
+Ownership is recorded in a third reserved system tree, the **tree ownership ledger**
+(`sys-app-trees`), keyed by the tenant-composed tree id. It sits under the same
+`sys-app-` prefix as the registry, so it has the same control-plane read isolation
+and user-origin write guard. The owner of a tree is an install identity: the tenant,
+the app slug, and the publisher recorded from the app's provenance, so a different
+publisher shipping the same slug is a different owner.
+
+- **Claimed at install.** Installing or upgrading an app claims every tree its
+  manifest declares. A conflict visible before the install is recorded refuses it
+  with nothing written. Claims are compare-and-set writes, taken after the record in
+  ascending tree-id order, so of two concurrent installs of one tree exactly one
+  wins; the loser releases what it took and rolls its record back. When the app
+  source cannot supply the version being installed, claiming is left to activation.
+- **Re-verified at activation.** Enable and reconcile re-check, and if needed take,
+  every claim before any replication, provisioning or grant, so a conflict that
+  appeared after install fails activation closed with
+  `AppActivationFailure.TreeOwnershipConflict` and the app's rules withdrawn. A tree
+  soft-deleted by an earlier uninstall is recovered only once its claim is confirmed
+  as this install's.
+- **Released on uninstall.** Uninstall, and an upgrade that stops declaring an
+  adopted tree, release the adopted claims, so another install can adopt the tree
+  afterwards. A structural claim is held until the tree is purged: while an
+  uninstalled app's tree is still in its soft-delete window no other install can
+  take it, and reinstalling the same app re-attaches to it.
+
+A fresh claim is refused, and the install or activation fails with a
+`TreeOwnershipConflict`, when the tree:
+
+| Reason (`AppTreeOwnershipConflictReason`) | Meaning |
+|---|---|
+| `OwnedByAnotherApp` | Another install in the tenant - a different app, or the same slug from a different publisher - owns it. |
+| `PreExistingUnownedTree` | An app's structural tree already exists with no claim: it was created outside any app lifecycle, so it is never taken over. |
+| `DerivedTree` | It is a physical copy core created to back another tree (a resize, restore or remediation copy), so it is not a logical tree anyone can own. |
+| `AliasTarget` | Its physical backing is another logical tree's alias target, or it is aliased to a tree not derived from it, so owning it would give the same data a second name. |
+
+`IAppRegistry.GetTreeOwnershipConflictsAsync` reports the conflicts an install would
+hit without writing anything, and the control facade's `DescribeAsync` reports them
+per tree before installation.
+
+**Cross-app scopes need an installed owner.** A role scope or subscription that names
+another app's tree compiles only while that app is the installed owner of the tree in
+the same tenant, as the ledger records. Otherwise the role scope is reported as a
+ceiling excess, so the activation fails closed (`CeilingExceeded`) and every rule the
+app owns is withdrawn, not only those over that tree; and the subscription is denied,
+so that app's subscriptions fail to activate. The compilers take the owners as an
+optional `AppTreeOwnerSnapshot` argument and stay pure. When an app is uninstalled,
+every other enabled app in the tenant whose manifest reaches it through a cross-app
+scope or subscription is reconciled at once, so none of its grants over the absent
+owner's trees survive; its subscriptions stop at the subscription router's next
+rebuild from the changed registry.
+
+**Aliasing is bounded by ownership.** The package registers an
+[`ITreeOwnershipGuard`](../lattice/tree-registry.md#ownership-bounded-aliasing) backed
+by the ledger, so a core alias from logical tree `L` to physical tree `P` is allowed
+only when the install that owns `L` also owns `DerivedFrom(P) ?? P` (either side may
+be owned by no app). A resize, restore or remediation of an app tree passes, because
+its copy is derived from that tree; an alias between two trees no app owns is
+unchanged; every other alias that would cross an ownership boundary is refused with
+`LatticeTreeOwnershipDeniedException`, for every caller including core maintenance.
+The refusal names only the tree ids the caller supplied, never the owning app.
+
 ## Activation
 
 `IAppActivationPipeline` applies an installed app to the cluster. Its mutating verbs run
@@ -249,31 +321,35 @@ structured failure (`AppActivationFailure`) with diagnostics. Its `GetStatusAsyn
 is ungated and in-process, so a facade that exposes it must gate it itself.
 
 **Enable** resolves the installed version's manifest from the app source, validates
-it, compiles its roles against the pinned ceiling and bindings, provisions the app's
-structural trees with their declared shape (recovering a tree soft-deleted by an
-earlier uninstall), persists the compiled rule set, and marks the app `Enabled`. If a
+it, compiles its roles against the pinned ceiling and bindings, re-verifies its
+[tree ownership](#tree-ownership) claims, enrols the app's declared
+[replication](#replication-intent), provisions the app's structural trees with their
+declared shape (recovering a tree soft-deleted by an earlier uninstall), persists the
+compiled rule set, and marks the app `Enabled`. If a
 consent change landed while the run was in flight, it re-activates against the record
 its own transition wrote, so no grant compiled from superseded consent stays live.
 Replacing the owned rule set withdraws stale rules before writing new ones, so a
 policy-store fault part-way through never keeps a grant the current consent revoked.
 When the installed version itself cannot be activated - its manifest cannot be resolved
-or validated, its roles exceed the consented ceiling, or a binding names an undeclared
-role - any rules left from an earlier activation are withdrawn; a tree-provisioning or
-rule-write failure keeps the existing rules, so a retry is not an outage.
+or validated, its roles exceed the consented ceiling, a binding names an undeclared
+role, or it has a tree ownership conflict - any rules left from an earlier
+activation are withdrawn; a replication, tree-provisioning or rule-write failure
+keeps the existing rules, so a retry is not an outage.
 
 **Disable** removes every rule the app owns and marks it `Disabled`; its trees and
-data stay in place.
+data stay in place, and their [replication](#replication-intent) keeps running.
 
-**Uninstall** removes the owned rules, soft-deletes the app's structural trees on
-their configured `SoftDeleteDuration`, and marks the app `Uninstalled`. Adopted
-trees are never deleted. Physical purge is not part of uninstall, but each
-soft-deleted tree is purged by the core's deferred purge once its soft-delete window
-elapses; installing and enabling the app again within the window recovers it.
+**Uninstall** removes the owned rules, unenrols the replication the app enrolled,
+soft-deletes the app's structural trees on their configured `SoftDeleteDuration`,
+and marks the app `Uninstalled`. Adopted trees are never deleted. Physical purge is
+not part of uninstall, but each soft-deleted tree is purged by the core's deferred
+purge once its soft-delete window elapses; installing and enabling the app again
+within the window recovers it.
 
 **Reconcile** re-applies an enabled app, for example after a consent change or an
-upgrade. A manifest upgrade that drops a tree soft-deletes that tree. Reconciling an
-app in any other state withdraws its owned rules; reconcile never changes the registry
-state.
+upgrade. A manifest upgrade that drops a tree soft-deletes that tree, and one that
+drops a tree from the `replication` section unenrols it. Reconciling an app in any
+other state withdraws its owned rules; reconcile never changes the registry state.
 
 Every run records its outcome, and the manifest whose trees and rules are currently
 applied, as the app's `AppActivationStatus` in a second reserved system tree,
@@ -295,18 +371,64 @@ recorded against the app and logged; it is not retried and never stops the host.
 
 ### Replication intent
 
-When the replication add-on is registered, the trees an in-image app declares in
-its `replication` section are merged **additively** into
-`LatticeReplicationOptions.ReplicatedTrees`, at configuration time and whether or not
-the app is installed or enabled; an operator's existing entry is never
-overwritten. Because only apps registered in the image are known at configuration
-time, the merge enrols the default-tenant tree names. Without the replication
-add-on, replication intent is ignored.
+An app's manifest `replication` section declares which of its trees replicate
+across clusters, and under which merge mode. Replication follows the
+**installation**, not the image: each tenant's install enrols its own trees as it
+is activated, under the tenant-composed ids that install actually uses, so a
+tenant's app trees replicate per install and nothing is enrolled merely because
+an app is registered in the image.
+
+- **Enable** and **Reconcile** of an enabled app enrol every declared tree that is
+  not yet enrolled. Enrolling is idempotent, so a reconcile that finds everything
+  in place changes nothing.
+- An **upgrade** that drops a tree from the `replication` section unenrols it once
+  the new version activates.
+- **Disable** leaves replication running: the app's rules are withdrawn, but its
+  data keeps converging with peers, so a later enable does not need a re-seed.
+- **Uninstall** unenrols the app's trees. Peer data is not purged, and adopted
+  trees are not deleted.
+
+Enrolment goes through the replication package's runtime configuration
+(`ILatticeReplicationConfigAuthority`), so it needs
+`AddLatticeReplication(..., enableRuntimeConfig: true)`; an operator sees app
+trees in the [runtime replication configuration](../lattice.replication/runtime-config.md#installed-apps-enrol-through-the-runtime-configuration)
+rather than in `LatticeReplicationOptions.ReplicatedTrees`. Without the replication
+add-on or its runtime configuration, replication intent is ignored. With tenancy,
+each tenant's trees are admitted by the tenant replication isolation gate like any
+other tenant tree.
+
+An app only ever unenrols what it enrolled. Every activation records, as part of
+the app's `AppActivationStatus` and before any configuration change, which of its
+trees it enrolled itself and which were already enrolled by an operator; uninstall
+and dropped declarations disable only the former. A tree an operator had already
+enrolled - for example a legacy tree the app adopted - keeps replicating after the
+app is uninstalled.
+
+Activation checks every declared tree's merge mode before it changes any enrolment,
+so a mode conflict changes nothing. A precondition or enrolment failure can surface
+part-way through, after some trees are enrolled; the trees a run attempts are
+recorded first, so a later reconcile completes the change and an uninstall still
+unenrols them. On an enable or reconcile, every replication failure keeps the app's
+existing rules in place:
+
+| Failure | Meaning |
+|---|---|
+| `ReplicationModeChangeRejected` | A declared merge mode differs from the mode the tree is already enrolled under or from the mode the app's previous version declared for it, or the enrolled mode is ambiguous. Replication cannot switch a tree's merge mode in place, so keep the declared mode; for a tree enrolled outside the app, an operator can disable its replication first. |
+| `ReplicationPreconditionFailed` | A replication prerequisite is not met, for example the host has no configured cluster id, or the merge mode needs a configured local replica. |
+| `ReplicationEnrolmentFailed` | Reading or writing the runtime enrolment failed. The run can be retried with a reconcile. |
+
+A failure at startup reconcile is recorded against the app and never stops the
+host.
+
+Enrolling an adopted tree that already holds data does not bootstrap peers from
+it. If a peer needs that existing data, run an explicit replication bootstrap for
+the tree as an operator; the app supplies no bootstrap source.
 
 ## Compiled rules
 
 `AppRoleCompiler.Compile` is a pure function from a manifest, a tenant, the role
-bindings and the ceiling to an `AppRuleCompilation`. On success it holds the full
+bindings, the ceiling and an optional cross-app `AppTreeOwnerSnapshot` to an
+`AppRuleCompilation`. On success it holds the full
 set of `LatticeAuthorizationRule` records; on failure it lists every excess
 (`AppCeilingExcess`) and every binding that names an unknown role, and emits no
 rules. A declared role with no binding emits nothing and is listed in
@@ -379,15 +501,22 @@ writes are never delivered). A newly enabled app starts receiving once the rebui
 lands; a disabled or uninstalled app stops receiving as soon as the silo's registry
 snapshot reflects the change, shortly after it commits, without waiting for the
 rebuild. A subscription the manifest declares with no registered handler, or with
-more than one, fails that app's subscription activation.
+more than one, fails that app's subscription activation. Delivery is keyed by the
+logical tree id the observer receives, which stays the same across a resize, a
+shadow-cutover restore (and its revert) or a schema remediation of the observed
+tree, so a subscription keeps delivering when its tree's data moves to a new
+physical copy.
 
 A subscription to the app's own trees needs no consent. A cross-app subscription
 (and a subscription to an adopted tree) must be covered by an approved exception
 scope in the ceiling, or that app's subscriptions fail to activate with a message
-naming the observed app. A subscription activation failure is logged; it does not
-fail the enable and is not recorded in the app's activation status. Cross-tenant
-observation is not introduced: a subscription only sees trees composed for its own
-install's tenant.
+naming the observed app. A cross-app subscription also needs the observed app to be
+the installed owner of the tree, or that app's subscriptions fail to activate the same
+way; when the observed app is uninstalled, the next routing-table rebuild denies the
+subscription and it stops delivering. A subscription activation failure
+is logged; it does not fail the enable and is not recorded in the app's activation
+status. Cross-tenant observation is not introduced: a subscription only sees trees
+composed for its own install's tenant.
 
 ## Security
 
@@ -400,15 +529,19 @@ install's tenant.
 - App rules are ordinary rules evaluated by the existing gate; this package adds no
   enforcement path of its own.
 - App-owned rule ids cannot be edited or deleted except under system origin.
+- Each tree belongs to exactly one install, recorded in the `sys-app-trees` ledger,
+  and core aliasing cannot cross that ownership - see
+  [Tree ownership](#tree-ownership).
 - The role and subscription compilers never grant or observe the cluster-wide
   sentinel, a reserved or system-data tree, or a tenant-qualified id, whatever the
   ceiling approves, and never emit a scopeless capability.
 - Physical tree ids are kept out of the control facade's responses and exception
-  messages (see the [facade](../lattice.api.apps/README.md)). They remain visible in
-  telemetry, storage accounting and backup artifacts, each gated by its own
-  capability: no app role can carry the scopeless `Telemetry` capability, and a role
-  confers `Backup` or `TreeLifecycle` only when the manifest requests it and the
-  operator's ceiling allows it.
+  messages (see the [facade](../lattice.api.apps/README.md)). Telemetry and mutation
+  observers report the logical tree id. Physical ids remain visible in storage
+  accounting and backup artifacts, each gated by its own capability: no app role can
+  carry the scopeless `Telemetry` capability, and a role confers `Backup` or
+  `TreeLifecycle` only when the manifest requests it and the operator's ceiling
+  allows it.
 
 ## Configuration reference
 

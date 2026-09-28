@@ -57,6 +57,9 @@ internal sealed class TreeResizeState
     /// registry entry before the resize.
     /// </summary>
     [Id(9)] public TreeRegistryEntry? OldRegistryEntry { get; set; }
+
+    /// <summary>Persisted before reserving the logical alias; retained until release succeeds.</summary>
+    [Id(10)] public string? AliasReservationId { get; set; }
 }
 
 /// <summary>

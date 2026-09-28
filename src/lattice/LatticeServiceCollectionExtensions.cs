@@ -284,6 +284,7 @@ public static class LatticeServiceCollectionExtensions
         // package replaces it with the resolver that pins a tenant's trees to the
         // dedicated WAL provider named on the tenant's placement binding.
         builder.Services.TryAddSingleton<ITreePlacementResolver, NullTreePlacementResolver>();
+        builder.Services.TryAddSingleton<ITreeOwnershipGuard>(NullTreeOwnershipGuard.Instance);
         // CRDT shape registry: every closed-shape mode (the twelve merge
         // modes other than OrMap, see the CrdtShapeRegistry constructor) is
         // pre-populated on construction so no host registration is required
@@ -601,7 +602,8 @@ public static class LatticeServiceCollectionExtensions
                 sp.GetService<IGrainFactory>(),
                 sp.GetService<IOptionsMonitor<LatticeOptions>>(),
                 sp.GetService<ILogger<LeafCursorReporter>>(),
-                sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName)));
+                sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName),
+                optionsResolver: sp.GetService<LatticeOptionsResolver>()));
 
         // Reusable per-shard WAL tailing loop shared by every log consumer
         // (materialised views, the replication producer, future change-feed /

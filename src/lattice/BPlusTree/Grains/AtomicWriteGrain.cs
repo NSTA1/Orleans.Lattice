@@ -47,8 +47,19 @@ internal sealed class AtomicWriteGrain(
     ILogger<AtomicWriteGrain> logger,
     [PersistentState("atomic-write", LatticeOptions.StorageProviderName)]
     IPersistentState<AtomicWriteState> state)
-    : TtlGrain<AtomicWriteGrain>(context, reminderRegistry, logger), IAtomicWriteGrain
+    : TtlGrain<AtomicWriteGrain>(context, reminderRegistry, logger), IAtomicWriteGrain, IGrainBase
 {
+    private string? _metricTreeId;
+
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        var key = OperationKey;
+        var separator = OperationKeySeparator(key);
+        var treeId = separator < 0 ? key : key[..separator];
+        _metricTreeId = await GrainContext.ActivationServices
+            .GetRequiredService<LatticeOptionsResolver>().ResolveMetricTreeIdAsync(treeId);
+    }
+
     private const string KeepaliveReminderName = "atomic-write-keepalive";
     private const string RetentionReminderName = "atomic-write-retention";
     private const int MaxRetriesPerStep = 1;
@@ -3098,7 +3109,7 @@ internal sealed class AtomicWriteGrain(
                     : "failed")
                 : "compensated");
         LatticeMetrics.AtomicWriteCompleted.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? state.State.TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
             LatticeTenantLabel.ForTree(state.State.TreeId));
 
@@ -3118,13 +3129,13 @@ internal sealed class AtomicWriteGrain(
             var elapsedMs = (DateTimeOffset.UtcNow.UtcTicks - state.State.SagaStartedAtTicks)
                 / (double)TimeSpan.TicksPerMillisecond;
             LatticeMetrics.AtomicWriteDuration.Record(elapsedMs,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? state.State.TreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
                 LatticeTenantLabel.ForTree(state.State.TreeId));
         }
 
         LatticeMetrics.AtomicWriteBatchSize.Record(completedBatchSize,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? state.State.TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
             LatticeTenantLabel.ForTree(state.State.TreeId));
 
@@ -3362,7 +3373,7 @@ internal sealed class AtomicWriteGrain(
         var slashIndex = OperationKeySeparator(grainKey);
         var treeIdFromKey = slashIndex >= 0 ? grainKey[..slashIndex] : grainKey;
         var built = (
-            Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdFromKey),
+            Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _metricTreeId ?? treeIdFromKey),
             WalPartitions: new KeyValuePair<string, object?>(
                 LatticeMetrics.TagWalPartitions,
                 // Metric-only: reads from the live IOptionsMonitor

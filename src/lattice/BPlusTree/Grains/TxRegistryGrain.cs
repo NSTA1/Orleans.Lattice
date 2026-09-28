@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -55,6 +56,14 @@ internal sealed partial class TxRegistryGrain(
     IPersistentState<TxRegistryState> state) : ITxRegistryGrain, IGrainBase
 {
     IGrainContext IGrainBase.GrainContext => context;
+
+    private string? _metricTreeId;
+
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        if (context.ActivationServices?.GetService<LatticeOptionsResolver>() is { } resolver)
+            _metricTreeId = await resolver.ResolveMetricTreeIdAsync(TreeId);
+    }
 
     /// <summary>
     /// Time source for tombstone-expiry checks. Defaults to

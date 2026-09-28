@@ -101,11 +101,15 @@ internal sealed partial class LatticeAppsControl
                 state = AppsControlMapping.ToWireState(matching.State, status);
             }
 
+            var provenance = resolved.Provenance ?? manifest.Identity.Provenance;
+            var conflicts = await _registry.GetTreeOwnershipConflictsAsync(tenant, manifest, provenance, cancellationToken)
+                .ConfigureAwait(false);
             return AppsControlMapping.ToDescriptor(
                 manifest,
-                resolved.Provenance ?? manifest.Identity.Provenance,
+                provenance,
                 state,
-                live ? matching : null);
+                live ? matching : null,
+                conflicts);
         }
         catch (Exception ex) when (AppsControlExceptionSanitizer.TryRewrite(ex, appSlug, out var sanitized))
         {

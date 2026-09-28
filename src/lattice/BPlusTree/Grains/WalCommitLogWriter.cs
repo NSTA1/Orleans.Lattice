@@ -226,7 +226,9 @@ internal sealed class WalCommitLogWriter(
             throw new LatticeShuttingDownException(
                 $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the owning WalCommitLogWriter is shutting down ({nameof(LatticeOptions.WalDrainBudget)}).");
         }
-        return _trackers.GetOrAdd((treeId, partition), static key => new PartitionTracker(key.TreeId, key.Partition));
+        return _trackers.GetOrAdd((treeId, partition),
+            static (key, resolver) => new PartitionTracker(key.TreeId, key.Partition, resolver),
+            optionsResolver);
     }
 
     /// <summary>
@@ -445,7 +447,7 @@ internal sealed class WalCommitLogWriter(
             }
             LatticeMetrics.WalAppendAdmissionSaturationRefusals.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(treeId)),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                 LatticeTenantLabel.ForTree(treeId));
             LatticeMetrics.RecordSaturationRefusal(treeId, LatticeSaturationSource.WalAdmission);
@@ -690,7 +692,7 @@ internal sealed class WalCommitLogWriter(
         // names the dominant stuck stage per partition. See
         // WalAppendStage and PendingAppend for the lifecycle details.
         var tracker = GetTracker(stamped.TreeId, partition);
-        var treeTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId);
+        var treeTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(stamped.TreeId));
         var tenantTagWriter = LatticeTenantLabel.ForTree(stamped.TreeId);
         var partitionTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
 
@@ -854,7 +856,7 @@ internal sealed class WalCommitLogWriter(
                 System.Console.WriteLine($"[wal-dispatch-timeout-cts] tree={stamped.TreeId} shard={partition} entries=1 timeout={dispatchTimeout}");
                 LatticeMetrics.WalAppendDispatchTimeouts.Add(
                     1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(stamped.TreeId)),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition),
                     LatticeTenantLabel.ForTree(stamped.TreeId));
                 // Per-(tree, shard) cumulative trip count consumed by
@@ -1106,7 +1108,7 @@ internal sealed class WalCommitLogWriter(
         // entry stamp/unlink so a wedged batched dispatch is visible in
         // the StallWatchdog [wal-append] output too.
         var tracker = GetTracker(treeId, partition);
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(treeId));
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
         var partitionTag = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
 
@@ -1207,7 +1209,7 @@ internal sealed class WalCommitLogWriter(
                     System.Console.WriteLine($"[wal-dispatch-timeout-cts] tree={treeId} shard={partition} entries={entries.Count} timeout={dispatchTimeout}");
                     LatticeMetrics.WalAppendDispatchTimeouts.Add(
                         1,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(treeId)),
                         new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition),
                         LatticeTenantLabel.ForTree(treeId));
                     // Per-(tree, shard) cumulative trip count consumed
@@ -1245,10 +1247,10 @@ internal sealed class WalCommitLogWriter(
         }
     }
 
-    private static void RecordDispatchOutcome(string treeId, int partition, int walPartitions, LatticeOptions perTree, int entryCount, long startTicks)
+    private void RecordDispatchOutcome(string treeId, int partition, int walPartitions, LatticeOptions perTree, int entryCount, long startTicks)
     {
         var elapsedMs = Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(treeId));
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
         var shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition);
         // walPartitions tag must reflect the tree-registry pinned value
@@ -1544,6 +1546,8 @@ internal sealed class WalCommitLogWriter(
     internal sealed class PartitionTracker
     {
         public readonly string TreeId;
+        private readonly LatticeOptionsResolver? _optionsResolver;
+        private string MetricTreeId => _optionsResolver?.GetMetricTreeId(TreeId) ?? TreeId;
         public readonly int Partition;
         public readonly LinkedList<PendingAppend> _inFlight = new();
         private readonly object _gate = new();
@@ -1556,9 +1560,10 @@ internal sealed class WalCommitLogWriter(
         private SemaphoreSlim? _admission;
         private int _admissionCap;
 
-        public PartitionTracker(string treeId, int partition)
+        public PartitionTracker(string treeId, int partition, LatticeOptionsResolver? optionsResolver = null)
         {
             TreeId = treeId;
+            _optionsResolver = optionsResolver;
             Partition = partition;
         }
 
@@ -1666,7 +1671,7 @@ internal sealed class WalCommitLogWriter(
                     _admission.Release();
                     LatticeMetrics.WalAppendDrainReleases.Add(
                         1,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                         new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition),
                         LatticeTenantLabel.ForTree(TreeId));
                     throw new TimeoutException(
@@ -1683,7 +1688,7 @@ internal sealed class WalCommitLogWriter(
                 // metric sample for dashboard observability.
                 LatticeMetrics.WalAppendDrainReleases.Add(
                     1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition),
                     LatticeTenantLabel.ForTree(TreeId));
                 throw new TimeoutException(

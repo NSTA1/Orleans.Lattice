@@ -731,6 +731,23 @@ Register one or more observers in the silo DI container. They are
 resolved as `IEnumerable<IMutationObserver>`, so multiple can
 coexist. When none is registered the hook is zero-cost.
 
+`LatticeMutation.TreeId` is always the **logical** tree id the caller
+addressed, and it stays stable across an alias swap: after a resize, a
+shadow-cutover restore (and its revert) or a schema remediation routes a
+tree's writes to a physical copy, observers keep receiving the logical id,
+so an observer keyed by tree id keeps working without reacting to the swap.
+The logical id is accepted only when it was routed to the exact physical
+tree that commits the write; a write that reaches a physical tree directly,
+without going through its logical tree, reports that physical tree's own
+id. The routing tier overwrites the routed identity on every routed write,
+and under `AddLatticeAuth` the capability-stripping call filter also strips
+it from external clients, so a caller cannot choose the id observers see.
+Aliasing changes no callback coverage: the paths that publish
+callbacks, and the ones that deliberately do not (bulk load and bulk
+append, and saga terminal records, which are WAL-only), are the same as on
+an unaliased tree. The WAL records remain keyed by the physical tree; the
+replication shipper decodes them back to the logical tree it ships.
+
 Because the callback is on the write path, its cost is measured and
 attributed: every invocation is timed onto the
 [`orleans.lattice.observer.duration`](metrics.md#mutation-observers)

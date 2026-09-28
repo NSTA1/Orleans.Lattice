@@ -14,6 +14,7 @@ public sealed class LatticeAppsServiceCollectionExtensionsSubscriptionsTests
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton<IAppRegistryProjection>(new FakeAppRegistryProjection());
         services.AddSingleton<IAppSource>(new FakeAppSource());
+        services.AddSingleton(AppRegistryTestData.CreateLedger(new InMemoryAppRegistryStore()));
         return services;
     }
 

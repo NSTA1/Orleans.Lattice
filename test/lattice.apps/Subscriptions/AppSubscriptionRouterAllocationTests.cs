@@ -28,6 +28,7 @@ public sealed class AppSubscriptionRouterAllocationTests
             projection,
             source,
             new AppSubscriptionHandlerCatalog(Substitute.For<IServiceProvider>(), [new(Notes, "docs-feed", _ => handler)]),
+            AppRegistryTestData.CreateLedger(new InMemoryAppRegistryStore()),
             NullLogger<AppSubscriptionRouter>.Instance);
         await router.RefreshAsync();
         var mutation = Set("unrelated-tree", "k");
@@ -52,6 +53,7 @@ public sealed class AppSubscriptionRouterAllocationTests
             projection,
             source,
             new AppSubscriptionHandlerCatalog(Substitute.For<IServiceProvider>(), [new(Notes, "log-feed", _ => handler)]),
+            AppRegistryTestData.CreateLedger(new InMemoryAppRegistryStore()),
             NullLogger<AppSubscriptionRouter>.Instance);
         await router.RefreshAsync();
         var mutation = Set("a/notes/audit", "log/1");

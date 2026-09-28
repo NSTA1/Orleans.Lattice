@@ -17,6 +17,22 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 [TestFixture]
 public sealed class McpToolFaultTranslatorTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Translate_ownership_denial_retains_actionable_reason_locally_and_remotely(bool remote)
+    {
+        var denial = new LatticeTreeOwnershipDeniedException("different owner");
+        Exception fault = remote
+            ? new RpcException(new Status(StatusCode.PermissionDenied, denial.Message))
+            : denial;
+
+        var translated = McpToolFaultTranslator.Translate(fault);
+
+        Assert.That(translated.Message, Does.Contain("different owner"));
+        Assert.That(translated.Message, Does.Contain(remote
+            ? nameof(StatusCode.PermissionDenied) : nameof(LatticeTreeOwnershipDeniedException)));
+    }
+
     [Test]
     public void Translate_null_fault_is_rejected()
         => Assert.That(() => McpToolFaultTranslator.Translate(null!), Throws.ArgumentNullException);
@@ -217,4 +233,3 @@ public sealed class McpToolFaultTranslatorTests
 
     private sealed class SatelliteLikeException(string message) : Exception(message);
 }
-

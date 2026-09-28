@@ -80,4 +80,7 @@ internal sealed class SchemaRemediationState
     /// to a no-op success instead of rebuilding an identical destination.
     /// </summary>
     [Id(12)] public uint LastCompletedMigrationVersion { get; set; }
+
+    /// <summary>Persisted before reserving the alias; an idle pass releases an abandoned preparation.</summary>
+    [Id(13)] public string? AliasReservationId { get; set; }
 }

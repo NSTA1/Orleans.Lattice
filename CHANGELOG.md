@@ -12,7 +12,9 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
-- **Apps - Installable apps.** An app declares its trees, roles, subscriptions and MCP tools in a manifest; enabling it compiles its roles into ordinary authorization rules within an operator-consented ceiling. See [Installable apps](docs/lattice.apps/README.md). ([#2235](https://github.com/NSTA1/Orleans.Lattice/issues/2235)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer.Access`)
+- **Apps - Installable apps.** An app declares its trees, roles, subscriptions and MCP tools in a manifest; enabling it compiles its roles into authorization rules within an operator-consented ceiling, and each install exclusively owns its trees and replicates the ones it declares. ([#2235](https://github.com/NSTA1/Orleans.Lattice/issues/2235), [#3764](https://github.com/NSTA1/Orleans.Lattice/issues/3764), [#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.Apps`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer.Access`)
+
+- **Core - Ownership-bounded aliasing.** An optional `ITreeOwnershipGuard` can refuse an alias that would cross tree ownership, for every alias change including resize, restore and remediation; a refusal throws `LatticeTreeOwnershipDeniedException`. ([#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)
 
@@ -92,6 +94,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Performance - Clean leaf deactivations skip an acknowledged pin flush.** The `frontier_pin` barrier is elided when this deactivation already acknowledged a dominating pin, counted by `orleans.lattice.leaf.deactivation.barrier.elided`; a faulted pin write no longer counts as acknowledged. ([#3643](https://github.com/NSTA1/Orleans.Lattice/issues/3643)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 ### Fixed
+
+- **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)
+
+- **Observability - Logical tree id after an alias.** Mutation observers and the `tree` metric tag keep reporting the logical tree id after a resize, restore or schema remediation moves a tree to a new physical copy, so observers, dashboards and alerts keep their series. ([#3767](https://github.com/NSTA1/Orleans.Lattice/issues/3767), [#3780](https://github.com/NSTA1/Orleans.Lattice/issues/3780)) (`Orleans.Lattice`)
 
 - **Host - A host built but never started leaked its metrics listener.** The RepoContext host's eagerly-built metrics collector, meters and activation census were released only at `ApplicationStopped`, so a host disposed without being started, or whose build threw, left a live process-wide `MeterListener` allocating on every Lattice measurement. They are now owned by the host and released when it is disposed. ([#3792](https://github.com/NSTA1/Orleans.Lattice/issues/3792)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 

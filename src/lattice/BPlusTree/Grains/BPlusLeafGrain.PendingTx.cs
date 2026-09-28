@@ -1837,7 +1837,7 @@ internal sealed partial class BPlusLeafGrain
                     {
                         var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                         LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "backstop"),
                             LatticeTenantLabel.ForTree(treeId));
                     }

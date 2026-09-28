@@ -241,6 +241,7 @@ public class LatticeServiceCollectionExtensionsTests
     public void AddWalCursorRegistry_replaces_in_memory_reporter_with_durable_reporter()
     {
         var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -284,6 +285,7 @@ public class LatticeServiceCollectionExtensionsTests
     public void AddLattice_registers_IWalSaturationSignal_singleton()
     {
         var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 
@@ -334,6 +336,7 @@ public class LatticeServiceCollectionExtensionsTests
         // WalSaturationSignal in tests + the sampler) see consistent
         // state.
         var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
         var builder = Substitute.For<ISiloBuilder>();
         builder.Services.Returns(services);
 

@@ -653,7 +653,7 @@ internal sealed class ShardHealingOrchestratorGrain(
         state.State.LastBacklog = backlog;
         state.State.LastObservedAtTicks = nowUtc.Ticks;
 
-        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId));
         var tenantTag = LatticeTenantLabel.ForTree(TreeId);
         LatticeMetrics.ShardHealingBacklog.Record(backlog, treeTag, tenantTag);
         LatticeMetrics.ShardHealingDecisions.Add(1, treeTag, DecisionTag(decision), tenantTag);

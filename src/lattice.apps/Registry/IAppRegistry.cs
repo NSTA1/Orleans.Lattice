@@ -25,6 +25,19 @@ namespace Orleans.Lattice.Apps;
 /// disable a disabled one, uninstall an uninstalled one) is an idempotent success that
 /// writes nothing.
 /// </para>
+/// <para>
+/// <b>Tree ownership.</b> Install and upgrade claim every tree the consented version's
+/// manifest declares (its structural <c>a/{slug}/{tree}</c> trees and its adopted trees)
+/// in the reserved <c>sys-app-trees</c> ownership ledger, keyed by the tenant-composed
+/// tree id, for the owner identity slug plus the recorded provenance's publisher. A tree
+/// another install owns, a pre-existing unowned structural tree, a derived copy, or another
+/// tree's alias target refuses the transition with
+/// <see cref="AppRegistryTransitionError.TreeOwnershipConflict"/>; claims are compare-and-set,
+/// so of two concurrent installs of one tree exactly one succeeds. An upgrade releases the
+/// adopted claims its new version drops, and uninstall releases every adopted claim;
+/// structural claims are held until the tree is purged. When the app source cannot supply
+/// the consented version, claiming is left to activation, which re-verifies every claim.
+/// </para>
 /// </remarks>
 public interface IAppRegistry
 {
@@ -47,6 +60,25 @@ public interface IAppRegistry
     /// <returns>The tenant's records, including uninstalled ones.</returns>
     /// <exception cref="ArgumentException"><paramref name="tenant"/> is uninitialised.</exception>
     IAsyncEnumerable<AppRegistryRecord> ListForTenantAsync(TenantId tenant, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports, without writing anything, every tree <paramref name="manifest"/> declares that an
+    /// install of it by <paramref name="provenance"/>'s publisher in <paramref name="tenant"/> could
+    /// not own: the conflicts an install or upgrade would be refused with. Like the other reads it
+    /// performs no authorization; a facade exposing it must gate it.
+    /// </summary>
+    /// <param name="tenant">The tenant the app would be installed for. Must be initialised.</param>
+    /// <param name="manifest">The manifest under review. Must not be <c>null</c>.</param>
+    /// <param name="provenance">The provenance the app source vouches for; its publisher is part of the owner identity.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The conflicts, one per affected tree; empty when every claim would succeed.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="manifest"/> or <paramref name="provenance"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="tenant"/> or the manifest's slug is uninitialised.</exception>
+    Task<IReadOnlyList<AppTreeOwnershipConflict>> GetTreeOwnershipConflictsAsync(
+        TenantId tenant,
+        AppManifest manifest,
+        AppProvenance provenance,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Installs an app that is absent or <see cref="AppRegistryLifecycleState.Uninstalled"/>,

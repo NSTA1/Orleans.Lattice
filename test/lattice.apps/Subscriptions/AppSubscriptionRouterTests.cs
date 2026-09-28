@@ -10,6 +10,8 @@ public sealed partial class AppSubscriptionRouterTests
     private FakeAppRegistryProjection _projection = null!;
     private FakeAppSource _source = null!;
     private List<AppSubscriptionHandlerRegistration> _registrations = null!;
+    private InMemoryAppRegistryStore _owners = null!;
+    private InMemoryAppTreeLedgerStore _ledger = null!;
 
     [SetUp]
     public void SetUp()
@@ -17,6 +19,8 @@ public sealed partial class AppSubscriptionRouterTests
         _projection = new FakeAppRegistryProjection();
         _source = new FakeAppSource();
         _registrations = [];
+        _owners = new InMemoryAppRegistryStore();
+        _ledger = new InMemoryAppTreeLedgerStore();
     }
 
     private RecordingChangeFeedHandler Handle(AppSlug app, string subscription)
@@ -31,6 +35,7 @@ public sealed partial class AppSubscriptionRouterTests
             _projection,
             _source,
             new AppSubscriptionHandlerCatalog(Substitute.For<IServiceProvider>(), _registrations),
+            AppRegistryTestData.CreateLedger(_owners, _ledger),
             NullLogger<AppSubscriptionRouter>.Instance);
 
     private async Task<AppSubscriptionRouter> CreateWarmRouterAsync()
@@ -64,6 +69,7 @@ public sealed partial class AppSubscriptionRouterTests
     [Test]
     public async Task Cross_app_subscription_is_delivered_when_the_ceiling_approves_it()
     {
+        InstallOwner(Billing, "invoices");
         _source.Add(Manifest(Subscription("invoices", "invoices", Billing)));
         _projection.Publish(Record(Notes, ceiling: Ceiling(TreeException("a/billing/invoices"))));
         var handler = Handle(Notes, "invoices");
@@ -74,6 +80,53 @@ public sealed partial class AppSubscriptionRouterTests
         var delivery = handler.Deliveries.Single();
         Assert.That(delivery.Subscription.ObservedApp, Is.EqualTo(Billing));
         Assert.That(delivery.Subscription.IsCrossApp, Is.True);
+    }
+
+    [Test]
+    public async Task Cross_app_subscription_is_not_activated_while_the_observed_app_is_not_an_installed_owner()
+    {
+        _source.Add(Manifest(Subscription("invoices", "invoices", Billing)));
+        _projection.Publish(Record(Notes, ceiling: Ceiling(TreeException("a/billing/invoices"))));
+        var handler = Handle(Notes, "invoices");
+        var router = await CreateWarmRouterAsync();
+
+        await router.OnMutationAsync(Set("a/billing/invoices", "inv-1"), CancellationToken.None);
+
+        Assert.That(handler.Deliveries, Is.Empty);
+        Assert.That(router.Table.TryGetFailure(TenantId.Default, Notes, out var reasons), Is.True);
+        Assert.That(string.Join(" ", reasons!), Does.Contain("not installed as the owner"));
+    }
+
+    [Test]
+    public async Task Uninstalling_the_observed_owner_withdraws_the_cross_app_subscription_on_the_next_rebuild()
+    {
+        InstallOwner(Billing, "invoices");
+        _source.Add(Manifest(Subscription("invoices", "invoices", Billing)));
+        var notes = Record(Notes, ceiling: Ceiling(TreeException("a/billing/invoices")));
+        _projection.Publish(notes);
+        var handler = Handle(Notes, "invoices");
+        var router = await CreateWarmRouterAsync();
+
+        _owners.Seed(AppRegistryTreeNames.ComposeKey(TenantId.Default, Billing),
+            AppRegistryTestData.Record(AppRegistryLifecycleState.Uninstalled, slug: Billing));
+        _projection.Publish(notes with { Revision = notes.Revision + 1 });
+        await router.RefreshAsync();
+        await router.OnMutationAsync(Set("a/billing/invoices", "inv-1"), CancellationToken.None);
+
+        Assert.That(handler.Deliveries, Is.Empty);
+    }
+
+    private void InstallOwner(AppSlug app, string tree)
+    {
+        _owners.Seed(AppRegistryTreeNames.ComposeKey(TenantId.Default, app),
+            AppRegistryTestData.Record(AppRegistryLifecycleState.Enabled, slug: app));
+        _ledger.Seed(AppActivationTreeNames.StructuralTree(TenantId.Default, app, tree), new AppTreeClaim
+        {
+            Tenant = TenantId.Default,
+            Slug = app,
+            Publisher = new AppProvenance().Publisher,
+            Kind = AppTreeClaimKind.Structural,
+        });
     }
 
     [Test]

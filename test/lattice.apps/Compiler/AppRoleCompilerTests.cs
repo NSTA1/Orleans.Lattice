@@ -9,6 +9,10 @@ public sealed partial class AppRoleCompilerTests
 
     private static readonly LatticeOperation ReadWrite = LatticeOperation.Read | LatticeOperation.Write;
 
+    /// <summary>The installed app <c>other</c> owns its <c>items</c> tree (default tenant).</summary>
+    private static readonly AppTreeOwnerSnapshot OtherOwnsItems =
+        AppTreeOwnerSnapshot.Create([new("a/other/items", AppSlug.Parse("other"))]);
+
     private static AppRoleDeclaration Role(string name, LatticeOperation operations, params AppScopeTemplate[] scopes) =>
         new() { Name = name, Operations = operations, Scopes = scopes };
 

@@ -11,6 +11,16 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class LatticeGrain
 {
+    private void StampReplicationObserverIdentity(string physicalTreeId)
+    {
+        // Replication fan-out bypasses the ordinary routing helpers. Stamp once
+        // per batch, and leave the observer-free path's RequestContext untouched.
+        if (HasMutationObservers)
+        {
+            StampRoutedIdentity(physicalTreeId);
+        }
+    }
+
     /// <inheritdoc />
     public Task ApplySetAsync(
         string key,
@@ -179,7 +189,7 @@ internal sealed partial class LatticeGrain
             (self: this, key, batch),
             static async args =>
             {
-                var shard = await args.self.GetShardGrainAsync(args.key);
+                var shard = args.self.GetShardGrain(args.key, await args.self.GetRoutingAsync());
                 await shard.MergeManyAsync(args.batch);
             },
             CancellationToken.None);
@@ -188,6 +198,7 @@ internal sealed partial class LatticeGrain
     private async Task ApplyDeleteRangeCoreAsync(string startInclusive, string endExclusive)
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        StampReplicationObserverIdentity(physicalTreeId);
         var physicalShards = shardMap.GetPhysicalShardIndices();
         var tasks = new Task<int>[physicalShards.Count];
         for (var i = 0; i < physicalShards.Count; i++)
@@ -232,6 +243,7 @@ internal sealed partial class LatticeGrain
     private async Task ApplyMergeManyCoreAsync(IReadOnlyList<ApplyMergeItem> items)
     {
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        StampReplicationObserverIdentity(physicalTreeId);
 
         // Group items by shard. Most batches in steady-state replication
         // come from a single producer's ship phase and will land on a

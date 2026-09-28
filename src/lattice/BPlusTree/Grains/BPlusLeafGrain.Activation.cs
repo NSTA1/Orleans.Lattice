@@ -2259,7 +2259,7 @@ internal sealed partial class BPlusLeafGrain
             // records the first on WalReplayPermitQueueWait's 'canceled' arm.
             LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeTenantLabel.ForTree(state.State.TreeId));
 
             // Logged with the measured elapsed rather than the budget alone, and
@@ -2591,7 +2591,7 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId;
         LatticeMetrics.WalReplayPermitQueueWait.Record(
             elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             outcome,
             LatticeTenantLabel.ForTree(treeId));
     }
@@ -2699,14 +2699,17 @@ internal sealed partial class BPlusLeafGrain
     /// would trigger a lazy replay never arrives.
     /// </para>
     /// <para>
-    /// Nothing in this hook awaits, so no exception it could raise exists to
-    /// swallow; a replay failure is reported on
+    /// This hook awaits only the pure registry read that establishes metric
+    /// provenance, not the replay permit or replay work. A provenance-read
+    /// failure fails activation; a replay failure is reported on
     /// <see cref="LatticeMetrics.LeafReplayBarrierOutcomes"/> and re-thrown to
     /// whichever request awaits the barrier.
     /// </para>
     /// </remarks>
-    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        if (state.State.TreeId is { } metricPhysicalTreeId)
+            _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(metricPhysicalTreeId);
         // Publish this activation's same-silo revision cookie HERE, before the
         // replay is even armed, and note that the replay still bumps it again at
         // step 1.4 once the projection is rebuilt. Both are needed, for different
@@ -2739,10 +2742,9 @@ internal sealed partial class BPlusLeafGrain
 
         // Deliberately NOT passing the activation's own cancellation token down.
         // Orleans may dispose that token once the activation completes - which is
-        // now immediately - whereas the replay outlives this call and is bounded
+        // after provenance setup - whereas replay outlives this call and is bounded
         // instead by the per-activation source cancelled in the deactivation hook.
         EnsureReplayStarted();
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -2916,7 +2918,7 @@ internal sealed partial class BPlusLeafGrain
                 var replayTreeId = state.State.TreeId!;
                 LatticeMetrics.LeafActivationReplays.Add(
                     1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, replayTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     cold ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
                     LatticeTenantLabel.ForTree(replayTreeId));
 
@@ -3050,7 +3052,7 @@ internal sealed partial class BPlusLeafGrain
 
                 LatticeMetrics.LeafActivationFailures.Add(
                     1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, failedTreeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     replayCheckpointOverride == -1L ? LatticeMetrics.ActivationTemperatureCold : LatticeMetrics.ActivationTemperatureWarm,
                     reason,
                     LatticeTenantLabel.ForTree(failedTreeId));
@@ -3400,7 +3402,7 @@ internal sealed partial class BPlusLeafGrain
             // against a saturated silo cannot self-amplify into a log flood.
             LatticeMetrics.LeafActivationCursorPublishFailures.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeTenantLabel.ForTree(state.State.TreeId));
 
             if (ShouldLogCursorPublishFailure())
@@ -3470,7 +3472,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _residency = ResidentWorkingSet.Register(
-            treeId,
+            MetricTreeId,
             Cache.ResidentFootprintBytes,
             rehydratedFromSnapshot,
             // Graceful, so the deactivation runs this leaf's
@@ -5501,7 +5503,7 @@ internal sealed partial class BPlusLeafGrain
 
         LatticeMetrics.LeafColdReplayLoop.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(treeId));
 
         if (!ShouldLogColdReplayLoop(leafId, now))
@@ -6241,7 +6243,7 @@ internal sealed partial class BPlusLeafGrain
         // cannot perturb the value.
         LatticeMetrics.LeafDeferredTerminalsDroppedAtCap.Add(
             0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
             LatticeTenantLabel.ForTree(treeId));
 
@@ -6263,7 +6265,7 @@ internal sealed partial class BPlusLeafGrain
         // different ownership than it was filtered with.
         var sliceReader = new ReplaySliceReader(
             coordinator,
-            treeId,
+            MetricTreeId,
             partition,
             (await GetOptionsAsync()).WalReplaySliceBudget,
             replayOwnership.Filter);
@@ -6413,7 +6415,7 @@ internal sealed partial class BPlusLeafGrain
             // "exact census" true rather than merely intended.
             LatticeMetrics.LeafActivationStalledReplays.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                 LatticeTenantLabel.ForTree(treeId));
 
@@ -6692,7 +6694,7 @@ internal sealed partial class BPlusLeafGrain
                         // log line below, not in a time series.
                         LatticeMetrics.LeafActivationOverBudgetReplays.Add(
                             1,
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                             new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                             LatticeTenantLabel.ForTree(treeId));
 
@@ -6855,7 +6857,7 @@ internal sealed partial class BPlusLeafGrain
                             // resting-at-cap value this drop implies.
                             LatticeMetrics.LeafDeferredTerminalsDroppedAtCap.Add(
                                 1,
-                                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                                 new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                                 LatticeTenantLabel.ForTree(treeId));
                         }

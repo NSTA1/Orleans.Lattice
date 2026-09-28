@@ -75,10 +75,14 @@ public sealed partial class AppRegistryTests
         var store = new InMemoryAppRegistryStore();
         var authorizer = new AppInstallAuthorizer(RecordingAccessGate.AllowAll());
         var options = Microsoft.Extensions.Options.Options.Create(new Orleans.Configuration.ClusterOptions());
+        var ledger = AppRegistryTestData.CreateLedger(store);
+        var source = NullAppSource.Instance;
 
-        Assert.That(() => new AppRegistry(null!, authorizer, options), Throws.ArgumentNullException);
-        Assert.That(() => new AppRegistry(store, null!, options), Throws.ArgumentNullException);
-        Assert.That(() => new AppRegistry(store, authorizer, null!), Throws.ArgumentNullException);
+        Assert.That(() => new AppRegistry(null!, authorizer, options, ledger, source), Throws.ArgumentNullException);
+        Assert.That(() => new AppRegistry(store, null!, options, ledger, source), Throws.ArgumentNullException);
+        Assert.That(() => new AppRegistry(store, authorizer, null!, ledger, source), Throws.ArgumentNullException);
+        Assert.That(() => new AppRegistry(store, authorizer, options, null!, source), Throws.ArgumentNullException);
+        Assert.That(() => new AppRegistry(store, authorizer, options, ledger, null!), Throws.ArgumentNullException);
     }
 
     // ---- Optimistic concurrency ------------------------------------------

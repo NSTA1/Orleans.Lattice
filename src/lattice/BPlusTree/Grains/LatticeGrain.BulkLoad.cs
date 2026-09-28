@@ -339,7 +339,7 @@ internal sealed partial class LatticeGrain
         // so the override takes effect immediately locally.
         _eventsGate.Invalidate();
         LatticeMetrics.ConfigChanged.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"),
             LatticeTenantLabel.ForTree(TreeId));
     }
@@ -352,7 +352,7 @@ internal sealed partial class LatticeGrain
         var registry = grainFactory.GetLatticeRegistry();
         await registry.SetHistoryRetentionAsync(TreeId, mode, window);
         LatticeMetrics.ConfigChanged.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
             LatticeTenantLabel.ForTree(TreeId));
     }

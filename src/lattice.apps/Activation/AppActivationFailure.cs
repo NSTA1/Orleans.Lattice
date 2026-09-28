@@ -54,4 +54,20 @@ public enum AppActivationFailure
 
     /// <summary>An unexpected error occurred; the diagnostics carry its description.</summary>
     Faulted = 14,
+
+    /// <summary>A declared replication mode differs from the previously enabled mode or is ambiguous.</summary>
+    ReplicationModeChangeRejected = 15,
+
+    /// <summary>Replication prerequisites, such as a configured cluster id, are not satisfied.</summary>
+    ReplicationPreconditionFailed = 16,
+
+    /// <summary>Reading or writing the runtime replication enrolment failed.</summary>
+    ReplicationEnrolmentFailed = 17,
+
+    /// <summary>
+    /// Re-verifying the install's tree ownership claims found a tree it cannot own: another install
+    /// owns it, it is a pre-existing unowned structural tree, a derived copy, or another tree's alias
+    /// target. Nothing is provisioned and any rules left from an earlier activation are withdrawn.
+    /// </summary>
+    TreeOwnershipConflict = 18,
 }

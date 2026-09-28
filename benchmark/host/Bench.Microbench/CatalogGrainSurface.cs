@@ -204,6 +204,8 @@ internal sealed class CatalogGrainSurface
 
         public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) => surface.EnumerateAsync(prefix);
 
+        public Task<IReadOnlyList<string>> GetAliasesTargetingAsync(string physicalTreeId) => throw NotDriven();
+
         public Task<TreeRegistryEntry?> GetEntryAsync(string treeId) => surface.ReadEntryAsync(treeId);
 
         public Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds) =>
@@ -274,6 +276,22 @@ internal sealed class CatalogGrainSurface
         public Task DeleteTreeAsync() => throw new NotSupportedException();
 
         public Task DeleteRetiredPhysicalTreeAsync() => throw new NotSupportedException();
+
+        public Task DeleteDerivedPhysicalTreeAsync() => throw new NotSupportedException();
+
+        public Task<bool> IsPhysicalDeletedAsync() => throw new NotSupportedException();
+
+        public Task RecoverPhysicalAsync() => throw new NotSupportedException();
+
+        public Task PurgePhysicalAsync() => throw new NotSupportedException();
+
+        public Task DeleteDelegatedAsync() => throw new NotSupportedException();
+
+        public Task BeginAliasChangeAsync(string operationId) => throw new NotSupportedException();
+
+        public Task EndAliasChangeAsync(string operationId) => throw new NotSupportedException();
+
+        public Task EnsureAliasWritableAsync() => throw new NotSupportedException();
 
         public Task<TreeDeletionSnapshot> GetDeletionStatusAsync() => throw new NotSupportedException();
 

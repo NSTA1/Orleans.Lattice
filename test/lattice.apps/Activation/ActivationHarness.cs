@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Apps.Tests;
 
@@ -15,21 +16,31 @@ internal sealed class ActivationHarness
     public static readonly AppVersion V2 = AppRegistryTestData.V2;
     public static readonly LatticeOperation ReadWrite = LatticeOperation.Read | LatticeOperation.Write;
 
-    public ActivationHarness(bool withMembership = true, bool withPolicyStore = true, ILatticeMembershipContext? membership = null)
+    public ActivationHarness(bool withMembership = true, bool withPolicyStore = true, ILatticeMembershipContext? membership = null,
+        ILatticeReplicationConfigAuthority? replication = null)
     {
-        Registry = AppRegistryTestData.CreateRegistry(RegistryStore);
+        Ownership = AppRegistryTestData.CreateLedger(RegistryStore, Ledger, Facts, Time);
+        Registry = AppRegistryTestData.CreateRegistry(RegistryStore, source: Source, ownership: Ownership);
         Engine = new AppActivationEngine(
             Registry,
             Source,
             Status,
             Trees,
+            Ownership,
             NullLogger<AppActivationEngine>.Instance,
             withPolicyStore ? Rules : null,
             membership ?? (withMembership ? new FixedMembershipContext() : null),
-            Time);
+            Time,
+            replication);
     }
 
     public InMemoryAppRegistryStore RegistryStore { get; } = new();
+
+    public InMemoryAppTreeLedgerStore Ledger { get; } = new();
+
+    public FakeAppTreeFacts Facts { get; } = new();
+
+    public AppTreeOwnershipLedger Ownership { get; }
 
     public AppRegistry Registry { get; }
 

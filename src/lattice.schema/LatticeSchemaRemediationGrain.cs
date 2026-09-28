@@ -69,6 +69,33 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     private string TreeId => context.GrainId.Key.ToString()!;
 
+    private void EnsureControlPlaneOrigin() =>
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            context.ActivationServices, TreeId, LatticeOperation.SchemaAdmin);
+
+    private async Task ReserveAliasAsync()
+    {
+        if (!state.State.InProgress) await ReleaseAliasAsync();
+        if (state.State.AliasReservationId is null)
+        {
+            state.State.AliasReservationId = $"remediation:{Guid.NewGuid():N}";
+            try { await state.WriteStateAsync(); }
+            catch { state.State.AliasReservationId = null; throw; }
+        }
+        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
+            .BeginAliasChangeAsync(state.State.AliasReservationId);
+    }
+
+    private async Task ReleaseAliasAsync()
+    {
+        if (state.State.AliasReservationId is not { } id) return;
+        using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).EndAliasChangeAsync(id);
+        state.State.AliasReservationId = null;
+        try { await state.WriteStateAsync(); }
+        catch { state.State.AliasReservationId = id; throw; }
+    }
+
     /// <inheritdoc />
     public async Task<LatticeSchemaRemediationReport> StartAsync(
         LatticeValueTransform transform,
@@ -76,6 +103,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(targetPolicy);
+        EnsureControlPlaneOrigin();
 
         // Reject an uncompilable / non-linear regex here rather than mid-build.
         _ = CompiledSchemaPolicy.Compile(targetPolicy);
@@ -102,6 +130,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     public async Task<LatticeSchemaRemediationReport> StartVersionMigrationAsync(
         uint schemaId, uint targetVersion, CancellationToken cancellationToken = default)
     {
+        EnsureControlPlaneOrigin();
         if (schemaRegistry is null)
         {
             throw new InvalidOperationException(
@@ -140,8 +169,10 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// <inheritdoc />
     public async Task RunRemediationPassAsync()
     {
+        EnsureControlPlaneOrigin();
         if (!state.State.InProgress)
         {
+            await ReleaseAliasAsync();
             return;
         }
 
@@ -151,28 +182,37 @@ internal sealed class LatticeSchemaRemediationGrain(
         // not re-entered while the destination is populated.
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (state.State.Phase == LatticeSchemaRemediationPhase.DryRun)
+            await ReserveAliasAsync();
+            try
             {
-                if (!await RunDryRunGateAsync())
+                if (state.State.Phase == LatticeSchemaRemediationPhase.DryRun)
                 {
-                    return;
+                    if (!await RunDryRunGateAsync())
+                    {
+                        return;
+                    }
                 }
-            }
 
-            if (state.State.Phase == LatticeSchemaRemediationPhase.Build)
-            {
-                if (!await BuildDestinationAsync())
+                if (state.State.Phase == LatticeSchemaRemediationPhase.Build)
                 {
-                    return;
+                    if (!await BuildDestinationAsync())
+                    {
+                        return;
+                    }
                 }
-            }
 
-            if (state.State.Phase == LatticeSchemaRemediationPhase.Cutover)
+                if (state.State.Phase == LatticeSchemaRemediationPhase.Cutover)
+                {
+                    await CutoverAsync();
+                }
+
+                await CompleteAsync();
+            }
+            finally
             {
-                await CutoverAsync();
+                if (!state.State.InProgress)
+                    await ReleaseAliasAsync();
             }
-
-            await CompleteAsync();
         }
     }
 
@@ -244,6 +284,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var registry = grainFactory.GetLatticeRegistry();
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            await ReserveAliasAsync();
             sourcePhysical = await registry.ResolveAsync(TreeId);
         }
 
@@ -331,6 +372,9 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// </summary>
     private async Task<bool> BuildDestinationAsync()
     {
+        await grainFactory.GetLatticeRegistry().RegisterAsync(
+            state.State.DestinationTreeId!,
+            new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId });
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
         var compiled = CompiledPolicyOrNull();

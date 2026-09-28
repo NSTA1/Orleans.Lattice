@@ -30,7 +30,8 @@ internal sealed class LatticeRegistryGrain(
     ITreePlacementResolver? placementResolver = null,
     TreeAliasObserverDispatcher? aliasObservers = null,
     ILatticeAccessGate? accessGate = null,
-    ILatticeMembershipContext? membership = null) : ILatticeRegistry
+    ILatticeMembershipContext? membership = null,
+    ITreeOwnershipGuard? ownershipGuard = null) : ILatticeRegistry
 {
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
@@ -376,6 +377,24 @@ internal sealed class LatticeRegistryGrain(
         return entries;
     }
 
+    public async Task<IReadOnlyList<string>> GetAliasesTargetingAsync(string physicalTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(physicalTreeId);
+
+        // Control-plane scan: avoid a second durable index whose write could
+        // diverge from the alias entry. The non-interleaved turn excludes mutators.
+        List<string>? aliases = null;
+        await foreach (var row in Registry.ScanEntriesAsync())
+        {
+            if (string.Equals(DeserializeEntry(row.Value).PhysicalTreeId, physicalTreeId, StringComparison.Ordinal))
+            {
+                (aliases ??= []).Add(row.Key);
+            }
+        }
+
+        return aliases is null ? Array.Empty<string>() : aliases;
+    }
+
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => GetAllTreeIdsAsync(prefix: null);
 
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) =>
@@ -476,10 +495,22 @@ internal sealed class LatticeRegistryGrain(
 
         // Enforce single-level indirection: the target must not itself be aliased.
         var targetEntry = await GetEntryCoreAsync(physicalTreeId);
+        await grainFactory.GetGrain<ITreeDeletionGrain>(treeId).EnsureAliasWritableAsync();
+        await grainFactory.GetGrain<ITreeDeletionGrain>(physicalTreeId).EnsureAliasWritableAsync();
+        if (targetEntry?.DerivedFrom is { } owner && owner != treeId)
+            await grainFactory.GetGrain<ITreeDeletionGrain>(owner).EnsureAliasWritableAsync();
         if (targetEntry?.PhysicalTreeId is not null)
             throw new InvalidOperationException(
                 $"Cannot set alias: target tree '{physicalTreeId}' is itself aliased to '{targetEntry.PhysicalTreeId}'. " +
                 "Only a single level of indirection is supported.");
+
+        // Ownership is independent of caller authorization: maintenance must
+        // not bypass it merely because it carries system origin.
+        var ownership = await (ownershipGuard ?? NullTreeOwnershipGuard.Instance)
+            .AuthorizeAliasAsync(treeId, physicalTreeId, targetEntry?.DerivedFrom);
+        if (!ownership.Allowed)
+            throw new LatticeTreeOwnershipDeniedException(
+                ownership.Reason ?? "The ownership provider did not allow this alias.");
 
         var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PhysicalTreeId = physicalTreeId };
@@ -506,6 +537,7 @@ internal sealed class LatticeRegistryGrain(
     public async Task RemoveAliasAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        await grainFactory.GetGrain<ITreeDeletionGrain>(treeId).EnsureAliasWritableAsync();
 
         var existing = await GetEntryCoreAsync(treeId);
         if (existing?.PhysicalTreeId is null) return;

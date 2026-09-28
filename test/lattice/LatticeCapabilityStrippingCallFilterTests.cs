@@ -125,4 +125,48 @@ public sealed class LatticeCapabilityStrippingCallFilterTests
         var surviving = await SurvivingReservedKeysAsync(external);
         Assert.That(surviving, Is.EqualTo(0));
     }
+
+    // The routed identity pair classifies which logical tree a mutation observer
+    // attributes a write to. Only the facade may assert it; an external client that
+    // seeds a matching physical id with a chosen logical id must not reach any path
+    // the facade does not re-stamp.
+    private static readonly string[] RoutedIdentityKeys =
+    [
+        LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey,
+        LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
+    ];
+
+    private static async Task<int> SurvivingRoutedIdentityKeysAsync(GrainId sourceId)
+    {
+        var filter = new LatticeCapabilityStrippingCallFilter(Oracle());
+        RequestContext.Set(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey, "victim");
+        RequestContext.Set(LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey, "attacker");
+
+        await filter.Invoke(ContextWithSource(sourceId));
+
+        return RoutedIdentityKeys.Count(k => RequestContext.Get(k) is not null);
+    }
+
+    [Test]
+    public async Task External_client_has_routed_identity_pair_stripped()
+    {
+        var external = GrainId.Create(GrainTypePrefix.ClientGrainType, Guid.NewGuid().ToString("N"));
+        var surviving = await SurvivingRoutedIdentityKeysAsync(external);
+        Assert.That(surviving, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Forged_hosted_prefix_has_routed_identity_pair_stripped()
+    {
+        var forged = GrainId.Create(GrainTypePrefix.ClientGrainType, "hosted-forged");
+        var surviving = await SurvivingRoutedIdentityKeysAsync(forged);
+        Assert.That(surviving, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task Local_in_silo_hosted_client_retains_routed_identity_pair()
+    {
+        var surviving = await SurvivingRoutedIdentityKeysAsync(HostedClientId(LocalSilo));
+        Assert.That(surviving, Is.EqualTo(RoutedIdentityKeys.Length));
+    }
 }

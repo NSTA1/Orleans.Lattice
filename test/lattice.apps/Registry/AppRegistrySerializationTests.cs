@@ -99,7 +99,7 @@ public sealed class AppRegistrySerializationTests
         var aliases = Constants(typeof(AppRegistryTypeAliases));
         var owners = assembly.GetTypes().Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null).ToArray();
 
-        Assert.That(aliases, Has.Length.EqualTo(6));
+        Assert.That(aliases, Has.Length.EqualTo(8));
         Assert.That(aliases.Distinct().Count(), Is.EqualTo(aliases.Length));
         Assert.That(aliases.Intersect(Constants(typeof(AppsTypeAliases))), Is.Empty, "the two apps alias tables are disjoint");
         foreach (var alias in aliases)

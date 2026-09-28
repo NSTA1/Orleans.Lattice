@@ -41,8 +41,12 @@ public interface IAppActivationPipeline
 
     /// <summary>
     /// Withdraws an app's rules, soft-deletes its structural trees (never purging them itself, and
-    /// never touching adopted trees), and marks it uninstalled. The core purges each soft-deleted
-    /// tree once its soft-delete window elapses unless it is recovered first.
+    /// never touching adopted trees), releases its adopted-tree ownership claims, and marks it
+    /// uninstalled. The core purges each soft-deleted tree once its soft-delete window elapses unless
+    /// it is recovered first; its structural ownership claims are held until then. On success every
+    /// other enabled app in the tenant that reaches the uninstalled app through a cross-app role scope
+    /// or subscription is then reconciled, so its cross-app grants to the absent owner are withdrawn;
+    /// each dependant's outcome is recorded against it, not returned here.
     /// </summary>
     /// <param name="tenant">The tenant the app is installed for.</param>
     /// <param name="slug">The app to uninstall.</param>

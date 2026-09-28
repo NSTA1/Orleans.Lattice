@@ -88,6 +88,22 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
     // ----- Fault mapping -----
 
     [Test]
+    public void SetTreeAlias_maps_ownership_denial_to_PermissionDenied_with_reason()
+    {
+        var control = Substitute.For<ILatticeTreeAdmin>();
+        control.SetTreeAliasAsync("orders", "physical", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new LatticeTreeOwnershipDeniedException("different owner"));
+        var service = CreateService(control);
+
+        var error = Assert.ThrowsAsync<RpcException>(() => service.SetTreeAlias(
+            new TreeAdminSetAliasRequest { TreeId = "orders", PhysicalTreeId = "physical" },
+            Context("SetTreeAlias")));
+
+        Assert.That(error!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+        Assert.That(error.Status.Detail, Does.Contain("different owner"));
+    }
+
+    [Test]
     public void InvokeAsync_rethrows_an_RpcException_unchanged()
     {
         var original = new RpcException(new Status(StatusCode.ResourceExhausted, "quota"));
