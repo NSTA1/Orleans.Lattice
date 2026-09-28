@@ -219,6 +219,27 @@ public sealed partial class DurableVectorIndex
 
     private async Task IngestAsync(CancellationToken cancellationToken)
     {
+        // THE EXPECTED COUNT IS RETRIED WHILE IT IS UNKNOWN, AND THAT IS THE WHOLE
+        // FIX FOR A PROGRESS BAR THAT READ 100% AT HALF DONE.
+        //
+        // CountSourceOrUnknownAsync returns 0 for "unknown" - it swallows a failed
+        // count deliberately - and StartBuildAsync took that count exactly once.
+        // A single failed count therefore left _expected at 0 for the entire life
+        // of the index, and because _expected is persisted in the build state and
+        // restored on open, no later process recovered it either.
+        //
+        // Two things read that field and both degrade silently on 0:
+        // VectorIndexBuildProgress.IngestedFraction reports 1 when the expected
+        // count is unknown, so "no idea" renders identically to "finished"; and
+        // the host's exact-scan budget cannot size the corpus, so it cannot cap
+        // the scan. Retrying here costs one source count per slice, stops the
+        // moment it succeeds, and leaves a build whose count never succeeds no
+        // worse off than it was.
+        if (_expected <= 0)
+        {
+            _expected = await CountSourceOrUnknownAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var budget = _options.IngestBatchSize;
         var consumed = 0;
         var chunkSize = _options.EffectiveItemsPerChunk;
@@ -232,6 +253,23 @@ public sealed partial class DurableVectorIndex
         var timeProvider = _options.TimeProvider;
         var timeBounded = sliceBudget > TimeSpan.Zero;
         var startedAt = timeBounded ? timeProvider.GetTimestamp() : 0L;
+
+        // Stage accumulators for the build observer. GATED ON AN OBSERVER BEING
+        // PRESENT, and that is a correctness property rather than an
+        // optimisation: each sample is a clock read, and the ingest slice is
+        // bounded by a budget measured against that same clock. A test clock that
+        // charges per read - SteppingTimeProvider does exactly this, which is how
+        // "the clock is charged once per vector" is asserted - would have its
+        // budget consumed several times faster purely because this instrumentation
+        // exists, so a build with no observer must make no extra reads at all.
+        // Nothing is lost: the timings have no consumer but the observer, and the
+        // host's registry always supplies one.
+        var observer = _options.BuildObserver;
+        var sampling = observer is not null;
+        var sourceWaitTicks = 0L;
+        var keyAssignTicks = 0L;
+        var upsertTicks = 0L;
+        var keyFlushTicks = 0L;
 
         // Exhaustion is recorded where it is OBSERVED rather than inferred once
         // the loop is over, and the distinction is load-bearing. Running the loop
@@ -295,8 +333,13 @@ public sealed partial class DurableVectorIndex
             {
                 while (true)
                 {
+                    var sourceAt = sampling ? timeProvider.GetTimestamp() : 0L;
                     var (hasNext, pending) = await AwaitSourceMoveAsync(
                         enumerator, sliceDeadline, consumed).ConfigureAwait(false);
+                    if (sampling)
+                    {
+                        sourceWaitTicks += timeProvider.GetElapsedTime(sourceAt).Ticks;
+                    }
 
                     if (pending is not null)
                     {
@@ -325,8 +368,25 @@ public sealed partial class DurableVectorIndex
                     // the deadline exists to preserve. The deadline governs
                     // WAITING for the source; it does not interrupt banking an
                     // item that has already arrived.
-                    var key = await _keys.GetOrAddAsync(entry.Id, cancellationToken).ConfigureAwait(false);
-                    if (_index.Upsert(key, entry.Vector.Span))
+                    // BUFFERED, not written per item. The durable record joins a
+                    // batch flushed once per slice below; see
+                    // VectorKeyDictionary.GetOrAddBufferedAsync for why a write
+                    // per vector was the build's dominant cost.
+                    var keyAt = sampling ? timeProvider.GetTimestamp() : 0L;
+                    var key = await _keys.GetOrAddBufferedAsync(entry.Id, cancellationToken).ConfigureAwait(false);
+                    if (sampling)
+                    {
+                        keyAssignTicks += timeProvider.GetElapsedTime(keyAt).Ticks;
+                    }
+
+                    var upsertAt = sampling ? timeProvider.GetTimestamp() : 0L;
+                    var replaced = _index.Upsert(key, entry.Vector.Span);
+                    if (sampling)
+                    {
+                        upsertTicks += timeProvider.GetElapsedTime(upsertAt).Ticks;
+                    }
+
+                    if (replaced)
                     {
                         // A replacement is not an append, so the committed chunk prefix
                         // is no longer a prefix of the cell and the checkpoint has to
@@ -415,6 +475,18 @@ public sealed partial class DurableVectorIndex
             _emptyDeadlinesSinceAdvance = 0;
         }
 
+        // BEFORE the checkpoint, never after. The checkpoint is what makes the
+        // cells durable, and a committed cell whose identifier is not yet durable
+        // is unresolvable on the next load - the silent wrong-document failure
+        // the key dictionary exists to prevent. The mapping running AHEAD of the
+        // cells is fine and expected; behind them is not.
+        var flushAt = sampling ? timeProvider.GetTimestamp() : 0L;
+        await _keys.FlushPendingAsync(cancellationToken).ConfigureAwait(false);
+        if (sampling)
+        {
+            keyFlushTicks += timeProvider.GetElapsedTime(flushAt).Ticks;
+        }
+
         await WriteIngestCheckpointAsync(exhausted, cancellationToken).ConfigureAwait(false);
 
         if (exhausted)
@@ -423,6 +495,13 @@ public sealed partial class DurableVectorIndex
         }
 
         await WriteBuildStateAsync(cancellationToken).ConfigureAwait(false);
+
+        observer?.OnSliceCompleted(new VectorIndexBuildSliceTimings(
+            TimeSpan.FromTicks(sourceWaitTicks),
+            TimeSpan.FromTicks(keyAssignTicks),
+            TimeSpan.FromTicks(upsertTicks),
+            TimeSpan.FromTicks(keyFlushTicks),
+            consumed));
     }
 
     /// <summary>
@@ -780,6 +859,13 @@ public sealed partial class DurableVectorIndex
     {
         try
         {
+            // FIRST, and inside the try on purpose. The cells this checkpoint is
+            // about to commit use keys whose records are still buffered, so the
+            // mapping has to land first. If this write is the one the store
+            // refuses, the throw skips the checkpoint below and the swallow
+            // leaves this slice banking nothing - which is the safe outcome, and
+            // the one the remarks already describe.
+            await _keys.FlushPendingAsync(cancellationToken).ConfigureAwait(false);
             await WriteIngestCheckpointAsync(false, cancellationToken).ConfigureAwait(false);
             await WriteBuildStateAsync(cancellationToken).ConfigureAwait(false);
         }

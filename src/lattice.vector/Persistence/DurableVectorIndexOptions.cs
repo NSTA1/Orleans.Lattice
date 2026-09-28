@@ -393,6 +393,14 @@ public sealed class DurableVectorIndexOptions
     }
 
     /// <summary>
+    /// An optional observer that receives per-slice stage timings from the build,
+    /// so a host can publish them on its own meter. Null by design, and null by
+    /// default: this package declares no instruments of its own. See
+    /// <see cref="IVectorIndexBuildObserver"/>.
+    /// </summary>
+    public IVectorIndexBuildObserver? BuildObserver { get; set; }
+
+    /// <summary>
     /// How many index keys one durable reservation of the key dictionary covers.
     /// Defaults to 1024. A larger block writes the watermark less often; the
     /// identifiers left unused by a crash are burned, which is free in a 64-bit
@@ -426,6 +434,14 @@ public sealed class DurableVectorIndexOptions
     }
 
     /// <summary>Returns an independent copy of these options.</summary>
+    /// <remarks>
+    /// Every field is listed explicitly, so a property added above and not added
+    /// here is silently dropped the moment the options reach
+    /// <see cref="DurableVectorIndex.OpenAsync(IVectorIndexStore, IVectorSource, DurableVectorIndexOptions, VectorIndexLoadMode, CancellationToken)"/>,
+    /// which clones before use. That failure is invisible at the call site - the
+    /// option is set, and simply has no effect - so add new properties here in the
+    /// same change that introduces them.
+    /// </remarks>
     public DurableVectorIndexOptions Clone() => new()
     {
         Index = Index?.Clone() ?? new VectorIndexOptions(),
@@ -435,5 +451,6 @@ public sealed class DurableVectorIndexOptions
         _keyReservationBlock = _keyReservationBlock,
         _ingestSliceBudget = _ingestSliceBudget,
         _timeProvider = _timeProvider,
+        BuildObserver = BuildObserver,
     };
 }
