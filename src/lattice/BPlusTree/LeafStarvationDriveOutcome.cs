@@ -125,4 +125,26 @@ internal enum LeafStarvationDriveOutcome
     /// </para>
     /// </summary>
     TimedOut = 5,
+
+    /// <summary>
+    /// The drive was refused a replay permit before it replayed anything,
+    /// because the per-silo GC share of the replay gate was full. Drives never
+    /// queue for a permit, so this is the immediate answer to a full gate.
+    /// <para>
+    /// Reported as a verdict rather than raised as a
+    /// <see cref="LatticeSaturatedException"/> (issue #3761). The refusal is
+    /// the expected, routine response of a bounded background drive, and
+    /// raising it made it the dominant source of first-chance exceptions on a
+    /// busy silo - about 490 a minute - while carrying no information the
+    /// caller could not have had from a return value. The refusal is still
+    /// counted on <c>orleans.lattice.saturation.refusals</c> with source
+    /// <c>replay_permit_admission</c>.
+    /// </para>
+    /// <para>
+    /// Kept apart from <see cref="NoAdvance"/> for the reason
+    /// <see cref="MemoryRefused"/> is: nothing was learned about the leaf, so
+    /// retrying it once the gate drains is the correct response.
+    /// </para>
+    /// </summary>
+    AdmissionRefused = 6,
 }

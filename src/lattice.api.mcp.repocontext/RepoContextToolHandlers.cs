@@ -43,7 +43,7 @@ internal static class RepoContextToolHandlers
 
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter must be a non-empty identifier when supplied.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter must be a non-empty identifier when supplied.");
         }
 
         repoId = repoId.Trim();
@@ -213,12 +213,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoRoot))
         {
-            throw new McpException("The 'repoRoot' parameter is required and must be a non-empty path.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoRoot' parameter is required and must be a non-empty path.");
         }
 
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         return StartIndexAsync(context, repoRoot, repoId.Trim(), includeGlobs, excludeGlobs, respectGitignore, excludeBinary);
@@ -243,7 +243,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         return ResolveStore(context).RecallAsync(key, evaluateStaleness: true, cancellationToken);
@@ -281,14 +281,14 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (!Enum.TryParse<RepoContextScanScope>(scope, ignoreCase: true, out var parsedScope)
             || !Enum.IsDefined(parsedScope)
             || !string.Equals(parsedScope.ToString(), scope, StringComparison.OrdinalIgnoreCase))
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 $"The 'scope' value '{scope}' is not recognised. Use one of: Files, Packages, Symbols, Memory, MemoryTopic.");
         }
 
@@ -313,7 +313,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         return ResolveStore(context).ListTopicsAsync(repoId, cancellationToken);
@@ -373,12 +373,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (string.IsNullOrWhiteSpace(topic))
         {
-            throw new McpException("The 'topic' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'topic' parameter is required and must be a non-empty identifier.");
         }
 
         // MemoryKind.Unspecified is the "never classified" default, not a kind a caller
@@ -391,7 +391,7 @@ internal static class RepoContextToolHandlers
                 || memoryKind == MemoryKind.Unspecified
                 || !string.Equals(memoryKind.ToString(), kind, StringComparison.OrdinalIgnoreCase)))
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");
         }
 
@@ -441,7 +441,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         if (fields is not null)
@@ -487,7 +487,7 @@ internal static class RepoContextToolHandlers
         var framing = RepoContextBodyFraming.Inspect(body);
         if (framing.IsContaminated)
         {
-            throw new McpException(
+            throw McpToolClientErrors.RejectedContent(
                 RepoContextBodyFraming.DescribeRejection(location, framing.DisplacedArguments));
         }
 
@@ -527,7 +527,7 @@ internal static class RepoContextToolHandlers
         var credentials = RepoContextBodyCredentials.Inspect(text);
         if (credentials.CarriesCredentialUrl)
         {
-            throw new McpException(
+            throw McpToolClientErrors.RejectedContent(
                 RepoContextBodyCredentials.DescribeRejection(location, credentials));
         }
     }
@@ -595,7 +595,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         return ResolveStore(context).NeighborsAsync(key, relation, depth, maxNodes, cancellationToken);
@@ -628,7 +628,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         return ResolveStore(context).ForgetAsync(key, lapse, lapseSeconds, fencingToken, cancellationToken);
@@ -660,12 +660,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         if (string.IsNullOrWhiteSpace(owner))
         {
-            throw new McpException("The 'owner' parameter is required and must be a non-empty identity.");
+            throw McpToolClientErrors.InvalidArgument("The 'owner' parameter is required and must be a non-empty identity.");
         }
 
         return ResolveStore(context).ClaimAsync(key, owner, leaseSeconds, maxWaitSeconds, cancellationToken);
@@ -694,7 +694,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         return ResolveStore(context).RenewClaimAsync(key, fencingToken, leaseSeconds, cancellationToken);
@@ -720,7 +720,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         return ResolveStore(context).ReleaseClaimAsync(key, fencingToken, cancellationToken);
@@ -743,7 +743,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+            throw McpToolClientErrors.InvalidArgument("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
         return ResolveStore(context).ClaimStatusAsync(key, cancellationToken);
@@ -774,12 +774,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (string.IsNullOrWhiteSpace(query))
         {
-            throw new McpException("The 'query' parameter is required and must be a non-empty query string.");
+            throw McpToolClientErrors.InvalidArgument("The 'query' parameter is required and must be a non-empty query string.");
         }
 
         var search = ResolveSearchService(context);
@@ -842,12 +842,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (string.IsNullOrWhiteSpace(task))
         {
-            throw new McpException("The 'task' parameter is required and must be a non-empty task description.");
+            throw McpToolClientErrors.InvalidArgument("The 'task' parameter is required and must be a non-empty task description.");
         }
 
         var bundle = ResolveBundleService(context);
@@ -896,12 +896,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            throw new McpException("The 'path' parameter is required and must be a non-empty file path.");
+            throw McpToolClientErrors.InvalidArgument("The 'path' parameter is required and must be a non-empty file path.");
         }
 
         return ResolveGraphService(context).OutlineAsync(repoId, path, cancellationToken);
@@ -931,12 +931,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            throw new McpException("The 'path' parameter is required and must be a non-empty workspace path.");
+            throw McpToolClientErrors.InvalidArgument("The 'path' parameter is required and must be a non-empty workspace path.");
         }
 
         try
@@ -946,15 +946,15 @@ internal static class RepoContextToolHandlers
         }
         catch (RepoContextWorkspaceViolationException ex)
         {
-            throw new McpException(ex.Message);
+            throw McpToolClientErrors.InvalidArgument(ex.Message);
         }
         catch (ArgumentException ex)
         {
-            throw new McpException(ex.Message);
+            throw McpToolClientErrors.InvalidArgument(ex.Message);
         }
         catch (DirectoryNotFoundException ex)
         {
-            throw new McpException(ex.Message);
+            throw McpToolClientErrors.InvalidArgument(ex.Message);
         }
     }
 
@@ -980,12 +980,12 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            throw new McpException("The 'path' parameter is required and must be a non-empty file path.");
+            throw McpToolClientErrors.InvalidArgument("The 'path' parameter is required and must be a non-empty file path.");
         }
 
         return ResolveGraphService(context).RelatedAsync(repoId, path, cancellationToken);
@@ -1044,13 +1044,13 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(path))
         {
-            throw new McpException("The 'path' parameter is required and must be a non-empty path under the workspace root.");
+            throw McpToolClientErrors.InvalidArgument("The 'path' parameter is required and must be a non-empty path under the workspace root.");
         }
 
         var resolvedId = string.IsNullOrWhiteSpace(repoId) ? DeriveRepoId(path) : repoId!.Trim();
         if (string.IsNullOrWhiteSpace(resolvedId))
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 "A repository id could not be derived from the path; supply the 'repoId' parameter explicitly.");
         }
 
@@ -1096,7 +1096,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         return ResolveStore(context).RemoveRepoAsync(repoId, cancellationToken);
@@ -1149,7 +1149,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         var services = context.Services
@@ -1196,7 +1196,7 @@ internal static class RepoContextToolHandlers
     {
         if (string.IsNullOrWhiteSpace(repoId))
         {
-            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+            throw McpToolClientErrors.InvalidArgument("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
         var runner = context.Services?.GetRequiredService<IRepoIndexRunner>()
@@ -1282,16 +1282,16 @@ internal static class RepoContextToolHandlers
         }
         catch (RepoContextWorkspaceViolationException ex)
         {
-            throw new McpException(ex.Message);
+            throw McpToolClientErrors.InvalidArgument(ex.Message);
         }
         catch (ArgumentException ex)
         {
-            throw new McpException(ex.Message);
+            throw McpToolClientErrors.InvalidArgument(ex.Message);
         }
 
         if (!Directory.Exists(resolvedRoot))
         {
-            throw new McpException(
+            throw McpToolClientErrors.NotFound(
                 $"The repository root '{repoRoot}' does not exist or is not a directory.");
         }
 

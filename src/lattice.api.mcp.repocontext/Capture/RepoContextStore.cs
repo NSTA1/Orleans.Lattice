@@ -808,7 +808,7 @@ internal sealed partial class RepoContextStore
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
         if (versioned.Value is not { } existing)
         {
-            throw new McpException(
+            throw McpToolClientErrors.NotFound(
                 $"No record exists at '{key}'. Use repocontext_remember or repocontext_bootstrap to create it first.");
         }
 
@@ -952,7 +952,7 @@ internal sealed partial class RepoContextStore
         var seconds = lapseSeconds ?? DefaultLapseSeconds;
         if (seconds <= 0L)
         {
-            throw new McpException("The lapse window must be a positive number of seconds.");
+            throw McpToolClientErrors.InvalidArgument("The lapse window must be a positive number of seconds.");
         }
 
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
@@ -1836,7 +1836,7 @@ internal sealed partial class RepoContextStore
         {
             if (explicitSeconds <= 0L)
             {
-                throw new McpException("The 'ttlSeconds' parameter must be a positive number of seconds when supplied.");
+                throw McpToolClientErrors.InvalidArgument("The 'ttlSeconds' parameter must be a positive number of seconds when supplied.");
             }
 
             return TimeSpan.FromSeconds(explicitSeconds);
@@ -1897,7 +1897,7 @@ internal sealed partial class RepoContextStore
                 RequireNonEmpty(topic, "topic");
                 return (RepoContextTrees.Memory, RepoContextKeys.MemoryTopicPrefix(repoId, topic!));
             default:
-                throw new McpException($"Unknown scan scope '{scope}'.");
+                throw McpToolClientErrors.InvalidArgument($"Unknown scan scope '{scope}'.");
         }
     }
 
@@ -1905,7 +1905,7 @@ internal sealed partial class RepoContextStore
     {
         if (!string.IsNullOrEmpty(pathPrefix))
         {
-            throw new McpException($"A path prefix is only supported for the Files scope, not {scope}.");
+            throw McpToolClientErrors.InvalidArgument($"A path prefix is only supported for the Files scope, not {scope}.");
         }
     }
 
@@ -1916,7 +1916,7 @@ internal sealed partial class RepoContextStore
     {
         if (string.IsNullOrWhiteSpace(key) || !RepoContextKeys.TryParse(key, out var parsed))
         {
-            throw new McpException(
+            throw McpToolClientErrors.InvalidArgument(
                 $"The key '{key}' is not a well-formed repository-context key (expected 'repo/{{repoId}}/...').");
         }
 
@@ -1927,7 +1927,7 @@ internal sealed partial class RepoContextStore
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            throw new McpException($"The '{parameterName}' parameter is required and must be non-empty.");
+            throw McpToolClientErrors.InvalidArgument($"The '{parameterName}' parameter is required and must be non-empty.");
         }
     }
 }

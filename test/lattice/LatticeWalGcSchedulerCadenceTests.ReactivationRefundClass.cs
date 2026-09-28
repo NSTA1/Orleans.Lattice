@@ -307,18 +307,20 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             await AdvanceAtLeastAsync(time, TimeSpan.FromHours(6));
 
             var attempted = Outcomes(recorder, "attempted");
+            var refused = Outcomes(recorder, "admission_refused");
             Assert.Multiple(() =>
             {
-                Assert.That(attempted, Is.GreaterThan(6),
+                Assert.That(refused, Is.GreaterThan(6),
                     "more touches than a refunded budget could buy, or refusals are still being charged.");
-                Assert.That(Outcomes(recorder, "admission_refused"), Is.EqualTo(attempted),
-                    "every refused touch must land on its own arm.");
+                Assert.That(attempted, Is.Zero,
+                    "a refused touch never reached the drive, so it must be counted on 'admission_refused' alone "
+                    + "and never on 'attempted' (issue #3761).");
                 Assert.That(Outcomes(recorder, "faulted"), Is.Zero,
                     "a refusal is back-pressure, not a fault, and must not be counted as one.");
                 Assert.That(Outcomes(recorder, "abandoned"), Is.Zero,
                     "a consumer that was never driven must never be given up on: the give-up claims the block "
                     + "is not clearable by activation, which a refusal never tested.");
-                Assert.That(attempted, Is.LessThan(40),
+                Assert.That(refused, Is.LessThan(40),
                     "but the retry must escalate: touched at every pass of the six hours the consumer would "
                     + "take about seventy touches, whereas a delay that doubles to the cooldown takes under thirty.");
             });
@@ -356,7 +358,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             }
 
             var refusedAt = time.GetUtcNow();
-            while (Outcomes(recorder, "attempted") < 2)
+            while (Outcomes(recorder, "attempted") < 1)
             {
                 await TickAsync(time);
                 Assert.That(++guard, Is.LessThan(100), "the refused consumer was never touched again.");

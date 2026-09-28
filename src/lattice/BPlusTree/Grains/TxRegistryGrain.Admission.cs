@@ -89,6 +89,7 @@ internal sealed partial class TxRegistryGrain
         }
 
         LogTxRegistryAdmissionRefused(logger, TreeId, estimate, budget);
+        LatticeMetrics.RecordSaturationRefusal(TreeId, LatticeSaturationSource.TxRegistryCapacity);
         throw new LatticeSaturatedException(
             $"Atomic write refused on tree '{TreeId}': the transaction registry's estimated persisted row size "
             + $"({estimate} bytes) is at or above {nameof(LatticeOptions.TxRegistryAdmissionBudgetBytes)} ({budget} bytes). "

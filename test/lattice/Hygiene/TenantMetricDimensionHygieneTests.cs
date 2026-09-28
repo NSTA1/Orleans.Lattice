@@ -69,6 +69,11 @@ public sealed class TenantMetricDimensionHygieneTests
         // aggregate in the reserved __grainindex/ namespace, so the pre-built
         // measurement tag array carries the platform sentinel.
         ("src/lattice.grainindex/Observability/GrainIndexBackfillProgressRegistry.cs", "sample.Tags", true),
+        // Registry CreateMetricTags caches per-plane labels on the handle. Repositories
+        // share the vector tree, so these are platform observations, not tenant traffic.
+        ("src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs", "handle.HeldVectorTags", true),
+        ("src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs", "handle.ExpectedVectorTags", true),
+        ("src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs", "entry.Value.PartitionTags", true),
         // Per-tenant snapshot measurements: the tenancy meter's own tenant tag.
         ("src/lattice.tenancy/TenantObservabilityGaugeSnapshot.cs", "tags", false),
     ];
@@ -103,7 +108,8 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   its own usage, its own retrieval readiness, which plane its retrieval
     ///   was served from, and which arm of an indexing pass faulted, all of which
     ///   are properties of the operator-facing host process rather than of any
-    ///   tenant's traffic.</item>
+    ///   tenant's traffic. The MCP host's own rate of client-error tool calls is
+    ///   the same kind of self-metering.</item>
     ///   <item><b>Grain-call observation</b> - the outstanding-call depth and
     ///   call duration recorded per target grain type describe contention on a
     ///   shared activation and on this silo's scheduler. The quantity is the
@@ -193,6 +199,7 @@ public sealed class TenantMetricDimensionHygieneTests
         "SnapshotRebuilds",
         "SweepDurationHistogram",
         "SweepsCounter",
+        "ToolClientErrors",
         "TreesMismatchedCounter",
         "TreesProbedCounter",
         // orleans.lattice.wal.gc.scheduler.* - the six liveness instruments on the
@@ -271,6 +278,13 @@ public sealed class TenantMetricDimensionHygieneTests
         // would partition a series whose whole purpose is to say whether this process
         // is shedding load, and the fault tag is the dimension that carries the signal.
         "_exactGatherFaults",
+        // Exact-gather work and budget decisions share the host-wide vector trees
+        // and fallback policy above; no caller tenant owns this aggregate cost.
+        "_exactBudget",
+        "_exactDuration",
+        "_exactGathers",
+        "_exactPages",
+        "_exactVectors",
         // repocontext.retrieval.duration and repocontext.retrieval.stage.duration -
         // end-to-end and per-stage retrieval latency, tagged by tool, stage, and the
         // retrieval path that answered (issue #2624). Latency here is a property of the

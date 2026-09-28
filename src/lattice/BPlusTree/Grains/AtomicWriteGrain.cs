@@ -2727,6 +2727,7 @@ internal sealed class AtomicWriteGrain(
                     var quiesceOutcome = await QuiesceOnSaturatedAsync(state.State.TreeId).ConfigureAwait(true);
                     if (quiesceOutcome == SagaQuiesceOutcome.StillSaturated)
                     {
+                        LatticeMetrics.RecordSaturationRefusal(state.State.TreeId, LatticeSaturationSource.AtomicWriteSaga);
                         throw new LatticeSaturatedException(
                             $"Atomic-write saga {OperationKey} refused batch dispatch: the per-tree saturation signal stayed Saturated beyond the saga quiesce budget. The caller should back off and retry the saga once the signal returns to Healthy; re-dispatching now would amplify the storage-side back-pressure.",
                                                         state.State.TreeId,
@@ -2949,6 +2950,7 @@ internal sealed class AtomicWriteGrain(
                     // preserve its tree id for caller attribution;
                     // otherwise fall back to the saga's own tree id.
                     var attributedTreeId = ExtractSaturationTreeId(batchFailure) ?? state.State.TreeId;
+                    LatticeMetrics.RecordSaturationRefusal(attributedTreeId, LatticeSaturationSource.AtomicWriteSaga);
                     throw new LatticeSaturatedException(
                         $"Atomic write saga for tree '{state.State.TreeId}' could not complete because the per-tree saturation signal stayed Saturated past the saga quiesce budget; the saga will resume on the caller's next retry once the signal returns to Healthy.",
                         treeId: attributedTreeId,

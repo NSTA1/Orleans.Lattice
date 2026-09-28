@@ -236,12 +236,12 @@ public sealed class DashboardPanelTagDomainTests
             // "faulted" because it was counted as a fault until it had an arm of
             // its own, and the two have to be legible side by side.
             //
-            // The six drive arms (issues #2692, #3065) record what a touch achieved
-            // rather than that it was issued, and are charted with their full
-            // interpretation on panel 2692 below.
+            // The seven drive arms (issues #2692, #3065, #3761) record what a touch
+            // achieved rather than that it was issued, and are charted with their
+            // full interpretation on panel 2692 below.
             ["Replication|2783|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
                 [
-                    "attempted", "drove_already_driving", "drove_lifted",
+                    "attempted", "drove_admission_refused", "drove_already_driving", "drove_lifted",
                     "drove_memory_refused", "drove_no_advance", "drove_not_driven",
                     "drove_timed_out",
                 ],
@@ -610,8 +610,8 @@ public sealed class DashboardPanelTagDomainTests
             // resolving for one of the two mappings.
             AssertDomain("orleans_lattice_wal_gc_blocked_leaf_reactivations_total", "outcome",
                 [
-                    "abandoned", "admission_refused", "attempted", "completed", "drove_already_driving",
-                    "drove_lifted", "drove_memory_refused", "drove_no_advance",
+                    "abandoned", "admission_refused", "attempted", "completed", "drove_admission_refused",
+                    "drove_already_driving", "drove_lifted", "drove_memory_refused", "drove_no_advance",
                     "drove_not_driven", "drove_timed_out", "faulted", "healed",
                     "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",
                 ]);

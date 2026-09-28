@@ -86,6 +86,7 @@ that must keep a partially-loaded instance across a fault uses
 | `OpenAsync` | Static. Opens (and, for a full load, restores) an index over a store and a source. |
 | `CreateUnloaded` | Static. Creates an instance without reading durable state, so a caller can retry `LoadOrResumeAsync` on the same instance after a fault. Not usable until a load completes. |
 | `LoadOrResumeAsync` | Runs the durable load, resuming a previous attempt that faulted partway; a no-op once loaded. The two-token overload bounds only the resumable key-map walk with the first token and the whole load with the second. |
+| `LoadDiscardReason` | `VectorIndexLoadDiscardReason`: `None` unless a full load completed a discard, otherwise `UnloadableRecord`, `CountMismatch`, or `EmbeddingSpaceChange`. Retained on that instance; an explicit rebuild is not a load discard. Lazy readers refuse invalid state without deleting it and leave this value `None`. Generation differences that normal recovery can adopt are not discards. |
 | `LoadedKeyCount`, `IsLoaded`, `HasBankedLoadProgress` | Load observability: identifier mappings loaded so far, whether a load has completed, and whether an interrupted load banked progress. |
 | `KeyPrefix`, `Generation`, `LoadMode` | Where the index lives, which partitioning is live, and how it was opened. |
 | `Status`, `Count`, `UpdatesSinceTraining` | The core's status, the live vector count, and the drift signal that tells you when to retrain. |

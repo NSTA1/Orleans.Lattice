@@ -274,9 +274,10 @@ internal sealed class LatticeWalGcScheduler(
     /// <para>
     /// The per-leaf limits are unchanged; only the number of leaves a pass may
     /// apply them to at once has moved off 1. Touches are issued concurrently,
-    /// so a pass costs the same wall-clock as it did when it made one, and the
-    /// real work they start is bounded downstream by the leaf replay-admission
-    /// gate rather than by this number. Trees are swept sequentially, so this is
+    /// no wider than the replay gate's GC share (issue #3761, see
+    /// <see cref="ShareBoundedTouchRunner"/>), and the real work they start is
+    /// bounded downstream by the leaf replay-admission gate rather than by this
+    /// number. Trees are swept sequentially, so this is
     /// also the whole silo's concurrent touch ceiling and not a per-tree ceiling
     /// multiplied by the tree count.
     /// </para>
@@ -307,8 +308,8 @@ internal sealed class LatticeWalGcScheduler(
     /// 512 because retiring an orphan deletes a row: no leaf to activate,
     /// nothing to replay, no permit to take. A reactivation touch is the
     /// opposite on every one of those axes, and touches are issued concurrently
-    /// via <c>Task.WhenAll</c>, so this number is a direct concurrency bound on
-    /// grain activations and WAL replays. Do not reach for 512 here by analogy
+    /// up to the replay gate's GC share, so this number bounds the grain
+    /// activations and WAL replays one pass may start. Do not reach for 512 here by analogy
     /// with that constant: its own remarks are explicit that the two must not
     /// share a bound, and copying the number would repeat the error in the
     /// other direction. Trees are swept sequentially, so this remains the whole
@@ -316,6 +317,21 @@ internal sealed class LatticeWalGcScheduler(
     /// </para>
     /// </remarks>
     internal const int MaxReactivationTouchesCeiling = 32;
+
+    /// <summary>
+    /// How long one tree's reactivation pass keeps starting touches, including
+    /// in-pass retries of a touch refused admission (issue #3761).
+    /// </summary>
+    /// <remarks>
+    /// Sizing the fan-out to the replay gate's GC share serialises a pass that
+    /// used to run all at once, and trees are swept sequentially, so a pass of
+    /// slow touches must not be allowed to hold the silo's sweep indefinitely.
+    /// Past this budget no further touch is started; those in flight are
+    /// awaited, each bounded by the cluster response timeout, and a selected
+    /// consumer that was never started is handed back uncharged for the next
+    /// pass.
+    /// </remarks>
+    internal static readonly TimeSpan ReactivationPassLaunchBudget = TimeSpan.FromMinutes(1);
 
     /// <summary>
     /// Floor-holding pins that must be present before the per-pass touch budget
@@ -1221,9 +1237,12 @@ internal sealed class LatticeWalGcScheduler(
 
         /// <summary>
         /// The touch reached the leaf's silo, which refused the drive admission
-        /// to its WAL replay gate before anything was replayed (issue #3575): a
-        /// <see cref="LatticeSaturatedException"/> whose source is
-        /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>.
+        /// to its WAL replay gate before anything was replayed (issue #3575): the
+        /// <see cref="LeafStarvationDriveOutcome.AdmissionRefused"/> verdict
+        /// (issue #3761), or a <see cref="LatticeSaturatedException"/> whose
+        /// source is <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>
+        /// from an activation refused a place in the permit queue, or from a silo
+        /// on an earlier build.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -3921,6 +3940,7 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         List<string>? touching = null;
+        List<ConsumerReactivationBudget>? unstamped = null;
 
         // The leaves already being touched on this pass. A leaf publishes one
         // pin per WAL partition, and BPlusLeafGrain.FlushDurableMaterialiserFrontierAsync
@@ -4090,15 +4110,20 @@ internal sealed class LatticeWalGcScheduler(
             // or is cancelled must still consume the budget and the cooldown, or
             // a leaf that fails fast would be retried every pass - turning a
             // rate-limited heal into the stampede this path is bounded to avoid.
+            //
+            // The 'attempted' arm is NOT recorded here any more (issue #3761): a
+            // touch the replay gate refuses admission tested nothing, so it is
+            // counted on 'admission_refused' alone once its outcome is known,
+            // and 'attempted' counts only the touches that reached the drive.
+            // The pre-stamp budget is kept so a consumer the pass never gets to
+            // start is handed back exactly as it was.
+            (unstamped ??= new List<ConsumerReactivationBudget>(MaxReactivationTouchesPerPass)).Add(budget);
             budgets[consumerId] = budget with
             {
                 Attempts = budget.Attempts + 1,
                 LastAttempt = now,
                 AdmissionRetryAt = null,
             };
-
-            RecordBlockedLeafReactivation(
-                LatticeMetrics.BlockedLeafReactivationAttempted, treeTag, tenantTag);
 
             (touching ??= new List<string>(MaxReactivationTouchesPerPass)).Add(consumerId);
         }
@@ -4112,41 +4137,43 @@ internal sealed class LatticeWalGcScheduler(
         observation = observation with { LastAnyAttempt = now };
         _blockedConsumers[treeId] = observation;
 
-        var touches = new Task<ReactivationTouchResult>[touching.Count];
-        var concurrentFrom = 0;
-
-        // Issue #3610: the floor holder is touched first and alone. The
+        // Issue #3761: the touches run no wider than the replay gate's GC
+        // share. The gate admits a sweep drive with a non-queueing acquire, so
+        // launching the whole pass at once had every touch past the share
+        // refused on arrival - 88% of them on the live estate - and nothing
+        // retried a refusal inside the pass. The runner holds at most the share
+        // in flight, starts the next as each finishes, and re-drives a refused
+        // touch once a sibling has freed a slot, so the at-floor cohort keeps
+        // being worked for as long as the pass has budget. A share of 0 means
+        // this silo's gate is not yet sized, and the pass is not narrowed.
+        //
+        // Issue #3610: the floor holder is still touched first and alone. The
         // classifier hands arm 2 its holders nearest the floor first, but a
         // concurrent launch let whichever touch reached the replay gate first
         // take the free permit, which on the live estate was always a leaf
-        // above the floor. The rest still run concurrently, so a stuck floor
-        // holder costs this pass one extra touch, and MaxReactivationAttempts
-        // bounds how many passes it can do that on.
-        if (preClassified && touching.Count > 1)
-        {
-            touches[0] = TryReactivateBlockedLeafAsync(
-                treeId,
-                touching[0],
-                treeTag,
-                tenantTag,
-                requireOffsetAdvance?.Contains(touching[0]) == true,
-                stoppingToken);
-            await ((Task)touches[0]).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            concurrentFrom = 1;
-        }
+        // above the floor. The runner starts lower indices first, retries
+        // included, so that ranking also decides who takes a freed slot.
+        var share = BPlusTree.Grains.BPlusLeafGrain.SweepStarvationShare;
+        var pass = new ReactivationPass(
+            this,
+            treeId,
+            touching,
+            treeTag,
+            tenantTag,
+            requireOffsetAdvance,
+            _time.GetTimestamp(),
+            stoppingToken);
 
-        for (var i = concurrentFrom; i < touching.Count; i++)
-        {
-            touches[i] = TryReactivateBlockedLeafAsync(
-                treeId,
-                touching[i],
-                treeTag,
-                tenantTag,
-                requireOffsetAdvance?.Contains(touching[i]) == true,
-                stoppingToken);
-        }
+        await ShareBoundedTouchRunner.RunAsync(
+            touching.Count,
+            share > 0 ? share : touching.Count,
+            preClassified,
+            pass,
+            static (p, i) => p.TouchAsync(i),
+            static p => p.MayLaunch())
+            .ConfigureAwait(false);
 
-        var outcomes = await Task.WhenAll(touches).ConfigureAwait(false);
+        var outcomes = pass.Results;
 
         // Refund a faulted or undelivered touch, within a cap. Charging the
         // budget before the call is right for the cooldown - it is what stops a
@@ -4167,13 +4194,28 @@ internal sealed class LatticeWalGcScheduler(
         // which is the failure mode this whole change exists to remove.
         for (var i = 0; i < outcomes.Length; i++)
         {
-            // Recording is unconditional and no longer shares a branch with the
-            // refund decision below (issue #2938). While the two were one piece
-            // of control flow, only the outcome that happened to need a refund
-            // was counted, and the other three reported a structural zero that
-            // read as a measured one.
-            RecordBlockedLeafReactivation(
-                ReactivationOutcomeTag(outcomes[i].Outcome), treeTag, tenantTag);
+            if (outcomes[i] is not { } result)
+            {
+                // Selected but never started: the pass ran out of launch budget
+                // first (ReactivationPassLaunchBudget). Nothing was tried, so
+                // the consumer is handed back exactly as it was selected.
+                budgets[touching[i]] = unstamped![i];
+                continue;
+            }
+
+            // A refused try was counted on 'admission_refused' by the pass as
+            // it happened, once per refusal. Everything else reached the drive,
+            // so it is counted on 'attempted' and on exactly one outcome arm
+            // (issues #2938, #3761): recording is unconditional and does not
+            // share a branch with the refund decision below, and the arms other
+            // than 'admission_refused' partition 'attempted'.
+            if (!IsUnchargedReactivationOutcome(result.Outcome))
+            {
+                RecordBlockedLeafReactivation(
+                    LatticeMetrics.BlockedLeafReactivationAttempted, treeTag, tenantTag);
+                RecordBlockedLeafReactivation(
+                    ReactivationOutcomeTag(result.Outcome), treeTag, tenantTag);
+            }
 
             var current = budgets[touching[i]];
 
@@ -4187,16 +4229,17 @@ internal sealed class LatticeWalGcScheduler(
             // rather than a one-way trapdoor.
             if (requireOffsetAdvance is not null)
             {
-                current = current with { OffsetAdvanceOwed = outcomes[i].OffsetAdvanceOwed };
+                current = current with { OffsetAdvanceOwed = result.OffsetAdvanceOwed };
             }
 
-            if (IsUnchargedReactivationOutcome(outcomes[i].Outcome))
+            if (IsUnchargedReactivationOutcome(result.Outcome))
             {
                 // Taken back in full and outside the refund cap (issue #3575):
-                // the drive was refused admission before it started, so the
-                // touch tested nothing about the leaf. The consumer is due again
-                // after a short delay that escalates while refusals continue,
-                // rather than after the cooldown a touch that ran has to serve.
+                // the drive was refused admission before it started - on every
+                // try this pass made - so the touch tested nothing about the
+                // leaf. The consumer is due again after a short delay that
+                // escalates while refusals continue, rather than after the
+                // cooldown a touch that ran has to serve.
                 var refusals = current.AdmissionRefusals + 1;
                 current = current with
                 {
@@ -4209,7 +4252,7 @@ internal sealed class LatticeWalGcScheduler(
             {
                 current = current with { AdmissionRefusals = 0 };
 
-                if (IsRefundableReactivationOutcome(outcomes[i].Outcome)
+                if (IsRefundableReactivationOutcome(result.Outcome)
                     && current.Refunds < MaxReactivationRefunds)
                 {
                     current = current with
@@ -4225,10 +4268,10 @@ internal sealed class LatticeWalGcScheduler(
             // charged, which also keeps the entry out of pruning for the rest of
             // the episode - a pruned terminal consumer would be re-admitted
             // fresh and driven again.
-            if (outcomes[i].Terminal != ReactivationTerminal.None)
+            if (result.Terminal != ReactivationTerminal.None)
             {
-                current = current with { Terminal = outcomes[i].Terminal };
-                observation = MarkTerminal(observation, outcomes[i]);
+                current = current with { Terminal = result.Terminal };
+                observation = MarkTerminal(observation, result);
             }
 
             budgets[touching[i]] = current;
@@ -4236,6 +4279,69 @@ internal sealed class LatticeWalGcScheduler(
 
         _blockedConsumers[treeId] = observation;
         ReportLatchedStaleLeaves(treeId, observation);
+    }
+
+    /// <summary>
+    /// The state of one tree's reactivation pass as
+    /// <see cref="ShareBoundedTouchRunner"/> drives it (issue #3761).
+    /// </summary>
+    /// <remarks>
+    /// Holds each touch's latest result, and counts every refused try on the
+    /// <c>admission_refused</c> arm as it happens, because a touch retried in
+    /// the pass may be refused more than once and only its final result
+    /// reaches the budget.
+    /// </remarks>
+    private sealed class ReactivationPass(
+        LatticeWalGcScheduler scheduler,
+        string treeId,
+        List<string> touching,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        IReadOnlySet<string>? requireOffsetAdvance,
+        long startedAt,
+        CancellationToken stoppingToken)
+    {
+        /// <summary>
+        /// Each touch's latest result, or <see langword="null"/> for a touch the
+        /// pass never started.
+        /// </summary>
+        public ReactivationTouchResult?[] Results { get; } = new ReactivationTouchResult?[touching.Count];
+
+        /// <summary>
+        /// Drives touch <paramref name="index"/> once, and reports whether it
+        /// was refused admission.
+        /// </summary>
+        public async Task<bool> TouchAsync(int index)
+        {
+            var consumerId = touching[index];
+            var result = await scheduler.TryReactivateBlockedLeafAsync(
+                treeId,
+                consumerId,
+                treeTag,
+                tenantTag,
+                requireOffsetAdvance?.Contains(consumerId) == true,
+                stoppingToken)
+                .ConfigureAwait(false);
+
+            Results[index] = result;
+
+            if (IsUnchargedReactivationOutcome(result.Outcome))
+            {
+                RecordBlockedLeafReactivation(
+                    ReactivationOutcomeTag(result.Outcome), treeTag, tenantTag);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether another touch may be started: the host is not stopping and
+        /// the pass is inside <see cref="ReactivationPassLaunchBudget"/>.
+        /// </summary>
+        public bool MayLaunch() =>
+            !stoppingToken.IsCancellationRequested
+            && scheduler._time.GetElapsedTime(startedAt) < ReactivationPassLaunchBudget;
     }
 
     /// <summary>
@@ -4775,6 +4881,7 @@ internal sealed class LatticeWalGcScheduler(
             LeafStarvationDriveOutcome.MemoryRefused => LatticeMetrics.BlockedLeafReactivationDroveMemoryRefused,
             LeafStarvationDriveOutcome.AlreadyDriving => LatticeMetrics.BlockedLeafReactivationDroveAlreadyDriving,
             LeafStarvationDriveOutcome.TimedOut => LatticeMetrics.BlockedLeafReactivationDroveTimedOut,
+            LeafStarvationDriveOutcome.AdmissionRefused => LatticeMetrics.BlockedLeafReactivationDroveAdmissionRefused,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
@@ -4898,6 +5005,24 @@ internal sealed class LatticeWalGcScheduler(
             }
 
             var drive = await leaf.DriveStarvedCheckpointAsync().ConfigureAwait(false);
+
+            // The leaf's silo had no immediate replay capacity for the drive
+            // (issue #3761). Reported as a verdict rather than raised, which is
+            // the same refusal the saturation catch below classifies for a silo
+            // on an earlier build: back-pressure, not a fault, never charged
+            // against the consumer's budget, and not graded on the offset axis
+            // because nothing was replayed.
+            if (drive == LeafStarvationDriveOutcome.AdmissionRefused)
+            {
+                RecordBlockedLeafReactivation(DriveOutcomeTag(drive), treeTag, tenantTag);
+                logger.LogDebug(
+                    "WAL GC could not drive leaf {Leaf} on tree {Tree} for blocking pin {Consumer}: the drive was refused admission to the WAL replay gate before anything was replayed (the GC share had no immediate capacity). The touch is not charged against the consumer's attempt budget, and the consumer is retried after a short delay.",
+                    leafGrainId,
+                    treeId,
+                    blockingConsumerId);
+
+                return new ReactivationTouchResult(ReactivationOutcome.AdmissionRefused, requireOffsetAdvance);
+            }
 
             // Grade the drive on the axis its admission was granted on (issue
             // #3185). The leaf's own verdict is not wrong, it is answering a

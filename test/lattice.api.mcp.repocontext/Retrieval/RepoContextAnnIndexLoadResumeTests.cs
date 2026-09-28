@@ -51,6 +51,7 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         // reference is forced by that ordering: there is no instrument to match
         // against until the type whose priming is under test has already run.
         var seen = new List<(string Outcome, long Value)>();
+        var pairs = new List<(string Outcome, string Reason)>();
         using var listener = new MeterListener
         {
             InstrumentPublished = (published, l) =>
@@ -68,6 +69,8 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
         };
         listener.SetMeasurementEventCallback<long>((_, measurement, tags, _) =>
         {
+            var labels = tags.ToArray().ToDictionary(tag => tag.Key, tag => tag.Value);
+            pairs.Add(((string)labels["outcome"]!, (string)labels["reason"]!));
             foreach (var tag in tags)
             {
                 if (string.Equals(
@@ -89,7 +92,7 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             // the priming deleted - a test that cannot fail is the defect, not the
             // detector.
             Assert.That(
-                seen.Select(s => s.Outcome),
+                seen.Select(s => s.Outcome).Distinct(),
                 Is.EquivalentTo(new[]
                 {
                     RepoContextAnnIndexLoadReporter.OutcomeFreshTag,
@@ -97,6 +100,7 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
                     RepoContextAnnIndexLoadReporter.OutcomeFaultedTag,
                     RepoContextAnnIndexLoadReporter.OutcomeDeferredTag,
                     RepoContextAnnIndexLoadReporter.OutcomeRefusedTag,
+                    RepoContextAnnIndexLoadReporter.OutcomeDiscardedTag,
                 }),
                 "Every arm has to be PRESENT on a host that has simply never faulted. An arm that appears "
                 + "only once it is non-zero cannot distinguish a healthy plane from a build that never "
@@ -104,6 +108,15 @@ public sealed partial class RepoContextAnnIndexLoadResumeTests
             Assert.That(
                 seen.Select(s => s.Value), Is.All.Zero,
                 "Primed with a zero-valued add. A non-zero priming value would fabricate activity.");
+            Assert.That(pairs, Is.EquivalentTo(new[]
+            {
+                ("fresh", "none"), ("resumed", "none"), ("deferred", "none"),
+                ("refused", "admission_refused"),
+                ("faulted", "other"), ("faulted", "timeout"),
+                ("faulted", "embedding_space_change"), ("faulted", "unloadable_record"),
+                ("discarded", "count_mismatch"), ("discarded", "embedding_space_change"),
+                ("discarded", "unloadable_record"),
+            }));
         });
     }
 

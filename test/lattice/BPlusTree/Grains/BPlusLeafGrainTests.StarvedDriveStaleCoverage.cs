@@ -90,7 +90,7 @@ public partial class BPlusLeafGrainTests
             .Returns(call =>
             {
                 published.AddRange(call.ArgAt<IReadOnlyList<MaterialiserPinReport>>(1));
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             });
 
         var sc = new ServiceCollection();

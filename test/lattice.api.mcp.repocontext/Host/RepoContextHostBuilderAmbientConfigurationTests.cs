@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
@@ -157,4 +158,46 @@ public sealed class RepoContextHostBuilderAmbientConfigurationTests
     [Test]
     public void Build_rejects_null_arguments()
         => Assert.Throws<ArgumentNullException>(() => RepoContextHostBuilder.Build(null!));
+
+    /// <summary>
+    /// Pins issue #3792: a host that is built and disposed WITHOUT ever being
+    /// started must not leave its metrics collector listening.
+    /// </summary>
+    /// <remarks>
+    /// The collector was registered as an instance, which the container never
+    /// disposes, and was released only at <c>ApplicationStopped</c>, which never
+    /// fires for an application that was not started. Every such host therefore
+    /// left a live process-wide <c>MeterListener</c> behind that allocated on every
+    /// Lattice measurement for the rest of the process, and a zero-allocation
+    /// assertion later in the same test process failed by exactly one leaked
+    /// collector's worth of bytes per host. The first probe proves the collector
+    /// was listening, so the second cannot pass merely because it never was.
+    /// </remarks>
+    [Test]
+    public async Task Disposing_a_host_that_was_never_started_stops_its_metrics_collector_listening()
+    {
+        var app = RepoContextHostBuilder.Build([]);
+        var collector = app.Services.GetRequiredService<RepoContextMetricsCollector>();
+
+        var before = "host_leak_probe_before_" + Guid.NewGuid().ToString("N");
+        using var beforeMeter = new Meter("orleans.lattice.tests." + before);
+        beforeMeter.CreateCounter<long>("orleans.lattice.tests." + before).Add(1);
+
+        Assert.That(
+            collector.Render(),
+            Does.Contain(before),
+            "The probe must reach the collector while the host is alive, or the post-disposal assertion proves nothing.");
+
+        await app.DisposeAsync();
+
+        var after = "host_leak_probe_after_" + Guid.NewGuid().ToString("N");
+        using var afterMeter = new Meter("orleans.lattice.tests." + after);
+        afterMeter.CreateCounter<long>("orleans.lattice.tests." + after).Add(1);
+
+        Assert.That(
+            collector.Render(),
+            Does.Not.Contain(after),
+            "A host disposed without being started left its metrics collector subscribed: its MeterListener outlives "
+                + "the host and allocates on every Lattice measurement for the rest of the process (issue #3792).");
+    }
 }

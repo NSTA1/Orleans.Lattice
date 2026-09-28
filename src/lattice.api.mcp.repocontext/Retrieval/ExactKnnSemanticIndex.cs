@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -28,20 +29,26 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly RepoContextVectorCache _cache;
+    private readonly RepoContextRetrievalGuardReporter _reporter;
 
     /// <summary>Creates the exact kNN index.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
     /// <param name="cache">The warm decoded-candidate cache consulted before the store is scanned. Must not be <see langword="null"/>.</param>
+    /// <param name="reporter">The reporter measuring actual gather work, excluding cache hits. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public ExactKnnSemanticIndex(IGrainFactory grainFactory, Serializer serializer, RepoContextVectorCache cache)
+    public ExactKnnSemanticIndex(
+        IGrainFactory grainFactory, Serializer serializer, RepoContextVectorCache cache,
+        RepoContextRetrievalGuardReporter reporter)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(reporter);
         _grainFactory = grainFactory;
         _serializer = serializer;
         _cache = cache;
+        _reporter = reporter;
     }
 
     /// <inheritdoc />
@@ -73,7 +80,23 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
         // Capture the generation before gathering so a write that lands during the
         // scan invalidates this result rather than caching a stale set.
         var generation = _cache.CaptureGeneration(repoId);
-        var candidates = await GatherAsync(repoId, querySpace, cancellationToken).ConfigureAwait(false);
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "faulted";
+        List<RepoContextVectorCandidate> candidates;
+        try
+        {
+            candidates = await GatherAsync(repoId, querySpace, cancellationToken).ConfigureAwait(false);
+            outcome = "completed";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = "cancelled";
+            throw;
+        }
+        finally
+        {
+            _reporter.RecordExactGather(Stopwatch.GetElapsedTime(started).TotalSeconds, outcome);
+        }
         _cache.Store(repoId, querySpace, candidates, generation);
         return RepoContextKnnRanker.Rank(query, querySpace, candidates, k);
     }
@@ -99,6 +122,10 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
             var page = await RepoContextPortability
                 .EnumerateAsync(metadataTree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Publish before decoding or fetching payloads: a later fault must not
+            // erase work already returned. This is one logical page, not a shard RPC.
+            _reporter.RecordExactPage(page.Records.Count);
 
             // Pass 1: decode the page's metadata, keep only vectors in the query's
             // embedding space, and record the payload key each survivor needs.

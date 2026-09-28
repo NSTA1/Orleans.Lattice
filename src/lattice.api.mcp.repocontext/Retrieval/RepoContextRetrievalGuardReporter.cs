@@ -247,6 +247,11 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
     private readonly Meter _meter;
     private readonly Counter<long> _annSearches;
     private readonly Counter<long> _exactGatherFaults;
+    private readonly Counter<long> _exactVectors;
+    private readonly Counter<long> _exactPages;
+    private readonly Counter<double> _exactDuration;
+    private readonly Counter<long> _exactGathers;
+    private readonly Counter<long> _exactBudget;
 
     /// <summary>Creates the reporter.</summary>
     /// <param name="timeProvider">
@@ -326,6 +331,55 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.AbandonedTag), LatticeTenantLabel.Platform);
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.DeterministicTag), LatticeTenantLabel.Platform);
         _exactGatherFaults.Add(0, new KeyValuePair<string, object?>(RepoContextExactGatherFault.FaultTagKey, RepoContextExactGatherFault.PropagatedTag), LatticeTenantLabel.Platform);
+
+        _exactVectors = _meter.CreateCounter<long>(
+            "repocontext.retrieval.exact_scan.vectors", "{vector}",
+            "Metadata records returned to exact gathers, including filtered spaces and missing payloads. "
+            + "Excludes cache hits, lookahead rows and partial pages that never return; not ranked matches.");
+        _exactPages = _meter.CreateCounter<long>(
+            "repocontext.retrieval.exact_scan.pages", "{page}",
+            "Logical metadata pages returned to exact gathers, including empty terminal pages. "
+            + "Not internal shard fills or RPCs. Published before decoding so later faults retain returned work.");
+        _exactDuration = _meter.CreateCounter<double>(
+            "repocontext.retrieval.exact_scan.duration", "s",
+            "Cumulative wall seconds spent gathering exact candidates, including failed and cancelled gathers. "
+            + "Excludes cache hits and ranking; includes awaits, is not CPU time, and concurrent gathers overlap.");
+        _exactGathers = _meter.CreateCounter<long>(
+            "repocontext.retrieval.exact_scan.gathers", "{gather}",
+            "Finished exact gathers by outcome: completed, faulted, or caller-cancelled. "
+            + "Cache hits and suppressed gathers do not count. All arms are zero-primed.");
+        _exactBudget = _meter.CreateCounter<long>(
+            "repocontext.retrieval.exact_scan.budget", "{evaluation}",
+            "Exact fallback budget evaluations by outcome: unbounded, corpus_unknown, within_budget, exceeded. "
+            + "Exceeded suppresses the gather before it starts; breaker skips and ANN answers do not evaluate "
+            + "this budget. Explicit exact mode bypasses the budget. All arms are zero-primed.");
+        _exactVectors.Add(0, LatticeTenantLabel.Platform);
+        _exactPages.Add(0, LatticeTenantLabel.Platform);
+        _exactDuration.Add(0, LatticeTenantLabel.Platform);
+        foreach (var outcome in new[] { "completed", "faulted", "cancelled" })
+            _exactGathers.Add(0, new KeyValuePair<string, object?>("outcome", outcome), LatticeTenantLabel.Platform);
+        foreach (var outcome in new[] { "unbounded", "corpus_unknown", "within_budget", "exceeded" })
+            _exactBudget.Add(0, new KeyValuePair<string, object?>("outcome", outcome), LatticeTenantLabel.Platform);
+    }
+
+    /// <summary>Records one returned logical metadata page without per-vector telemetry allocation.</summary>
+    internal void RecordExactPage(int vectors)
+    {
+        _exactPages.Add(1, LatticeTenantLabel.Platform);
+        _exactVectors.Add(vectors, LatticeTenantLabel.Platform);
+    }
+
+    /// <summary>Records elapsed gather time and a bounded terminal outcome, including failures.</summary>
+    internal void RecordExactGather(double seconds, string outcome)
+    {
+        var boundedOutcome = outcome switch
+        {
+            "completed" => "completed",
+            "cancelled" => "cancelled",
+            _ => "faulted",
+        };
+        _exactDuration.Add(seconds, LatticeTenantLabel.Platform);
+        _exactGathers.Add(1, new KeyValuePair<string, object?>("outcome", boundedOutcome), LatticeTenantLabel.Platform);
     }
 
     /// <summary>The minimum spacing between summaries for one repository.</summary>
@@ -386,7 +440,19 @@ internal sealed class RepoContextRetrievalGuardReporter : IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     public bool RecordBudgetDecision(
         string repoId, RepoContextExactScanBudgetDecision decision, int corpus, int affordable)
-        => Counters(repoId).Budget(decision, corpus, affordable);
+    {
+        var first = Counters(repoId).Budget(decision, corpus, affordable);
+        var outcome = decision switch
+        {
+            RepoContextExactScanBudgetDecision.Unbounded => "unbounded",
+            RepoContextExactScanBudgetDecision.CorpusUnknown => "corpus_unknown",
+            RepoContextExactScanBudgetDecision.WithinBudget => "within_budget",
+            RepoContextExactScanBudgetDecision.Exceeded => "exceeded",
+            _ => throw new ArgumentOutOfRangeException(nameof(decision)),
+        };
+        _exactBudget.Add(1, new KeyValuePair<string, object?>("outcome", outcome), LatticeTenantLabel.Platform);
+        return first;
+    }
 
     /// <summary>Records that a stalled gather opened the breaker.</summary>
     /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>

@@ -450,6 +450,7 @@ internal sealed class WalCommitLogWriter(
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(treeId)),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
                 LatticeTenantLabel.ForTree(treeId));
+            LatticeMetrics.RecordSaturationRefusal(treeId, LatticeSaturationSource.WalAdmission);
             var bound = callBudgetBinding
                 ? $"the enclosing call exhausted its {nameof(LatticeOptions.WalAdmissionSaturationCallBudget)} ({callBudget}) waiting at this gate"
                 : $"the saturation signal for this partition stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget})";

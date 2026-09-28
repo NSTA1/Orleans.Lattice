@@ -167,6 +167,29 @@ public static class RepoContextHostBuilder
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(config);
 
+        // Every listener and meter constructed eagerly below is owned here, so a
+        // build that throws part-way through, and a host that is built and disposed
+        // without ever being started, both release them. Before this they were
+        // released only at ApplicationStopped, so either path leaked a live
+        // process-wide MeterListener (issue #3792). See
+        // RepoContextHostOwnedDisposables.
+        var owned = new RepoContextHostOwnedDisposables();
+        try
+        {
+            return Compose(builder, config, owned);
+        }
+        catch
+        {
+            owned.Dispose();
+            throw;
+        }
+    }
+
+    private static WebApplication Compose(
+        WebApplicationBuilder builder,
+        RepoContextHostConfiguration config,
+        RepoContextHostOwnedDisposables owned)
+    {
         PrepareDataPaths(config);
 
         // Startup admission, sited here on purpose: immediately after the data paths
@@ -227,6 +250,7 @@ public static class RepoContextHostBuilder
         // the silo, and a call at the start of a drain would compete with the very
         // teardown it is measuring.
         var census = new RepoContextActivationCensus();
+        owned.Add(census);
         builder.Services.AddSingleton(census);
 
         // The drain record is carried across the restart on the data mount, because
@@ -268,6 +292,7 @@ public static class RepoContextHostBuilder
         // report those as zero, which reads as a measured negative rather than as
         // the absence of measurement it actually is.
         var metricsCollector = new RepoContextMetricsCollector();
+        owned.Add(metricsCollector);
         builder.Services.AddSingleton(metricsCollector);
 
         // Constructed eagerly, for the same reason and immediately after the
@@ -278,6 +303,7 @@ public static class RepoContextHostBuilder
         // pause (issues #2605 and #2515). Registered after the collector so the
         // listener is already running when the instruments publish.
         var gcMeter = new RepoContextGarbageCollectionMeter();
+        owned.Add(gcMeter);
         builder.Services.AddSingleton(gcMeter);
 
         // The ceiling the collector above is measured against. Constructed eagerly
@@ -287,6 +313,7 @@ public static class RepoContextHostBuilder
         // fixes in this epic - stays an inference drawn from outside the container
         // (issues #2543, #2765, #2767).
         var heapCeilingMeter = new RepoContextHeapCeilingMeter();
+        owned.Add(heapCeilingMeter);
         builder.Services.AddSingleton(heapCeilingMeter);
 
         // SQLite grain-storage lock attribution (issue #2431). Constructed eagerly for
@@ -296,6 +323,7 @@ public static class RepoContextHostBuilder
         // durability wiring installs records on this instance rather than creating
         // its own on first use.
         var storageLockMeter = new RepoContextGrainStorageLockMeter();
+        owned.Add(storageLockMeter);
         builder.Services.AddSingleton(storageLockMeter);
 
         // What that ceiling turned out to cost: the peak commitment reached and the
@@ -317,6 +345,7 @@ public static class RepoContextHostBuilder
         var memoryWatchMeter = new RepoContextMemoryWatchMeter(
             () => memoryWatch?.Current ?? default,
             () => lastMemory?.ExhaustedAtLimitBytes);
+        owned.Add(memoryWatchMeter);
         builder.Services.AddSingleton(memoryWatchMeter);
 
         builder.Services.AddSingleton(sp =>
@@ -579,6 +608,7 @@ public static class RepoContextHostBuilder
         // under the Enabled guard below, so the disabled deployment reports state 0
         // as a value rather than reporting nothing.
         var backupMeter = new RepoContextBackupMeter(backupStatus);
+        owned.Add(backupMeter);
         builder.Services.AddSingleton(backupMeter);
 
         // The status is registered unconditionally and the service is not, and the
@@ -655,7 +685,16 @@ public static class RepoContextHostBuilder
         // issue #2868 and the verdict reaching no consumer was.
         builder.Services.AddRepoContextHealthPublication();
 
+        // A factory registration, not an instance one: see the resolution below.
+        builder.Services.AddSingleton(_ => owned);
+
         var app = builder.Build();
+
+        // Resolved at once so the container tracks the owner and disposes it with the
+        // application. Registered through a factory because the container never
+        // disposes an instance registration it did not create - which is exactly how
+        // the listeners it owns used to outlive a host that was never started.
+        _ = app.Services.GetRequiredService<RepoContextHostOwnedDisposables>();
 
         // The collector was built before any logger existed, so it could not be given
         // one then. Attached here, as early as the container allows: a ceiling it
@@ -744,8 +783,9 @@ public static class RepoContextHostBuilder
                 RepoContextShutdownBudget.StopGracePeriodKey);
         }
 
-        // Dispose is idempotent, so registering it here is safe whether or not the
-        // service provider also disposes the instance it did not create.
+        // Dispose is idempotent, so registering it here is safe alongside the
+        // disposal the host-owned set performs when the application is disposed.
+        // Kept so a started host releases its listener at stop, not only at disposal.
         app.Lifetime.ApplicationStopped.Register(metricsCollector.Dispose);
 
         // Resolved eagerly, for the same reason the GC and backup meters are

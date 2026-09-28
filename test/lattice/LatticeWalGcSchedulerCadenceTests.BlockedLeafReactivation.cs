@@ -732,10 +732,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     // by issue #3575).
                     "completed", "unresolvable", "faulted", "undelivered", "orphaned",
                     "latched_stale", "admission_refused",
-                    // Six drive verdicts, primed by walking
-                    // LeafStarvationDriveOutcome (issue #2692).
+                    // Seven drive verdicts, primed by walking
+                    // LeafStarvationDriveOutcome (issues #2692, #3761).
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",
                     "drove_not_driven", "drove_already_driving", "drove_timed_out",
+                    "drove_admission_refused",
                 }),
                 "every outcome must be minted, so a reader can tell a measured zero from a missing build.");
             Assert.That(recorder.Measurements.Select(m => m.Value), Is.All.Zero,

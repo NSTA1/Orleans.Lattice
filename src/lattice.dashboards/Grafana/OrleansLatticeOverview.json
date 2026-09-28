@@ -1597,7 +1597,7 @@
     {
       "id": 69,
       "title": "Leaf division fast path forfeited (rate)",
-      "description": "Rate of leaf splits that could not place their pivot from the snapshot frame and fell back to materialising the whole leaf (orleans_lattice_leaf_bisect_refusals_total), split by the refusal reason and by the cache surface that had already released the frame. Read the two tags together - the reason alone cannot tell a benign refusal from a harmful one. reason=no_snapshot_attached with detach_seam=none is benign: no frame was ever attached (a leaf replayed from the WAL), the leaf is already resident, and the fallback costs nothing extra. The SAME reason with any other detach_seam is the defect (issue #2787): a frame WAS attached and an unrelated whole-leaf operation consumed it, so the division must now make every row resident and unsheddable for the life of the activation - on precisely the oversized leaf that can least afford the allocation, and the operation that would have reduced its size. The refusal is a function of activation history, not of leaf size, so the split seam itself cannot distinguish the two cases and this counter is the only place the forfeiture is observable. Any sustained non-zero rate carrying a detach_seam other than 'none' is operator-actionable, and names the seam to convert.",
+      "description": "Rate of leaf splits that could not place their pivot from the snapshot frame and fell back to the ordered key view (orleans_lattice_leaf_bisect_refusals_total), split by the refusal reason and by the cache surface that had already released the frame. What the fallback costs is decided by whether a frame is still attached at the refusal (issue #2856). reason=no_snapshot_attached is reported exactly when no frame is attached, so every row is already resident and the fallback materialises nothing: with detach_seam=none no frame was ever attached (a leaf replayed from the WAL); with any other detach_seam a frame WAS attached and the named surface had already materialised or discarded it, earlier and typically on the read path - the cost was paid there, not by the split. reason=frame_key_unreadable and reason=no_key_sorts_below_pivot are the expensive refusals: a frame is still attached, so the fallback itself materialises the whole remainder of the leaf and detaches the frame, resident and unsheddable for the life of the activation - on precisely the oversized leaf that can least afford the allocation. Any sustained non-zero rate carrying a detach_seam other than 'none' is operator-actionable and names the read-path seam that forfeited the frame; any non-zero rate of the two frame-attached reasons is a division paying for the whole leaf.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1014 },
@@ -1613,7 +1613,7 @@
     {
       "id": 70,
       "title": "Leaf divisions sought (rate)",
-      "description": "Rate of divisions SOUGHT on an over-capacity leaf (orleans_lattice_leaf_split_attempts_total), split by outcome: divided (the division ran to completion), gate_contended (another turn held the split gate, so this turn returned without evaluating the leaf), already_under_capacity (the in-gate re-check found the leaf back under threshold because a concurrent turn had divided it). Read this BESIDE the bisect-refusal panel, which is uninterpretable alone. A zero refusal rate has two opposite meanings - no division ever forfeited its fast path, or no division was ever attempted - and only the attempt count separates them. That distinction is the whole question on an oversized leaf: a leaf sitting far above MaxLeafBytes with zero refusals AND zero attempts is not a leaf whose splits are succeeding, it is a leaf nothing is trying to split, which is a different defect with a different fix. All three outcomes are pre-minted at zero whenever a leaf reaches the byte-bound check on the snapshot-capture path, carrying the tag set a real emission carries, so this panel deliberately OMITS the 'or vector(0)' fallback its neighbours use: a flat zero here is a MEASURED zero and 'No data' means the capture seam was never reached, which is itself the finding. Sustained gate_contended with no divided is the pathological shape - divisions are being sought and none is completing.",
+      "description": "Rate of divisions SOUGHT on an over-capacity leaf (orleans_lattice_leaf_split_attempts_total), split by outcome: divided (the division ran to completion), gate_contended (another turn held the split gate, so this turn returned without evaluating the leaf), already_under_capacity (the in-gate re-check found the leaf back under threshold because a concurrent turn had divided it), no_admissible_pivot (no row fell strictly inside the leaf's own declared range, so the division was declined), faulted (the division began and threw, additionally tagged failure_class), recovered (a division stranded by an earlier fault, deactivation or crash was completed by the recovery path; never also counted as divided). Read this BESIDE the bisect-refusal panel, which is uninterpretable alone. A zero refusal rate has two opposite meanings - no division ever forfeited its fast path, or no division was ever attempted - and only the attempt count separates them. That distinction is the whole question on an oversized leaf: a leaf sitting far above MaxLeafBytes with zero refusals AND zero attempts is not a leaf whose splits are succeeding, it is a leaf nothing is trying to split, which is a different defect with a different fix. All six outcomes are pre-minted at zero whenever a leaf reaches the byte-bound check on the snapshot-capture path, carrying the tag set a real emission carries, so this panel deliberately OMITS the 'or vector(0)' fallback its neighbours use: a flat zero here is a MEASURED zero and 'No data' means the capture seam was never reached, which is itself the finding. Sustained gate_contended with no divided is the pathological shape - divisions are being sought and none is completing.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1014 },
@@ -1724,6 +1724,44 @@
       "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_shard_root_optimistic_read_outcomes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}/s" }
+      ]
+    },
+    {
+      "id": 79,
+      "title": "Exact KNN gather work",
+      "description": "Returned logical metadata pages and visited metadata records per second, including filtered spaces and missing payloads. Excludes warm cache hits, lookahead rows and failed partial pages. Pages are not internal shard fills or RPCs. Correlate these rates with ANN build progress to quantify exact gather work during a build, not CPU share. Platform aggregate; deliberately no tree filter. All counters are zero-primed: absent means not reporting, not idle.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1056 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(repocontext_retrieval_exact_scan_vectors_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "metadata vectors/s" },
+        { "refId": "B", "expr": "sum(rate(repocontext_retrieval_exact_scan_pages_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "logical pages/s" }
+      ]
+    },
+    {
+      "id": 80,
+      "title": "Exact KNN gather wall time",
+      "description": "Cumulative gather wall seconds per second, including failed and caller-cancelled gathers. Includes waits for metadata and payloads, excludes cache hits and ranking. This is not CPU utilization; overlapping gathers can exceed one second per second. Recorded on exit, so a currently blocked gather has not contributed its duration yet. No tree filter or fabricated zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1056 },
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(repocontext_retrieval_exact_scan_duration_seconds_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "gather wall seconds/s" }
+      ]
+    },
+    {
+      "id": 81,
+      "title": "Exact KNN budget and gather outcomes",
+      "description": "Budget evaluations and terminal gather outcomes per second. exceeded is a predicted budget exhaustion that prevents a gather, not a timed-out scan. corpus_unknown fails open; unbounded disables the prediction. ANN answers and breaker skips never evaluate the budget; explicit exact mode bypasses it. Cache hits may evaluate the fallback budget but do not gather. Fault causes remain on repocontext.retrieval.exact_gather.faults. Every outcome is zero-primed; absent is not zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 1063 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(repocontext_retrieval_exact_scan_budget_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "budget {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (outcome) (rate(repocontext_retrieval_exact_scan_gathers_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "gather {{outcome}}/s" }
       ]
     },
     {
