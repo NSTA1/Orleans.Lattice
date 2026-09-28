@@ -93,6 +93,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Host - A host built but never started leaked its metrics listener.** The RepoContext host's eagerly-built metrics collector, meters and activation census were released only at `ApplicationStopped`, so a host disposed without being started, or whose build threw, left a live process-wide `MeterListener` allocating on every Lattice measurement. They are now owned by the host and released when it is disposed. ([#3792](https://github.com/NSTA1/Orleans.Lattice/issues/3792)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Scan - Settled page reuse could serve a stale transactional outcome.** A reused scan page was guarded against writes and TTL expiry but not against a transaction decision changing by the clock alone. Reuse is now refused when the leaf read resolved pending transactional writes. ([#2823](https://github.com/NSTA1/Orleans.Lattice/issues/2823)) (`Orleans.Lattice`)
 
 - **Leaf - A range delete hydrated the whole leaf.** A foreground range delete enumerated every cached row and detached the leaf's snapshot frame. It now enumerates only the requested range, keeps the frame, and hydrates only the blocks that overlap it. ([#2841](https://github.com/NSTA1/Orleans.Lattice/issues/2841)) (`Orleans.Lattice`)
