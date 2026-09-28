@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Apps.Tests;
 /// <summary>
 /// Tree ownership on a real single-silo cluster: the <c>sys-app-trees</c> ledger records claims at
 /// install, a second install cannot take a tree another install owns, the ledger refuses user-origin
-/// writes, and (the #3744 regression) uninstalling an app whose tree was resized soft-deletes the live
+/// writes, core aliasing across an ownership boundary is denied while the resize alias passes, and
+/// (the #3744 regression) uninstalling an app whose tree was resized soft-deletes the live
 /// copy while re-enabling it recovers that same copy.
 /// </summary>
 [TestFixture]
@@ -174,6 +175,31 @@ public sealed class AppTreeOwnershipClusterTests
         {
             Assert.That(await tree.GetAsync("after"), Is.EqualTo(new byte[] { 2 }), "the recovered copy is the live resized one");
             Assert.That(await tree.GetAsync("before"), Is.EqualTo(new byte[] { 1 }));
+        }
+    }
+
+    [Test, Order(5)]
+    public async Task Aliases_are_bounded_by_app_ownership_for_every_caller()
+    {
+        var registry = Grains.GetLatticeRegistry();
+        var mine = $"mine-{Guid.NewGuid():N}";
+        var elsewhere = $"elsewhere-{Guid.NewGuid():N}";
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Grains.GetGrain<ILattice>(mine).SetAsync("k", [1]);
+            await Grains.GetGrain<ILattice>(elsewhere).SetAsync("k", [2]);
+
+            // The owned tree is resized by now, so its live data is the derived copy it resolves to.
+            var ownedCopy = await registry.ResolveAsync(Records);
+            var into = Assert.ThrowsAsync<LatticeTreeOwnershipDeniedException>(() => registry.SetAliasAsync(mine, ownedCopy));
+            var outOf = Assert.ThrowsAsync<LatticeTreeOwnershipDeniedException>(() => registry.SetAliasAsync(Records, elsewhere));
+            Assert.That(into!.Reason, Does.Contain("would cross an app ownership boundary"));
+            Assert.That(into.Reason, Does.Not.Contain("owned by app"), "the denial names only the caller's own ids, never the owning app");
+            Assert.That(outOf, Is.Not.Null);
+
+            await registry.SetAliasAsync(mine, elsewhere);
+            Assert.That(await registry.ResolveAsync(mine), Is.EqualTo(elsewhere), "aliasing two unowned trees is unchanged");
+            Assert.That(await registry.ResolveAsync(Records), Does.StartWith(Records + "/"), "the owned tree keeps its own derived backing");
         }
     }
 

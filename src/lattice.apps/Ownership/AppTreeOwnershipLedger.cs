@@ -281,8 +281,9 @@ internal sealed class AppTreeOwnershipLedger
         if (logicalOwner == targetOwner)
             return null;
 
+        // The reason reaches API callers, so it names only the ids the caller supplied, never an owner.
         return $"Aliasing tree '{logicalTreeId}' to '{physicalTreeId}' would cross an app ownership boundary: "
-            + $"the tree is {DescribeOwner(logicalOwner)} but the target is {DescribeOwner(targetOwner)}.";
+            + "the tree and the target are not owned by the same app install.";
     }
 
     /// <summary>
@@ -410,9 +411,6 @@ internal sealed class AppTreeOwnershipLedger
             holder.Slug == claimant.Slug
                 ? $"Tree '{item.TreeName}' is owned by another install of app '{holder.Slug}' from a different publisher."
                 : $"Tree '{item.TreeName}' is owned by app '{holder.Slug}'.");
-
-    private static string DescribeOwner(AppTreeOwner? owner) =>
-        owner is { } o ? $"owned by app '{o.Slug}'" : "not owned by any app";
 
     private enum Standing
     {

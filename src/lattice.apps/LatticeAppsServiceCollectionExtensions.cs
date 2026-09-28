@@ -97,6 +97,10 @@ public static partial class LatticeAppsServiceCollectionExtensions
         services.TryAddSingleton<IAppTreeFacts, LatticeAppTreeFacts>();
         services.TryAddSingleton<AppTreeOwnershipLedger>();
 
+        // Core registers an allow-all ownership guard; the ledger-backed guard replaces it so every
+        // alias change is bounded by app tree ownership.
+        services.Replace(ServiceDescriptor.Singleton<ITreeOwnershipGuard, AppTreeOwnershipGuard>());
+
         // The compiled snapshot maintainer is one singleton serving both as the change-feed
         // observer and the projection, so a registry write refreshes the snapshot readers see.
         // AddSingleton<IMutationObserver> is not idempotent under TryAdd, hence the marker above.

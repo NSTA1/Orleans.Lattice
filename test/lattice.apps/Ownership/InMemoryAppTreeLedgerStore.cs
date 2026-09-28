@@ -30,10 +30,15 @@ internal sealed class InMemoryAppTreeLedgerStore : IAppTreeLedgerStore
     /// <summary>The stored keys, in order.</summary>
     public IReadOnlyList<string> Keys => _entries.Keys.ToArray();
 
+    /// <summary>When set, every read throws, simulating an unavailable ledger.</summary>
+    public bool FailGet { get; set; }
+
     public Task<AppTreeLedgerRead> GetAsync(string treeId, CancellationToken cancellationToken) =>
-        Task.FromResult(_entries.TryGetValue(treeId, out var entry)
-            ? new AppTreeLedgerRead(entry.Claim, entry.Version)
-            : new AppTreeLedgerRead(null, HybridLogicalClock.Zero));
+        FailGet
+            ? Task.FromException<AppTreeLedgerRead>(new InvalidOperationException("ledger unavailable"))
+            : Task.FromResult(_entries.TryGetValue(treeId, out var entry)
+                ? new AppTreeLedgerRead(entry.Claim, entry.Version)
+                : new AppTreeLedgerRead(null, HybridLogicalClock.Zero));
 
     public async Task<bool> TrySetAsync(string treeId, AppTreeClaim claim, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
     {
