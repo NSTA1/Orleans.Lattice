@@ -13,8 +13,8 @@ public sealed record AppConsentReport
     /// <summary>The approved operations and exception scopes.</summary>
     [Id(2)] public required AppCapabilityCeilingDescriptor Ceiling { get; init; }
     /// <summary>
-    /// The consented bridge operations, or null when none were ever recorded or the
-    /// server predates bridge consent.
+    /// The consented bridge grants, or null when none were ever recorded or the server
+    /// predates bridge consent.
     /// </summary>
-    [Id(3)] public ImmutableArray<string>? BridgeOperations { get; init; }
+    [Id(3)] public ImmutableArray<AppUiBridgeGrantDescriptor>? BridgeGrants { get; init; }
 }

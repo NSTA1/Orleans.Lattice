@@ -13,9 +13,9 @@ public sealed record AppConsentUpdate
     /// <summary>The replacement operation mask and complete approved exception list.</summary>
     [Id(2)] public required AppCapabilityCeilingDescriptor Ceiling { get; init; }
     /// <summary>
-    /// The replacement consented bridge operations, or null to leave them unchanged. An
-    /// upgrade that requests an operation outside this set cannot activate until it is
+    /// The replacement consented bridge grants, or null to leave them unchanged. An
+    /// upgrade that requests a grant outside this set cannot activate until it is
     /// re-consented.
     /// </summary>
-    [Id(3)] public ImmutableArray<string>? BridgeOperations { get; init; }
+    [Id(3)] public ImmutableArray<AppUiBridgeGrantDescriptor>? BridgeGrants { get; init; }
 }

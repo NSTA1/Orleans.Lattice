@@ -135,11 +135,12 @@ public sealed class AppSerializationTests
     {
         Path = "app.js", MediaType = "text/javascript", Sha256 = new string('b', 64),
     };
+    internal static readonly AppUiBridgeGrantDescriptor ReadOrders = new() { Operation = "data.read", Tree = "orders" };
+    internal static readonly AppUiBridgeGrantDescriptor Notify = new() { Operation = "ui.notify" };
     internal static readonly AppUiDescriptor Ui = new()
     {
         Entry = "index.html", Styles = ["app.css"], Scripts = [Script], Assets = [Asset],
-        BundleDigest = new string('c', 64), BridgeOperations = ["data.read", "ui.notify"],
-        BridgeTrees = ["orders"], MinProtocol = 1,
+        BundleDigest = new string('c', 64), Bridge = [ReadOrders, Notify], MinProtocol = 1,
     };
     private static readonly WorkspaceTreeDescriptor WorkspaceTree = new()
     {
@@ -162,11 +163,11 @@ public sealed class AppSerializationTests
         };
         yield return new AppConsentUpdate
         {
-            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, BridgeOperations = ["data.read"],
+            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, BridgeGrants = [ReadOrders, Notify],
         };
         yield return new AppConsentReport
         {
-            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, BridgeOperations = ["data.read"],
+            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, BridgeGrants = [ReadOrders, Notify],
         };
         yield return new AppSourceSummary
         {
@@ -177,6 +178,8 @@ public sealed class AppSerializationTests
         yield return Presentation;
         yield return Icon;
         yield return Ui;
+        yield return ReadOrders;
+        yield return Notify;
         yield return Script;
         yield return Asset;
         yield return new AppIconAsset { Bytes = new byte[] { 0x3c, 0x73, 0x76, 0x67 }, MediaType = "image/svg+xml", Sha256 = Icon.Sha256 };
@@ -230,7 +233,7 @@ public sealed class AppSerializationTests
                 && !typeof(Exception).IsAssignableFrom(t));
         Assert.That(Samples().Select(s => s.GetType()).Distinct(), Is.EquivalentTo(dtoTypes));
         Assert.That(PreEpicSamples().Count(), Is.EqualTo(19));
-        Assert.That(Samples().Select(s => s.GetType()).Distinct().Count(), Is.EqualTo(37));
+        Assert.That(Samples().Select(s => s.GetType()).Distinct().Count(), Is.EqualTo(38));
     }
 
     [TestCaseSource(nameof(LifecycleStates))]

@@ -55,6 +55,8 @@ public static class ApiAppsTypeAliases
     public const string AppUiScriptDescriptor = "oia.us";
     /// <summary>Alias for <see cref="AppUiAssetDescriptor"/>.</summary>
     public const string AppUiAssetDescriptor = "oia.ua";
+    /// <summary>Alias for <see cref="AppUiBridgeGrantDescriptor"/>.</summary>
+    public const string AppUiBridgeGrantDescriptor = "oia.bg";
     /// <summary>Alias for <see cref="AppIconAsset"/>.</summary>
     public const string AppIconAsset = "oia.ia";
     /// <summary>Alias for <see cref="AppUiAsset"/>.</summary>

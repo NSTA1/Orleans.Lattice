@@ -20,15 +20,10 @@ public sealed record AppUiDescriptor
     /// <summary>The digest over every asset path and digest; the bundle's cache identity.</summary>
     [Id(4)] public required string BundleDigest { get; init; }
     /// <summary>
-    /// The requested bridge operations, each a member of the app engine's bridge
-    /// operation vocabulary, transported as strings.
+    /// The requested bridge grants, one per operation and tree pair; a grant with a null
+    /// tree covers every tree the app declares.
     /// </summary>
-    [Id(5)] public ImmutableArray<string> BridgeOperations { get; init; } = [];
-    /// <summary>
-    /// The app-local tree names the data operations are restricted to; empty means every
-    /// tree the app declares.
-    /// </summary>
-    [Id(6)] public ImmutableArray<string> BridgeTrees { get; init; } = [];
+    [Id(5)] public ImmutableArray<AppUiBridgeGrantDescriptor> Bridge { get; init; } = [];
     /// <summary>The minimum in-frame protocol version the bundle requires.</summary>
-    [Id(7)] public int MinProtocol { get; init; }
+    [Id(6)] public int MinProtocol { get; init; }
 }

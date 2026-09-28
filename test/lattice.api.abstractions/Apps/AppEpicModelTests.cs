@@ -24,6 +24,7 @@ public sealed class AppEpicModelTests
     [
         typeof(AppSourceSummary), typeof(AppPresentationDescriptor), typeof(AppIconDescriptor),
         typeof(AppUiDescriptor), typeof(AppUiScriptDescriptor), typeof(AppUiAssetDescriptor),
+        typeof(AppUiBridgeGrantDescriptor),
         typeof(AppIconAsset), typeof(AppUiAsset), typeof(AvailableAppQuery), typeof(AvailableAppPage),
         typeof(AvailableAppSummary), typeof(WorkspaceAppSummary), typeof(WorkspaceAppDescriptor),
         typeof(WorkspaceTreeDescriptor), typeof(AppBridgeTarget), typeof(AppBridgeValue), typeof(AppBridgePage),
@@ -196,23 +197,61 @@ public sealed class AppEpicModelTests
     }
 
     [Test]
-    public void Every_bridge_operation_is_transported_verbatim()
+    public void Every_bridge_operation_is_transported_verbatim_with_and_without_a_tree()
     {
-        var ui = new AppUiDescriptor { Entry = "index.html", BundleDigest = new string('0', 64), BridgeOperations = [.. BridgeVocabulary] };
-        var consent = new AppConsentUpdate
-        {
-            Slug = "inventory", Version = "1.0.0", Ceiling = new(), BridgeOperations = [.. BridgeVocabulary],
-        };
-        var report = new AppConsentReport
-        {
-            Slug = "inventory", Version = "1.0.0", Ceiling = new(), BridgeOperations = [.. BridgeVocabulary],
-        };
+        ImmutableArray<AppUiBridgeGrantDescriptor> grants =
+        [
+            .. BridgeVocabulary.Select(op => new AppUiBridgeGrantDescriptor { Operation = op }),
+            .. BridgeVocabulary.Select(op => new AppUiBridgeGrantDescriptor { Operation = op, Tree = "orders" }),
+        ];
+        var ui = new AppUiDescriptor { Entry = "index.html", BundleDigest = new string('0', 64), Bridge = grants };
+        var consent = new AppConsentUpdate { Slug = "inventory", Version = "1.0.0", Ceiling = new(), BridgeGrants = grants };
+        var report = new AppConsentReport { Slug = "inventory", Version = "1.0.0", Ceiling = new(), BridgeGrants = grants };
 
         Assert.Multiple(() =>
         {
-            Assert.That(RoundTrip(ui).BridgeOperations, Is.EqualTo(BridgeVocabulary));
-            Assert.That(RoundTrip(consent).BridgeOperations!.Value, Is.EqualTo(BridgeVocabulary));
-            Assert.That(RoundTrip(report).BridgeOperations!.Value, Is.EqualTo(BridgeVocabulary));
+            Assert.That(RoundTrip(ui).Bridge, Is.EqualTo(grants));
+            Assert.That(RoundTrip(consent).BridgeGrants!.Value, Is.EqualTo(grants));
+            Assert.That(RoundTrip(report).BridgeGrants!.Value, Is.EqualTo(grants));
+        });
+    }
+
+    [Test]
+    public void Bridge_grants_keep_tree_scopes_per_operation()
+    {
+        // data.read on [a, b] with data.write on [a] only: a flat operation list plus a flat
+        // tree list cannot express this, so the grant set must carry one pair per scope.
+        ImmutableArray<AppUiBridgeGrantDescriptor> grants =
+        [
+            new() { Operation = "data.read", Tree = "a" },
+            new() { Operation = "data.read", Tree = "b" },
+            new() { Operation = "data.write", Tree = "a" },
+            new() { Operation = "context.read" },
+        ];
+
+        var copy = RoundTrip(new AppUiDescriptor { Entry = "index.html", BundleDigest = new string('0', 64), Bridge = grants });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Bridge.Where(g => g.Operation == "data.write").Select(g => g.Tree), Is.EqualTo(new[] { "a" }));
+            Assert.That(copy.Bridge.Where(g => g.Operation == "data.read").Select(g => g.Tree), Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(copy.Bridge.Single(g => g.Operation == "context.read").Tree, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Bridge_grant_defaults_to_every_declared_tree_and_compares_by_value()
+    {
+        var all = new AppUiBridgeGrantDescriptor { Operation = "data.read" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(all.Tree, Is.Null);
+            Assert.That(all, Is.EqualTo(new AppUiBridgeGrantDescriptor { Operation = "data.read" }));
+            Assert.That(all, Is.Not.EqualTo(all with { Tree = "orders" }));
+            Assert.That(new AppUiDescriptor { Entry = "index.html", BundleDigest = new string('0', 64) }.Bridge, Is.Empty);
+            Assert.That(typeof(AppUiBridgeGrantDescriptor).GetProperties().Select(p => p.Name),
+                Is.EqualTo(new[] { "Operation", "Tree" }));
         });
     }
 
@@ -220,13 +259,14 @@ public sealed class AppEpicModelTests
     public void Consent_update_distinguishes_unchanged_from_an_emptied_bridge_set()
     {
         var unchanged = new AppConsentUpdate { Slug = "inventory", Version = "1.0.0", Ceiling = new() };
-        var emptied = unchanged with { BridgeOperations = [] };
+        var emptied = unchanged with { BridgeGrants = [] };
 
         Assert.Multiple(() =>
         {
-            Assert.That(RoundTrip(unchanged).BridgeOperations, Is.Null);
-            Assert.That(RoundTrip(emptied).BridgeOperations, Is.Not.Null);
-            Assert.That(RoundTrip(emptied).BridgeOperations!.Value, Is.Empty);
+            Assert.That(RoundTrip(unchanged).BridgeGrants, Is.Null);
+            Assert.That(RoundTrip(emptied).BridgeGrants, Is.Not.Null);
+            Assert.That(RoundTrip(emptied).BridgeGrants!.Value, Is.Empty);
+            Assert.That(new AppConsentReport { Slug = "inventory", Version = "1.0.0", Ceiling = new() }.BridgeGrants, Is.Null);
         });
     }
 

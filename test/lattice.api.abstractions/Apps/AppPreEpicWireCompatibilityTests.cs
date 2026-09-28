@@ -126,8 +126,8 @@ public sealed class AppPreEpicWireCompatibilityTests
             Assert.That(descriptor.Ui, Is.Null);
             Assert.That(descriptor.SourceKey, Is.Null);
             Assert.That(install.SourceKey, Is.Null);
-            Assert.That(update.BridgeOperations, Is.Null);
-            Assert.That(report.BridgeOperations, Is.Null);
+            Assert.That(update.BridgeGrants, Is.Null);
+            Assert.That(report.BridgeGrants, Is.Null);
         });
     }
 
