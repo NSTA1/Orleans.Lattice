@@ -1,0 +1,52 @@
+@page "/reset"
+
+@*
+    The reset-view escape: the addressable, always-reachable way to forget
+    everything the Explorer remembers about how you like it and where you were.
+
+    It lives at its own route rather than only as a control in the chrome,
+    because the user who needs it most is usually one whose remembered state is
+    the problem, so the escape must not depend on that chrome rendering. A typed
+    or bookmarked address always works.
+
+    Resetting is an explicit action, never something that happens on arrival,
+    so following a link cannot silently discard somebody's preferences. It
+    clears only this identity's own preferences for the connected cluster.
+*@
+
+<PageTitle>Reset view</PageTitle>
+
+<h1>Reset view</h1>
+
+@if (_reset)
+{
+    <p role="status">
+        The Explorer has forgotten your remembered view. It will start from its
+        default the next time you open it.
+    </p>
+    <p>
+        <a class="lt-btn" href="./">Back to the Explorer</a>
+    </p>
+}
+else
+{
+    <p>
+        The Explorer remembers a few things about how you like it and where you
+        were last time. Resetting forgets all of them for the account and cluster
+        you are connected to now, and affects nothing else - no cluster data, and
+        no sign-in.
+    </p>
+
+    <h2>What is remembered</h2>
+    <ul>
+        @foreach (var key in Preferences.Keys)
+        {
+            <li>@key.Description</li>
+        }
+    </ul>
+
+    <div class="lt-dialog__actions">
+        <a class="lt-btn lt-btn--quiet" href="./">Cancel</a>
+        <LtButton Disabled="_busy" OnClick="_resetClicked">Reset view</LtButton>
+    </div>
+}

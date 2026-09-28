@@ -14,11 +14,8 @@ namespace Orleans.Lattice.Api.Abstractions.Tests.Apps;
 public sealed class AppEpicModelTests
 {
     // The canonical bridge operation vocabulary is owned by AppUiBridgeOperations in
-    // Orleans.Lattice.Apps (#3808). Until that type is on this branch the vocabulary is
-    // pinned here literally; the epic coordinator replaces this list with a reference to
-    // AppUiBridgeOperations.All when #3808 integrates, so the two can never drift.
-    private static readonly string[] BridgeVocabulary =
-        ["context.read", "context.user", "data.read", "data.write", "data.delete", "nav.sync", "ui.notify"];
+    // Orleans.Lattice.Apps (#3808); the transport is pinned against it, so the two can never drift.
+    private static readonly string[] BridgeVocabulary = [.. Orleans.Lattice.Apps.AppUiBridgeOperations.All.Order(StringComparer.Ordinal)];
 
     private static readonly Type[] EpicDtoTypes =
     [

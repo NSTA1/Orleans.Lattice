@@ -279,7 +279,7 @@ internal sealed class AppSubscriptionRouter : IMutationObserver
 
         try
         {
-            var resolution = await _source.ResolveAsync(record.Slug, record.Version, cancellationToken).ConfigureAwait(false);
+            var resolution = await _source.ResolveInstalledAsync(record, cancellationToken).ConfigureAwait(false);
             if (!resolution.IsResolved || resolution.Manifest is not { } manifest)
                 return resolution.Errors.Count == 0
                     ? [$"App '{record.Slug}' version '{record.Version}' could not be resolved ({resolution.Status})."]

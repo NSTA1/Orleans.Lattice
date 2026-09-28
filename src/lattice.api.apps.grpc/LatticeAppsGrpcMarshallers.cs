@@ -4,7 +4,7 @@ using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
-internal static class LatticeAppsGrpcMarshallers
+internal static partial class LatticeAppsGrpcMarshallers
 {
     public static Marshaller<T> Create<T>(Serializer<T> serializer) where T : class
     {

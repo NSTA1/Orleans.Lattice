@@ -147,7 +147,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
                     }
                     else
                     {
-                        allowed = await app.Roles[role].IsHeldAsync(_gate!, subject, cancellationToken).ConfigureAwait(false);
+                        allowed = await AppMcpRoleGate.IsHeldAsync(app.Roles[role], _gate!, subject, cancellationToken).ConfigureAwait(false);
                         if (role < 32)
                         {
                             evaluated |= 1u << role;
@@ -217,7 +217,7 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
 
             var subject = await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
                 .ConfigureAwait(false);
-            return await app.Roles[current.RoleIndex].IsHeldAsync(_gate!, subject, cancellationToken).ConfigureAwait(false);
+            return await AppMcpRoleGate.IsHeldAsync(app.Roles[current.RoleIndex], _gate!, subject, cancellationToken).ConfigureAwait(false);
         }
         catch (LatticeTenantAccessDeniedException)
         {
@@ -271,34 +271,26 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
         AppMcpToolCatalog previous,
         CancellationToken cancellationToken)
     {
-        var activations = new Dictionary<(AppSlug Slug, AppVersion Version), AppMcpToolActivation>();
+        var activations = new Dictionary<(AppSlug Slug, AppVersion Version, string Source), AppMcpToolActivation>();
         var byTenant = new Dictionary<TenantId, List<AppMcpInstalledApp>>();
         foreach (var record in snapshot.Records)
         {
-            if (record.State != AppRegistryLifecycleState.Enabled || !record.IsCeilingPinnedToVersion)
+            if (!AppRoleGrantEvaluator.IsEvaluated(record))
                 continue;
 
-            var key = (record.Slug, record.Version);
+            var key = (record.Slug, record.Version, record.Provenance.Source);
             if (!activations.TryGetValue(key, out var activation))
             {
                 activation = previous.Activations.TryGetValue(key, out var prior) && prior.Succeeded
                     ? prior
-                    : await ActivateAsync(record.Slug, record.Version, cancellationToken).ConfigureAwait(false);
+                    : await ActivateAsync(record, cancellationToken).ConfigureAwait(false);
                 activations.Add(key, activation);
             }
 
             if (!activation.Succeeded || activation.Tools.Length == 0)
                 continue;
 
-            var manifest = activation.Manifest!;
-            var roles = new AppMcpRoleGate[manifest.Roles.Length];
-            for (var i = 0; i < roles.Length; i++)
-            {
-                var role = manifest.Roles[i];
-                roles[i] = new AppMcpRoleGate(
-                    role.Operations,
-                    AppMcpScopeResolver.Resolve(record.Slug, role, manifest.Trees, record.Tenant));
-            }
+            var roles = AppRoleGrantEvaluator.CompileRoles(record, activation.Manifest!);
 
             if (!byTenant.TryGetValue(record.Tenant, out var apps))
                 byTenant.Add(record.Tenant, apps = []);
@@ -312,12 +304,14 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
         return new AppMcpToolCatalog(snapshot.Epoch, frozen, activations);
     }
 
-    private async ValueTask<AppMcpToolActivation> ActivateAsync(AppSlug slug, AppVersion version, CancellationToken cancellationToken)
+    private async ValueTask<AppMcpToolActivation> ActivateAsync(AppRegistryRecord record, CancellationToken cancellationToken)
     {
+        var slug = record.Slug;
+        var version = record.Version;
         AppSourceResult result;
         try
         {
-            result = await _appSource!.ResolveAsync(slug, version, cancellationToken).ConfigureAwait(false);
+            result = await _appSource!.ResolveInstalledAsync(record, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException
             && !LatticeApiMcpDiscoveryFaultClassifier.IsTransientBackendFault(ex))
