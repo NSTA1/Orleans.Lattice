@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Apps.Tests;
 
@@ -15,7 +16,8 @@ internal sealed class ActivationHarness
     public static readonly AppVersion V2 = AppRegistryTestData.V2;
     public static readonly LatticeOperation ReadWrite = LatticeOperation.Read | LatticeOperation.Write;
 
-    public ActivationHarness(bool withMembership = true, bool withPolicyStore = true, ILatticeMembershipContext? membership = null)
+    public ActivationHarness(bool withMembership = true, bool withPolicyStore = true, ILatticeMembershipContext? membership = null,
+        ILatticeReplicationConfigAuthority? replication = null)
     {
         Registry = AppRegistryTestData.CreateRegistry(RegistryStore);
         Engine = new AppActivationEngine(
@@ -26,7 +28,8 @@ internal sealed class ActivationHarness
             NullLogger<AppActivationEngine>.Instance,
             withPolicyStore ? Rules : null,
             membership ?? (withMembership ? new FixedMembershipContext() : null),
-            Time);
+            Time,
+            replication);
     }
 
     public InMemoryAppRegistryStore RegistryStore { get; } = new();

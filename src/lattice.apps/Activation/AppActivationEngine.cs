@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Apps;
 
@@ -30,6 +31,7 @@ internal sealed class AppActivationEngine
     private readonly ILatticeAuthorizationPolicyStore? _policyStore;
     private readonly ILatticeMembershipContext? _membership;
     private readonly TimeProvider _time;
+    private readonly AppReplicationEnrolment _replication;
 
     public AppActivationEngine(
         IAppRegistry registry,
@@ -39,7 +41,8 @@ internal sealed class AppActivationEngine
         ILogger<AppActivationEngine> logger,
         ILatticeAuthorizationPolicyStore? policyStore = null,
         ILatticeMembershipContext? membership = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILatticeReplicationConfigAuthority? replication = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(source);
@@ -54,6 +57,7 @@ internal sealed class AppActivationEngine
         _policyStore = policyStore;
         _membership = membership;
         _time = timeProvider ?? TimeProvider.System;
+        _replication = new AppReplicationEnrolment(replication);
     }
 
     internal bool IsMembershipRegistered => _membership is not null and not NullLatticeMembershipContext;
@@ -74,13 +78,15 @@ internal sealed class AppActivationEngine
         using (LatticeSystemOrigin.Enter())
         {
             AppActivationStatus? status = null;
+            Run? run = null;
             var statusRead = false;
             Step result;
             try
             {
                 status = await _statusStore.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
                 statusRead = true;
-                var run = new Run(this, operation, tenant, slug, status?.AppliedManifest);
+                run = new Run(this, operation, tenant, slug, status?.AppliedManifest,
+                    status?.ReplicationTrees ?? Array.Empty<string>());
                 result = await run.ExecuteAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -123,6 +129,7 @@ internal sealed class AppActivationEngine
                     Slug = slug,
                     LastOutcome = outcome,
                     AppliedManifest = result.Applied,
+                    ReplicationTrees = run?.ReplicationTrees ?? status?.ReplicationTrees ?? Array.Empty<string>(),
                 }, cancellationToken).ConfigureAwait(false);
             }
 
@@ -220,8 +227,44 @@ internal sealed class AppActivationEngine
         AppActivationOperation operation,
         TenantId tenant,
         AppSlug slug,
-        AppManifest? applied)
+        AppManifest? applied,
+        IReadOnlyList<string> replicationTrees)
     {
+        public IReadOnlyList<string> ReplicationTrees { get; private set; } = replicationTrees;
+
+        private async Task<(AppActivationFailure Failure, AppManifestError? Diagnostic)> ApplyReplicationAsync(
+            AppManifest? manifest, AppManifest? previous, CancellationToken cancellationToken)
+        {
+            var result = await engine._replication.ApplyAsync(tenant, manifest, previous, ReplicationTrees,
+                async pending =>
+                {
+                    ReplicationTrees = pending;
+                    await engine._statusStore.SetAsync(new AppActivationStatus
+                    {
+                        Tenant = tenant,
+                        Slug = slug,
+                        AppliedManifest = applied,
+                        ReplicationTrees = pending,
+                        LastOutcome = new AppActivationOutcome
+                        {
+                            Tenant = tenant,
+                            Slug = slug,
+                            Operation = operation,
+                            Failure = AppActivationFailure.ReplicationEnrolmentFailed,
+                            Diagnostics = new[] { new AppManifestError("replication-pending", "$.replication",
+                                "Replication intent was recorded; activation has not completed.") },
+                            CompletedAtUtc = engine._time.GetUtcNow(),
+                        },
+                    }, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+            if (result.Trees is { } trees)
+            {
+                ReplicationTrees = trees;
+            }
+
+            return (result.Failure, result.Diagnostic);
+        }
+
         public async Task<Step> ExecuteAsync(CancellationToken cancellationToken)
         {
             var needsMembership = operation is AppActivationOperation.Enable or AppActivationOperation.Reconcile;
@@ -376,6 +419,12 @@ internal sealed class AppActivationEngine
                 manifest = resolved.Manifest;
             }
 
+            var replication = await ApplyReplicationAsync(null, manifest, cancellationToken).ConfigureAwait(false);
+            if (replication.Diagnostic is { } diagnostic)
+            {
+                return Step.Fail(record, replication.Failure, new[] { diagnostic }, applied);
+            }
+
             if (manifest is not null)
             {
                 foreach (var tree in manifest.Trees)
@@ -444,6 +493,12 @@ internal sealed class AppActivationEngine
                     ? AppActivationFailure.CeilingExceeded
                     : AppActivationFailure.UnknownRoleBinding;
                 return Step.Fail(record, failure, DescribeCompilation(compilation), applied);
+            }
+
+            var replication = await ApplyReplicationAsync(manifest, previous, cancellationToken).ConfigureAwait(false);
+            if (replication.Diagnostic is { } diagnostic)
+            {
+                return Step.Fail(record, replication.Failure, new[] { diagnostic }, applied);
             }
 
             foreach (var tree in manifest.Trees)
@@ -519,7 +574,9 @@ internal sealed class AppActivationEngine
         /// </summary>
         private async Task<Step> FailClosedAsync(Step failed, CancellationToken cancellationToken)
         {
-            if (failed.Failure is AppActivationFailure.TreeProvisioningFailed or AppActivationFailure.RulePersistenceFailed)
+            if (failed.Failure is AppActivationFailure.TreeProvisioningFailed or AppActivationFailure.RulePersistenceFailed
+                or AppActivationFailure.ReplicationModeChangeRejected or AppActivationFailure.ReplicationPreconditionFailed
+                or AppActivationFailure.ReplicationEnrolmentFailed)
             {
                 return failed;
             }

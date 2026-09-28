@@ -54,4 +54,13 @@ public enum AppActivationFailure
 
     /// <summary>An unexpected error occurred; the diagnostics carry its description.</summary>
     Faulted = 14,
+
+    /// <summary>A declared replication mode differs from the previously enabled mode or is ambiguous.</summary>
+    ReplicationModeChangeRejected = 15,
+
+    /// <summary>Replication prerequisites, such as a configured cluster id, are not satisfied.</summary>
+    ReplicationPreconditionFailed = 16,
+
+    /// <summary>Reading or writing the runtime replication enrolment failed.</summary>
+    ReplicationEnrolmentFailed = 17,
 }

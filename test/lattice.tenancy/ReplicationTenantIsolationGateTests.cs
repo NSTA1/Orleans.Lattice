@@ -192,6 +192,21 @@ public sealed class ReplicationTenantIsolationGateTests
 
     // ---- Real tenant trees: existence + residency -----------------------
 
+    [TestCase(true, ReplicationTenantIsolationDecision.Admit)]
+    [TestCase(false, ReplicationTenantIsolationDecision.RejectOutOfRegion)]
+    public async Task EvaluateAsync_tenant_app_tree_requires_residency(bool resident, ReplicationTenantIsolationDecision expected)
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsActive(registry);
+        var residency = Substitute.For<ITenantResidencyResolver>();
+        residency.IsActive.Returns(true);
+        residency.IsOnlineInServingRegion(Acme).Returns(resident);
+
+        var decision = await CreateGate(registry, residency).EvaluateAsync("t/acme/a/notes/records");
+
+        Assert.That(decision, Is.EqualTo(expected));
+    }
+
     [Test]
     public async Task EvaluateAsync_existing_resident_tenant_admits()
     {
