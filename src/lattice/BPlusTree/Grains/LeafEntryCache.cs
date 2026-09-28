@@ -1080,11 +1080,27 @@ internal sealed partial class LeafEntryCache
         /// <summary>Returns a struct enumerator over the bounded rows.</summary>
         public Enumerator GetEnumerator() => new(rows, startInclusive, endExclusive);
 
-        /// <summary>Struct enumerator over a <see cref="RangeRows"/>.</summary>
+        /// <summary>
+        /// Struct enumerator over a <see cref="RangeRows"/>.
+        /// <para>
+        /// The lower bound is retired the moment it is first satisfied. The
+        /// backing dictionary is ordered by <see cref="StringComparer.Ordinal"/>
+        /// - the cache's documented construction invariant - so its keys are
+        /// yielded ascending, and once one key sorts at or above
+        /// <c>startInclusive</c> every later key does too. Re-testing it would
+        /// spend a second ordinal comparison per row on an answer that can no
+        /// longer change, and the in-range span is the part of the walk a range
+        /// read actually pays for.
+        /// </para>
+        /// </summary>
         public struct Enumerator(
             SortedDictionary<string, LwwValue<byte[]>> rows, string? startInclusive, string? endExclusive)
         {
             private SortedDictionary<string, LwwValue<byte[]>>.Enumerator _inner = rows.GetEnumerator();
+
+            // Set once the walk has reached the lower bound (or immediately,
+            // when the range is unbounded below).
+            private bool _atOrAboveStart = startInclusive is null;
 
             /// <summary>The row most recently yielded by <see cref="MoveNext"/>.</summary>
             public KeyValuePair<string, LwwValue<byte[]>> Current { get; private set; }
@@ -1095,10 +1111,14 @@ internal sealed partial class LeafEntryCache
                 while (_inner.MoveNext())
                 {
                     var candidate = _inner.Current;
-                    if (startInclusive is not null
-                        && string.CompareOrdinal(candidate.Key, startInclusive) < 0)
+                    if (!_atOrAboveStart)
                     {
-                        continue;
+                        if (string.CompareOrdinal(candidate.Key, startInclusive) < 0)
+                        {
+                            continue;
+                        }
+
+                        _atOrAboveStart = true;
                     }
 
                     if (endExclusive is not null
