@@ -237,7 +237,7 @@ public partial class TreeResizeGrainTests
         // A later resize retires a previous resize's copy, a registered tree of
         // its own whose entry must go when it is purged.
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(previousCopy);
-        await deletion.Received(1).DeleteTreeAsync();
+        await deletion.Received(1).DeleteDerivedPhysicalTreeAsync();
         await deletion.DidNotReceive().DeleteRetiredPhysicalTreeAsync();
     }
 
@@ -329,7 +329,7 @@ public partial class TreeResizeGrainTests
 
         // Recovered old tree.
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .Received(1).RecoverAsync();
+            .Received(1).RecoverPhysicalAsync();
 
         // Removed alias.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -435,8 +435,8 @@ public partial class TreeResizeGrainTests
     /// <summary>
     /// Configures the old physical tree's <see cref="ITreeDeletionGrain"/>
     /// substitute to behave like the real <c>TreeDeletionGrain</c>: report its
-    /// soft-deletion state through <c>IsDeletedAsync</c>, and - when the tree
-    /// was never deleted - reject <c>RecoverAsync</c> with the same guard
+    /// soft-deletion state through <c>IsPhysicalDeletedAsync</c>, and - when the tree
+    /// was never deleted - reject <c>RecoverPhysicalAsync</c> with the same guard
     /// message the real grain throws. Without that faithful rejection an undo
     /// that recovers unconditionally would silently pass against a bare
     /// substitute while failing in production.
@@ -445,10 +445,10 @@ public partial class TreeResizeGrainTests
         IGrainFactory grainFactory, bool isDeleted)
     {
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
-        deletion.IsDeletedAsync().Returns(Task.FromResult(isDeleted));
+        deletion.IsPhysicalDeletedAsync().Returns(Task.FromResult(isDeleted));
         if (!isDeleted)
         {
-            deletion.RecoverAsync().ThrowsAsync(
+            deletion.RecoverPhysicalAsync().ThrowsAsync(
                 new InvalidOperationException("Cannot recover a tree that has not been deleted."));
         }
 

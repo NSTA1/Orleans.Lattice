@@ -62,6 +62,25 @@ internal sealed class TreeResizeGrain(
             throw new ArgumentOutOfRangeException(nameof(newMaxLeafKeys), "Must be greater than 1.");
         if (newMaxInternalChildren <= 2)
             throw new ArgumentOutOfRangeException(nameof(newMaxInternalChildren), "Must be greater than 2.");
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+        await ReserveAliasAsync();
+        try
+        {
+            await ResizeCoreAsync(newMaxLeafKeys, newMaxInternalChildren);
+        }
+        finally
+        {
+            if (!state.State.InProgress) await ReleaseAliasAsync();
+        }
+    }
+
+    private async Task ResizeCoreAsync(int newMaxLeafKeys, int newMaxInternalChildren)
+    {
+        if (newMaxLeafKeys <= 1)
+            throw new ArgumentOutOfRangeException(nameof(newMaxLeafKeys), "Must be greater than 1.");
+        if (newMaxInternalChildren <= 2)
+            throw new ArgumentOutOfRangeException(nameof(newMaxInternalChildren), "Must be greater than 2.");
 
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
@@ -234,7 +253,12 @@ internal sealed class TreeResizeGrain(
 
     public async Task RunResizePassAsync()
     {
-        if (!state.State.InProgress) return;
+        if (!state.State.InProgress)
+        {
+            await ReleaseAliasAsync();
+            return;
+        }
+        await ReserveAliasAsync();
 
         if (state.State.Phase == ResizePhase.Snapshot)
         {
@@ -260,6 +284,21 @@ internal sealed class TreeResizeGrain(
     }
 
     public async Task UndoResizeAsync()
+    {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+        await ReserveAliasAsync();
+        try
+        {
+            await UndoResizeCoreAsync();
+        }
+        finally
+        {
+            if (!state.State.InProgress) await ReleaseAliasAsync();
+        }
+    }
+
+    private async Task UndoResizeCoreAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
@@ -377,9 +416,9 @@ internal sealed class TreeResizeGrain(
         //    RecoverAsync into a no-op: on the public tree-recover path,
         //    "not deleted" genuinely is a caller error and must keep throwing.
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);
-        if (await oldDeletion.IsDeletedAsync())
+        if (await oldDeletion.IsPhysicalDeletedAsync())
         {
-            await oldDeletion.RecoverAsync();
+            await oldDeletion.RecoverPhysicalAsync();
         }
 
         // 2. Clear shadow-forward on every old-tree shard so the tree becomes
@@ -615,7 +654,7 @@ internal sealed class TreeResizeGrain(
         }
         else
         {
-            await deletion.DeleteTreeAsync();
+            await deletion.DeleteDerivedPhysicalTreeAsync();
         }
     }
 
@@ -644,6 +683,29 @@ internal sealed class TreeResizeGrain(
         await PublishResizeCompletedAsync();
 
         await CompleteCoordinatorAsync();
+        await ReleaseAliasAsync();
+    }
+
+    private async Task ReserveAliasAsync()
+    {
+        if (!state.State.InProgress) await ReleaseAliasAsync();
+        if (state.State.AliasReservationId is null)
+        {
+            state.State.AliasReservationId = $"resize:{Guid.NewGuid():N}";
+            try { await state.WriteStateAsync(); }
+            catch { state.State.AliasReservationId = null; throw; }
+        }
+        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
+            .BeginAliasChangeAsync(state.State.AliasReservationId);
+    }
+
+    private async Task ReleaseAliasAsync()
+    {
+        if (state.State.AliasReservationId is not { } id) return;
+        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).EndAliasChangeAsync(id);
+        state.State.AliasReservationId = null;
+        try { await state.WriteStateAsync(); }
+        catch { state.State.AliasReservationId = id; throw; }
     }
 
     private async Task PublishResizeCompletedAsync()

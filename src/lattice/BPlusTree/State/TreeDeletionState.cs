@@ -45,4 +45,34 @@ internal sealed class TreeDeletionState
     /// <see langword="false"/>, the behaviour of an ordinary deletion.
     /// </summary>
     [Id(6)] public bool RetainsRegistryEntry { get; set; }
+
+    /// <summary>The physical target pinned by a logical alias deletion.</summary>
+    [Id(7)] public string? LogicalPhysicalTreeId { get; set; }
+
+    /// <summary>The logical deletion time, independent of physical retirement.</summary>
+    [Id(8)] public DateTimeOffset? LogicalDeletedAtUtc { get; set; }
+
+    /// <summary>Whether the delegated logical purge has started.</summary>
+    [Id(9)] public bool LogicalPurgeInProgress { get; set; }
+
+    /// <summary>Whether both physical and logical registry entries were purged.</summary>
+    [Id(10)] public bool LogicalPurgeComplete { get; set; }
+
+    /// <summary>Whether the logical soft-delete side effects completed.</summary>
+    [Id(11)] public bool LogicalDeleteComplete { get; set; }
+
+    /// <summary>Whether physical work is driven exclusively by a logical owner.</summary>
+    [Id(12)] public bool Delegated { get; set; }
+
+    /// <summary>Whether lifecycle events describe an internal physical operation.</summary>
+    [Id(13)] public bool SuppressLifecycleEvents { get; set; }
+
+    /// <summary>The durable reservation held by an alias-changing coordinator.</summary>
+    [Id(14)] public string? AliasOperationId { get; set; }
+
+    /// <summary>Blocks alias changes while the deletion target is being resolved.</summary>
+    [Id(15)] public bool DeletePending { get; set; }
+
+    /// <summary>Pins an ordinary deletion to this grain's physical id before shard effects.</summary>
+    [Id(16)] public bool LocalDeleteTargetPinned { get; set; }
 }

@@ -334,6 +334,8 @@ internal sealed class LatticeBackupRestoreService(
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
+                .BeginAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
             if (string.Equals(restore.PreviousPhysicalTreeId, restore.TargetTreeId, StringComparison.Ordinal))
             {
                 await registry.RemoveAliasAsync(restore.TargetTreeId).ConfigureAwait(false);
@@ -380,6 +382,11 @@ internal sealed class LatticeBackupRestoreService(
         logger.LogInformation(
             "Reverted shadow-cutover restore of tree {TreeId} back to physical tree {PreviousTreeId}.",
             restore.TargetTreeId, restore.PreviousPhysicalTreeId);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
+                .EndAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
+        }
     }
 
     // ---- In-place restore ------------------------------------------------
@@ -475,8 +482,6 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo shadowRouting;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            previousPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
-
             // Stamp the shadow tree with restore provenance so the state catalog
             // can classify it as a restore shadow (and group it under the logical
             // alias) from a first-class fact rather than its name.
@@ -487,6 +492,11 @@ internal sealed class LatticeBackupRestoreService(
                     RestoreShadowOfTreeId = targetTreeId,
                     DerivedFrom = targetTreeId,
                 }).ConfigureAwait(false);
+            // Provenance precedes the reservation so orphan-shadow GC can
+            // release it even if this host dies before the first data write.
+            await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
+                .BeginAliasChangeAsync(shadowTreeId).ConfigureAwait(false);
+            previousPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
             shadowRouting = await grainFactory.GetGrain<ILattice>(shadowTreeId)
                 .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -529,6 +539,8 @@ internal sealed class LatticeBackupRestoreService(
             && !string.Equals(previousPhysicalTreeId, shadowPhysicalTreeId, StringComparison.Ordinal);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
+                .BeginAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
             // Resolve the retained tree's routing BEFORE the alias swap. A
             // never-aliased tree's retained physical id equals its logical name,
             // so resolving it after the swap would follow the alias to the
@@ -570,6 +582,11 @@ internal sealed class LatticeBackupRestoreService(
         // remains the backstop, so a reconcile hiccup must not fail the restore.
         await tagIndexReconcileTrigger.TriggerForTreeAsync(targetTreeId, cancellationToken)
             .ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
+                .EndAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
+        }
     }
 
     // ---- Coordinated-restore engine seams (ILatticeCoordinatedRestoreEngine) --
@@ -796,6 +813,8 @@ internal sealed class LatticeBackupRestoreService(
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            await grainFactory.GetGrain<ITreeDeletionGrain>(shadowOfTreeId)
+                .EndAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
             await registry.UnregisterAsync(shadowPhysicalTreeId).ConfigureAwait(false);
         }
 

@@ -112,7 +112,7 @@ public partial class TreeResizeGrainTests
         await grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId)
             .Received(1).AbortAsync(UndoSnapshotSuffix);
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .DidNotReceive().RecoverAsync();
+            .DidNotReceive().RecoverPhysicalAsync();
         await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
             .Received(1).DeleteTreeAsync();
 
@@ -140,7 +140,7 @@ public partial class TreeResizeGrainTests
         await grain.UndoResizeAsync();
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .DidNotReceive().RecoverAsync();
+            .DidNotReceive().RecoverPhysicalAsync();
         await AssertAfterSwapCompensationCompleteAsync(state, grainFactory);
     }
 
@@ -156,7 +156,7 @@ public partial class TreeResizeGrainTests
         await grain.UndoResizeAsync();
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .DidNotReceive().RecoverAsync();
+            .DidNotReceive().RecoverPhysicalAsync();
         await AssertAfterSwapCompensationCompleteAsync(state, grainFactory);
     }
 
@@ -175,7 +175,7 @@ public partial class TreeResizeGrainTests
         await grain.UndoResizeAsync();
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .DidNotReceive().RecoverAsync();
+            .DidNotReceive().RecoverPhysicalAsync();
         await AssertAfterSwapCompensationCompleteAsync(state, grainFactory);
     }
 
@@ -191,7 +191,7 @@ public partial class TreeResizeGrainTests
         await grain.UndoResizeAsync();
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .Received(1).RecoverAsync();
+            .Received(1).RecoverPhysicalAsync();
         await AssertAfterSwapCompensationCompleteAsync(state, grainFactory);
     }
 
@@ -209,7 +209,7 @@ public partial class TreeResizeGrainTests
         await grain.UndoResizeAsync();
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .Received(1).RecoverAsync();
+            .Received(1).RecoverPhysicalAsync();
         await AssertAfterSwapCompensationCompleteAsync(state, grainFactory);
     }
 
@@ -226,8 +226,8 @@ public partial class TreeResizeGrainTests
         SeedInFlightResize(state, ResizePhase.Cleanup);
 
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
-        deletion.IsDeletedAsync().Returns(Task.FromResult(true));
-        deletion.RecoverAsync().ThrowsAsync(
+        deletion.IsPhysicalDeletedAsync().Returns(Task.FromResult(true));
+        deletion.RecoverPhysicalAsync().ThrowsAsync(
             new InvalidOperationException("Cannot recover a tree whose data has already been purged."));
 
         var ex = Assert.ThrowsAsync<InvalidOperationException>(() => grain.UndoResizeAsync());

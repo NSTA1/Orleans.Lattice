@@ -142,7 +142,7 @@ public partial class TreeResizeGrainTests
         await grain.UndoResizeAsync();
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
-            .DidNotReceive().RecoverAsync();
+            .DidNotReceive().RecoverPhysicalAsync();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());
     }
@@ -262,7 +262,7 @@ public partial class TreeResizeGrainTests
         // snapshot (destination) tree.
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/undo-reject");
-        await oldDeletion.DidNotReceive().RecoverAsync();
+        await oldDeletion.DidNotReceive().RecoverPhysicalAsync();
         await newDeletion.Received().DeleteTreeAsync();
 
         // Alias removed so the logical tree maps back to the old physical tree.

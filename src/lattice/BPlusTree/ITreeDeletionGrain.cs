@@ -34,10 +34,36 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// </summary>
     Task DeleteRetiredPhysicalTreeAsync();
 
+    /// <summary>Retires a derived physical copy whose registry entry is disposable.</summary>
+    Task DeleteDerivedPhysicalTreeAsync();
+
+    /// <summary>Reports deletion of the local physical copy, not the logical alias.</summary>
+    Task<bool> IsPhysicalDeletedAsync();
+
+    /// <summary>Recovers the retired local physical copy for resize undo.</summary>
+    Task RecoverPhysicalAsync();
+
+    /// <summary>Purges the retired local copy without affecting a logical alias.</summary>
+    Task PurgePhysicalAsync();
+
+    /// <summary>Deletes a physical copy without events or a competing purge driver.</summary>
+    Task DeleteDelegatedAsync();
+
+    /// <summary>Reserves the logical lifecycle for an idempotent alias operation.</summary>
+    Task BeginAliasChangeAsync(string operationId);
+
+    /// <summary>Releases only the matching alias-operation reservation.</summary>
+    Task EndAliasChangeAsync(string operationId);
+
+    /// <summary>Rejects alias writes while logical deletion is pending or durable.</summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task EnsureAliasWritableAsync();
+
     /// <summary>
     /// Returns <c>true</c> if the tree has been soft-deleted (whether or not
     /// the purge has completed).
     /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<bool> IsDeletedAsync();
 
     /// <summary>
