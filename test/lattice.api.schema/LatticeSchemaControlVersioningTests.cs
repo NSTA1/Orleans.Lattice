@@ -127,6 +127,66 @@ public sealed class LatticeSchemaControlVersioningTests
         Assert.That(await control.ClearVersionConfigAsync(Tree), Is.True);
     }
 
+    /// <summary>
+    /// The read-side companion to the delegation tests above. Every other test
+    /// naming <c>GetVersionConfigAsync</c> asserts that it THROWS when versioning
+    /// is absent, so before this test the method had never been driven to a
+    /// successful completion: a facade that always returned <c>null</c>, or that
+    /// consulted the wrong admin, satisfied the whole fixture.
+    /// </summary>
+    [Test]
+    public async Task GetVersionConfig_delegates_and_returns_admin_result()
+    {
+        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
+        var stored = new LatticeSchemaVersionConfig(3, 9);
+        admin.GetVersionConfigAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns<LatticeSchemaVersionConfig?>(stored);
+        var control = Create(admin);
+
+        var result = await control.GetVersionConfigAsync(Tree);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Value.TargetVersion, Is.EqualTo(9u));
+        await admin.Received(1).GetVersionConfigAsync(Tree, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// An unconfigured tree has no version config, and the facade must surface that
+    /// absence rather than inventing a default. Distinct from the test above
+    /// because the nullable return is the only thing separating them.
+    /// </summary>
+    [Test]
+    public async Task GetVersionConfig_returns_null_when_the_tree_has_no_config()
+    {
+        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
+        admin.GetVersionConfigAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns<LatticeSchemaVersionConfig?>((LatticeSchemaVersionConfig?)null);
+        var control = Create(admin);
+
+        Assert.That(await control.GetVersionConfigAsync(Tree), Is.Null);
+    }
+
+    /// <summary>
+    /// As with <c>GetVersionConfigAsync</c>, the only existing test naming
+    /// <c>MigrateToTargetVersionAsync</c> asserts the versioning-absent throw, so
+    /// the delegation itself - and the report it hands back - was unproven.
+    /// </summary>
+    [Test]
+    public async Task MigrateToTargetVersion_delegates_and_returns_admin_report()
+    {
+        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
+        var report = LatticeSchemaRemediationReport.Completed(42, "orders-v9", "op-7");
+        admin.MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>()).Returns(report);
+        var control = Create(admin);
+
+        var result = await control.MigrateToTargetVersionAsync(Tree);
+
+        Assert.That(result.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Completed));
+        Assert.That(result.ScannedCount, Is.EqualTo(42));
+        Assert.That(result.OperationId, Is.EqualTo("op-7"));
+        await admin.Received(1).MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public void Version_operations_denied_by_gate_fail_closed_before_touching_version_admin()
     {
