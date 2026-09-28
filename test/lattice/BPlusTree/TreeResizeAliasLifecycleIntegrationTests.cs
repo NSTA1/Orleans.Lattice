@@ -98,6 +98,10 @@ public class TreeResizeAliasLifecycleIntegrationTests
             "the resize discarded the tree's PublishEvents override");
         Assert.That(entry.MaxLeafKeys, Is.EqualTo(64));
         Assert.That(entry.MaxInternalChildren, Is.EqualTo(64));
+        var registry = _cluster.GrainFactory.GetLatticeRegistry();
+        var physical = await registry.ResolveAsync(treeName);
+        Assert.That((await registry.GetEntryAsync(physical))!.DerivedFrom, Is.EqualTo(treeName));
+        Assert.That(await registry.GetAliasesTargetingAsync(physical), Is.EqualTo(new[] { treeName }));
     }
 
     [Test]

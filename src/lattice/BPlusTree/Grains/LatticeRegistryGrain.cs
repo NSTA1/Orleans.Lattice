@@ -376,6 +376,24 @@ internal sealed class LatticeRegistryGrain(
         return entries;
     }
 
+    public async Task<IReadOnlyList<string>> GetAliasesTargetingAsync(string physicalTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(physicalTreeId);
+
+        // Control-plane scan: avoid a second durable index whose write could
+        // diverge from the alias entry. The non-interleaved turn excludes mutators.
+        List<string>? aliases = null;
+        await foreach (var row in Registry.ScanEntriesAsync())
+        {
+            if (string.Equals(DeserializeEntry(row.Value).PhysicalTreeId, physicalTreeId, StringComparison.Ordinal))
+            {
+                (aliases ??= []).Add(row.Key);
+            }
+        }
+
+        return aliases is null ? Array.Empty<string>() : aliases;
+    }
+
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => GetAllTreeIdsAsync(prefix: null);
 
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) =>

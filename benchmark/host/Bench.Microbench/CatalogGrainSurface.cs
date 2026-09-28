@@ -204,6 +204,8 @@ internal sealed class CatalogGrainSurface
 
         public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) => surface.EnumerateAsync(prefix);
 
+        public Task<IReadOnlyList<string>> GetAliasesTargetingAsync(string physicalTreeId) => throw NotDriven();
+
         public Task<TreeRegistryEntry?> GetEntryAsync(string treeId) => surface.ReadEntryAsync(treeId);
 
         public Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds) =>

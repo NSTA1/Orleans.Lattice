@@ -225,4 +225,13 @@ internal sealed record TreeRegistryEntry
     /// </para>
     /// </summary>
     [Id(15)] public long? WalMaxRetainedBytes { get; init; }
+
+    /// <summary>
+    /// Logical tree id this physical tree was created to back, or <see langword="null"/>
+    /// for an independent tree (including entries written before this field existed).
+    /// Stamped at creation by resize, shadow restore, and schema remediation.
+    /// Standalone snapshots are independent trees. Restore shadows also retain
+    /// <see cref="RestoreShadowOfTreeId"/> for restore-specific classification.
+    /// </summary>
+    [Id(16)] public string? DerivedFrom { get; init; }
 }

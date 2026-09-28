@@ -159,6 +159,7 @@ internal sealed class TreeSnapshotGrain(
             MaxLeafKeys = maxLeafKeys,
             MaxInternalChildren = maxInternalChildren,
             ShardCount = shardCount,
+            DerivedFrom = releasesShadowForwardOnCompletion ? null : logicalTreeId,
         };
         await registry.RegisterAsync(destinationTreeId, entry);
 

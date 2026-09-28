@@ -21,7 +21,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// library. Every read-only member below that resolves a <em>bounded set of
 /// named entries</em> is marked <see cref="AlwaysInterleaveAttribute"/>; every
 /// member that mutates a registry entry deliberately is not, and neither are the
-/// two <see cref="GetAllTreeIdsAsync(string?)"/> range-scan overloads. The grain
+/// range scans (<see cref="GetAllTreeIdsAsync(string?)"/> and
+/// <see cref="GetAliasesTargetingAsync"/>). The grain
 /// type itself is <b>not</b>
 /// <see cref="ReentrantAttribute"/>, which would be the blanket version of the
 /// same change and is unsafe here - see the three parts below.
@@ -53,8 +54,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="AllocateNextShardIndexAsync"/> exist as single calls.
 /// </para>
 /// <para>
-/// <b>Why the enumeration is excluded even though it is a read.</b> It is the
-/// one read here that is not a point lookup but a multi-hop range traversal of
+/// <b>Why range scans are excluded even though they are reads.</b> They are
+/// not point lookups but multi-hop range traversals of
 /// the registry's own backing tree, and the system-tree scan path deliberately
 /// omits the topology re-probes that would otherwise re-enter this grain. Those
 /// omissions are sound only while no mutator can run during the scan, so
@@ -190,8 +191,8 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// </para>
     /// <para>
     /// The enumeration is deliberately <b>not</b> marked
-    /// <see cref="AlwaysInterleaveAttribute"/>, and this is the one read on this
-    /// interface that must not be. Unlike the point reads it is a multi-hop
+    /// <see cref="AlwaysInterleaveAttribute"/>, like the reverse-alias scan.
+    /// Unlike the point reads it is a multi-hop
     /// range traversal of the registry's own backing tree that spans many awaits,
     /// so admitting a mutator part-way through would let the backing tree's shard
     /// topology change underneath the cursor. The registry is a system tree, and
@@ -213,6 +214,17 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// </remarks>
     /// <param name="prefix">The tree-id prefix to scope the enumeration to, or <c>null</c> for all ids.</param>
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix);
+
+    /// <summary>
+    /// Returns the logical tree ids whose stored alias targets
+    /// <paramref name="physicalTreeId"/>, in ordinal order; empty when none do.
+    /// Scans authoritative registry entries rather than a separately maintained
+    /// reverse index, so set, remove, update, unregister, and resize swaps are
+    /// reflected without an additional write or a stale-index recovery path.
+    /// Like <see cref="GetAllTreeIdsAsync(string?)"/>, this range scan does not
+    /// interleave with registry mutations. Separate calls are not a transaction.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetAliasesTargetingAsync(string physicalTreeId);
 
     /// <summary>
     /// Sets a tree alias so that the logical <paramref name="treeId"/> maps to

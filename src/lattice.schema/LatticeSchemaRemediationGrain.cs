@@ -331,6 +331,9 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// </summary>
     private async Task<bool> BuildDestinationAsync()
     {
+        await grainFactory.GetLatticeRegistry().RegisterAsync(
+            state.State.DestinationTreeId!,
+            new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId });
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
         var compiled = CompiledPolicyOrNull();
