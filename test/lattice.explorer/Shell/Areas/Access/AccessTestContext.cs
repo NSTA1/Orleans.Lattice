@@ -4,8 +4,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Shell.Areas.Access;
 using Orleans.Lattice.Explorer.Shell.Design.Components;
 using Orleans.Lattice.Explorer.Shell.Design.Tokens;
+using Orleans.Lattice.Explorer.Shell.Navigation;
 using Orleans.Lattice.Explorer.Tests.Shell.Navigation;
 using Orleans.Lattice.Explorer.Tests.Shell.Session;
 
@@ -17,9 +19,11 @@ namespace Orleans.Lattice.Explorer.Tests.Shell.Areas.Access;
 /// facade and a directly driven sign-in, so no probe or page ever dials gRPC.
 /// </summary>
 /// <remarks>
-/// The fakes are registered after the Shell, so they win over any transport
-/// adapter the Shell registers. bUnit locks the service collection at the first
-/// render, so fixtures ask for an instance per test case.
+/// The fakes are registered after the Shell, so they win over the transport
+/// adapter the Shell registers. The chrome context drops the Shell's real areas
+/// so its own probe areas stand alone; this context re-registers the Access area,
+/// idempotently. bUnit locks the service collection at the first render, so
+/// fixtures ask for an instance per test case.
 /// </remarks>
 public abstract class AccessTestContext : ShellChromeTestContext
 {
@@ -31,6 +35,9 @@ public abstract class AccessTestContext : ShellChromeTestContext
         Auth.SignIn("ops@example.com");
         Services.AddSingleton<ILatticeAuthAdmin>(Admin);
         Services.AddSingleton<IExplorerAuthSession>(Auth);
+
+        // The chrome context keeps only its own probe areas; the area under test is put back.
+        Services.AddExplorerArea<AccessArea>();
     }
 
     /// <summary>The auth facade.</summary>
