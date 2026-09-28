@@ -40,10 +40,10 @@
     "assets": [
       { "path": "index.html", "mediaType": "text/html", "digest": "48e16d67c058dd9f19f64f7b27bd03fc1dfb33d39d9774be88acd988df2b8bf2" },
       { "path": "app.css", "mediaType": "text/css", "digest": "a2ad7151751a9261c28b05c7a7888bc3e6033eee044666d923a750fe22e2873b" },
-      { "path": "app.mjs", "mediaType": "text/javascript", "digest": "83b3cb3b5e15247b3c0b9f110c6a8d2ce8ac650010285f5d46656ed3549d0b3a" },
+      { "path": "app.mjs", "mediaType": "text/javascript", "digest": "935cc197b6148e8d984e9d7adafccbf7ced3a6f45984487bbdd04b44f867775f" },
       { "path": "icon.svg", "mediaType": "image/svg+xml", "digest": "c367e956895304c28f0936bd8f80db36308cfd837e8827c71ebe87940b4403a6" }
     ],
-    "bundleDigest": "b7e2b2ca4944f8dfa9fb6737028957b1fb593e3f8375e691e53d0e2e1173b1e8",
+    "bundleDigest": "753d0f676b30113bd014d54b8dc0508bed711a2c904ac13ba88a8a2a10555c36",
     "bridge": [
       { "operation": "context.read" },
       { "operation": "data.read", "trees": ["tasks"] },

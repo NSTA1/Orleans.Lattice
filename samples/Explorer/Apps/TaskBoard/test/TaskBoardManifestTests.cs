@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Orleans.Lattice.Apps;
 using Orleans.Lattice.Auth;
 
@@ -98,6 +99,38 @@ public sealed class TaskBoardManifestTests
         }));
         Assert.That(bridge.Where(b => AppUiBridgeOperations.IsDataOperation(b.Operation)).Select(b => b.Trees),
             Is.All.EqualTo(new[] { "tasks" }));
+    }
+
+    [Test]
+    public void The_writer_roles_in_the_module_are_the_manifest_roles_that_can_write()
+    {
+        var module = TaskBoardFiles.ReadText("ui/app.mjs");
+        var declared = Regex.Match(module, @"const WRITER_ROLES = \[(?<list>[^\]]*)\];");
+        Assert.That(declared.Success, Is.True, "app.mjs declares WRITER_ROLES");
+        var inModule = Regex.Matches(declared.Groups["list"].Value, "\"(?<name>[a-z][a-z0-9_-]*)\"").Select(m => m.Groups["name"].Value);
+
+        var writers = TaskBoardFiles.Manifest().Roles
+            .Where(r => r.Operations.HasFlag(LatticeOperation.Write) && r.Operations.HasFlag(LatticeOperation.Delete))
+            .Select(r => r.Name);
+
+        Assert.That(inModule, Is.EquivalentTo(writers));
+        Assert.That(writers, Is.EquivalentTo(new[] { "editor" }));
+    }
+
+    [Test]
+    public void The_board_decides_write_access_from_context_read_roles_not_a_probe()
+    {
+        var module = TaskBoardFiles.ReadText("ui/app.mjs");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(module, Does.Contain("context.roles"));
+            Assert.That(module, Does.Contain("Array.isArray(context.roles)"), "an absent roles member infers no role");
+            Assert.That(module, Does.Not.Contain("probe").IgnoreCase, "no write probe");
+            Assert.That(Regex.Matches(module, "request\\(\"data\\.delete\"").Count, Is.EqualTo(1), "the only delete is the user's own delete");
+            Assert.That(Regex.IsMatch(module, @"canEdit:\s*false"), Is.True, "the board starts read-only");
+            Assert.That(module, Does.Contain("code === \"denied\""), "a denied write drops to read-only");
+        });
     }
 
     [Test]

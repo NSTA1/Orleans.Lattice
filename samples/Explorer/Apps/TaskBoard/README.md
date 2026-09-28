@@ -59,8 +59,9 @@ Sign in as the demo administrator (the default), then:
      limited to `tasks`.
 
    Nothing reaches outside the app's namespace, so there are no exceptions to
-   approve. The app never asks for `context.user`, so it never learns who you
-   are.
+   approve. The app never asks for `context.user`, so it never learns your
+   name. It learns only which of its own roles you hold, through
+   `context.read`.
 3. **Bind roles to groups.** Bind `editor` to the `task-editors` group and
    `viewer` to the `task-viewers` group. Leave the `visitors` group unbound.
 4. **Install, then enable.** Install records the consent and the bindings;
@@ -77,7 +78,7 @@ Sign in as the demo administrator (the default), then:
 | Signed in as | Group | Role | What they see |
 |--------------|-------|------|---------------|
 | `alice` | `task-editors` | `editor` | The full board: add, move and delete controls. |
-| `bob` | `task-viewers` | `viewer` | The same board, read-only. The add, move and delete controls are not shown, and a note says the role cannot change the board. |
+| `bob` | `task-viewers` | `viewer` | The same board, read-only. `context.read` reports only `viewer`, so the add, move and delete controls are not shown, and a note says the role cannot change the board. |
 | `carol` | `visitors` | none | Nothing. Task board is not in her apps at all, and its address resolves as not found. |
 
 ## How the UI stays untrusted
@@ -90,10 +91,15 @@ Sign in as the demo administrator (the default), then:
   consented grants and the signed-in user's own rights allow it. An operator
   who can write every tree still gets a read-only board when bound only as a
   `viewer`.
-- The frame is never told the user's roles. The board starts read-only and
-  shows its write controls only after the cluster accepts a harmless probe (a
-  delete of `probe/write-access`, a key that never holds a task). A viewer's
-  probe is refused, so a viewer never sees a control the bridge would refuse.
+- The frame learns which of this app's roles the signed-in user holds from the
+  `roles` member of `context.read`: role names only, never their groups. The
+  board starts read-only and shows its write controls only when that list holds
+  `editor`, the one role in its manifest that may write. A viewer's list holds
+  `viewer`, so a viewer never sees a control the bridge would refuse. If a
+  write is still refused (a role unbound mid-session, say), the board drops
+  back to read-only. A host that sends no `roles` leaves the board read-only.
+  The role list only hides or shows controls; the cluster enforces every
+  write.
 - Stored values are treated as untrusted input: a card that does not parse is
   skipped, and titles are always rendered as text.
 - The layout reflows from three columns to one on a 360px screen, every

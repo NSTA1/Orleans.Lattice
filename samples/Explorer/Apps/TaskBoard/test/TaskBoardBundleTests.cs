@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Samples.Explorer.TaskBoard.Tests;
 
 /// <summary>
 /// The bundle is plain HTML, CSS and one self-contained ES module that reaches the Explorer only
-/// through <c>globalThis.lattice</c>, needs no toolchain, and hides every write control until the
-/// cluster has shown the user may write.
+/// through <c>globalThis.lattice</c>, needs no toolchain, and hides every write control until
+/// <c>context.read</c> reports a role that may write.
 /// </summary>
 [TestFixture]
 public sealed class TaskBoardBundleTests
@@ -107,7 +107,7 @@ public sealed class TaskBoardBundleTests
     {
         var html = TaskBoardFiles.ReadText("ui/index.html");
 
-        Assert.That(Regex.IsMatch(html, "id=\"" + id + "\"[^>]*\\shidden\\b"), Is.True, id + " is hidden until writes are proven");
+        Assert.That(Regex.IsMatch(html, "id=\"" + id + "\"[^>]*\\shidden\\b"), Is.True, id + " is hidden until context.read reports a writer role");
     }
 
     [Test]

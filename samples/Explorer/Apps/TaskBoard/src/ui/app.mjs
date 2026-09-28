@@ -2,14 +2,17 @@
 // no storage. The AppKit bootstrap defines globalThis.lattice before this runs,
 // and every call below goes through the Explorer's bridge broker to the
 // cluster, under the signed-in user's rights intersected with this app's
-// consented grants. The frame never learns the user's roles, so the board
-// starts read-only and shows its write controls only once the cluster has
-// accepted a harmless write probe (see probeWriteAccess). A viewer therefore
-// never sees a control the bridge would refuse.
+// consented grants. The board starts read-only and shows its write controls
+// only when context.read reports a role that this app's manifest lets write
+// (see WRITER_ROLES). The cluster still enforces every write, and any denied
+// write drops the board back to read-only, so a hint that is wrong can only
+// ever hide a control, never grant one.
 
 const TREE = "tasks";
 const PREFIX = "tasks/";
-const PROBE_KEY = "probe/write-access";
+// The roles in manifest.json whose operations include Write and Delete on the
+// tasks tree. A test keeps this list equal to the manifest.
+const WRITER_ROLES = ["editor"];
 const COLUMNS = ["todo", "doing", "done"];
 const COLUMN_NAMES = { todo: "To do", doing: "Doing", done: "Done" };
 const ID_PATTERN = /^[a-z0-9-]{1,64}$/;
@@ -230,16 +233,14 @@ async function loadAll() {
   state.selected = state.wanted !== null && tasks.has(state.wanted) ? state.wanted : null;
 }
 
-// The frame is never told the user's roles. Deleting a key that never holds a
-// task is a no-op for an editor and is refused for a viewer, which is exactly
-// the question the board needs answered. Any failure keeps the board read-only.
-async function probeWriteAccess() {
-  try {
-    await lattice.request("data.delete", { action: "delete", tree: TREE, key: PROBE_KEY });
-    return true;
-  } catch (error) {
+// context.read carries the caller's role names in this app. A host that
+// predates the member omits it, and then no role may be inferred: the board
+// stays read-only.
+function canWrite(context) {
+  if (context === null || typeof context !== "object" || !Array.isArray(context.roles)) {
     return false;
   }
+  return context.roles.some(function (role) { return WRITER_ROLES.includes(role); });
 }
 
 async function writeTask(task) {
@@ -370,7 +371,7 @@ async function start() {
     lattice.on("context.changed", function (next) {
       showContext(context, next);
     });
-    state.canEdit = await probeWriteAccess();
+    state.canEdit = canWrite(context);
     await refresh();
   } catch (error) {
     byId("tb-context").textContent = "The board could not start (" + errorCode(error) + ").";
