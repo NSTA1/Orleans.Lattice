@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -40,6 +41,30 @@ namespace Orleans.Lattice;
 /// injective as the key's <see cref="object.ToString()"/>. The element is a
 /// presentation/identity surrogate for the key, not a round-trippable encoding
 /// of it.
+/// </para>
+/// <para>
+/// <strong>Why every dot scan here walks a span.</strong> A key's add and
+/// tombstone dots live in a <see cref="List{T}"/> of
+/// <see cref="OrSetDot"/>, a struct, so reading one through the list indexer
+/// copies the whole struct, bounds-checks the access and re-reads the list's
+/// mutable <c>Count</c> on every iteration of the loop condition. Taking
+/// <see cref="CollectionsMarshal.AsSpan{T}(List{T})"/> once removes the
+/// <c>Count</c> re-read and lets the bounds check hoist. The invariant that
+/// licenses it: no scan in this type may change a scanned list's length while
+/// its span is alive - every one of them is read-only, appending only to the
+/// caller's sink.
+/// </para>
+/// <para>
+/// <strong>Why only some of them hold a <c>ref readonly</c>.</strong> Reading
+/// the element through <c>ref readonly</c> also removes the struct copy, but
+/// only pays where the loop body makes no call. A byref into the span that is
+/// live across a call is an interior pointer the JIT must report to the GC, so
+/// it is pinned to a tracked stack slot instead of being enregistered. Measured
+/// on the benchmark suite that arbitrated this change, holding one across the
+/// emit loops' <c>sink.Add</c> cost more than the 16-byte copy it saved. So the
+/// pure scans (<see cref="SingleReplica"/>, <see cref="IsEntryTombstoned"/>,
+/// the counter-index fill) read through <c>ref readonly</c>, and every loop
+/// whose body calls out copies the element instead.
 /// </para>
 /// </summary>
 public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
@@ -201,7 +226,11 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
                     }
 
                     counters = rented.AsSpan(0, tomb.Count);
-                    for (var i = 0; i < tomb.Count; i++) counters[i] = tomb[i].Counter;
+                    // Span walk - see the type remarks on why every dot scan
+                    // here takes one. The gate above puts this list above the
+                    // index threshold and the body only reads.
+                    var tombSpan = CollectionsMarshal.AsSpan(tomb);
+                    for (var i = 0; i < tombSpan.Length; i++) counters[i] = tombSpan[i].Counter;
                     counters.Sort();
                 }
             }
@@ -209,9 +238,14 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
             var hasLive = false;
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
-            for (var i = 0; i < entries.Count; i++)
+            // Span walk: the body only reads, but it can call into
+            // BinarySearch or IsEntryTombstoned, so the element is copied
+            // rather than held by reference (a byref into the span live across
+            // a call is pinned to a GC-tracked stack slot).
+            var entrySpan = CollectionsMarshal.AsSpan(entries);
+            for (var i = 0; i < entrySpan.Length; i++)
             {
-                var entry = entries[i];
+                var entry = entrySpan[i];
                 var tombstoned = sharedReplica is not null
                     ? string.Equals(entry.ReplicaId, sharedReplica, StringComparison.Ordinal)
                         && counters.BinarySearch(entry.Counter) >= 0
@@ -244,14 +278,22 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
     /// or <see langword="null"/> when the list spans more than one replica (or
     /// is empty). One pass, comparing ordinally and short-circuiting on the
     /// reference the list overwhelmingly repeats.
+    /// <para>
+    /// Internal rather than private only so the benchmark host can A/B the
+    /// shipped scan against its pre-span baseline directly.
+    /// </para>
     /// </summary>
-    private static string? SingleReplica(List<OrSetDot> tombstones)
+    internal static string? SingleReplica(List<OrSetDot> tombstones)
     {
         if (tombstones.Count == 0) return null;
-        var first = tombstones[0].ReplicaId;
-        for (var i = 1; i < tombstones.Count; i++)
+        // Span walk - see the type remarks. Callers gate this on a list longer
+        // than TombstoneIndexThreshold, and the body only reads.
+        var span = CollectionsMarshal.AsSpan(tombstones);
+        var first = span[0].ReplicaId;
+        for (var i = 1; i < span.Length; i++)
         {
-            var candidate = tombstones[i].ReplicaId;
+            ref readonly var dot = ref span[i];
+            var candidate = dot.ReplicaId;
             if (!ReferenceEquals(candidate, first)
                 && !string.Equals(candidate, first, StringComparison.Ordinal))
             {
@@ -270,12 +312,26 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
     /// </summary>
     private const int TombstoneIndexThreshold = 8;
 
-    private static bool IsEntryTombstoned(List<OrSetDot>? tombstones, string replicaId, long counter)
+    /// <summary>
+    /// Whether <paramref name="tombstones"/> contains the exact
+    /// <c>(replicaId, counter)</c> dot. The inner scan of the per-key
+    /// membership test, so it runs once per add dot on every key whose
+    /// tombstone list misses the counter index.
+    /// <para>
+    /// Internal rather than private only so the benchmark host can A/B the
+    /// shipped scan against its pre-span baseline directly.
+    /// </para>
+    /// </summary>
+    internal static bool IsEntryTombstoned(List<OrSetDot>? tombstones, string replicaId, long counter)
     {
         if (tombstones is null) return false;
-        for (var i = 0; i < tombstones.Count; i++)
+        // Span walk - this is the inner scan of the per-key membership test, so
+        // it runs once per add dot on every key that misses the counter index.
+        // The body only reads.
+        var span = CollectionsMarshal.AsSpan(tombstones);
+        for (var i = 0; i < span.Length; i++)
         {
-            var t = tombstones[i];
+            ref readonly var t = ref span[i];
             if (t.Counter == counter && string.Equals(t.ReplicaId, replicaId, StringComparison.Ordinal))
             {
                 return true;
@@ -407,9 +463,14 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         {
             if (entries.Count == 0) continue;
             var element = KeyToBytes(key);
-            for (var i = 0; i < entries.Count; i++)
+            // Span walk: the loop appends to sink, never to entries, so the
+            // scanned list's length cannot change while the span is alive. The
+            // element is copied rather than held by reference because the body
+            // calls into sink.Add.
+            var entrySpan = CollectionsMarshal.AsSpan(entries);
+            for (var i = 0; i < entrySpan.Length; i++)
             {
-                var e = entries[i];
+                var e = entrySpan[i];
                 sink.Add(new CrdtMemberChange
                 {
                     Element = element,
@@ -425,9 +486,10 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         {
             if (dots.Count == 0) continue;
             var element = KeyToBytes(key);
-            for (var i = 0; i < dots.Count; i++)
+            var dotSpan = CollectionsMarshal.AsSpan(dots);
+            for (var i = 0; i < dotSpan.Length; i++)
             {
-                var dot = dots[i];
+                var dot = dotSpan[i];
                 sink.Add(new CrdtMemberChange
                 {
                     Element = element,

@@ -19,11 +19,27 @@ internal static class BlobCacheKeyMap
     // hot path.
     private const int StackHashThresholdBytes = 512;
 
+    // UTF-8 emits at most three bytes per char (a surrogate pair costs four
+    // bytes for two chars, so the per-char bound holds), so a key no longer than
+    // this cannot overflow the stack buffer whatever it contains. Below it the
+    // buffer choice is settled by the key's length alone and the separate
+    // GetByteCount pass - a full scan of the key, on the hot path of every cache
+    // read and write - is skipped outright.
+    private const int StackHashThresholdChars = StackHashThresholdBytes / 3;
+
     /// <summary>
     /// Returns the blob name that backs <paramref name="key"/> under
     /// <paramref name="keyPrefix"/>. The prefix is concatenated verbatim (include
     /// a trailing slash for a virtual directory); the key contributes a 64-char
     /// lowercase-hex SHA-256 digest.
+    /// <para>
+    /// A key of at most <see cref="StackHashThresholdChars"/> chars is transcoded
+    /// exactly once: its worst case already fits the stack buffer, so the count
+    /// pass that used to pick the buffer is not needed and the encoder's written
+    /// count bounds the hash instead. A longer key keeps the two-pass shape, so
+    /// every key lands in the same buffer it did before and the digest is
+    /// byte-identical either way.
+    /// </para>
     /// </summary>
     /// <param name="keyPrefix">The configured key prefix (may be empty).</param>
     /// <param name="key">The cache key. Must not be <see langword="null"/>.</param>
@@ -34,7 +50,12 @@ internal static class BlobCacheKeyMap
         ArgumentNullException.ThrowIfNull(key);
 
         Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
-        var byteCount = Encoding.UTF8.GetByteCount(key);
+
+        // -1 marks "short enough that the count is not worth taking"; it selects
+        // the stack buffer exactly as a real count below the threshold would.
+        var byteCount = key.Length <= StackHashThresholdChars
+            ? -1
+            : Encoding.UTF8.GetByteCount(key);
 
         byte[]? rented = null;
         try

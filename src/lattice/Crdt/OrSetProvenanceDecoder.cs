@@ -153,9 +153,16 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (adds.TryGetValue(key, out var addDots))
             {
-                for (var i = 0; i < addDots.Count; i++)
+                // Span walk - see the type remarks. The loop appends only to
+                // result, so the scanned list's length cannot change. The
+                // element is copied rather than held by reference: the body
+                // calls into result.Add, and a byref into the span held live
+                // across a call is pinned to a GC-tracked stack slot, which
+                // measured dearer than the 16-byte copy it saves.
+                var addSpan = CollectionsMarshal.AsSpan(addDots);
+                for (var i = 0; i < addSpan.Length; i++)
                 {
-                    var dot = addDots[i];
+                    var dot = addSpan[i];
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -169,9 +176,10 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (tombstones.TryGetValue(key, out var tombDots))
             {
-                for (var i = 0; i < tombDots.Count; i++)
+                var tombSpan = CollectionsMarshal.AsSpan(tombDots);
+                for (var i = 0; i < tombSpan.Length; i++)
                 {
-                    var dot = tombDots[i];
+                    var dot = tombSpan[i];
                     if (addDots is not null && !ContainsExact(addDots, in dot))
                     {
                         // A compacted add list can retain only this replica's
@@ -275,9 +283,13 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
             var hasLive = false;
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
-            for (var i = 0; i < addDots.Count; i++)
+            // Span walk: the body only reads, but it can call IsTombstoned, so
+            // the element is copied rather than held by reference (a byref into
+            // the span live across a call is pinned to a GC-tracked stack slot).
+            var addSpan = CollectionsMarshal.AsSpan(addDots);
+            for (var i = 0; i < addSpan.Length; i++)
             {
-                var dot = addDots[i];
+                var dot = addSpan[i];
                 var tombstoned = sharedReplica is not null
                     ? dot.Counter <= coverCounter
                         && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
