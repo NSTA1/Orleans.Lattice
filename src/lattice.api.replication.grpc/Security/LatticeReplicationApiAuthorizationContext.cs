@@ -27,6 +27,13 @@ public enum LatticeReplicationApiOperation
     /// rather than have it silently masquerade as a benign read operation.
     /// </summary>
     Unknown,
+
+    /// <summary>
+    /// The read-only <c>GetPeerStatus</c> RPC of the replication peer-status
+    /// service. Its <see cref="LatticeReplicationApiAuthorizationContext.TargetId"/>
+    /// is the query's tree filter, or <see langword="null"/> for a whole-estate read.
+    /// </summary>
+    GetPeerStatus,
 }
 
 /// <summary>

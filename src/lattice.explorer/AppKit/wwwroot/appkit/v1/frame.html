@@ -1,23 +1,25 @@
 <!doctype html>
 <!--
-  Placeholder for the AppKit v1 frame bootstrap document (issue #3811).
+  Orleans.Lattice Explorer AppKit, protocol v1: the app frame bootstrap document.
 
-  F5 (issue #3814) replaces this file with the real bootstrap: it loads the
-  loader and the in-frame lattice API from appkit/v1/, waits for the host's
-  MessageChannel port, and materialises the verified bundle as blob: URLs.
-  The placeholder exists so the frame host (issue #3817) can map and test the
-  bootstrap route and its headers before F5 lands.
-
-  It is served with "Content-Security-Policy: sandbox allow-scripts;
-  default-src 'none'; ..." (epic #3807, E4), so it must stay free of inline
-  script and inline style, and must never reference a third-party origin.
+  Every Lattice App frame loads this same static, app-agnostic document inside
+  <iframe sandbox="allow-scripts">, so it runs with an opaque origin. It is
+  served with "Content-Security-Policy: sandbox allow-scripts; default-src
+  'none'; script-src 'self' blob:; style-src 'self' blob:; ..." (epic #3807,
+  E4), so it carries no inline script, no inline style and no third-party
+  reference: boot.js and lattice-app.css load from beside it, and everything
+  the app ships arrives over the host's MessageChannel port and is
+  materialised as blob: URLs. See NUGET_README.md for the protocol.
 -->
-<html lang="en">
+<html lang="en" data-appkit-protocol="1" data-theme="paper" data-bs-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="referrer" content="no-referrer">
-  <title>Lattice App frame</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lattice App</title>
+  <link rel="stylesheet" href="lattice-app.css">
+  <script src="boot.js" defer></script>
 </head>
-<body data-appkit-protocol="1" data-appkit-placeholder="true">
+<body>
 </body>
 </html>

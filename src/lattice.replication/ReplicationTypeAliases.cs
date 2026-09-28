@@ -252,4 +252,19 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="LatticeReplicationModeChangeRejectedException"/>.</summary>
     internal const string LatticeReplicationModeChangeRejectedException = "olr.rj";
 
+    // Peer-status read path: the per-silo grain service the replication status
+    // facade fans out to, and the bounded read it answers.
+
+    /// <summary>Alias for <see cref="Replication.IReplicationPeerStatusGrainService"/>.</summary>
+    internal const string IReplicationPeerStatusGrainService = "olr.pg";
+
+    /// <summary>Alias for <see cref="Replication.ReplicationPeerStatusRow"/>.</summary>
+    internal const string ReplicationPeerStatusRow = "olr.pw";
+
+    /// <summary>Alias for <see cref="Replication.ReplicationPeerStatusReadRequest"/>.</summary>
+    internal const string ReplicationPeerStatusReadRequest = "olr.pq";
+
+    /// <summary>Alias for <see cref="Replication.ReplicationPeerStatusCursor"/>.</summary>
+    internal const string ReplicationPeerStatusCursor = "olr.pc";
+
 }
