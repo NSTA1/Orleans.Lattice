@@ -74,7 +74,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
     /// observed enable). A single unobserved or concurrent disable keeps the
     /// flag off - this is the remove-wins tie-break.
     /// </summary>
-    public bool IsEnabled => Enables.Count > 0 && LiveDisableCount() == 0;
+    public bool IsEnabled => Enables.Count > 0 && !HasLiveDisable();
 
     /// <inheritdoc />
     /// <remarks>
@@ -202,7 +202,12 @@ public sealed class RwFlag : ICrdt<RwFlag>
         OrSetDotCompaction.CompactMaxPerReplica(Tombstones);
     }
 
-    private int LiveDisableCount() => OrSetDotCompaction.CountLive(Disables, Tombstones);
+    /// <summary>
+    /// Whether any disable dot survives the observed-enable tombstones. The
+    /// only caller consumes a boolean, so the walk stops at the first survivor
+    /// rather than counting every one.
+    /// </summary>
+    private bool HasLiveDisable() => OrSetDotCompaction.AnyLive(Disables, Tombstones);
 
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {
