@@ -762,8 +762,10 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Publishes the durable pin from <see cref="CompleteDeactivationCheckpointFlushTailAsync"/>
-    /// through the batched, awaited <see cref="FlushDurableMaterialiserFrontierAsync"/>,
-    /// and never throws.
+    /// through the batched, awaited durable-pin flush, and never throws. A pin the
+    /// store acknowledges here is recorded as this deactivation's acknowledgement,
+    /// which lets the <c>frontier_pin</c> barrier that follows elide a republish it
+    /// dominates (#3643).
     /// </summary>
     /// <param name="afterRecheck">
     /// <see langword="false"/> for the #3393 publish that precedes the recheck;
@@ -774,7 +776,7 @@ internal sealed partial class BPlusLeafGrain
     {
         try
         {
-            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+            await FlushDurableMaterialiserFrontierCoreAsync(DurablePinFlushPurpose.DeactivationTail, cancellationToken);
 
             // The first-real-frontier batched flush the cursor report would
             // otherwise perform has just happened.

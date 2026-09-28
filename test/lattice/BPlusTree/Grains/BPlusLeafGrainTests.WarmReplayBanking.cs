@@ -206,7 +206,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Any<IReadOnlyList<MaterialiserPinReport>>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStore);

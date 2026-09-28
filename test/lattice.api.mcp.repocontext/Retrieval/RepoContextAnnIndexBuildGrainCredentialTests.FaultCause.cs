@@ -101,8 +101,9 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         });
     }
 
-    [Test]
-    public async Task A_grain_call_timeout_is_attributed_to_the_dependency_arm_and_not_to_the_paging_one()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_grain_call_timeout_is_distinct_from_an_unreachable_dependency(bool wrapped)
     {
         // THE ADVERSARIAL DIRECTION FOR THE CLASSIFIER ITSELF. The fixture above
         // would pass identically against an attribution that always reported
@@ -118,9 +119,11 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         rig.Backing.SeedRing(RepoId, Space, SteppedCorpus);
         var gate = rig.Backing.Gate(RepoId, Space);
         gate.Faults = true;
-        gate.FaultFactory = () => new TimeoutException(
-            "Response did not arrive on time for Request to shardroot/repo-context-vector-index/7 "
-            + "IBPlusLeafGrain.GetEntriesAsync");
+        var timeout = new TimeoutException(
+            "Response did not arrive on time for Request to repocontextannindexbuild/lattice "
+            + "Orleans.IRemindable.ReceiveReminder");
+        Exception fault = wrapped ? new InvalidOperationException("build step failed", timeout) : timeout;
+        gate.FaultFactory = () => fault;
         rig.Start();
 
         var faults = await rig.PumpCollectingFaultsAsync(FaultingTicks);
@@ -130,16 +133,40 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         {
             Assert.That(faults, Is.Not.Empty,
                 "positive control: ticks must actually have thrown");
-            Assert.That(faults, Is.All.InstanceOf<TimeoutException>(),
-                "positive control: and they must have thrown the injected type, or the "
-                + "attribution below is being asserted about some other fault");
-            Assert.That(slices.FaultedByCause.DependencyUnavailable, Is.EqualTo(faults.Count),
-                "a grain call that timed out is a dependency that did not answer, whose remedy "
-                + "is the cluster or the tree shape");
+            Assert.That(faults, Is.All.SameAs(fault),
+                "the original fault must propagate unchanged");
+            Assert.That(slices.FaultedByCause.DependencyUnavailable, Is.Zero,
+                "a response deadline can expire behind a busy callee; it does not prove unreachability");
+            Assert.That(slices.FaultedByCause.ResponseTimeout, Is.EqualTo(faults.Count));
+            Assert.That(slices.FaultedByCause.Total, Is.EqualTo(faults.Count));
+            Assert.That(slices.FaultedByCause.Unexpected, Is.Zero);
             Assert.That(slices.FaultedByCause.ProjectionStale, Is.Zero,
                 "THE ARM THAT MUST NOT MOVE. A classifier that always reported the same cause "
                 + "would satisfy every other assertion in this partial and tell an operator "
                 + "nothing, because a dimension with one value distinguishes nothing");
+        });
+    }
+
+    [Test]
+    public async Task An_unreachable_silo_still_records_dependency_unavailable()
+    {
+        using var rig = new Rig(RunAuthority());
+        rig.Backing.SeedRing(RepoId, Space, SteppedCorpus);
+        var gate = rig.Backing.Gate(RepoId, Space);
+        gate.Faults = true;
+        gate.FaultFactory = () => new Orleans.Runtime.SiloUnavailableException("silo is unavailable");
+        rig.Start();
+
+        var faults = await rig.PumpCollectingFaultsAsync(FaultingTicks);
+        var slices = rig.SliceReporter.Read();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(faults, Is.Not.Empty);
+            Assert.That(faults, Is.All.InstanceOf<Orleans.Runtime.SiloUnavailableException>());
+            Assert.That(slices.FaultedByCause.DependencyUnavailable, Is.EqualTo(faults.Count));
+            Assert.That(slices.FaultedByCause.ResponseTimeout, Is.Zero);
+            Assert.That(slices.FaultedByCause.Total, Is.EqualTo(faults.Count));
         });
     }
 
@@ -149,9 +176,8 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         // THE SUBTYPE TRAP, driven end to end because the ordering is easy to get
         // right in a unit table and lose in the wiring. ScanPageStalledException
         // derives from TimeoutException, so a classifier whose arms are in the wrong
-        // order attributes this to 'dependency-unavailable' - which sends the
-        // investigation to the cluster when the condition is a tree whose leaf
-        // cannot be materialised in a single grain call.
+        // order attributes this to 'response-timeout' and loses the specific
+        // diagnosis: a tree whose leaf cannot be materialised in a single call.
         using var rig = new Rig(RunAuthority());
         rig.Backing.SeedRing(RepoId, Space, SteppedCorpus);
         var gate = rig.Backing.Gate(RepoId, Space);
@@ -171,10 +197,10 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
                 "positive control: the injected type must genuinely BE a TimeoutException, or "
                 + "the subtype trap this fixture exists to spring is not present");
             Assert.That(slices.FaultedByCause.ScanPageStalled, Is.EqualTo(faults.Count));
-            Assert.That(slices.FaultedByCause.DependencyUnavailable, Is.Zero,
+            Assert.That(slices.FaultedByCause.ResponseTimeout, Is.Zero,
                 "the more specific arm must win. Folding a page stall into the timeout arm loses "
-                + "the distinction between a tree that cannot page a leaf and a cluster that has "
-                + "not settled, which have opposite remedies");
+                + "the distinction between a tree that cannot page a leaf and an unexplained "
+                + "response deadline");
         });
     }
 

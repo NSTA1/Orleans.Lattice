@@ -266,6 +266,13 @@ public sealed partial class DurableVectorIndex
     public bool IsLoaded => _loaded;
 
     /// <summary>
+    /// Why this instance discarded durable state while opening, or
+    /// <see cref="VectorIndexLoadDiscardReason.None"/> for a fresh or restored load.
+    /// Retained after opening; an explicit rebuild does not change this reading.
+    /// </summary>
+    public VectorIndexLoadDiscardReason LoadDiscardReason { get; private set; }
+
+    /// <summary>
     /// Whether an interrupted load banked progress that a further
     /// <see cref="LoadOrResumeAsync"/> will continue from rather than re-read.
     /// <para>

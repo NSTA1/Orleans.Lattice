@@ -40,6 +40,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Drain-lag holders named while lag persists.** A tree above the materialiser lag threshold repeats its structured warning naming the lowest-cursor consumers, at most every `LatticeOptions.WalDrainLagHolderLogInterval` (default 10 minutes; null keeps edge-only logging). ([#2505](https://github.com/NSTA1/Orleans.Lattice/issues/2505)) (`Orleans.Lattice`)
 
+- **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Dashboards`)
+
 ### Changed
 
 - **Performance - CRDT provenance dot scans and UTF-8 transcodes.** The OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice`, `Orleans.Lattice.Caching.AzureBlob`)
@@ -86,6 +88,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Container - Cgroup readers.** The silo and the ONNX embedder compile one dependency-free set of cgroup CPU and memory readers, a gate confines cgroup reads to it, and three unreachable `cpu.max` parser clauses are removed with every parse outcome pinned. ([#2817](https://github.com/NSTA1/Orleans.Lattice/issues/2817), [#2819](https://github.com/NSTA1/Orleans.Lattice/issues/2819), [#2828](https://github.com/NSTA1/Orleans.Lattice/issues/2828)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Docs - Naming registry covers RepoContext.** The naming-conventions registry gains its missing `Orleans.Lattice.Api.Mcp.RepoContext` section, and a gate fails when that section drifts from the package's public types. ([#2494](https://github.com/NSTA1/Orleans.Lattice/issues/2494)) (`repository-wide`)
+
+- **Performance - Clean leaf deactivations skip an acknowledged pin flush.** The `frontier_pin` barrier is elided when this deactivation already acknowledged a dominating pin, counted by `orleans.lattice.leaf.deactivation.barrier.elided`; a faulted pin write no longer counts as acknowledged. ([#3643](https://github.com/NSTA1/Orleans.Lattice/issues/3643)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 ### Fixed
 
@@ -196,6 +200,20 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Atomic - A cross-tree write repeating a key never resolved.** A tree slice naming one key twice, including a `Set` and a `Delete`, was admitted, then refused by that tree's sub-saga on every keepalive, parking the other trees' writes. It now throws `ArgumentException` before anything is staged. ([#3756](https://github.com/NSTA1/Orleans.Lattice/issues/3756)) (`Orleans.Lattice`)
 
 - **Backup - A full backup's cut recorded HLC 0.** The consistency cut read an anchor the core always stamps as zero; it now records the highest HLC the capture read, so the first increment on a full base pins the WAL at that frontier while it drains. ([#3758](https://github.com/NSTA1/Orleans.Lattice/issues/3758)) (`Orleans.Lattice.Backup`)
+
+- **WAL - GC reactivation respects the sweep share.** The reactivation pass fans leaf touches out within the sweep starvation share and retries a refused touch in the same pass, a refusal no longer spends a reactivation attempt, and the orphan-pin sweep sum is documented as a population bound. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761), [#2878](https://github.com/NSTA1/Orleans.Lattice/issues/2878)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Leaf - Split and hydration accounting.** Recovery-path split completions land on a zero-primed `recovered` outcome, the bisect-refusal counter documents its corrected cost model, and the hydration heap factor is justified from both the binary and legacy JSON read paths. ([#2860](https://github.com/NSTA1/Orleans.Lattice/issues/2860), [#2856](https://github.com/NSTA1/Orleans.Lattice/issues/2856), [#2858](https://github.com/NSTA1/Orleans.Lattice/issues/2858)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Retrieval - ANN build and load progress misreported.** Only a step that banked progress counts as advanced, held and expected vectors and partitions are gauged, a discarded load names its reason, and a response timeout is no longer classified as an unreachable dependency. ([#3762](https://github.com/NSTA1/Orleans.Lattice/issues/3762), [#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761), [#3152](https://github.com/NSTA1/Orleans.Lattice/issues/3152)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`, `Orleans.Lattice.Dashboards`)
+
+- **Observability - Saturation refusals are attributed.** `orleans.lattice.saturation.refusals` counts every saturation refusal by tree and source, and a starvation drive refused a replay permit returns a verdict the WAL GC scheduler counts instead of throwing. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Observability - Malformed MCP calls are client errors.** A tool call failing argument binding or validation gets the same error result, logged at Debug without a stack and counted by `orleans.lattice.api.mcp.tool.client_errors`, rather than logged as an unhandled server exception. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761)) (`Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Container - Pin-store writes retry a SQLite lock.** A pin-store write or clear that fails with a SQLite lock is re-issued with bounded, jittered backoff, and `lattice_repocontext_grain_storage_lock_retries_total` reports whether each retry recovered or gave up. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Tests - Replay banking resumes from the banked prefix.** The replay-apply-failure fixture now asserts that the next attempt resumes from the banked checkpoint, not only that the checkpoint was banked. ([#3092](https://github.com/NSTA1/Orleans.Lattice/issues/3092)) (`repository-wide`)
 
 ### Security
 

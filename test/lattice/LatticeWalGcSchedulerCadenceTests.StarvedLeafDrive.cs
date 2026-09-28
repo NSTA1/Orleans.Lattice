@@ -108,12 +108,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     /// <summary>
-    /// The six arms the drive verdicts land on, in enum order.
+    /// The seven arms the drive verdicts land on, in enum order.
     /// </summary>
     private static readonly string[] StarvationDriveArms =
     [
         "drove_lifted", "drove_no_advance", "drove_memory_refused",
         "drove_not_driven", "drove_already_driving", "drove_timed_out",
+        "drove_admission_refused",
     ];
 
     /// <summary>
@@ -137,6 +138,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         [LeafStarvationDriveOutcome.NotDriven] = "drove_not_driven",
         [LeafStarvationDriveOutcome.AlreadyDriving] = "drove_already_driving",
         [LeafStarvationDriveOutcome.TimedOut] = "drove_timed_out",
+        [LeafStarvationDriveOutcome.AdmissionRefused] = "drove_admission_refused",
     };
 
     /// <summary>
@@ -157,7 +159,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     [Test]
     public async Task ExecuteAsync_records_each_drive_verdict_on_its_own_arm_and_no_other()
     {
-        // A 6x6 identity matrix rather than six independent tests, for the
+        // A 7x7 identity matrix rather than seven independent tests, for the
         // reason issue #2942 makes explicit: asserting an absence is not a
         // detector, because a broken arm and a correct-and-quiet one are the
         // same observation. Here each off-diagonal zero is licensed by the

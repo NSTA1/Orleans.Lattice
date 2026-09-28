@@ -1,7 +1,9 @@
+using Orleans.Lattice.Vector.Persistence;
+
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// A single-slot box the build coordinator hands down to the plane so the plane
+/// A caller-owned box the build coordinator hands down to the plane so the plane
 /// can report which <see cref="RepoContextAnnBuildStepPhase"/> a step was in. The
 /// coordinator owns the box; the plane only writes to it.
 /// <para>
@@ -36,6 +38,9 @@ internal sealed class RepoContextAnnBuildPhaseProbe
     /// </summary>
     public RepoContextAnnBuildStepPhase Phase { get; private set; }
         = RepoContextAnnBuildStepPhase.Coordinating;
+
+    /// <summary>The opened index's reading before this caller takes its build step.</summary>
+    internal VectorIndexBuildProgress? InitialProgress { get; set; }
 
     /// <summary>
     /// Attaches the reporter that should be told about phase entries for the step
@@ -83,5 +88,9 @@ internal sealed class RepoContextAnnBuildPhaseProbe
     /// Returns the box to its pre-step reading, so a reused probe cannot report
     /// the previous tick's phase for a tick that never reached the plane.
     /// </summary>
-    public void Reset() => Phase = RepoContextAnnBuildStepPhase.Coordinating;
+    public void Reset()
+    {
+        Phase = RepoContextAnnBuildStepPhase.Coordinating;
+        InitialProgress = null;
+    }
 }

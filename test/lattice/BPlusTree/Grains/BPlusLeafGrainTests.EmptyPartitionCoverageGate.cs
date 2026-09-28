@@ -252,7 +252,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         // No durable snapshot exists for this leaf (LoadAsync -> null), so the
         // cold cache cannot be rehydrated and coverage stays -1.

@@ -3,9 +3,9 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
-/// How one attempt to load the durable approximate index ended. The five values
+/// How one attempt to load the durable approximate index ended. The six values
 /// are exhaustive over an attempt that was made, which is what lets them be
-/// counted as a partition rather than as five unrelated tallies.
+/// counted as a partition rather than as unrelated tallies.
 /// </summary>
 internal enum RepoContextAnnIndexLoadOutcome
 {
@@ -69,6 +69,9 @@ internal enum RepoContextAnnIndexLoadOutcome
     /// </para>
     /// </summary>
     Refused = 4,
+
+    /// <summary>The open discarded unverifiable durable state and started an empty index.</summary>
+    Discarded = 5,
 }
 
 /// <summary>
@@ -115,7 +118,7 @@ internal enum RepoContextAnnIndexLoadOutcome
 /// would exist to report.
 /// </para>
 /// <para>
-/// <b>Cardinality and disclosure.</b> The only tag is the closed outcome set. No
+/// <b>Cardinality and disclosure.</b> Outcome and reason are closed sets. No
 /// repository id, no key, no cursor value. A cursor is a store key and naming one
 /// in a metric label would put corpus content in the metrics endpoint.
 /// </para>
@@ -148,6 +151,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     /// queue, which yielded and banked whatever progress it had made.
     /// </summary>
     internal const string OutcomeRefusedTag = "refused";
+    internal const string OutcomeDiscardedTag = "discarded";
 
     // Declared above the instrument it constructs, and the instrument is built from
     // this field, so reordering throws at type-initialisation rather than
@@ -162,6 +166,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     private long _faulted;
     private long _deferred;
     private long _refused;
+    private long _discarded;
 
     /// <summary>Creates the reporter, its instrument, and every one of its series.</summary>
     public RepoContextAnnIndexLoadReporter()
@@ -173,7 +178,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
             description:
                 "Durable approximate-index load attempts, partitioned by whether the attempt started fresh, "
                 + "resumed progress banked by an earlier faulted attempt, faulted itself, yielded on its open "
-                + "slice budget, or was refused admission to the WAL replay permit queue.");
+                + "slice budget, was refused admission to the WAL replay permit queue, or discarded unverifiable state.");
 
         // Pre-minted so that every arm is PRESENT and reads zero on a host that has
         // simply not faulted yet. An arm that appears only once it is non-zero
@@ -181,29 +186,56 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
         _loads.Add(
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFreshTag),
+            new KeyValuePair<string, object?>("reason", "none"),
             LatticeTenantLabel.Platform);
         _loads.Add(
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeResumedTag),
+            new KeyValuePair<string, object?>("reason", "none"),
             LatticeTenantLabel.Platform);
         _loads.Add(
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+            new KeyValuePair<string, object?>("reason", "other"),
             LatticeTenantLabel.Platform);
         _loads.Add(
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDeferredTag),
+            new KeyValuePair<string, object?>("reason", "none"),
             LatticeTenantLabel.Platform);
         _loads.Add(
             0,
             new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeRefusedTag),
+            new KeyValuePair<string, object?>("reason", "admission_refused"),
             LatticeTenantLabel.Platform);
+        _loads.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDiscardedTag),
+            new KeyValuePair<string, object?>("reason", "count_mismatch"), LatticeTenantLabel.Platform);
+        _loads.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDiscardedTag),
+            new KeyValuePair<string, object?>("reason", "embedding_space_change"), LatticeTenantLabel.Platform);
+        _loads.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDiscardedTag),
+            new KeyValuePair<string, object?>("reason", "unloadable_record"), LatticeTenantLabel.Platform);
+        _loads.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+            new KeyValuePair<string, object?>("reason", "timeout"), LatticeTenantLabel.Platform);
+        _loads.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+            new KeyValuePair<string, object?>("reason", "embedding_space_change"), LatticeTenantLabel.Platform);
+        _loads.Add(0, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+            new KeyValuePair<string, object?>("reason", "unloadable_record"), LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records one load attempt.</summary>
     /// <param name="outcome">How the attempt ended.</param>
-    public void Record(RepoContextAnnIndexLoadOutcome outcome)
+    /// <param name="reason">A bounded reason for a fault or discard; never exception text.</param>
+    public void Record(RepoContextAnnIndexLoadOutcome outcome, string? reason = null)
     {
+        reason = outcome switch
+        {
+            RepoContextAnnIndexLoadOutcome.Faulted => reason is
+                "timeout" or "embedding_space_change" or "unloadable_record" ? reason : "other",
+            RepoContextAnnIndexLoadOutcome.Refused => "admission_refused",
+            RepoContextAnnIndexLoadOutcome.Discarded => reason is
+                "count_mismatch" or "embedding_space_change" ? reason : "unloadable_record",
+            _ => "none",
+        };
         lock (_gate)
         {
             switch (outcome)
@@ -219,6 +251,9 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
                     break;
                 case RepoContextAnnIndexLoadOutcome.Refused:
                     _refused++;
+                    break;
+                case RepoContextAnnIndexLoadOutcome.Discarded:
+                    _discarded++;
                     break;
                 default:
                     _faulted++;
@@ -239,30 +274,62 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
                 _loads.Add(
                     1,
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFreshTag),
+                    new KeyValuePair<string, object?>("reason", "none"),
                     LatticeTenantLabel.Platform);
                 break;
             case RepoContextAnnIndexLoadOutcome.Resumed:
                 _loads.Add(
                     1,
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeResumedTag),
+                    new KeyValuePair<string, object?>("reason", "none"),
                     LatticeTenantLabel.Platform);
                 break;
             case RepoContextAnnIndexLoadOutcome.Deferred:
                 _loads.Add(
                     1,
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDeferredTag),
+                    new KeyValuePair<string, object?>("reason", "none"),
                     LatticeTenantLabel.Platform);
                 break;
             case RepoContextAnnIndexLoadOutcome.Refused:
                 _loads.Add(
                     1,
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeRefusedTag),
+                    new KeyValuePair<string, object?>("reason", "admission_refused"),
                     LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Discarded when reason == "count_mismatch":
+                _loads.Add(1, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDiscardedTag),
+                    new KeyValuePair<string, object?>("reason", "count_mismatch"), LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Discarded when reason == "embedding_space_change":
+                _loads.Add(1, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDiscardedTag),
+                    new KeyValuePair<string, object?>("reason", "embedding_space_change"), LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Discarded:
+                _loads.Add(
+                    1,
+                    new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeDiscardedTag),
+                    new KeyValuePair<string, object?>("reason", "unloadable_record"),
+                    LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Faulted when reason == "timeout":
+                _loads.Add(1, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+                    new KeyValuePair<string, object?>("reason", "timeout"), LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Faulted when reason == "embedding_space_change":
+                _loads.Add(1, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+                    new KeyValuePair<string, object?>("reason", "embedding_space_change"), LatticeTenantLabel.Platform);
+                break;
+            case RepoContextAnnIndexLoadOutcome.Faulted when reason == "unloadable_record":
+                _loads.Add(1, new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+                    new KeyValuePair<string, object?>("reason", "unloadable_record"), LatticeTenantLabel.Platform);
                 break;
             default:
                 _loads.Add(
                     1,
                     new KeyValuePair<string, object?>(OutcomeTagKey, OutcomeFaultedTag),
+                    new KeyValuePair<string, object?>("reason", "other"),
                     LatticeTenantLabel.Platform);
                 break;
         }
@@ -276,7 +343,7 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
     {
         lock (_gate)
         {
-            return new RepoContextAnnIndexLoadSnapshot(_fresh, _resumed, _faulted, _deferred, _refused);
+            return new RepoContextAnnIndexLoadSnapshot(_fresh, _resumed, _faulted, _deferred, _refused, _discarded);
         }
     }
 
@@ -292,9 +359,11 @@ internal sealed class RepoContextAnnIndexLoadReporter : IDisposable
 /// <param name="Faulted">Attempts that faulted partway, banking their progress.</param>
 /// <param name="Deferred">Attempts that yielded on their wall-clock budget, banking their progress.</param>
 /// <param name="Refused">Attempts refused admission to the WAL replay permit queue, banking their progress.</param>
+/// <param name="Discarded">Opens that discarded unverifiable durable state.</param>
 internal readonly record struct RepoContextAnnIndexLoadSnapshot(
     long Fresh,
     long Resumed,
     long Faulted,
     long Deferred,
-    long Refused);
+    long Refused,
+    long Discarded = 0);

@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 191 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 194 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -22,6 +22,8 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_inFlightSeconds	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexLoadReporter.cs#_loads	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs#_partitions	unresolved	reason=dimension (unread-observable-callback:ObservePartitions): callback measurements use cached tag arrays whose domains are not resolved; runtime coverage: Gauges_follow_banked_and_restored_progress_and_retire_with_registry
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs#_vectors	unresolved	reason=dimension (unread-observable-callback:ObserveVectors): callback measurements use cached tag arrays whose domains are not resolved; runtime coverage: Gauges_follow_banked_and_restored_progress_and_retire_with_registry
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_annSweeps	anchored	dimension=cause; total=faulted; assertedBy=The_cause_partition_sums_to_the_faulted_arm
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexSweepReporter.cs#_armingAttempts	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnPartitioningReporter.cs#_partitioning	primed	
@@ -29,7 +31,12 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnPartitioningReporter.cs#
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextCoverageProbeReporter.cs#_probes	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextMemoryMarkerScanReporter.cs#_markerScans	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_annSearches	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactBudget	unresolved	reason=dimension outcome: no declaration found for outcome
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactDuration	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactGatherFaults	unresolved	reason=dimension fault: no declaration found for fault
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactGathers	unresolved	reason=dimension outcome: no declaration found for boundedOutcome
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactPages	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactVectors	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_duration	unresolved	reason=dimension tool: no declaration found for tool
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_stageDuration	unresolved	reason=dimension stage: no declaration found for stage
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_readySeconds	unresolved	reason=dimension phase: no declaration found for phaseTag
@@ -39,6 +46,7 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextVectorPlaneReDeriver.cs#_co
 src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_callsCounter	unresolved	reason=dimension command: no declaration found for Command
 src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_replacedCounter	unresolved	reason=dimension command: no declaration found for Command
 src/lattice.api.mcp.repocontext/Usage/RepoContextUsageRecorder.cs#_responseCounter	unresolved	reason=dimension command: no declaration found for Command
+src/lattice.api.mcp/LatticeApiMcpMetrics.cs#ToolClientErrors	unresolved	reason=dimension tool: no declaration found for toolName
 src/lattice.auth/AuthSnapshotGaugeRegistry.cs#(unassigned:LatticeAuthMetrics.SnapshotAgeName)	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice.auth/AuthSnapshotGaugeRegistry.cs#(unassigned:LatticeAuthMetrics.SnapshotEpochName)	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice.auth/AuthSnapshotGaugeRegistry.cs#(unassigned:LatticeAuthMetrics.SnapshotSubjectsName)	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
@@ -249,6 +257,7 @@ src/lattice/LatticeMetrics.cs#LeafCommitDuration	unresolved	reason=dimension ste
 src/lattice/LatticeMetrics.cs#LeafCommitInFlight	open	open=tenant, tree; open dimension: tree carries a runtime identifier (state.State.TreeId ?? string.Empty)
 src/lattice/LatticeMetrics.cs#LeafCompactionDuration	unresolved	reason=dimension (unread-tag-argument:treeTag, trig, tenantTag): tag argument(s) treeTag, trig, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafDeactivationBarrierDuration	unresolved	reason=dimension (unread-tag-argument:treeTag, barrier, tenantTag): tag argument(s) treeTag, barrier, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#LeafDeactivationBarrierElided	unresolved	reason=dimension (unread-tag-argument:treeTag, tenantTag): tag argument(s) treeTag, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafDeactivationBarrierFailures	unresolved	reason=dimension (unread-tag-argument:treeTag, barrier, tenantTag): tag argument(s) treeTag, barrier, tenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#LeafDeactivationCheckpointDelta	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#LeafDeferredTerminalsDroppedAtCap	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
@@ -316,6 +325,7 @@ src/lattice/LatticeMetrics.cs#SagaPerKeyDuration	unresolved	reason=dimension (un
 src/lattice/LatticeMetrics.cs#SagaPrepareDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#SagaReminderDuration	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#SagaTerminalDecisionDuration	unresolved	reason=dimension (unread-tag-argument:sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag): tag argument(s) sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#SaturationRefusals	unresolved	reason=dimension source: unrecognised value expression: source switch { LatticeSaturationSource.Unspecified => "unsp...
 src/lattice/LatticeMetrics.cs#ScanChainRegressions	unresolved	reason=dimension (unread-tag-argument:outcome): tag argument(s) outcome are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#ScanPageCeilingOutcomes	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#ScanPageLeafReadOutcomes	unresolved	reason=dimension (unread-tag-argument:outcome): tag argument(s) outcome are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read

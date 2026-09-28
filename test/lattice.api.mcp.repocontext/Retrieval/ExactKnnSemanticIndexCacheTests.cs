@@ -40,7 +40,8 @@ public sealed class ExactKnnSemanticIndexCacheTests
         => new(
             harness.GrainFactory,
             harness.Services.GetRequiredService<Serializer>(),
-            new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions { VectorCacheTtl = TimeSpan.Zero }));
+            new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions { VectorCacheTtl = TimeSpan.Zero }),
+            harness.Services.GetRequiredService<RepoContextRetrievalGuardReporter>());
 
     [Test]
     public async Task A_cache_hit_returns_the_same_results_as_the_first_scan()

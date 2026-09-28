@@ -128,6 +128,48 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
     }
 
     [Test]
+    public async Task A_pin_state_write_queued_behind_a_held_lock_lands_once_the_lock_is_released()
+    {
+        // Issue #3761 item 6: under a bulk ingest a pin-state write waited out the busy
+        // window behind the bulk write convoy, failed with "database is locked", and left
+        // the published pin stale. Here the lock is held past one busy window (1 s) and
+        // released inside the retry budget, so only a re-issue can land the write.
+        var logger = new RecordingLogger();
+        using var meter = new RepoContextGrainStorageLockMeter();
+        using var recorder = new MeterRecorder(meter);
+        var policy = new RepoContextGrainStorageLockRetryPolicy(
+            maxRetries: 2, baseDelay: TimeSpan.FromMilliseconds(100), RepoContextGrainStorageLockRetryPolicy.PinStateNamePrefix);
+        var storage = await StartOverRealProviderAsync(meter, logger, policy);
+        var grain = Grain("repo-context-vector-index~s1");
+
+        Task write;
+        using (HoldWriteLock())
+        {
+            write = Task.Run(() => storage.WriteStateAsync(
+                RepoContextGrainStorageLockRetryPolicy.PinStateNamePrefix + "~b15",
+                grain,
+                new GrainState<string> { State = "pin" }));
+            await Task.Delay(TimeSpan.FromMilliseconds(1_300));
+        }
+
+        await write;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(StoredRowCount(), Is.EqualTo(1L), "The pin write must land once the convoy clears.");
+            Assert.That(logger.Entries, Is.Not.Empty,
+                "Control: the held lock must actually have failed the first attempt, otherwise the "
+                + "write was never contended and this proves nothing about the re-issue.");
+            Assert.That(logger.Entries[0]["Wait"], Is.EqualTo(RepoContextGrainStorageLockMeter.WaitExhausted));
+            Assert.That(logger.Entries.Select(e => e["Retrying"]), Has.All.EqualTo(true));
+            Assert.That(recorder.Sum(
+                    RepoContextGrainStorageLockMeter.LockRetriesCounterName,
+                    (RepoContextGrainStorageLockMeter.OutcomeTag, RepoContextGrainStorageLockMeter.OutcomeRecovered)),
+                Is.EqualTo(1d));
+        });
+    }
+
+    [Test]
     public async Task The_real_provider_initialises_through_the_decorator_lifecycle()
     {
         using var meter = new RepoContextGrainStorageLockMeter();
@@ -141,7 +183,9 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
     }
 
     private async Task<RepoContextLockAttributingGrainStorage> StartOverRealProviderAsync(
-        RepoContextGrainStorageLockMeter meter, RecordingLogger logger)
+        RepoContextGrainStorageLockMeter meter,
+        RecordingLogger logger,
+        RepoContextGrainStorageLockRetryPolicy? retryPolicy = null)
     {
         DurabilitySelector.RegisterAdoNetFactories();
         var connectionString = SqliteSchemaInitializer.BuildConnectionString(_dbPath, ShortRequestBudget);
@@ -162,7 +206,9 @@ public sealed partial class RepoContextLockAttributingGrainStorageTests
             provider,
             meter,
             logger,
-            TimeSpan.FromSeconds(new SqliteConnectionStringBuilder(connectionString).DefaultTimeout));
+            TimeSpan.FromSeconds(new SqliteConnectionStringBuilder(connectionString).DefaultTimeout),
+            timeProvider: null,
+            retryPolicy);
 
         ILifecycleObserver? observer = null;
         var lifecycle = Substitute.For<ISiloLifecycle>();

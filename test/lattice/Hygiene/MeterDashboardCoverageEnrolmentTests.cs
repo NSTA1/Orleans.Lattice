@@ -96,6 +96,14 @@ public sealed class MeterDashboardCoverageEnrolmentTests
     private static readonly (string Meter, string Reason)[] IntentionallyUnpaneledMeters =
     [
         (
+            "orleans.lattice.api.mcp",
+            "The MCP host's only instrument counts tool calls rejected as a caller mistake, which "
+                + "are answered with an error result rather than logged (issue #3761). No bundled "
+                + "dashboard charts the MCP host, and the counter is recorded unpaneled in "
+                + "docs/lattice.dashboards/metrics-to-panel-map.md; ApiMcpMetricsDocCoverageTests "
+                + "holds that documentation entry in place."
+        ),
+        (
             "Orleans.Lattice.Api.Mcp.RepoContext",
             "No bundled dashboard charts the repository-context surface, and the gap is recorded row by row "
                 + "in docs/lattice.dashboards/metrics-to-panel-map.md rather than left to be inferred. "

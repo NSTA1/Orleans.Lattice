@@ -5,12 +5,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// Detaching is irreversible for the life of the activation: nothing
 /// re-attaches a frame, so every row the cache holds stays resident and no
-/// later eviction can recover the footprint. A leaf that is subsequently asked
-/// to divide can then only do so through the ordered view, which materialises
-/// the whole leaf - the cost the frame exists to avoid. Recording the surface
-/// that detached makes that forfeiture attributable, because the split seam
-/// itself cannot tell a leaf that never had a frame from one whose frame an
-/// unrelated whole-leaf operation consumed.
+/// later eviction can recover the footprint. The detach is where the cost is
+/// paid: the named surface materialised (or discarded) the whole leaf at that
+/// moment. A leaf subsequently asked to divide can then only do so through the
+/// ordered view, but that view materialises nothing extra - the rows are
+/// already resident - so the division observes the forfeiture rather than
+/// causing it (issue #2856). Recording the surface that detached makes the
+/// forfeiture attributable to the path that actually paid for it, because the
+/// split seam itself cannot tell a leaf that never had a frame from one whose
+/// frame an unrelated whole-leaf operation consumed.
 /// </para>
 /// </summary>
 internal enum LeafSnapshotDetachSeam

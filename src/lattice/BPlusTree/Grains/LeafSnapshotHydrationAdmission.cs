@@ -122,30 +122,44 @@ internal sealed class LeafSnapshotHydrationAdmission
     /// <para>
     /// This is the single most important number in the gate, and sizing the
     /// budget against stored bytes instead would make it several times too
-    /// permissive. The leaf's persistent state is written by the ADO.NET grain
-    /// storage provider as JSON <b>text</b>, so reading it back is not a byte
-    /// copy. The live failing stack shows the sequence, and the lifetimes
-    /// overlap rather than succeed one another:
+    /// permissive. "Stored" here is the encoded frame length, per
+    /// <c>BPlusLeafGrain.MeasureSnapshotLoadBytes</c>, and the heap one
+    /// hydration costs over it depends on which of the two live read paths the
+    /// persisted payload takes (issue #2858). Reads route on the payload, not on
+    /// the type, so both paths are live on any estate that predates issue #2516:
     /// </para>
-    /// <list type="number">
-    /// <item><description>the provider reads the column
-    /// (<c>SqliteValueReader.GetValue</c> / <c>GetBlob</c>);</description></item>
-    /// <item><description><c>System.String.Ctor(char[], int, int)</c> builds a
-    /// string of the whole document - UTF-16, so <b>2x</b> the stored byte
-    /// length;</description></item>
-    /// <item><description>the <c>char[]</c> being copied <i>from</i> is still
-    /// live while that happens - another <b>2x</b>;</description></item>
-    /// <item><description>Newtonsoft then parses an object graph on top of
-    /// it.</description></item>
+    /// <list type="bullet">
+    /// <item><description><b>Binary (current writes).</b> A blob written by a
+    /// current build carries the Orleans binary <c>LGB1</c> marker and is decoded
+    /// by <c>LatticeGrainStorageSerializer</c>. The provider's column read plus
+    /// the decoded rows cost about <b>2x</b> the frame, measured in both total
+    /// allocation and peak live heap.</description></item>
+    /// <item><description><b>Legacy JSON (pre-#2516 writes).</b> A blob without
+    /// the marker falls back to the JSON grain storage serializer. The base64
+    /// document is itself 4/3 of the frame, and reading it back builds a UTF-16
+    /// <c>System.String</c> of the whole document on top of Newtonsoft's growing
+    /// character buffer before the decoded rows are allocated: about <b>13x</b>
+    /// the frame in total allocation, with a sampled peak live heap of
+    /// <b>10x</b> or more. This is the shape of the original incident, whose
+    /// <see cref="OutOfMemoryException"/> landed in <c>String.Ctor</c> and
+    /// <c>JsonTextReader.ParseReadString</c> rather than in the blob
+    /// read.</description></item>
     /// </list>
     /// <para>
-    /// Four multiples are therefore unavoidable before the parse allocates
-    /// anything, which is why the observed <see cref="OutOfMemoryException"/>
-    /// lands in <c>String.Ctor</c> and <c>JsonTextReader.ParseReadString</c>
-    /// rather than in the blob read. Five is a deliberately conservative floor
-    /// on that shape, not a tuning parameter: erring low re-admits the very
-    /// fan-out this gate exists to stop, while erring high only serialises a
-    /// cold start that is already the slow path.
+    /// Five is therefore <b>not</b> a floor on the legacy JSON read, as an
+    /// earlier revision of this comment claimed; it is a single price the gate
+    /// must charge before it can know which path a claim will take. It covers
+    /// the binary path with 2.5x headroom and deliberately under-prices the
+    /// legacy one, whose excess the budget absorbs: because the whole budget is
+    /// only 1/<see cref="HeapBudgetDivisor"/> of the heap limit, an all-legacy
+    /// cold start admitted to the full budget peaks at about 13/5/8 of the limit,
+    /// roughly a third. Raising the factor to the legacy figure would halve
+    /// admission for every current blob, and push more leaves into sole
+    /// occupancy, to protect a population that shrinks as leaves re-snapshot in
+    /// binary. Lowering it to the binary figure would let that same storm reach
+    /// most of the limit. <c>LeafSnapshotHydrationAmplificationTests</c> measures
+    /// both paths and fails on either mistake, so do not change this value from
+    /// a measurement of one path alone.
     /// </para>
     /// <para>
     /// A worked example, purely to show the shape of the asymmetry - the gate

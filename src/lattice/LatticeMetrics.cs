@@ -4470,22 +4470,34 @@ public static class LatticeMetrics
     /// pivot from the snapshot frame alone and fell back to the ordered view,
     /// tagged by tree, <see cref="TagReason"/> and <see cref="TagDetachSeam"/>.
     /// <para>
-    /// The fallback materialises the whole leaf and ends in a detach, so every
-    /// row is resident for the life of the activation and no later eviction can
-    /// recover the footprint. On an oversized leaf that is the allocation the
-    /// division can least afford, which makes dividing it require an allocation
-    /// proportional to its size - so a leaf that cannot afford it stays over
-    /// threshold and keeps growing.
+    /// What the fallback costs is decided by whether a snapshot frame is still
+    /// attached at the moment of refusal, and the reason tag says which. The
+    /// fallback reads the ordered key view, whose whole-cache hydration returns
+    /// immediately when no frame is attached and otherwise materialises every
+    /// row the frame still owns and detaches it, leaving those rows resident and
+    /// unsheddable for the life of the activation (issue #2856):
     /// </para>
-    /// <para>
-    /// The two tags are only useful together. <see cref="TagReason"/> =
-    /// <c>no_snapshot_attached</c> with <see cref="TagDetachSeam"/> = <c>none</c>
-    /// is benign: the leaf was replayed from the write-ahead log, never attached
-    /// a frame, and its rows were already resident, so the fallback costs
-    /// nothing extra. The same reason with any other seam is a forfeiture, and
-    /// the seam names the surface that caused it. Reading the reason alone
-    /// conflates the two, and they have opposite costs.
-    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>no_snapshot_attached</c> - <b>free at the refusal.</b>
+    /// The reason is reported exactly when no frame is attached, so every row was
+    /// already resident before the division began and the fallback materialises
+    /// nothing. With <see cref="TagDetachSeam"/> = <c>none</c> no frame was ever
+    /// attached (a leaf replayed from the write-ahead log) and nothing was
+    /// forfeited. With any other seam a frame was attached and the named surface
+    /// had already materialised or discarded it, earlier and typically on the
+    /// read path: the fast path was lost there, the cost was sunk there, and the
+    /// seam is where to look - not the split path, which only observes the
+    /// consequence.</description></item>
+    /// <item><description><c>too_few_rows</c> - cheap. A frame is attached but
+    /// declares fewer than two rows, so the fallback materialises at most one
+    /// frame row.</description></item>
+    /// <item><description><c>frame_key_unreadable</c> and
+    /// <c>no_key_sorts_below_pivot</c> - <b>expensive.</b> A frame is still
+    /// attached with its rows, so the fallback itself materialises the whole
+    /// remainder of the leaf and detaches the frame. These are the only reasons
+    /// at which the refusal is the forfeiture, and on an oversized leaf that is
+    /// the allocation the division can least afford.</description></item>
+    /// </list>
     /// </summary>
     public static readonly Counter<long> LeafBisectRefusals =
         Meter.CreateCounter<long>("orleans.lattice.leaf.bisect_refusals", unit: "{refusal}",
@@ -4508,7 +4520,7 @@ public static class LatticeMetrics
     /// evidence at all.
     /// </para>
     /// <para>
-    /// All five outcomes are zero-primed at the capture seam, for the reason
+    /// All six outcomes are zero-primed at the capture seam, for the reason
     /// established by issue #2756 on <see cref="LeafByteOverflows"/>: a
     /// <see cref="Counter{T}"/> exports nothing until its first
     /// <c>Add</c>, so an absent series and a measured zero are the same
@@ -4543,7 +4555,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSplitAttempts =
         Meter.CreateCounter<long>("orleans.lattice.leaf.split_attempts", unit: "{attempt}",
-            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/gate_contended/already_under_capacity/no_admissible_pivot/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
+            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/recovered/gate_contended/already_under_capacity/no_admissible_pivot/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
 
     /// <summary>Canonical name of <see cref="LeafSplitAttempts"/>.</summary>
     public const string LeafSplitAttemptsName = "orleans.lattice.leaf.split_attempts";
@@ -4554,6 +4566,28 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitDivided =
         new(TagOutcome, "divided");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>recovered</c> on
+    /// <see cref="LeafSplitAttempts"/>: a division whose intent was already
+    /// durable - left half-finished by an earlier attempt that threw, by a
+    /// deactivation, or by a crash - was resumed by the recovery path and ran
+    /// to completion. Issue #2860.
+    /// <para>
+    /// Distinct from <see cref="LeafSplitDivided"/> so that a recovered
+    /// completion is never mistaken for a fresh one, and deliberately NOT
+    /// accompanied by a second <see cref="LeafSplits"/> increment: that counter
+    /// counts initiations and already counted this division when its intent
+    /// was persisted. A grain can deactivate and reactivate for idle collection
+    /// with the process alive, so an increment there would double-count one
+    /// division in the same counter lifetime. Read together,
+    /// <c>splits - divided</c> is the divisions that were stranded mid-division
+    /// and <c>splits - divided - recovered</c> is those still stranded, within
+    /// one process lifetime.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitRecovered =
+        new(TagOutcome, "recovered");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>gate_contended</c> on
@@ -5590,6 +5624,38 @@ public static class LatticeMetrics
     public const string LeafDeactivationBarrierDurationName = "orleans.lattice.leaf.deactivation.barrier.duration";
 
     /// <summary>
+    /// Counter of graceful-deactivation barriers that were elided because the
+    /// pin store had already acknowledged everything the barrier would publish,
+    /// tagged with <see cref="TagTree"/>, <see cref="TagReason"/> (only
+    /// <c>frontier_pin</c> today) and the tenant dimension.
+    /// <para>
+    /// <b>Why this exists (issue #3643).</b> The <c>frontier_pin</c> barrier
+    /// republishes the leaf's durable materialiser pin at the end of every
+    /// graceful deactivation, but the teardown persist tail has usually just
+    /// published and been acknowledged for the very same pin, so the barrier
+    /// pays a pin-store round trip that changes nothing. The barrier now skips
+    /// that call when every partition's pin is dominated, on both the frontier
+    /// and the offset axis, by an acknowledgement obtained in the same
+    /// deactivation. This counts the skips, so the saving is visible and a
+    /// regression that silently stops eliding is too.
+    /// </para>
+    /// <para>
+    /// Read it against the <c>frontier_pin</c> series of
+    /// <see cref="LeafDeactivationBarrierDuration"/>, which is still recorded
+    /// for an elided barrier: the ratio of this rate to that histogram's count
+    /// rate is the fraction of drains whose pin publish was redundant. Not
+    /// zero-primed, matching its sibling barrier instruments; a series appears
+    /// on the first elision.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafDeactivationBarrierElided =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.deactivation.barrier.elided", unit: "{barrier}",
+            description: "Graceful-deactivation barriers skipped because the pin store had already acknowledged, in the same deactivation, a pin dominating everything the barrier would publish, tagged by tree and barrier (frontier_pin).");
+
+    /// <summary>Canonical name of <see cref="LeafDeactivationBarrierElided"/>.</summary>
+    public const string LeafDeactivationBarrierElidedName = "orleans.lattice.leaf.deactivation.barrier.elided";
+
+    /// <summary>
     /// <see cref="TagReason"/> value for the coalesced projection-digest publish
     /// barrier. Benign in isolation - the digest is staleness-tolerant and the
     /// next mutation republishes it.
@@ -6094,6 +6160,19 @@ public static class LatticeMetrics
     /// managed to drive was abandoned with advice about its snapshot capture.
     /// </para>
     /// <para>
+    /// It is also the one terminal arm <b>outside</b> <c>attempted</c> (issue
+    /// #3761). A refused try never reached the drive, so it is not an attempt:
+    /// <c>attempted</c> counts only touches that reached the leaf, the other
+    /// terminal arms partition it exactly once each, and
+    /// <c>admission_refused</c> counts every refused try on its own. A pass
+    /// holds no more touches in flight than this silo's GC starvation share and
+    /// re-drives a refused touch once a sibling touch of the same pass frees a
+    /// slot, so one consumer may be refused more than once in a pass. Divide
+    /// <c>attempted</c> by the <c>orleans.lattice.wal.gc.blocked_consumers</c>
+    /// census for the per-blocker touch rate (issue #2878); counting refusals in
+    /// the numerator once inflated it with touches that tested nothing.
+    /// </para>
+    /// <para>
     /// The <b>drive verdict</b> arms (issue #2692 Half B) are held to both
     /// conditions by construction rather than by promise, because they were
     /// added one commit after the two above were established and there was no
@@ -6131,7 +6210,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale/admission_refused) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode, and admission_refused (issue #3575) is a drive the leaf's silo refused admission to its WAL replay gate before replaying anything, which is not charged against the consumer's attempt budget. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. Every arm is zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale/admission_refused) are the per-touch outcome; every one but admission_refused partitions 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode, and admission_refused (issue #3575) counts each try the leaf's silo refused admission to its WAL replay gate before replaying anything, which is not an attempt, is not charged against the consumer's attempt budget, and may recur within a pass (issue #3761). The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out/drove_admission_refused, issues #2692, #3065 and #3761) are what came of driving a starved leaf's replay forward. Every arm is zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
@@ -7663,6 +7742,22 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveTimedOut =
         new(TagOutcome, "drove_timed_out");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalGcBlockedLeafReactivations"/>
+    /// for a starvation drive that was refused a replay permit before it replayed
+    /// anything (<c>LeafStarvationDriveOutcome.AdmissionRefused</c>, issue #3761).
+    /// </summary>
+    /// <remarks>
+    /// The same refusal used to reach the scheduler as a
+    /// <see cref="LatticeSaturatedException"/> and was reported only as the
+    /// terminal <c>admission_refused</c> outcome. It is now returned as a
+    /// verdict, so it is recorded here as well as under that terminal outcome;
+    /// the refusal itself is counted on <see cref="SaturationRefusals"/> with
+    /// source <c>replay_permit_admission</c>.
+    /// </remarks>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationDroveAdmissionRefused =
+        new(TagOutcome, "drove_admission_refused");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="LeafByteOverflows"/> for a
@@ -9614,6 +9709,86 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalAppendAdmissionSaturationRefusals =
         Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.admission_saturation_refusals", unit: "{refusal}",
             description: "Count of writer-side admission dispatches refused with LatticeSaturatedException because the saturation signal stayed Saturated beyond WalAdmissionSaturationWaitBudget.");
+
+    /// <summary>
+    /// Tag key naming the admission seam that refused an operation, on
+    /// <see cref="SaturationRefusals"/>. The value is the snake_case form of
+    /// the <see cref="LatticeSaturationSource"/> the refusal carries, as
+    /// mapped by <see cref="SaturationSourceTag"/>.
+    /// </summary>
+    public const string TagSaturationSource = "source";
+
+    /// <summary>
+    /// Instrument name of <see cref="SaturationRefusals"/>, exported so
+    /// dashboards and tests resolve it without a string literal.
+    /// </summary>
+    public const string SaturationRefusalsName = "orleans.lattice.saturation.refusals";
+
+    /// <summary>
+    /// Count of saturation refusals, one per refusal, at every seam that
+    /// raises <see cref="LatticeSaturatedException"/>, and at the one seam
+    /// that now reports its refusal as a result instead: a starvation drive
+    /// refused a replay permit, which returns
+    /// <c>LeafStarvationDriveOutcome.AdmissionRefused</c> (issue #3761).
+    /// Tagged with <see cref="TagTree"/>, <see cref="TagSaturationSource"/>
+    /// and the tenant.
+    /// <para>
+    /// <b>Why it exists.</b> The runtime's own exception counter reported
+    /// about 490 refusals a minute with no way to say which seam raised
+    /// them, while every per-seam counter read zero. Each seam already
+    /// knows its <see cref="LatticeSaturationSource"/>, so the source is
+    /// recorded here at the refusal itself rather than reconstructed from
+    /// logs. Every refusal is recorded through
+    /// <see cref="RecordSaturationRefusal"/> immediately before the seam
+    /// throws or returns its refused result.
+    /// </para>
+    /// <para>
+    /// Not primed: the tree id is a runtime value, so a prime would need
+    /// every tree up front. An absent series therefore means no refusal of
+    /// that source has happened on this silo since start, not zero
+    /// measured.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> SaturationRefusals =
+        Meter.CreateCounter<long>(SaturationRefusalsName, unit: "{refusal}",
+            description: "Count of saturation refusals by the admission seam (source) that refused them, whether raised as LatticeSaturatedException or returned as a refused result.");
+
+    /// <summary>
+    /// Records one saturation refusal from <paramref name="source"/> on
+    /// <paramref name="treeId"/>, on <see cref="SaturationRefusals"/>.
+    /// </summary>
+    /// <param name="treeId">The refused tree, or <see langword="null"/> when none is known.</param>
+    /// <param name="source">The admission seam that refused.</param>
+    internal static void RecordSaturationRefusal(string? treeId, LatticeSaturationSource source)
+        => SaturationRefusals.Add(
+            1,
+            new KeyValuePair<string, object?>(TagTree, treeId ?? string.Empty),
+            SaturationSourceTag(source),
+            LatticeTenantLabel.ForTree(treeId));
+
+    /// <summary>
+    /// Maps a <see cref="LatticeSaturationSource"/> to its
+    /// <see cref="TagSaturationSource"/> arm on
+    /// <see cref="SaturationRefusals"/>. Throws for an unmapped value rather
+    /// than folding it into a neighbour, for the reason
+    /// <c>LatticeWalGcScheduler.DriveOutcomeTag</c> gives.
+    /// </summary>
+    /// <param name="source">The refusing seam.</param>
+    internal static KeyValuePair<string, object?> SaturationSourceTag(LatticeSaturationSource source)
+        => new(TagSaturationSource, source switch
+        {
+            LatticeSaturationSource.Unspecified => "unspecified",
+            LatticeSaturationSource.WalAdmission => "wal_admission",
+            LatticeSaturationSource.AtomicWriteSaga => "atomic_write_saga",
+            LatticeSaturationSource.SnapshotCursorOpen => "snapshot_cursor_open",
+            LatticeSaturationSource.ReplayPermitAdmission => "replay_permit_admission",
+            LatticeSaturationSource.SetManyFanOut => "set_many_fan_out",
+            LatticeSaturationSource.TxRegistryCapacity => "tx_registry_capacity",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(source),
+                source,
+                "Every saturation source must have a metric arm; an unmapped one would be counted under no source at all (issue #3761)."),
+        });
 
     /// <summary>
     /// Tag key for the per-tree saturation state on

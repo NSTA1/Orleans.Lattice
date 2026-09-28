@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -52,9 +54,23 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <see cref="System.OperationCanceledException"/> is rethrown unchanged to
 /// preserve cancellation semantics.
 /// </para>
+/// <para>
+/// A fault classified as the caller's mistake (see <see cref="McpToolClientErrors"/>) is
+/// answered here with the MCP error result the SDK would have built, logged at Debug
+/// without a stack, and counted on <see cref="LatticeApiMcpMetrics.ToolClientErrors"/>
+/// (issue #3761). Throwing it instead would have the SDK log it at Error as an
+/// unhandled exception. Every other fault - a server fault, an authorization denial, a
+/// region rejection - is still thrown.
+/// </para>
 /// </remarks>
 internal sealed class CredentialStampingTool : DelegatingMcpServerTool
 {
+    private static readonly Action<ILogger, string, string, string, Exception?> LogClientError =
+        LoggerMessage.Define<string, string, string>(
+            LogLevel.Debug,
+            new EventId(1, "McpToolClientError"),
+            "Tool call \"{ToolName}\" was rejected as a client error ({Reason}): {Message}");
+
     private readonly LatticeApiMcpGroup? _group;
     private readonly Tool _protocolTool;
     private readonly IReadOnlySet<string> _allowedArguments;
@@ -119,7 +135,11 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         // Strict binding: an argument the tool does not declare is a caller error
         // (typically a misspelled or unsupported parameter name), so reject it with
         // a message naming the offending argument rather than silently ignoring it.
-        EnsureNoUnknownArguments(request);
+        // It is answered as a client error result, never thrown (issue #3761).
+        if (DescribeUnknownArguments(request) is { } unknownArguments)
+        {
+            return ReportClientError(services, toolName, unknownArguments, McpToolClientErrorReason.UnknownArgument);
+        }
 
         var requestedRegion = ReadRequestedRegion(request);
 
@@ -231,8 +251,45 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
             // actionable McpException is surfaced unchanged; everything else -
             // including a FileNotFoundException raised while JIT-compiling an
             // adapter that names a missing satellite assembly - is translated.
-            throw McpToolFaultTranslator.Translate(ex);
+            var fault = McpToolClientErrors.FromArgumentBindingFault(ex, ProtocolTool.Name)
+                ?? McpToolFaultTranslator.Translate(ex);
+
+            // A caller mistake is answered, not thrown: the SDK logs every thrown
+            // tool exception at Error with its stack (issue #3761).
+            if (McpToolClientErrors.TryGetReason(fault, out var reason))
+            {
+                return ReportClientError(request.Services!, ProtocolTool.Name, fault.Message, reason);
+            }
+
+            throw fault;
         }
+    }
+
+    /// <summary>
+    /// Answers a client error with the error result the SDK builds for a thrown
+    /// <see cref="McpException"/>, so the caller sees the same content, while
+    /// logging it at Debug without a stack and counting it.
+    /// </summary>
+    /// <param name="services">The request's service provider, for the logger.</param>
+    /// <param name="toolName">The invoked tool.</param>
+    /// <param name="message">The caller-facing message.</param>
+    /// <param name="reason">Why the call was rejected.</param>
+    /// <returns>An error <see cref="CallToolResult"/>.</returns>
+    internal static CallToolResult ReportClientError(
+        IServiceProvider services, string toolName, string message, McpToolClientErrorReason reason)
+    {
+        var reasonTag = McpToolClientErrors.ReasonTag(reason);
+        LatticeApiMcpMetrics.RecordToolClientError(toolName, reason);
+
+        var logger = services.GetService<ILoggerFactory>()?.CreateLogger<CredentialStampingTool>()
+            ?? NullLogger<CredentialStampingTool>.Instance;
+        LogClientError(logger, toolName, reasonTag, message, null);
+
+        return new CallToolResult
+        {
+            IsError = true,
+            Content = [new TextContentBlock { Text = $"An error occurred invoking '{toolName}': {message}" }],
+        };
     }
 
     private static string? ReadRequestedRegion(RequestContext<CallToolRequestParams> request)
@@ -257,12 +314,13 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
     /// parameter - and silently discarding it lets the call run with a meaning the
     /// caller never intended, so it faults fast with a message naming the offenders.
     /// </summary>
-    private void EnsureNoUnknownArguments(RequestContext<CallToolRequestParams> request)
+    /// <returns>The rejection message, or <see langword="null"/> when every argument is declared.</returns>
+    private string? DescribeUnknownArguments(RequestContext<CallToolRequestParams> request)
     {
         var arguments = request.Params?.Arguments;
         if (arguments is null || arguments.Count == 0)
         {
-            return;
+            return null;
         }
 
         List<string>? unknown = null;
@@ -276,12 +334,12 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
 
         if (unknown is null)
         {
-            return;
+            return null;
         }
 
         unknown.Sort(StringComparer.Ordinal);
         var offending = string.Join(", ", unknown.Select(static n => $"'{n}'"));
-        throw new McpException(
+        return (
             $"The '{ProtocolTool.Name}' tool does not accept the argument(s): {offending}. "
             + $"Accepted arguments: {_acceptedArgumentsDescription}. "
             + "Check for a misspelled or unsupported argument name; unknown arguments are "

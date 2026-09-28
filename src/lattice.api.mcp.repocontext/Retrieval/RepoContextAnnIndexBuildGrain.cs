@@ -160,12 +160,13 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// <see cref="VectorIndexBuildProgress.SlicesDeadlinedWithoutProgress"/> in
     /// particular - are per index instance and reset with the handle, so carrying a
     /// baseline across activations would compare a fresh instance's counters
-    /// against a retired one's and manufacture a spurious classification. The
-    /// default baseline names phase <c>NotStarted</c> and zero of everything, which
-    /// is exactly what a build that has not yet stepped holds.
+    /// against a retired one's and manufacture a spurious classification. Seeded
+    /// from the opened index before this activation's first build step, because
+    /// a restored or silo-cached index can already hold vectors.
     /// </para>
     /// </summary>
     private VectorIndexBuildProgress _previousProgress;
+    private bool _progressBaselineSeeded;
 
     /// <summary>
     /// Whether the tick currently executing has already recorded its step on the
@@ -484,9 +485,9 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// later one.</b> <see cref="ScanPageStalledException"/> derives from
     /// <see cref="TimeoutException"/>, so testing the timeout arm first would
     /// silently swallow every leaf-chain stall into
-    /// <see cref="RepoContextAnnBuildFaultCause.DependencyUnavailable"/> - and those
+    /// <see cref="RepoContextAnnBuildFaultCause.ResponseTimeout"/> - and those
     /// have opposite remedies, one being a tree whose leaf cannot be materialised in
-    /// a single grain call and the other a cluster that has not settled.
+    /// a single grain call and the other a response deadline with no proven cause.
     /// <see cref="LeafProjectionStaleException"/> and
     /// <see cref="EmbeddingSpaceMismatchException"/> both derive from
     /// <see cref="InvalidOperationException"/>, which is why no arm matches that base
@@ -556,7 +557,12 @@ internal sealed class RepoContextAnnIndexBuildGrain(
                 return RepoContextAnnBuildFaultCause.PlaneRejected;
             }
 
-            if (e is TimeoutException or System.IO.IOException)
+            if (e is TimeoutException)
+            {
+                return RepoContextAnnBuildFaultCause.ResponseTimeout;
+            }
+
+            if (e is System.IO.IOException)
             {
                 return RepoContextAnnBuildFaultCause.DependencyUnavailable;
             }
@@ -754,6 +760,12 @@ internal sealed class RepoContextAnnIndexBuildGrain(
         // makes the total a record of work attempted rather than of work finished;
         // moving this call under the Ready check would restore exactly the
         // blindness it was added to remove.
+        if (!_progressBaselineSeeded && _phaseProbe.InitialProgress is { } initial)
+        {
+            _previousProgress = initial;
+            _progressBaselineSeeded = true;
+        }
+
         sliceReporter.RecordSlice(
             RepoContextAnnBuildSliceReporter.Classify(_previousProgress, progress),
             repoId,
