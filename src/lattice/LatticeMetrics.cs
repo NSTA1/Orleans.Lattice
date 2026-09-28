@@ -6084,6 +6084,19 @@ public static class LatticeMetrics
     /// managed to drive was abandoned with advice about its snapshot capture.
     /// </para>
     /// <para>
+    /// It is also the one terminal arm <b>outside</b> <c>attempted</c> (issue
+    /// #3761). A refused try never reached the drive, so it is not an attempt:
+    /// <c>attempted</c> counts only touches that reached the leaf, the other
+    /// terminal arms partition it exactly once each, and
+    /// <c>admission_refused</c> counts every refused try on its own. A pass
+    /// holds no more touches in flight than this silo's GC starvation share and
+    /// re-drives a refused touch once a sibling touch of the same pass frees a
+    /// slot, so one consumer may be refused more than once in a pass. Divide
+    /// <c>attempted</c> by the <c>orleans.lattice.wal.gc.blocked_consumers</c>
+    /// census for the per-blocker touch rate (issue #2878); counting refusals in
+    /// the numerator once inflated it with touches that tested nothing.
+    /// </para>
+    /// <para>
     /// The <b>drive verdict</b> arms (issue #2692 Half B) are held to both
     /// conditions by construction rather than by promise, because they were
     /// added one commit after the two above were established and there was no
@@ -6121,7 +6134,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalGcBlockedLeafReactivations =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.blocked_leaf_reactivations", unit: "{reactivation}",
-            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale/admission_refused) are the per-touch outcome and partition 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode, and admission_refused (issue #3575) is a drive the leaf's silo refused admission to its WAL replay gate before replaying anything, which is not charged against the consumer's attempt budget. The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. Every arm is zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
+            description: "Reactivations of a dormant leaf whose unusable durable materialiser pin blocked its tree's WAL cursor floor (issue #2710), tagged by tree and outcome. Three disjoint groups of arms share this instrument. The lifecycle arms (attempted/healed/abandoned/rearmed) count what the sweep did. The terminal arms (completed/unresolvable/faulted/undelivered/orphaned/latched_stale/admission_refused) are the per-touch outcome; every one but admission_refused partitions 'attempted' exactly once each, so they sum to it; latched_stale (issue #3478) is terminal for its pin, which is never driven again in that episode, and admission_refused (issue #3575) counts each try the leaf's silo refused admission to its WAL replay gate before replaying anything, which is not an attempt, is not charged against the consumer's attempt budget, and may recur within a pass (issue #3761). The drive-verdict arms (drove_lifted/drove_no_advance/drove_memory_refused/drove_not_driven/drove_already_driving/drove_timed_out, issues #2692 and #3065) are what came of driving a starved leaf's replay forward. Every arm is zero-primed once per tree per process, latched on the tree's first collection rather than repeated per pass. Read a zero on a terminal or drive arm as measured: both groups are gated for exhaustive arming and each arm is proven to advance by its own positive control (issues #2938, #2942, #2692). Priming alone would not license that reading, since a primed arm whose recording path is unreachable is frozen at zero and looks identical to a quiet one.");
 
     /// <summary>Canonical name of <see cref="WalGcBlockedLeafReactivations"/>.</summary>
     public const string WalGcBlockedLeafReactivationsName = "orleans.lattice.wal.gc.blocked_leaf_reactivations";
