@@ -51,9 +51,17 @@ namespace Orleans.Lattice.Tests;
 /// </summary>
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
-    /// <summary>The terminal arms, which partition every attempted touch.</summary>
+    /// <summary>
+    /// The terminal arms. Every one but <c>admission_refused</c> partitions the
+    /// attempted touches; a refused try never reached the drive, so it is
+    /// counted on its own arm and not on <c>attempted</c> (issue #3761).
+    /// </summary>
     private static readonly string[] TerminalOutcomeArms =
         ["completed", "unresolvable", "faulted", "undelivered", "orphaned", "latched_stale", "admission_refused"];
+
+    /// <summary>The terminal arms that partition <c>attempted</c> exactly once each.</summary>
+    private static readonly string[] AttemptedPartitionArms =
+        TerminalOutcomeArms.Where(arm => arm != "admission_refused").ToArray();
 
     [Test]
     public void ReactivationOutcomeTag_arms_every_declared_terminal_outcome()
@@ -277,14 +285,30 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             {
                 await StartAndRunFirstPassAsync(scheduler, time);
                 var attempted = await AttemptsBeforeRetriesEndAsync(time, recorder);
-                var terminal = TerminalOutcomeArms.Sum(arm => Outcomes(recorder, arm));
+                var partitioned = AttemptedPartitionArms.Sum(arm => Outcomes(recorder, arm));
+                var refused = Outcomes(recorder, "admission_refused");
 
                 Assert.Multiple(() =>
                 {
-                    Assert.That(attempted, Is.GreaterThan(0),
-                        $"'{treeId}' must issue touches, or its sum below is vacuously equal.");
-                    Assert.That(terminal, Is.EqualTo(attempted),
-                        $"'{treeId}' must account for every attempted touch on exactly one terminal arm, which is the partition the instrument's description promises.");
+                    if (probe == AdmissionRefusedProbe)
+                    {
+                        // Issue #3761: a refused try tested nothing, so it is not
+                        // an attempt. Before the fix it was counted on both.
+                        Assert.That(refused, Is.GreaterThan(0),
+                            $"'{treeId}' must be refused, or its zero 'attempted' below is vacuous.");
+                        Assert.That(attempted, Is.Zero,
+                            $"'{treeId}' was refused on every try, so no touch reached the drive and none may be counted as attempted.");
+                    }
+                    else
+                    {
+                        Assert.That(attempted, Is.GreaterThan(0),
+                            $"'{treeId}' must issue touches, or its sum below is vacuously equal.");
+                        Assert.That(refused, Is.Zero,
+                            $"'{treeId}' was never refused admission.");
+                    }
+
+                    Assert.That(partitioned, Is.EqualTo(attempted),
+                        $"'{treeId}' must account for every attempted touch on exactly one terminal arm other than 'admission_refused', which is the partition the instrument's description promises.");
                 });
 
                 await scheduler.StopAsync(CancellationToken.None);

@@ -1712,6 +1712,32 @@ internal sealed partial class BPlusLeafGrain
         => Math.Max(1, ceiling - withheld);
 
     /// <summary>
+    /// The GC share a WAL GC sweep drive may fill on this silo right now, or 0
+    /// while this silo's replay gate has not been sized (issue #3761).
+    /// </summary>
+    /// <remarks>
+    /// Read by the WAL GC scheduler to size its concurrent touch fan-out, so a
+    /// pass does not launch more sweep drives at once than the non-queueing
+    /// admission in <see cref="TryAcquireStarvationReplayPermit"/> can take. It
+    /// is this silo's reading: a leaf activated elsewhere is admitted against
+    /// its own silo's share, which follows the same configuration, so the
+    /// figure is an estimate there rather than a bound. Zero means no leaf has
+    /// sized the gate here yet, and so no share is known.
+    /// </remarks>
+    internal static int SweepStarvationShare
+    {
+        get
+        {
+            var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
+            return ceiling <= 0
+                ? 0
+                : StarvationReplayLimit(
+                    CirculatingReplayPermits(ceiling, Volatile.Read(ref _withheldReplayPermits)),
+                    StarvationDriveOrigin.WalGcSweep);
+        }
+    }
+
+    /// <summary>
     /// Reserves a process-wide GC slot and an immediately available shared
     /// replay permit for a drive of <paramref name="origin"/>, sizing the GC
     /// share from the permits in circulation (issue #3610). A failed attempt
