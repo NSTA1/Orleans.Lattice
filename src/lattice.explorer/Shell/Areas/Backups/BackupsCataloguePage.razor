@@ -1,0 +1,133 @@
+@page "/backups"
+@page "/t/{tenant}/backups"
+@inherits ExplorerPage
+@*
+    /backups: the backup catalogue. Newest first, one page at a time, filtered
+    by kind, name prefix and tree on the server, with the inventory in the lede
+    and, when a tree is chosen, that tree's schedule status.
+*@
+
+<PageTitle>Backups - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Backups</h1>
+<p class="lt-shell-page-lede">@Lede</p>
+<BackupsNav Current="@BackupsNav.CataloguePage" />
+
+<div class="lt-toolbar">
+    <LtSelect Label="Kind" Options="@KindOptions" Value="@KindValue" ValueChanged="SetKindAsync" />
+    <LtSearchInput Label="Filter by name prefix" Placeholder="Name starts with" Value="@_nameInput" ValueChanged="value => _nameInput = value" OnSubmit="SetNameAsync" />
+    <LtSearchInput Label="Filter by tree" Placeholder="Tree, such as a/crm/orders" Value="@_treeInput" ValueChanged="value => _treeInput = value" OnSubmit="SetTreeAsync" />
+    <a class="lt-btn" href="@Href(BackupsAddresses.Capture)" data-lt-command="@BackupsArea.CaptureCommandId">Capture backup...</a>
+</div>
+
+@if (Tree is { } tree)
+{
+    <section class="lt-backups-section" aria-labelledby="lt-backups-scope-title">
+        <h2 id="lt-backups-scope-title" class="lt-backups-section__title">Schedule status of <BackupTreeLabel TreeId="@tree" /></h2>
+        @if (_scopeStatusLoading)
+        {
+            <LtSkeleton Lines="2" Label="Loading the tree's schedule status" />
+        }
+        else if (_scopeStatusError is { } scopeError)
+        {
+            <p class="lt-backups-error" role="alert">@scopeError</p>
+        }
+        else if (_scopeStatus is null)
+        {
+            <p class="lt-backups-note">This tree has no schedule and no backups yet.</p>
+        }
+        else
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Full schedule">@ScheduleText(_scopeStatus.FullScheduleRegistered, _scopeStatus.RuntimeFullBackupInterval)</LtDefinition>
+                <LtDefinition Term="Incremental schedule">@ScheduleText(_scopeStatus.IncrementalScheduleRegistered, _scopeStatus.RuntimeIncrementalBackupInterval)</LtDefinition>
+                <LtDefinition Term="Last full success">@BackupsFormat.Time(_scopeStatus.LastFullSuccessUtc, "Never")</LtDefinition>
+                <LtDefinition Term="Last incremental success">@BackupsFormat.Time(_scopeStatus.LastIncrementalSuccessUtc, "Never")</LtDefinition>
+                <LtDefinition Term="Last scheduled run">@BackupsFormat.Outcome(_scopeStatus.LastRunOutcome)</LtDefinition>
+                <LtDefinition Term="Chain depth">@_scopeStatus.ChainDepth</LtDefinition>
+            </LtDefinitionList>
+        }
+        <p class="lt-backups-note"><a class="lt-backups-link" href="@Href(BackupsAddresses.SchedulesOf(tree))">Manage this tree's schedules</a></p>
+    </section>
+}
+
+@if (_error is { } error)
+{
+    <p class="lt-backups-error" role="alert">@error</p>
+    <LtButton OnClick="ReloadAsync">Try again</LtButton>
+}
+else if (_page is null)
+{
+    <LtSkeleton Lines="6" Label="Loading backups" />
+}
+else
+{
+    <LtTable TItem="BackupManifest"
+             Items="@_page.Entries"
+             Caption="Backups, newest first"
+             CaptionHidden="true"
+             RowKey="manifest => manifest.Id"
+             DetailTitle="BackupsFormat.Name">
+        <ChildContent>
+            <LtColumn TItem="BackupManifest" Title="Name" RowHeader="true">
+                <a class="lt-backups-link" href="@Href(BackupsAddresses.Backup(context.Id))">@BackupsFormat.Name(context)</a>
+            </LtColumn>
+            <LtColumn TItem="BackupManifest" Title="Tree">
+                <BackupTreeLabel TreeId="@context.Scope.TreeId" />
+            </LtColumn>
+            <LtColumn TItem="BackupManifest" Title="Kind" Value="manifest => KindText(manifest)" />
+            <LtColumn TItem="BackupManifest" Title="Created" Mono="true" Value="manifest => BackupsFormat.Time(manifest.CreatedAtUtc)" />
+            @if (_healthAvailable)
+            {
+                <LtColumn TItem="BackupManifest" Title="Health">
+                    <BackupHealthPill Report="@HealthOf(context)" Pending="@(!_healthRead.Contains(context.Id))" />
+                </LtColumn>
+            }
+        </ChildContent>
+        <CompactRow>
+            <LtCompactRow>
+                <Primary>@BackupsFormat.Name(context)</Primary>
+                <Secondary>@BackupTreeName.Parse(context.Scope.TreeId).Name - @KindText(context) - @BackupsFormat.Time(context.CreatedAtUtc)</Secondary>
+                <State>
+                    @if (_healthAvailable)
+                    {
+                        <BackupHealthPill Report="@HealthOf(context)" Pending="@(!_healthRead.Contains(context.Id))" />
+                    }
+                </State>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions>
+            <a class="lt-btn" href="@Href(BackupsAddresses.Backup(context.Id))">Open backup</a>
+        </DetailActions>
+        <EmptyContent>
+            <LtEmptyState Title="@(IsFiltered ? "No backup matches these filters" : "No backups yet")" HeadingLevel="2">
+                @(IsFiltered ? "Clear a filter to see more." : "Capture one to start the catalogue.")
+            </LtEmptyState>
+        </EmptyContent>
+    </LtTable>
+
+    @if (_pageIndex > 0 || _page.NextPageToken is not null)
+    {
+        <div class="lt-backups-pager">
+            <span class="lt-backups-pager__position">Page @(_pageIndex + 1)</span>
+            <LtButton Disabled="@(_pageIndex == 0)" OnClick="PreviousPageAsync">Previous page</LtButton>
+            <LtButton Disabled="@(_page.NextPageToken is null)" OnClick="NextPageAsync">Next page</LtButton>
+        </div>
+    }
+}
+
+@if (Operations.Recent is { Count: > 0 } recent)
+{
+    <section class="lt-backups-section" aria-labelledby="lt-backups-operations-title">
+        <h2 id="lt-backups-operations-title" class="lt-backups-section__title">Operations this session</h2>
+        <ul class="lt-backups-list">
+            @foreach (var operation in recent.Take(10))
+            {
+                <li @key="operation.Id">
+                    <a class="lt-backups-link" href="@Href(BackupsAddresses.Operation(operation.Id))">@operation.Title</a>
+                    - @BackupsFormat.OperationStatus(operation.Status)
+                </li>
+            }
+        </ul>
+    </section>
+}

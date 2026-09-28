@@ -1,0 +1,70 @@
+@page "/backups/maintenance"
+@page "/t/{tenant}/backups/maintenance"
+@inherits ExplorerPage
+@*
+    /backups/maintenance: rebuild the catalogue from the backup store, and scrub
+    the catalogue against it. Both are high-privilege administrative actions the
+    server authorizes; a connection that does not serve them says so instead of
+    offering them.
+*@
+
+<PageTitle>Backup maintenance - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Maintenance</h1>
+<p class="lt-shell-page-lede">The backup store is the source of truth; the catalogue is a projection over it that can be rebuilt and checked.</p>
+<BackupsNav Current="@BackupsNav.MaintenancePage" />
+
+@if (_served is null)
+{
+    <LtSkeleton Lines="3" Label="Checking what this connection serves" />
+}
+else
+{
+    @if (_served == false)
+    {
+        <p class="lt-backups-note" role="status">@BackupsFaults.NotServed</p>
+    }
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-rebuild-title">
+        <h2 id="lt-backups-rebuild-title" class="lt-backups-section__title">Rebuild the catalogue</h2>
+        <p class="lt-backups-note">Scans every manifest in the backup store and records it in the catalogue. A backup already catalogued is reconciled in place; nothing is duplicated or removed. Safe to run again.</p>
+        <LtButton Disabled="@(_served == false)" OnClick="() => _confirmRebuild = true">Rebuild catalogue...</LtButton>
+        @if (Latest(BackupOperationKind.RebuildCatalogue) is { } rebuild)
+        {
+            <p class="lt-backups-note">Last run: <a class="lt-backups-link" href="@Href(rebuild)">@(rebuild.Message ?? "under way")</a></p>
+        }
+    </section>
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-scrub-title">
+        <h2 id="lt-backups-scrub-title" class="lt-backups-section__title">Check the catalogue against the store</h2>
+        <p class="lt-backups-note">Finds catalogue rows whose backup is gone from the store. An orphan row is never offered as a restore point. The check changes nothing.</p>
+        <LtButton Disabled="@(_served == false)" OnClick="CheckAsync">Check catalogue</LtButton>
+        @if (Latest(BackupOperationKind.ScrubCatalogue) is { } scrub)
+        {
+            <p class="lt-backups-note">Last run: <a class="lt-backups-link" href="@Href(scrub)">@(scrub.Message ?? "under way")</a></p>
+            @if (scrub.Status == BackupOperationStatus.Succeeded && scrub.Items.Count > 0 && _served != false)
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmPrune = true">Remove orphan rows...</LtButton>
+            }
+        }
+    </section>
+
+    <LtDialog @bind-Open="_confirmRebuild" Title="Rebuild the catalogue?" Alert="true">
+        <ChildContent>
+            <p>Every manifest in the backup store is read and recorded in the catalogue. This can take a while on a large store; you can leave the status page and come back.</p>
+        </ChildContent>
+        <Actions>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _confirmRebuild = false">Cancel</LtButton>
+            <LtButton OnClick="RebuildAsync">Rebuild</LtButton>
+        </Actions>
+    </LtDialog>
+
+    <LtConfirmDestructive @bind-Open="_confirmPrune"
+                          Title="Remove orphan rows?"
+                          ObjectKind="catalogue"
+                          ObjectName="backup catalogue"
+                          ConfirmText="Remove"
+                          OnConfirm="PruneAsync">
+        <p>Every catalogue row whose backup is gone from the store is removed. The store itself is not touched, and a rebuild restores any row whose backup reappears.</p>
+    </LtConfirmDestructive>
+}

@@ -1,0 +1,102 @@
+@page "/backups/operations/{p1}"
+@page "/t/{tenant}/backups/operations/{p1}"
+@inherits ExplorerPage
+@*
+    /backups/operations/{id}: one staged operation's status page (epic E15).
+    It can be left and resumed for as long as the session lasts. A finished
+    point-in-time restore offers its revert here, behind a type-the-name
+    confirmation.
+*@
+
+<PageTitle>@(_operation?.Title ?? "Operation") - Orleans.Lattice Explorer</PageTitle>
+
+@if (_operation is not { } operation)
+{
+    <h1 class="lt-shell-page-title">Operation</h1>
+    <BackupsNav />
+    <LtSkeleton Lines="3" Label="Loading the operation" />
+}
+else
+{
+    <h1 class="lt-shell-page-title">@operation.Title</h1>
+    <p class="lt-shell-page-lede">Started @BackupsFormat.Time(operation.StartedAt)@(operation.CompletedAt is { } done ? ", finished " + BackupsFormat.Time(done) : string.Empty).</p>
+    <BackupsNav />
+
+    <div role="status" aria-live="polite">
+        <p class="lt-backups-status">
+            <LtStatusPill State="@StatusRole(operation.Status)" Text="@StatusText(operation.Status)" />
+            @if (operation.Message is { } message)
+            {
+                <span> @message</span>
+            }
+        </p>
+    </div>
+
+    <ol class="lt-backups-stages" aria-label="Stages">
+        @for (var index = 0; index < operation.Stages.Count; index++)
+        {
+            var stage = index;
+            var state = StageState(operation, stage);
+            <li class="lt-backups-stages__stage" @key="stage" aria-current="@(state == StageRunning ? "step" : null)">
+                <LtNode Kind="@StageNode(state)" />
+                <span>@operation.Stages[stage]</span>
+                <span class="lt-backups-stages__state">@state</span>
+            </li>
+        }
+    </ol>
+
+    @if (operation.Facts.Count > 0)
+    {
+        <LtDefinitionList>
+            @foreach (var fact in operation.Facts)
+            {
+                <LtDefinition Term="@fact.Key">@fact.Value</LtDefinition>
+            }
+        </LtDefinitionList>
+    }
+
+    @if (operation.Links.Count > 0)
+    {
+        <ul class="lt-backups-list">
+            @foreach (var link in operation.Links)
+            {
+                <li @key="link.Text"><a class="lt-backups-link" href="@Navigator.Canonicalize(link.Target).ToHref()">@link.Text</a></li>
+            }
+        </ul>
+    }
+
+    @if (operation.Items.Count > 0)
+    {
+        <section class="lt-backups-section" aria-labelledby="lt-backups-items-title">
+            <h2 id="lt-backups-items-title" class="lt-backups-section__title">Orphan rows</h2>
+            <ul class="lt-backups-list">
+                @foreach (var item in operation.Items)
+                {
+                    <li class="lt-backups-list__item" @key="item">@item</li>
+                }
+            </ul>
+        </section>
+    }
+
+    @if (operation.RevertedBy is { } revertedBy)
+    {
+        <p class="lt-backups-note">This restore was reverted. <a class="lt-backups-link" href="@Navigator.Canonicalize(BackupsAddresses.Operation(revertedBy)).ToHref()">See the revert</a>.</p>
+    }
+    else if (operation.CanRevert && operation.RestoreResult is { } restore)
+    {
+        <section class="lt-backups-section" aria-labelledby="lt-backups-revert-title">
+            <h2 id="lt-backups-revert-title" class="lt-backups-section__title">Revert this restore</h2>
+            <p class="lt-backups-note">Reverting swaps the tree back to the copy it held before this restore. Writes made since the restore are dropped.</p>
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmRevert = true">Revert restore...</LtButton>
+        </section>
+
+        <LtConfirmDestructive @bind-Open="_confirmRevert"
+                              Title="Revert this restore?"
+                              ObjectKind="tree"
+                              ObjectName="@restore.TargetTreeId"
+                              ConfirmText="Revert"
+                              OnConfirm="RevertAsync">
+            <p>The tree returns to the copy it held before the restore. Every write made to it since the restore is dropped.</p>
+        </LtConfirmDestructive>
+    }
+}

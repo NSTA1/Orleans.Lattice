@@ -1,0 +1,121 @@
+@page "/backups/schedules"
+@page "/t/{tenant}/backups/schedules"
+@inherits ExplorerPage
+@*
+    /backups/schedules: a tree's recurring full and incremental schedules. Shows
+    the tree's schedule status, and - when the capability probe allows capture -
+    registers, changes and cancels a schedule.
+*@
+
+<PageTitle>Backup schedules - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Schedules</h1>
+<p class="lt-shell-page-lede">A schedule captures a full or incremental backup of a tree at a fixed interval. It survives silo restarts and overrides the configured cadence for its kind.</p>
+<BackupsNav Current="@BackupsNav.SchedulesPage" />
+
+<form class="lt-toolbar" @onsubmit="ShowTreeAsync">
+    <LtTextInput Label="Tree" Mono="true" Value="@_treeInput" ValueChanged="value => _treeInput = value" Placeholder="a/crm/orders" Error="@_treeError" />
+    <LtButton Type="LtButtonType.Submit">Show schedules</LtButton>
+</form>
+
+@if (Tree is not { } tree)
+{
+    <LtEmptyState Title="Choose a tree" HeadingLevel="2">Schedules belong to a tree. Name one to see and change its schedules.</LtEmptyState>
+}
+else if (_capabilities is null || (_capabilities.CanList && !_statusLoaded && _statusError is null))
+{
+    <LtSkeleton Lines="3" Label="Loading the tree's schedules" />
+}
+else
+{
+    <h2 class="lt-backups-section__title">Schedules of <BackupTreeLabel TreeId="@tree" /></h2>
+    @if (_statusError is { } statusError)
+    {
+        <p class="lt-backups-error" role="alert">@statusError</p>
+    }
+    else if (!_capabilities.CanList)
+    {
+        <p class="lt-backups-note">You may not read this tree's backup status.</p>
+    }
+    else
+    {
+        <LtTable TItem="ScheduleRow"
+                 Items="@Rows"
+                 Caption="The tree's schedules"
+                 CaptionHidden="true"
+                 RowKey="row => row.Kind">
+            <ChildContent>
+                <LtColumn TItem="ScheduleRow" Title="Kind" RowHeader="true" Value="row => row.Kind" />
+                <LtColumn TItem="ScheduleRow" Title="Schedule">
+                    <LtStatusPill State="@(context.Registered ? LtStateRole.Enabled : LtStateRole.Disabled)" Text="@(context.Registered ? "Registered" : "None")" />
+                </LtColumn>
+                <LtColumn TItem="ScheduleRow" Title="Interval" Value="row => row.Interval" />
+                <LtColumn TItem="ScheduleRow" Title="Last run" Mono="true" Value="row => row.LastRun" />
+                <LtColumn TItem="ScheduleRow" Title="Last success" Mono="true" Value="row => row.LastSuccess" />
+                <LtColumn TItem="ScheduleRow" Title="Actions">
+                    @if (context.Registered && CanChange(context.Incremental))
+                    {
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AskCancel(context.Incremental)" aria-label="@("Cancel the " + context.Kind.ToLowerInvariant() + " schedule")">Cancel schedule</LtButton>
+                    }
+                </LtColumn>
+            </ChildContent>
+            <CompactRow>
+                <LtCompactRow>
+                    <Primary>@context.Kind</Primary>
+                    <Secondary>@(context.Registered ? "Every " + context.Interval : "No schedule") - last success @context.LastSuccess</Secondary>
+                    <State><LtStatusPill State="@(context.Registered ? LtStateRole.Enabled : LtStateRole.Disabled)" Text="@(context.Registered ? "Registered" : "None")" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions>
+                @if (context.Registered && CanChange(context.Incremental))
+                {
+                    <LtButton OnClick="() => AskCancel(context.Incremental)">Cancel schedule</LtButton>
+                }
+            </DetailActions>
+        </LtTable>
+        @if (_status is { } status)
+        {
+            <p class="lt-backups-note">Last scheduled run: @BackupsFormat.Outcome(status.LastRunOutcome). Chain depth: @status.ChainDepth.</p>
+        }
+    }
+
+    <section class="lt-backups-section" aria-labelledby="lt-backups-schedule-title">
+        <h2 id="lt-backups-schedule-title" class="lt-backups-section__title">Register or change a schedule</h2>
+        @if (!_capabilities.CanCapture && !_capabilities.CanCaptureIncremental)
+        {
+            <p class="lt-backups-note">You may not schedule backups of this tree.</p>
+        }
+        else
+        {
+            <form class="lt-backups-form" @onsubmit="ScheduleAsync">
+                <LtSelect Label="Kind" Options="@ScheduleKindOptions" Value="@_kind" ValueChanged="value => _kind = value" />
+                <div class="lt-backups-form__row">
+                    <LtTextInput Label="Hours" Value="@_hours" ValueChanged="value => _hours = value" inputmode="numeric" />
+                    <LtTextInput Label="Minutes" Value="@_minutes" ValueChanged="value => _minutes = value" inputmode="numeric" Error="@_intervalError" />
+                </div>
+                <p class="lt-backups-note">An interval under one minute is raised to one minute.</p>
+                @if (_scheduleMessage is { } scheduleMessage)
+                {
+                    <p class="lt-backups-status" role="status">@scheduleMessage</p>
+                }
+                @if (_scheduleError is { } scheduleError)
+                {
+                    <p class="lt-backups-error" role="alert">@scheduleError</p>
+                }
+                <div class="lt-backups-actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Save schedule</LtButton>
+                </div>
+            </form>
+        }
+    </section>
+
+    <LtDialog @bind-Open="_confirmCancel" Title="Cancel this schedule?" Alert="true">
+        <ChildContent>
+            <p>The @(_cancelIncremental ? "incremental" : "full") schedule of <span class="lt-backups-mono">@tree</span> stops. Backups it already captured are kept.</p>
+        </ChildContent>
+        <Actions>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _confirmCancel = false">Keep it</LtButton>
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="CancelScheduleAsync">Cancel schedule</LtButton>
+        </Actions>
+    </LtDialog>
+}
