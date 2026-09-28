@@ -34,6 +34,35 @@
   ],
   "flows": [
     {
+      "id": "grpc-apps-active-tenant",
+      "entry": "LatticeAppsGrpcService.StampActiveTenant",
+      "steps": [
+        "Read the configured gRPC metadata active-tenant header.",
+        "LatticeActiveTenantAssertion validates syntax and stamps LatticeActiveTenantContext for the facade call.",
+        "LatticeAppsControl resolves the active tenant through ITenantContextResolver before it authorizes AppInstall or reads app metadata."
+      ],
+      "sources": [
+        "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs",
+        "src/lattice.api.apps.grpc/LatticeAppsApiGrpcOptions.cs",
+        "src/lattice.api.apps/LatticeAppsControl.cs"
+      ]
+    },
+    {
+      "id": "grpc-apps-credential",
+      "entry": "HeaderLatticeAppsApiCredentialBridge.Resolve",
+      "steps": [
+        "Read the configured gRPC metadata credential header.",
+        "Strip the configured scheme prefix when present.",
+        "Stamp LatticeCredentialContext for the app-control facade call.",
+        "LatticeAppsControl resolves the caller subject through membership and authorizes AppInstall through the shared access gate."
+      ],
+      "sources": [
+        "src/lattice.api.apps.grpc/HeaderLatticeAppsApiCredentialBridge.cs",
+        "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs",
+        "src/lattice.api.apps/LatticeAppsControl.cs"
+      ]
+    },
+    {
       "id": "grpc-auth-credential",
       "entry": "HeaderLatticeAuthApiCredentialBridge.Resolve",
       "steps": [
@@ -110,6 +139,23 @@
       ]
     },
     {
+      "id": "mcp-app-tools",
+      "entry": "ILatticeApiMcpAppToolSource.GetPermittedToolsAsync and CredentialStampingTool.InvokeAsync",
+      "steps": [
+        "MCP session discovery passes the resolved caller credential and HttpContext to registered app tool sources.",
+        "AppMcpToolSource stamps LatticeCredentialContext and the asserted active tenant while it resolves tenant, subject, enabled apps, and role grants.",
+        "LatticeApiMcpSessionConfigurator wraps permitted app tools in CredentialStampingTool so invocation stamps the caller credential and active tenant again.",
+        "AppMcpNamespacedTool re-checks the current app role grant before invoking the app implementation."
+      ],
+      "sources": [
+        "src/lattice.api.mcp/Discovery/ILatticeApiMcpAppToolSource.cs",
+        "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
+        "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs",
+        "src/lattice.api.mcp.apps/AppMcpToolSource.cs",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs"
+      ]
+    },
+    {
       "id": "mcp-credential",
       "entry": "McpToolCredentialScope.Stamp",
       "steps": [
@@ -126,6 +172,22 @@
   ],
   "fail_closed": [
     {
+      "id": "apps-grpc-blank-credential",
+      "rule": "Missing, empty, or bare-scheme app gRPC credential headers stamp no credential; the facade AppInstall gate then resolves the caller through membership and denies when authority is required.",
+      "sources": [
+        "src/lattice.api.apps.grpc/HeaderLatticeAppsApiCredentialBridge.cs",
+        "src/lattice.api.apps/LatticeAppsControl.cs"
+      ]
+    },
+    {
+      "id": "apps-grpc-invalid-active-tenant",
+      "rule": "An invalid or unauthorized active-tenant assertion on the apps gRPC surface fails before app registry, source, consent, or activation metadata is read.",
+      "sources": [
+        "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs",
+        "src/lattice.api.apps/LatticeAppsControl.cs"
+      ]
+    },
+    {
       "id": "blank-credential",
       "rule": "Missing, empty, or bare-scheme credential headers resolve to anonymous or null and downstream gates deny when authority is required.",
       "sources": [
@@ -139,6 +201,14 @@
       "sources": [
         "src/lattice/LatticeActiveTenantAssertion.cs",
         "src/lattice.tenancy/TenantContextResolver.cs"
+      ]
+    },
+    {
+      "id": "mcp-app-tool-lost-grant",
+      "rule": "An app tool grant is checked again at invocation against the current registry and access gate; disabling the app or revoking the compiled grant causes the tool call to fail even if it was listed earlier in the session.",
+      "sources": [
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs",
+        "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
       ]
     },
     {

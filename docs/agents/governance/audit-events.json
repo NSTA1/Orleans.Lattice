@@ -2,6 +2,96 @@
   "schema": "lattice.agents/governance-audit-events/v1",
   "audit_records": [
     {
+      "id": "app-activation-failure-log",
+      "type": "ILogger warning",
+      "fields": [
+        "operation",
+        "tenant",
+        "slug",
+        "failure",
+        "diagnostic"
+      ],
+      "emitting_component": "AppActivationEngine",
+      "source": "src/lattice.apps/Activation/AppActivationEngine.cs"
+    },
+    {
+      "id": "app-activation-fault-log",
+      "type": "ILogger warning",
+      "fields": [
+        "operation",
+        "tenant",
+        "slug",
+        "exception"
+      ],
+      "emitting_component": "AppActivationEngine",
+      "source": "src/lattice.apps/Activation/AppActivationEngine.cs"
+    },
+    {
+      "id": "app-activation-status-write-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "tenant",
+        "slug",
+        "exception"
+      ],
+      "emitting_component": "AppActivationEngine",
+      "source": "src/lattice.apps/Activation/AppActivationEngine.cs"
+    },
+    {
+      "id": "app-registry-snapshot-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "CompiledAppRegistrySnapshotMaintainer",
+      "source": "src/lattice.apps/Registry/CompiledAppRegistrySnapshotMaintainer.cs"
+    },
+    {
+      "id": "app-startup-reconcile-app-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "tenant",
+        "slug",
+        "failure",
+        "exception"
+      ],
+      "emitting_component": "AppStartupReconciler",
+      "source": "src/lattice.apps/Activation/AppStartupReconciler.cs"
+    },
+    {
+      "id": "app-startup-reconcile-host-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "AppStartupReconciler",
+      "source": "src/lattice.apps/Activation/AppStartupReconciler.cs"
+    },
+    {
+      "id": "app-subscription-handler-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "subscription",
+        "app",
+        "tenant",
+        "exception"
+      ],
+      "emitting_component": "AppSubscriptionRouter",
+      "source": "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs"
+    },
+    {
+      "id": "app-subscription-routing-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "app",
+        "tenant",
+        "reasons",
+        "exception"
+      ],
+      "emitting_component": "AppSubscriptionRouter",
+      "source": "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs"
+    },
+    {
       "id": "auth-allowed-log",
       "type": "ILogger event 2",
       "fields": [
@@ -85,6 +175,45 @@
       "source": "src/lattice.auth/CompiledPolicySnapshotMaintainer.cs"
     },
     {
+      "id": "grpc-apps-auth-failure-log",
+      "type": "ILogger error",
+      "fields": [
+        "method",
+        "exception"
+      ],
+      "emitting_component": "LatticeAppsApiGrpcAuthInterceptor",
+      "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+    },
+    {
+      "id": "grpc-apps-interceptor-rejection-log",
+      "type": "ILogger warning",
+      "fields": [
+        "method"
+      ],
+      "emitting_component": "LatticeAppsApiGrpcAuthInterceptor",
+      "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+    },
+    {
+      "id": "grpc-apps-service-failure-log",
+      "type": "ILogger error",
+      "fields": [
+        "method",
+        "exception"
+      ],
+      "emitting_component": "LatticeAppsGrpcService",
+      "source": "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs"
+    },
+    {
+      "id": "grpc-apps-service-invalid-log",
+      "type": "ILogger warning",
+      "fields": [
+        "method",
+        "exception"
+      ],
+      "emitting_component": "LatticeAppsGrpcService",
+      "source": "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs"
+    },
+    {
       "id": "grpc-auth-interceptor-rejection-log",
       "type": "ILogger warning",
       "fields": [
@@ -101,6 +230,26 @@
       ],
       "emitting_component": "LatticeTenantAdminApiGrpcAuthInterceptor",
       "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
+    },
+    {
+      "id": "mcp-app-tool-activation-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "app_slug",
+        "app_version",
+        "reason"
+      ],
+      "emitting_component": "AppMcpToolSource",
+      "source": "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+    },
+    {
+      "id": "mcp-app-tool-resolution-warning",
+      "type": "ILogger warning",
+      "fields": [
+        "exception"
+      ],
+      "emitting_component": "AppMcpToolSource",
+      "source": "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
     },
     {
       "id": "tenant-placement-snapshot-warning",
@@ -191,6 +340,36 @@
       "instrument": "ObservableGauge",
       "tags": [],
       "source": "src/lattice.auth/AuthSnapshotGaugeRegistry.cs"
+    },
+    {
+      "id": "backup-cross-tree-fence-drain-wait",
+      "name": "orleans.lattice.backup.cross_tree_fence.drain_wait",
+      "instrument": "Histogram<double>",
+      "tags": [],
+      "source": "src/lattice.backup/BackupMetrics.cs"
+    },
+    {
+      "id": "backup-cross-tree-fence-drained-in-flight",
+      "name": "orleans.lattice.backup.cross_tree_fence.drained_in_flight",
+      "instrument": "Counter<long>",
+      "tags": [],
+      "source": "src/lattice.backup/BackupMetrics.cs"
+    },
+    {
+      "id": "backup-cross-tree-fence-retries",
+      "name": "orleans.lattice.backup.cross_tree_fence.retries",
+      "instrument": "Counter<long>",
+      "tags": [],
+      "source": "src/lattice.backup/BackupMetrics.cs"
+    },
+    {
+      "id": "backup-cross-tree-fence-selections",
+      "name": "orleans.lattice.backup.cross_tree_fence.selections",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tree_count"
+      ],
+      "source": "src/lattice.backup/BackupMetrics.cs"
     },
     {
       "id": "membership-directory-search-duration",

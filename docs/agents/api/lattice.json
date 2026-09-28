@@ -5,16 +5,24 @@
     "Orleans.Lattice"
   ],
   "sources": [
-    "src/lattice/BPlusTree/ILattice.cs#ILattice",
-    "src/lattice/ILatticeAdmin.cs#ILatticeAdmin",
-    "src/lattice/LatticeServiceCollectionExtensions.cs#AddLattice",
-    "src/lattice/ILatticeRetryPolicy.cs#ILatticeRetryPolicy",
+    "docs/lattice/queues.md",
+    "src/lattice/BPlusTree/Grains/LatticeAdminGrain.cs#LatticeAdminGrain",
     "src/lattice/BPlusTree/Grains/LatticeGrain.cs#LatticeGrain",
-    "src/lattice/BPlusTree/Grains/LatticeAdminGrain.cs#LatticeAdminGrain"
+    "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#LatticeQueueCore",
+    "src/lattice/BPlusTree/Grains/LatticeQueueGrain.cs#LatticeQueueGrain",
+    "src/lattice/BPlusTree/ILattice.cs#ILattice",
+    "src/lattice/BPlusTree/ILatticeQueue.cs#ILatticeQueue",
+    "src/lattice/BPlusTree/LatticeQueueExtensions.cs#GetLatticeQueue",
+    "src/lattice/ILatticeAdmin.cs#ILatticeAdmin",
+    "src/lattice/ILatticeRetryPolicy.cs#ILatticeRetryPolicy",
+    "src/lattice/IMutationObserver.cs#IMutationObserver",
+    "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException",
+    "src/lattice/LatticeSaturatedException.cs#LatticeSaturatedException",
+    "src/lattice/LatticeServiceCollectionExtensions.cs#AddLattice"
   ],
   "in_process": {
-    "interface": "ILattice per tree and ILatticeAdmin cluster-wide.",
-    "registration": "Call ISiloBuilder.AddLattice with the Lattice grain storage provider; obtain ILattice with IGrainFactory.GetGrain<ILattice>(treeId) and ILatticeAdmin with IGrainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).",
+    "interface": "ILattice per tree, ILatticeAdmin cluster-wide, and ILatticeQueue<T> per cluster-internal FIFO queue.",
+    "registration": "Call ISiloBuilder.AddLattice with the Lattice grain storage provider; obtain ILattice with IGrainFactory.GetGrain<ILattice>(treeId), ILatticeAdmin with IGrainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey), and ILatticeQueue<T> with IGrainFactory.GetLatticeQueue<T>(queueName, serializer).",
     "source": "src/lattice/LatticeServiceCollectionExtensions.cs#AddLattice"
   },
   "grpc": null,
@@ -187,6 +195,17 @@
       ],
       "source": "src/lattice/Primitives/HybridLogicalClock.cs#HybridLogicalClock"
     },
+    "IMutationObserver": {
+      "kind": "interface",
+      "fields": [
+        {
+          "name": "OnMutationAsync",
+          "type": "Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/IMutationObserver.cs#IMutationObserver"
+    },
     "LatticeBooleanOperator": {
       "kind": "enum",
       "values": [
@@ -323,6 +342,132 @@
       ],
       "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
     },
+    "LatticeMutation": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Kind",
+          "type": "MutationKind",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EndExclusiveKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Value",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "Timestamp",
+          "type": "HybridLogicalClock",
+          "required": true
+        },
+        {
+          "name": "IsTombstone",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "ExpiresAtTicks",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "OriginClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "VectorClock",
+          "type": "VersionVector?",
+          "required": false
+        },
+        {
+          "name": "TransactionId",
+          "type": "Guid",
+          "required": true
+        },
+        {
+          "name": "Category",
+          "type": "MutationCategory",
+          "required": true
+        },
+        {
+          "name": "Delta",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "AtomicBatchSize",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "AtomicBatchIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "IsPrepared",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "IsBackstop",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "AtomicShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "IsMerge",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "MatchedKeys",
+          "type": "IReadOnlyList<string>?",
+          "required": false
+        },
+        {
+          "name": "CrossTreeOperationId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "CrossTreeParticipants",
+          "type": "IReadOnlyList<string>?",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeMergeMode",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/LatticeMutation.cs#LatticeMutation"
+    },
     "LatticePredicateNode": {
       "kind": "struct",
       "fields": [
@@ -375,6 +520,53 @@
       ],
       "source": "src/lattice/Predicates/LatticePredicateNodeKind.cs#LatticePredicateNodeKind"
     },
+    "LatticeQueueEntry<T>": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "EntryId",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Value",
+          "type": "T",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/BPlusTree/LatticeQueueEntry.cs#LatticeQueueEntry"
+    },
+    "LatticeQuotaExceededException": {
+      "kind": "exception",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Dimension",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Current",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Limit",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException"
+    },
     "LatticeRangeReadGateCoverage": {
       "kind": "enum",
       "values": [
@@ -383,6 +575,35 @@
         "Denied"
       ],
       "source": "src/lattice/BPlusTree/LatticeRangeReadGateCoverage.cs#LatticeRangeReadGateCoverage"
+    },
+    "LatticeSaturatedException": {
+      "kind": "exception",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SaturationSource",
+          "type": "LatticeSaturationSource",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/LatticeSaturatedException.cs#LatticeSaturatedException"
+    },
+    "LatticeSaturationSource": {
+      "kind": "enum",
+      "values": [
+        "Unspecified",
+        "WalAdmission",
+        "AtomicWriteSaga",
+        "SnapshotCursorOpen",
+        "ReplayPermitAdmission",
+        "SetManyFanOut",
+        "TxRegistryCapacity"
+      ],
+      "source": "src/lattice/LatticeSaturationSource.cs#LatticeSaturationSource"
     },
     "LatticeStringMethod": {
       "kind": "enum",
@@ -419,6 +640,18 @@
         }
       ],
       "source": "src/lattice/BPlusTree/LeafProjectionDigest.cs#LeafProjectionDigest"
+    },
+    "MutationKind": {
+      "kind": "enum",
+      "values": [
+        "Set",
+        "Delete",
+        "DeleteRange",
+        "TxCommit",
+        "TxAbort",
+        "Tombstone"
+      ],
+      "source": "src/lattice/MutationKind.cs#MutationKind"
     },
     "OrphanedLeafRepairReport": {
       "kind": "struct",
@@ -958,6 +1191,10 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -1023,6 +1260,10 @@
         {
           "error_id": "argument-exception",
           "condition": "mode is LatticeMergeMode.LwwRegister; LWW batches use SetManyAsync."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -1098,6 +1339,10 @@
         {
           "error_id": "argument-out-of-range",
           "condition": "ttl is less than or equal to zero, or exceeds DateTimeOffset.MaxValue when converted to an absolute expiry."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -2496,6 +2741,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "MaintainProjectionDigest is disabled, so the persisted projection-digest aggregate is not maintained."
         }
       ],
       "retry": {
@@ -2509,7 +2758,7 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#GetLeafProjectionDigestAsync"
       },
       "concurrency": {
-        "rule": "Read-only operation; any access gate denial is surfaced as absent or empty where documented.",
+        "rule": "Read-only digest read; shard digests are maintained incrementally by leaf-to-root projection aggregates and read from the shard root rather than by walking the leaf chain.",
         "source": "src/lattice/BPlusTree/ILattice.cs#GetLeafProjectionDigestAsync"
       },
       "sources": [
@@ -2558,6 +2807,14 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "MaintainProjectionDigest is disabled, so the persisted projection-digest aggregate is not maintained."
+        },
+        {
+          "error_id": "argument-out-of-range",
+          "condition": "shardIndex is not a physical shard of this tree."
         }
       ],
       "retry": {
@@ -2571,8 +2828,8 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#GetLeafProjectionDigestForRangeAsync"
       },
       "concurrency": {
-        "rule": "Read-only operation; any access gate denial is surfaced as absent or empty where documented.",
-        "source": "src/lattice/BPlusTree/ILattice.cs#GetLeafProjectionDigestForRangeAsync"
+        "rule": "Read-only digest read; shard digests are maintained incrementally by leaf-to-root projection aggregates and read from the shard root rather than by walking the leaf chain.",
+        "source": "src/lattice/BPlusTree/ILattice.cs#GetLeafProjectionDigestAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#GetLeafProjectionDigestForRangeAsync",
@@ -2711,7 +2968,8 @@
         ]
       },
       "response": {
-        "type": "long"
+        "type": "long",
+        "meaning": "Largest per-shard materialiser-lag estimate: sum over WAL partitions of head minus minimum projection checkpoint, clamped at zero per term."
       },
       "errors": [
         {
@@ -2720,42 +2978,17 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "safe": true,
+        "policy": "Read-only estimate; retrying only re-reads the current lag.",
         "source": "src/lattice/BPlusTree/ILattice.cs#GetMaterialiserLagAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "idempotent": true,
+        "basis": "The operation is read-only and returns a point-in-time estimate.",
         "source": "src/lattice/BPlusTree/ILattice.cs#GetMaterialiserLagAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "rule": "Read a steady value as caught up and a growing value as falling behind; on multi-partition trees the per-leaf partition-0 checkpoint makes the figure an estimate.",
         "source": "src/lattice/BPlusTree/ILattice.cs#GetMaterialiserLagAsync"
       },
       "sources": [
@@ -2803,6 +3036,10 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -4847,6 +5084,281 @@
       ]
     },
     {
+      "id": "queue-count",
+      "in_process": {
+        "interface": "ILatticeQueue<T>",
+        "method": "CountAsync",
+        "signature": "Task<int> CountAsync(CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "int"
+      },
+      "errors": [
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The queue coordinator grain has not completed activation."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only in-memory count; retrying only re-reads the current parked depth.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#CountAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#CountAsync"
+      },
+      "concurrency": {
+        "rule": "Served from the single coordinator grain in-memory cache after activation; concurrent mutations serialize on that grain.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#CountAsync"
+      },
+      "sources": [
+        "src/lattice/BPlusTree/ILatticeQueue.cs#ILatticeQueue",
+        "src/lattice/BPlusTree/LatticeQueueExtensions.cs#GetLatticeQueue",
+        "src/lattice/BPlusTree/Grains/LatticeQueueGrain.cs#LatticeQueueGrain",
+        "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#LatticeQueueCore",
+        "docs/lattice/queues.md"
+      ]
+    },
+    {
+      "id": "queue-enqueue",
+      "in_process": {
+        "interface": "ILatticeQueue<T>",
+        "method": "EnqueueAsync",
+        "signature": "Task<long> EnqueueAsync(T item, CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "item",
+            "type": "T",
+            "required": true
+          },
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "long"
+      },
+      "errors": [
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The queue coordinator grain has not completed activation."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "A lost response followed by retry appends a new tail entry with a new monotonic id; bounded queues may evict the oldest entry first.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#EnqueueAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Each successful call assigns a new monotonic per-queue id and writes a new tail row.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#EnqueueAsync"
+      },
+      "concurrency": {
+        "rule": "Single coordinator grain serializes all appends to preserve FIFO; when QueueCapacity is reached it evicts oldest entries before appending.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#EnqueueAsync"
+      },
+      "sources": [
+        "src/lattice/BPlusTree/ILatticeQueue.cs#ILatticeQueue",
+        "src/lattice/BPlusTree/LatticeQueueExtensions.cs#GetLatticeQueue",
+        "src/lattice/BPlusTree/Grains/LatticeQueueGrain.cs#LatticeQueueGrain",
+        "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#LatticeQueueCore",
+        "docs/lattice/queues.md"
+      ]
+    },
+    {
+      "id": "queue-list",
+      "in_process": {
+        "interface": "ILatticeQueue<T>",
+        "method": "ListAsync",
+        "signature": "Task<IReadOnlyList<LatticeQueueEntry<T>>> ListAsync(CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "IReadOnlyList<LatticeQueueEntry<T>>"
+      },
+      "errors": [
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The queue coordinator grain has not completed activation."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only diagnostic snapshot; retrying only re-reads the current parked set.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#ListAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#ListAsync"
+      },
+      "concurrency": {
+        "rule": "Returns an ascending-id snapshot of every parked entry from the coordinator in-memory cache; intended for diagnostics/control-plane, not the hot path.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#ListAsync"
+      },
+      "sources": [
+        "src/lattice/BPlusTree/ILatticeQueue.cs#ILatticeQueue",
+        "src/lattice/BPlusTree/LatticeQueueExtensions.cs#GetLatticeQueue",
+        "src/lattice/BPlusTree/Grains/LatticeQueueGrain.cs#LatticeQueueGrain",
+        "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#LatticeQueueCore",
+        "docs/lattice/queues.md"
+      ]
+    },
+    {
+      "id": "queue-peek",
+      "in_process": {
+        "interface": "ILatticeQueue<T>",
+        "method": "PeekAsync",
+        "signature": "Task<LatticeQueueEntry<T>?> PeekAsync(CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "LatticeQueueEntry<T>?"
+      },
+      "errors": [
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The queue coordinator grain has not completed activation."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only head read; retrying only re-reads the current head.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#PeekAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#PeekAsync"
+      },
+      "concurrency": {
+        "rule": "Returns the current head from the single coordinator grain cache without removing it.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#PeekAsync"
+      },
+      "sources": [
+        "src/lattice/BPlusTree/ILatticeQueue.cs#ILatticeQueue",
+        "src/lattice/BPlusTree/LatticeQueueExtensions.cs#GetLatticeQueue",
+        "src/lattice/BPlusTree/Grains/LatticeQueueGrain.cs#LatticeQueueGrain",
+        "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#LatticeQueueCore",
+        "docs/lattice/queues.md"
+      ]
+    },
+    {
+      "id": "queue-try-dequeue",
+      "in_process": {
+        "interface": "ILatticeQueue<T>",
+        "method": "TryDequeueAsync",
+        "signature": "Task<LatticeQueueEntry<T>?> TryDequeueAsync(CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "LatticeQueueEntry<T>?"
+      },
+      "errors": [
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The queue coordinator grain has not completed activation."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Destructive dequeue removes the head before returning it; retry after a lost response may remove the next entry.",
+        "source": "src/lattice/BPlusTree/ILatticeQueue.cs#TryDequeueAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "A successful call advances the persisted/in-memory head and deletes the consumed row.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#TryDequeueAsync"
+      },
+      "concurrency": {
+        "rule": "Single coordinator grain serializes dequeue operations, preserving FIFO order and amortized O(1) head advancement.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#TryDequeueAsync"
+      },
+      "sources": [
+        "src/lattice/BPlusTree/ILatticeQueue.cs#ILatticeQueue",
+        "src/lattice/BPlusTree/LatticeQueueExtensions.cs#GetLatticeQueue",
+        "src/lattice/BPlusTree/Grains/LatticeQueueGrain.cs#LatticeQueueGrain",
+        "src/lattice/BPlusTree/Grains/LatticeQueueCore.cs#LatticeQueueCore",
+        "docs/lattice/queues.md"
+      ]
+    },
+    {
       "id": "rebuild-leaf-projection",
       "in_process": {
         "interface": "ILattice",
@@ -5173,6 +5685,14 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "argument-out-of-range",
+          "condition": "newShardCount is outside 2..DefaultVirtualShardCount, or shrinks a populated tree below its current physical shard count."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "A resize is in flight, or a different reshard target is already in progress."
         }
       ],
       "retry": {
@@ -5182,16 +5702,11 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "A call with the same newShardCount while a reshard is in progress is documented as a no-op.",
+        "basis": "A call with the current shard count is a no-op, and a call with the same newShardCount while a reshard is in progress is a no-op; a different in-flight target throws.",
         "source": "src/lattice/BPlusTree/ILattice.cs#ReshardAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "rule": "Populated trees grow only; empty trees can be re-pinned directly to any valid count, and concurrent requests for a different in-flight target are rejected.",
         "source": "src/lattice/BPlusTree/ILattice.cs#ReshardAsync"
       },
       "sources": [
@@ -5397,6 +5912,10 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -5550,6 +6069,10 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -5606,40 +6129,28 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "The per-shard fan-out has not settled within LatticeOptions.SetManyFanOutBudget; already-committed branches are retained and in-flight branches are not cancelled."
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "safe": "conditional",
+        "policy": "A caller may retry after backoff and after accepting the non-atomic outcome: branches that already committed stay committed and abandoned branches may still complete.",
         "source": "src/lattice/BPlusTree/ILattice.cs#SetManyAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetManyAsync"
+        "idempotent": "conditional",
+        "basis": "Without an ambient LatticeIdempotencyContext each retry is a fresh batch write; repeated identical values converge by value but restamp write metadata.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAsync"
       },
       "concurrency": {
-        "rule": "Not atomic; shard fan-out may leave a half-applied batch on partial failure.",
+        "rule": "Not atomic; shard fan-out may leave a half-applied batch on partial failure or budget expiry, and abandoned sibling branches are deliberately not cancelled.",
         "source": "src/lattice/BPlusTree/ILattice.cs#SetManyAsync"
       },
       "sources": [
@@ -6025,6 +6536,10 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -6192,6 +6707,10 @@
         {
           "error_id": "argument-out-of-range",
           "condition": "ttl is less than or equal to zero, or exceeds DateTimeOffset.MaxValue when converted to an absolute expiry."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
         }
       ],
       "retry": {
@@ -6675,7 +7194,7 @@
       "type": "LatticeQuotaExceededException",
       "grpc_status": null,
       "retryable": false,
-      "meaning": "A tree admission quota cap would be exceeded.",
+      "meaning": "A locally-authored public write would exceed a configured tree or tenant quota cap.",
       "source": "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException"
     },
     {
@@ -6699,7 +7218,7 @@
       "type": "LatticeSaturatedException",
       "grpc_status": null,
       "retryable": true,
-      "meaning": "WAL or admission saturation rejected the write before dispatch.",
+      "meaning": "A tree storage or fan-out admission seam refused work because the tree is back-pressured; LatticeSaturationSource names the seam.",
       "source": "src/lattice/LatticeSaturatedException.cs#LatticeSaturatedException"
     },
     {

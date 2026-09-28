@@ -45,6 +45,8 @@ steps:
 postconditions:
   - check: "The tree keeps serving reads and writes while a shadow tree is built and swapped."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  - check: "The logical registry entry keeps the live alias, sizing, configuration overrides, and tombstone compaction schedule after the old physical copy is retired."
+    source: "docs/lattice/tree-sizing.md"
   - check: "Undo is available only while a resize is in progress or while the pre-resize tree is inside its soft-delete recovery window."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
 failure_modes:
@@ -74,6 +76,8 @@ rollback:
 concurrency:
   - rule: "A matching in-flight target is idempotent; different resize parameters are rejected."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
+  - rule: "The destination physical tree is registered with the source ShardCount and no inherited shard map; the snapshot copies matching shard indices."
+    source: "docs/lattice/tree-sizing.md"
   - rule: "Resize and reshard are mutually exclusive in-flight operations."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ResizeTreeAsync"
 sources:

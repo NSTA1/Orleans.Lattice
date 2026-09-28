@@ -24,9 +24,14 @@
     "marshalling": "LatticeTreeAdminGrpcMarshallers.Create uses Orleans Serializer<T> for gRPC payloads.",
     "metadata": [
       {
-        "name": "active-tenant",
-        "purpose": "Carries the asserted active tenant header into LatticeActiveTenantContext.",
-        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#StampActiveTenant"
+        "name": "authorization",
+        "purpose": "Request metadata carrying the credential token by default; the bearer scheme is stripped when present and the token is stamped as a LatticeCredential.",
+        "source": "src/lattice.api.treeadmin.grpc/HeaderLatticeTreeAdminApiCredentialBridge.cs#Resolve"
+      },
+      {
+        "name": "lattice-active-tenant",
+        "purpose": "Request metadata carrying the asserted active tenant by default; the assertion is re-validated downstream and grants no access by itself.",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminApiGrpcOptions.cs#ActiveTenantHeaderName"
       }
     ],
     "auth": {
@@ -2028,7 +2033,7 @@
         },
         {
           "error_id": "precondition-failed",
-          "condition": "Facade precondition failed."
+          "condition": "A shard could not be sampled, so emptiness cannot be verified fail-closed."
         },
         {
           "error_id": "tree-not-empty",
@@ -2054,7 +2059,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
       },
       "concurrency": {
-        "rule": "The target tree must be empty. The emptiness probe first invalidates the per-tree diagnostics cache and then runs a deep DiagnoseAsync, so a report cached before chunks were grafted onto the tree cannot admit a second session.",
+        "rule": "The target tree must be empty, and the deep diagnostics probe must successfully sample every shard; any shard sample failure is refused fail-closed instead of being counted as empty.",
         "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
       },
       "sources": [
@@ -2470,7 +2475,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "rule": "Both shallow and deep diagnostics page through every shard leaf chain; shallow counts live keys only and reports tombstones as zero, while deep also counts tombstoned and expired entries.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
       },
       "sources": [
@@ -3726,7 +3731,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Current count or matching in-flight target is a no-op.",
+        "basis": "A request for the current physical shard count, or a matching in-flight target, is a no-op; a target below the current count is rejected except for the documented empty-tree re-pin case.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {
@@ -3870,12 +3875,13 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+        "rule": "The composed backup/restore engine authorizes the target before coordinated dispatch and requires Backup authority on any distinct captured source tree for a cross-tree retarget.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#RestoreAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTree"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTree",
+        "src/lattice.backup/LatticeBackupRestoreService.cs#RestoreAsync"
       ]
     },
     {
@@ -3918,12 +3924,13 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
       },
       "concurrency": {
-        "rule": "Replicated member trees flip together as an all-or-nothing saga.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+        "rule": "The composed backup/restore engine authorizes every member target before coordinated dispatch, then replicated members flip together as an all-or-nothing coordinated restore.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#RestoreSetAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTreeSet"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTreeSet",
+        "src/lattice.backup/LatticeBackupRestoreService.cs#RestoreSetAsync"
       ]
     },
     {
@@ -3966,12 +3973,13 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+        "rule": "The backup/restore engine revalidates caller-supplied physical tree ids against registry provenance before a shadow-cutover revert can repoint an alias.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RevertTreeRestore"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RevertTreeRestore",
+        "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       ]
     },
     {

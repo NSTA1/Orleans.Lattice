@@ -1,0 +1,149 @@
+schema: lattice.agents/procedure/v1
+id: app-lifecycle
+name: "Install, enable, disable, and uninstall an app"
+surfaces:
+  in_process:
+    api: "ILatticeAppsControl.InstallAsync, EnableAsync, DisableAsync, UninstallAsync, GetConsentAsync, UpdateConsentAsync, DescribeAsync, and ListAsync"
+    source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl"
+  grpc:
+    api: "/orleans.lattice.api.apps/Install, /Enable, /Disable, /Uninstall, /List, /Describe, /GetConsent, /UpdateConsent, /GetCapabilities, and /GetAuthScheme"
+    source: "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods.ServiceName"
+  mcp_tool:
+    api: "No app lifecycle MCP tool is documented; Orleans.Lattice.Api.Mcp.Apps exposes enabled app tools only."
+    source: "docs/lattice.api.mcp.apps/README.md"
+preconditions:
+  - id: app-source-registered
+    check: "The app is registered with an app source, such as AddLatticeApp for an embedded in-image manifest."
+    source: "src/lattice.apps/LatticeAppsServiceCollectionExtensions.cs#AddLatticeApp"
+  - id: appinstall-authority
+    check: "Caller has AppInstall over the cluster-wide scope in the active tenant context."
+    source: "src/lattice.api.apps/LatticeAppsControl.cs#LatticeAppsControl.AuthorizeAsync"
+  - id: consent-prepared
+    check: "Install or consent update request names an exact app version, group-only role bindings, and an explicit ceiling."
+    source: "src/lattice.api.abstractions/Apps/Model/AppInstallRequest.cs#AppInstallRequest.Ceiling"
+  - id: engine-prerequisites
+    check: "AddLatticeApps is registered after AddLattice; activation additionally needs membership and the authorization policy store or it fails closed with diagnostics."
+    source: "src/lattice.apps/LatticeAppsServiceCollectionExtensions.cs#AddLatticeApps"
+  - id: grpc-authorizer
+    check: "For remote gRPC use, the transport authorizer is configured or the endpoint is behind an outer authentication boundary."
+    source: "src/lattice.api.apps.grpc/LatticeAppsApiGrpcOptions.cs#LatticeAppsApiGrpcOptions.RequireAuthorization"
+steps:
+  - n: 1
+    action: "Inspect the app manifest before trust."
+    api: "ILatticeAppsControl.DescribeAsync / /orleans.lattice.api.apps/Describe"
+    expects: "Returns requested trees, roles, operations, subscriptions, MCP tools, provenance, and NotInstalled state, or null for an unknown app or version."
+    source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DescribeAsync"
+  - n: 2
+    action: "Install the exact source version with role-to-group bindings and the version-pinned ceiling."
+    api: "ILatticeAppsControl.InstallAsync / /orleans.lattice.api.apps/Install"
+    expects: "Returns Installed for a new install; a live install at another version is upgraded in place and an enabled app is re-applied."
+    source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.InstallAsync"
+  - n: 3
+    action: "Enable the installed app."
+    api: "ILatticeAppsControl.EnableAsync / /orleans.lattice.api.apps/Enable"
+    expects: "Activation resolves and validates the installed manifest, checks the ceiling, provisions structural trees, replaces owned rules, and returns Enabled."
+    source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.EnableAsync"
+  - n: 4
+    action: "Verify lifecycle and consent state."
+    api: "ILatticeAppsControl.ListAsync, DescribeAsync, and GetConsentAsync / /List, /Describe, and /GetConsent"
+    expects: "Reports the app state, install provenance, role bindings, and installed-version ceiling without composed physical tree ids."
+    source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.GetConsentAsync"
+  - n: 5
+    action: "Update consent only for the version currently installed."
+    api: "ILatticeAppsControl.UpdateConsentAsync / /orleans.lattice.api.apps/UpdateConsent"
+    expects: "Replaces the whole ceiling; if the app is enabled, reconciliation re-applies it so reduced consent withdraws stale grants."
+    source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.UpdateConsentAsync"
+  - n: 6
+    action: "Disable the app when access should stop but data must stay in place."
+    api: "ILatticeAppsControl.DisableAsync / /orleans.lattice.api.apps/Disable"
+    expects: "Owned rules are withdrawn, trees and data remain, and the record reaches Disabled."
+    source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.DisableAsync"
+  - n: 7
+    action: "Uninstall the app when the install should be retired."
+    api: "ILatticeAppsControl.UninstallAsync / /orleans.lattice.api.apps/Uninstall"
+    expects: "Owned rules are withdrawn, structural app trees are soft-deleted, adopted trees are skipped, and the record reaches Uninstalled."
+    source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
+  - n: 8
+    action: "For gRPC clients, discover the advertised auth scheme before app-control calls when sign-in metadata is needed."
+    api: "/orleans.lattice.api.apps/GetAuthScheme"
+    expects: "Returns only configured public auth scheme descriptors and is exempt from the transport authorizer."
+    source: "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods.GetAuthScheme"
+  - n: 9
+    action: "For MCP app tools, use the app's namespaced tools only after the app is enabled and the caller holds the declared role."
+    api: "{slug}_{tool} via Orleans.Lattice.Api.Mcp.Apps"
+    expects: "Tool advertisement and invocation are checked against the current registry state and access gate; there is no lifecycle MCP tool."
+    source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
+postconditions:
+  - check: "An enabled app has provisioned structural trees, persisted app-owned rules, and recorded activation status."
+    source: "src/lattice.apps/Activation/AppActivationEngine.cs#AppActivationEngine.ExecuteAsync"
+  - check: "A disabled app has no owned rules and keeps trees and data in place."
+    source: "test/lattice.apps/Activation/AppActivationEngineTests.Lifecycle.cs"
+  - check: "An uninstalled app retains its registry record as Uninstalled and never physically purges data."
+    source: "src/lattice.apps/Registry/IAppRegistry.cs#IAppRegistry.UninstallAsync"
+  - check: "App-control responses and sanitized exceptions do not disclose composed physical tree ids."
+    source: "src/lattice.api.apps/AppsControlExceptionSanitizer.cs#AppsControlExceptionSanitizer.TryRewrite"
+failure_modes:
+  - id: activation-ceiling-exceeded
+    signal: "Enable or reconcile returns diagnostics with AppActivationFailure.CeilingExceeded."
+    effect: "The app is not activated and fail-closed activation withdraws stale owned rules for non-transient activation failures."
+    response: "Update the version-pinned ceiling or reduce the manifest's requested operations and scopes, then enable or reconcile again."
+  - id: appinstall-denied
+    signal: "LatticeAuthorizationDeniedException or gRPC PermissionDenied before app metadata is read."
+    effect: "No registry, source, or activation state is disclosed or changed."
+    response: "Grant AppInstall over the cluster-wide scope to the operator group and retry."
+  - id: grpc-transport-denied
+    signal: "The gRPC interceptor returns PermissionDenied before the facade is called."
+    effect: "The RPC is rejected even if the facade would later apply its own AppInstall gate."
+    response: "Configure ILatticeAppsApiAuthorizer or place the endpoint behind the intended outer authorization boundary."
+  - id: missing-activation-prerequisite
+    signal: "Activation diagnostics name missing membership or missing authorization policy store."
+    effect: "The app remains not activated and silo startup stays healthy."
+    response: "Register AddLatticeMembership and AddLatticeAuth, then retry enable or reconcile."
+  - id: source-unavailable
+    signal: "Describe returns null for unknown app or version, or lifecycle calls surface SourceUnavailable, VersionMismatch, or InvalidManifest diagnostics."
+    effect: "No app lifecycle side effect is applied."
+    response: "Fix the app source registration, embedded resource, manifest identity, or requested version."
+  - id: stale-version-race
+    signal: "ConcurrencyConflict or InvalidOperationException stating the installed version changed."
+    effect: "The consent update or upgrade is refused without rolling back the newer install."
+    response: "Re-read the descriptor or consent report and retry against the current version."
+rollback:
+  supported: true
+  mechanism: "Disable withdraws access without deleting data; uninstall retires the install and soft-deletes structural app trees under retention. A consent or upgrade rollback is a new version-pinned InstallAsync or UpdateConsentAsync followed by reconciliation when the app is enabled."
+  steps:
+    - action: "Preserve the prior descriptor and consent report before upgrade or consent replacement."
+      api: "ILatticeAppsControl.DescribeAsync and GetConsentAsync"
+      source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DescribeAsync"
+    - action: "Disable the app to stop access while preserving trees and data."
+      api: "ILatticeAppsControl.DisableAsync / Disable"
+      source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DisableAsync"
+    - action: "Re-apply the previous version or previous ceiling when that is the intended rollback and the source still offers it."
+      api: "ILatticeAppsControl.InstallAsync or UpdateConsentAsync"
+      source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.InstallAsync"
+    - action: "Uninstall only when retiring the install and soft-deleting structural app trees is intended."
+      api: "ILatticeAppsControl.UninstallAsync / Uninstall"
+      source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.UninstallAsync"
+  source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DisableAsync"
+concurrency:
+  - rule: "Registry transitions use bounded optimistic concurrency and re-decide when a competing writer advances the same install record."
+    source: "src/lattice.apps/Registry/AppRegistry.cs#AppRegistry.TransitionAsync"
+  - rule: "InstallAsync and UpdateConsentAsync pass ExpectedVersion for upgrades so stale version decisions fail instead of overwriting newer installs."
+    source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.UpdateConsentAsync"
+  - rule: "Enable re-activates when the record revision changed during the enable transition, so grants converge to the transition's authoritative record."
+    source: "src/lattice.apps/Activation/AppActivationEngine.cs#AppActivationEngine.EnableAsync"
+  - rule: "One tenant app activation run is serialized through the activation pipeline, and startup reconcile retries in the background without blocking silo startup."
+    source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline"
+sources:
+  - "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs"
+  - "src/lattice.api.apps/LatticeAppsControl.cs"
+  - "src/lattice.api.apps/LatticeAppsControl.Install.cs"
+  - "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs"
+  - "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+  - "src/lattice.apps/Activation/AppActivationEngine.cs"
+  - "src/lattice.apps/Activation/IAppActivationPipeline.cs"
+  - "src/lattice.apps/Registry/AppRegistry.cs"
+  - "src/lattice.apps/Registry/IAppRegistry.cs"
+  - "docs/lattice.apps/README.md"
+  - "docs/lattice.api.apps/README.md"
+  - "docs/lattice.api.apps.grpc/README.md"
+  - "docs/lattice.api.mcp.apps/README.md"

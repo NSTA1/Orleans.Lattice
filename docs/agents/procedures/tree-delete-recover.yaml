@@ -45,6 +45,8 @@ steps:
 postconditions:
   - check: "Soft-delete is reversible until the recovery window elapses or purge runs."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+  - check: "Soft-delete, recover, and purge walk every physical shard index the tree has ever allocated, including split-added shards above the pinned shard count."
+    source: "docs/lattice/tree-deletion.md"
   - check: "Purge is irreversible."
     source: "docs/lattice.api.treeadmin/README.md"
 failure_modes:
@@ -76,6 +78,8 @@ concurrency:
     source: "docs/lattice.api.treeadmin/README.md"
   - rule: "Purge may be in progress or complete according to deletion status."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeDeletionStatusAsync"
+  - rule: "Shard enumeration uses the registry shard map or split allocation high-water mark rather than only the pinned ShardCount."
+    source: "docs/lattice/tree-deletion.md"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"

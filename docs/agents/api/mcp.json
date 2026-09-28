@@ -3,6 +3,7 @@
   "surface": "mcp",
   "packages": [
     "Orleans.Lattice.Api.Mcp",
+    "Orleans.Lattice.Api.Mcp.Apps",
     "Orleans.Lattice.Api.Mcp.RepoContext",
     "Orleans.Lattice.Api.Mcp.RepoContext.Replication",
     "Orleans.Lattice.Api.Mcp.Telemetry",
@@ -18,7 +19,19 @@
     "docs/lattice.api.mcp/tools.md",
     "docs/lattice.api.mcp/security.md",
     "docs/lattice.api.mcp.repocontext/tools.md",
-    "docs/lattice.api.mcp.telemetry/tools.md"
+    "docs/lattice.api.mcp.telemetry/tools.md",
+    "src/lattice.api.mcp/Discovery/ILatticeApiMcpAppToolSource.cs#ILatticeApiMcpAppToolSource",
+    "src/lattice.api.mcp.apps/LatticeMcpAppsServiceCollectionExtensions.cs#AddAppMcpTools",
+    "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.GetPermittedToolsAsync",
+    "src/lattice.api.mcp.apps/AppMcpToolActivation.cs#AppMcpToolActivation.Pair",
+    "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+    "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate.IsHeldAsync",
+    "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.Compose",
+    "src/lattice.api.mcp.apps/IAppMcpToolProvider.cs#IAppMcpToolProvider",
+    "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+    "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+    "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+    "docs/lattice.api.mcp.apps/README.md"
   ],
   "in_process": {
     "interface": "ILatticeApiMcpToolGroup",
@@ -26,13 +39,14 @@
       "server": "AddLatticeMcp registers the streamable-HTTP MCP server and installs per-session permission-scoped tool discovery.",
       "endpoint": "MapLatticeMcp maps the MCP transport at LatticeApiMcpOptions.TransportPattern and applies RequireAuthorization by default.",
       "transport": "ModelContextProtocol streamable HTTP via AddMcpServer().WithHttpTransport().",
-      "authorization_gate": "CredentialStampingTool enforces ILatticeApiMcpAuthorizer at invocation, stamps caller credentials and active tenant, resolves optional region, and translates faults.",
+      "authorization_gate": "CredentialStampingTool enforces ILatticeApiMcpAuthorizer at invocation, stamps caller credentials and active tenant, resolves optional region, and translates faults. RequireAuthorization controls endpoint authentication only; it does not bypass the default-deny authorizer.",
       "tool_modules": [
+        "AddAppMcpTools",
         "AddAuthTools",
         "AddBackupTools",
         "AddDataTools",
-        "AddRepoContextTools",
         "AddReplicationTools",
+        "AddRepoContextTools",
         "AddStateTools",
         "AddTelemetryTools",
         "AddTenantAdminTools",
@@ -40,7 +54,10 @@
         "AddTreeAdminTools"
       ],
       "write_opt_in": "Mutating tool modules are contributed only by their enableWrites, enableControl, enableAdministration, enableSchemaControl, enableLifecycle, or equivalent opt-in flags.",
-      "region_parameter": "CredentialStampingTool advertises an optional region string on facade-backed tools and rejects unknown or unreachable targets fail-closed."
+      "region_parameter": "CredentialStampingTool advertises an optional region string on tool calls. Facade-backed tools resolve it through the group router and reject unknown or unreachable targets fail-closed; app-contributed tools are in-process and accept only the current region.",
+      "app_tool_surface": "AddAppMcpTools registers ILatticeApiMcpAppToolSource. Enabled app manifests declare app-local tools, providers implement those names, and the session advertises permitted tools as {slug}_{tool}; app tools are omitted from lattice_capabilities.",
+      "app_tool_authorization": "AppMcpToolSource offers an app tool only when the caller holds every operation in the tool's declared role on at least one resolved role scope; AppMcpNamespacedTool repeats the same check at invocation.",
+      "app_tool_pairing": "AppMcpToolActivation hard-fails an app's whole tool activation when a declared tool lacks an implementation, an implementation is undeclared, a local name is duplicated, or the slug is reserved."
     },
     "source": "src/lattice.api.mcp/Discovery/ILatticeApiMcpToolGroup.cs#ILatticeApiMcpToolGroup"
   },
@@ -287,7 +304,7 @@
           "type": "LatticeSubjectSelectorKind",
           "required": false,
           "default": "LatticeSubjectSelectorKind.User",
-          "notes": "Whether subjectId names a user or a group. Set to Group to explain a group subject (evaluated as a member of that group and its ancestors); defaults to User."
+          "notes": "Whether subjectId names a user or a group. Set to Group to explain a group subject. User group closure is resolved from the membership directory only, not from token-asserted or claims-projected groups."
         },
         {
           "name": "region",
@@ -1680,24 +1697,18 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; OperationId makes a retried restore a no-op, and a missing OperationId is deterministically derived from the request.",
+        "source": "src/lattice.backup/LatticeRestoreRequest.cs#OperationId"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync"
+        "idempotent": true,
+        "basis": "A restore carries an idempotency key, or derives one from BackupId, target tree, scope, and mode; re-running the same request converges to the same state.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#DeriveOperationId"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync"
+        "rule": "The backup facade authorizes a resolved target scope before the restore engine runs; the restore engine authorizes the target before coordinated dispatch and also requires Backup authority on every distinct captured source tree for cross-tree retargets.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AuthorizeCapturedSourcesAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.RestoreBackupAsync",
@@ -1801,8 +1812,8 @@
         "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
+        "rule": "Before alias commit or revert, each caller-supplied physical tree id is re-resolved against registry provenance and must be the target itself, a restore shadow of the target, or the target current physical tree.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.RevertRestoreAsync",
@@ -4297,7 +4308,7 @@
     },
     {
       "id": "lattice_list_regions",
-      "in_process": "RegionDiscoveryToolHandlers.ListRegionsAsync",
+      "in_process": "ILatticeRegionCatalog.ListRegionsAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
       "facade_operation": null,
@@ -4309,7 +4320,7 @@
       "request": [],
       "response": {
         "type": "LatticeApiMcpRegionsToolResult",
-        "shape": "Structured JSON projection of LatticeApiMcpRegionsToolResult returned by the handler."
+        "shape": "Structured JSON projection of the ILatticeRegionCatalog.ListRegionsAsync result: currentRegion plus the regions the server can route to, with per-group reachability and tenant-scoped omissions."
       },
       "errors": [
         {
@@ -4324,7 +4335,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp/Tools/Region/RegionDiscoveryToolHandlers.cs#RegionDiscoveryToolHandlers.ListRegionsAsync"
+        "source": "src/lattice.api.abstractions/Region/ILatticeRegionCatalog.cs#ILatticeRegionCatalog.ListRegionsAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -4333,11 +4344,13 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp/Tools/Region/RegionDiscoveryToolHandlers.cs#RegionDiscoveryToolHandlers.ListRegionsAsync"
+        "source": "src/lattice.api.abstractions/Region/ILatticeRegionCatalog.cs#ILatticeRegionCatalog.ListRegionsAsync"
       },
       "sources": [
+        "src/lattice.api.abstractions/Region/ILatticeRegionCatalog.cs#ILatticeRegionCatalog.ListRegionsAsync",
         "src/lattice.api.mcp/Tools/Region/RegionDiscoveryToolHandlers.cs#RegionDiscoveryToolHandlers.ListRegionsAsync",
-        "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator"
+        "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator",
+        "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ListRegionsAsync"
       ]
     },
     {
@@ -6816,7 +6829,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
       },
       "concurrency": {
-        "rule": "The target tree must be empty. The emptiness probe first invalidates the per-tree diagnostics cache and then runs a deep DiagnoseAsync, so a report cached before chunks were grafted onto the tree cannot admit a second session.",
+        "rule": "The target tree must be empty, and the deep diagnostics probe must successfully sample every shard; any shard sample failure is refused fail-closed instead of being counted as empty.",
         "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
       },
       "sources": [
@@ -8219,7 +8232,7 @@
           "type": "bool",
           "required": false,
           "default": "false",
-          "notes": "When true, walk leaf state for authoritative counts (more expensive); when false (the default), use the cheap shard-root projection."
+          "notes": "When true, also count tombstoned and expired entries in each leaf. When false, page the leaf chain for live keys only and report tombstone counts as zero. Each mode is cached briefly."
         },
         {
           "name": "region",
@@ -8253,7 +8266,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "rule": "Both shallow and deep diagnostics page through every shard leaf chain; shallow counts live keys only and reports tombstones as zero, while deep also counts tombstoned and expired entries.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetDiagnosticsAsync"
       },
       "sources": [
@@ -9130,7 +9143,7 @@
           "name": "targetShardCount",
           "type": "int",
           "required": true,
-          "notes": "The desired number of distinct physical shards to grow the tree to. Grow-only: must be greater than the current physical shard count (an empty tree may be re-pinned to any count) and at most 4096. Must be at least 2."
+          "notes": "Desired physical shard count. Targets below the current count are rejected; an equal target is a no-op; the target must be at least 2 and at most 4096 except an empty tree may be re-pinned."
         },
         {
           "name": "region",
@@ -9160,7 +9173,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Current count or matching in-flight target is a no-op.",
+        "basis": "A request for the current physical shard count, or a matching in-flight target, is a no-op; a target below the current count is rejected except for the documented empty-tree re-pin case.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {
@@ -9374,7 +9387,7 @@
           "name": "treeId",
           "type": "string",
           "required": true,
-          "notes": "The tree whose most recent resize to undo. Must not be null, empty, or a reserved system tree id."
+          "notes": "The tree whose in-flight or most recent completed resize to undo. Must not be null, empty, or a reserved system tree id."
         },
         {
           "name": "region",
@@ -9543,8 +9556,8 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
+        "rule": "The composed backup/restore engine authorizes the target before coordinated dispatch and requires Backup authority on any distinct captured source tree for a cross-tree retarget.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#RestoreAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.RestoreTreeAsync",
@@ -9625,8 +9638,8 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+        "rule": "The backup/restore engine revalidates caller-supplied physical tree ids against registry provenance before a shadow-cutover revert can repoint an alias.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync",
@@ -9683,8 +9696,8 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
       },
       "concurrency": {
-        "rule": "Replicated member trees flip together as an all-or-nothing saga.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+        "rule": "The composed backup/restore engine authorizes every member target before coordinated dispatch, then replicated members flip together as an all-or-nothing coordinated restore.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#RestoreSetAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.RestoreTreeSetAsync",
@@ -10814,6 +10827,919 @@
       ]
     },
     {
+      "id": "repo-context_claim_status",
+      "in_process": "RepoContextToolHandlers.ClaimStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "key",
+          "type": "string",
+          "required": true,
+          "notes": "The full repository-context key of the memory record whose claim to inspect."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextClaimStatusResult",
+        "shape": "Structured JSON projection of RepoContextClaimStatusResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ClaimStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildClaimStatusTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ClaimStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ClaimStatusAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_context",
+      "in_process": "RepoContextToolHandlers.ContextAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identifier to bundle context from."
+        },
+        {
+          "name": "task",
+          "type": "string",
+          "required": true,
+          "notes": "The natural-language task to pack a ranked, explained context bundle for."
+        },
+        {
+          "name": "top",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "The maximum number of files to consider. Clamped to the range [1, 50]; defaults to 10."
+        },
+        {
+          "name": "responseBudgetTokens",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "The hard token ceiling for the whole bundle, measured with the exact BPE token counter. Clamped to the range [1, 200000]; defaults to 8192. The bundle's reported total never exceeds it."
+        },
+        {
+          "name": "detail",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "seen",
+          "type": "string[]?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "known",
+          "type": "string[]?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "session",
+          "type": "string?",
+          "required": false,
+          "default": "null"
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextContextResult",
+        "shape": "Structured JSON projection of RepoContextContextResult returned by the handler. responseTokens is the estimated wire cost of the whole response; totalTokens is the packed source text total."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ContextAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildContextTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ContextAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ContextAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_health",
+      "in_process": "RepoContextToolHandlers.HealthAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string?",
+          "required": false,
+          "notes": "Optional repository id. When supplied, report passive per-repository readiness and component evidence instead of process-wide readiness; no embedding, search, or recovery probe is executed."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextHealthResult",
+        "shape": "Structured JSON projection of RepoContextHealthResult. Without repoId it reports host retrieval readiness; with repoId it includes repository-scoped passive evidence in repository."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.HealthAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.HealthAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.HealthAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextHealthResult.cs#RepoContextHealthResult.Repository",
+        "src/lattice.api.mcp.repocontext/RepoContextRepositoryReadiness.cs#RepoContextRepositoryReadiness",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_index_status",
+      "in_process": "RepoContextToolHandlers.IndexStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identity whose indexing job to inspect. A repository that was never onboarded reports status 'None'."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoIndexProgress",
+        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler, including pending/walking/reconciling/applying/vectorising/done phases and resetting while repocontext_reset_index sweeps."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.IndexStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildIndexStatusTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.IndexStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.IndexStatusAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_list_topics",
+      "in_process": "RepoContextToolHandlers.ListTopicsAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identifier whose memory topics to enumerate."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextTopicsResult",
+        "shape": "Structured JSON projection of RepoContextTopicsResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ListTopicsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildListTopicsTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ListTopicsAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ListTopicsAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_neighbors",
+      "in_process": "RepoContextToolHandlers.NeighborsAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "key",
+          "type": "string",
+          "required": true,
+          "notes": "The seed repository-context key to walk knowledge-linking edges from, for example 'repo/{repoId}/mem/{topic}/{id}'."
+        },
+        {
+          "name": "relation",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "An optional relation name to restrict the walk to (for example 'broader' or 'related'); omit to follow every relation."
+        },
+        {
+          "name": "depth",
+          "type": "int",
+          "required": false,
+          "default": "1",
+          "notes": "The maximum number of hops to traverse. Clamped to the range [1, 3]; defaults to 1 (immediate neighbors)."
+        },
+        {
+          "name": "maxNodes",
+          "type": "int",
+          "required": false,
+          "default": "50",
+          "notes": "The maximum number of neighbor entries to return. Clamped to the range [1, 100]; defaults to 50. A non-positive value applies the default of 50, not the ceiling."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextNeighborsResult",
+        "shape": "Structured JSON projection of RepoContextNeighborsResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildNeighborsTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.DefaultNeighborNodes",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.NeighborsAsync"
+      ]
+    },
+    {
+      "id": "repo-context_outline",
+      "in_process": "RepoContextToolHandlers.OutlineAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identifier the file belongs to."
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "notes": "The repository-relative file path to outline, for example 'src/foo/Bar.cs'."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextOutlineResult",
+        "shape": "Structured JSON projection of RepoContextOutlineResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.OutlineAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildOutlineTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.OutlineAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.OutlineAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_recall",
+      "in_process": "RepoContextToolHandlers.RecallAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "key",
+          "type": "string",
+          "required": true,
+          "notes": "The full repository-context key to fetch, for example 'repo/{repoId}/file/{path}' or 'repo/{repoId}/mem/{topic}/{id}'."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextEntryView",
+        "shape": "Structured JSON projection of RepoContextEntryView returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.RecallAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRecallTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.RecallAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.RecallAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_related",
+      "in_process": "RepoContextToolHandlers.RelatedAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identifier the file belongs to."
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "required": true,
+          "notes": "The repository-relative file path whose related neighbourhood to resolve, for example 'src/foo/Bar.cs'."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextRelatedResult",
+        "shape": "Structured JSON projection of RepoContextRelatedResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.RelatedAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRelatedTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.RelatedAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.RelatedAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_scan",
+      "in_process": "RepoContextToolHandlers.ScanAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identifier to scan."
+        },
+        {
+          "name": "scope",
+          "type": "string",
+          "required": true,
+          "notes": "The range to walk: 'Files', 'Packages', 'Symbols', 'Memory', or 'MemoryTopic'."
+        },
+        {
+          "name": "topic",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "The memory topic to scan; required when scope is 'MemoryTopic', otherwise ignored."
+        },
+        {
+          "name": "pathPrefix",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "An optional directory path prefix to restrict a 'Files' scan to a subtree (for example 'src/'); rejected for other scopes."
+        },
+        {
+          "name": "continuationToken",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "An opaque continuation token from a prior page; omit to start at the beginning of the range."
+        },
+        {
+          "name": "pageSize",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "The maximum number of entries to return on this page. Clamped to the range [1, 500]; defaults to 100."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextScanResult",
+        "shape": "Structured JSON projection of RepoContextScanResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ScanAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildScanTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ScanAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ScanAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_search",
+      "in_process": "RepoContextToolHandlers.SearchAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "repoId",
+          "type": "string",
+          "required": true,
+          "notes": "The repository identifier to search."
+        },
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "notes": "The natural-language query to find relevant repository-context records for."
+        },
+        {
+          "name": "k",
+          "type": "int",
+          "required": false,
+          "default": "0",
+          "notes": "The maximum number of hits to return. Clamped to the range [1, 100]; defaults to 10."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextSearchResult",
+        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler, including retrievalPath and reasons such as chunk:symbol, chunk:file, chunk:memory, symbol:<fqName>, and topic:<topic>."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.SearchAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildSearchTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.SearchAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.SearchAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
+      "id": "repo-context_stats",
+      "in_process": "RepoContextToolHandlers.Stats",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": null,
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "request": [
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id. App-contributed tools are served in-process and accept only the current region; a peer region is rejected fail-closed."
+        }
+      ],
+      "response": {
+        "type": "RepoContextStatsResult",
+        "shape": "Structured JSON projection of RepoContextStatsResult returned by the handler, counted over answered repocontext_context bundles and using each bundle's estimated responseTokens."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "mcp-exception",
+          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.Stats"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only tool (tool_annotations.read_only) with no server-side mutation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildStatsTool"
+      },
+      "concurrency": {
+        "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.Stats"
+      },
+      "sources": [
+        "src/lattice.api.mcp.repocontext/App/repo-context.app.json",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames",
+        "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs#AppMcpNamespacedTool.InvokeAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.Stats",
+        "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      ]
+    },
+    {
       "id": "repocontext_add_repo",
       "in_process": "RepoContextToolHandlers.AddRepoAsync",
       "grpc_method": null,
@@ -11289,7 +12215,7 @@
       ],
       "response": {
         "type": "RepoContextContextResult",
-        "shape": "Structured JSON projection of RepoContextContextResult returned by the handler."
+        "shape": "Structured JSON projection of RepoContextContextResult returned by the handler. responseTokens is the estimated wire cost of the whole response; totalTokens is the packed source text total."
       },
       "errors": [
         {
@@ -11409,7 +12335,7 @@
     },
     {
       "id": "repocontext_health",
-      "in_process": "RepoContextToolHandlers.Health",
+      "in_process": "RepoContextToolHandlers.HealthAsync",
       "grpc_method": null,
       "transport_scope": "mcp_tool",
       "facade_operation": null,
@@ -11420,6 +12346,12 @@
       },
       "request": [
         {
+          "name": "repoId",
+          "type": "string?",
+          "required": false,
+          "notes": "Optional repository id. When supplied, report passive per-repository readiness and component evidence instead of process-wide readiness; no embedding, search, or recovery probe is executed."
+        },
+        {
           "name": "region",
           "type": "string",
           "required": false,
@@ -11428,7 +12360,7 @@
       ],
       "response": {
         "type": "RepoContextHealthResult",
-        "shape": "Structured JSON projection of RepoContextHealthResult returned by the handler."
+        "shape": "Structured JSON projection of RepoContextHealthResult. Without repoId it reports host retrieval readiness; with repoId it includes repository-scoped passive evidence in repository."
       },
       "errors": [
         {
@@ -11447,7 +12379,7 @@
       "retry": {
         "safe": true,
         "policy": "Retry after transient transport or backend faults; cancellation is not retried by the server.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.Health"
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.HealthAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -11456,10 +12388,12 @@
       },
       "concurrency": {
         "rule": "Concurrent with other operations; returned state is a point-in-time observation.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.Health"
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.HealthAsync"
       },
       "sources": [
-        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.Health",
+        "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.HealthAsync",
+        "src/lattice.api.mcp.repocontext/RepoContextHealthResult.cs#RepoContextHealthResult.Repository",
+        "src/lattice.api.mcp.repocontext/RepoContextRepositoryReadiness.cs#RepoContextRepositoryReadiness",
         "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       ]
     },
@@ -11490,7 +12424,7 @@
       ],
       "response": {
         "type": "RepoIndexProgress",
-        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler."
+        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler, including pending/walking/reconciling/applying/vectorising/done phases and resetting while repocontext_reset_index sweeps."
       },
       "errors": [
         {
@@ -11958,7 +12892,7 @@
       ],
       "response": {
         "type": "RepoContextReleaseClaimResult",
-        "shape": "Structured JSON projection of RepoContextReleaseClaimResult returned by the handler."
+        "shape": "Structured JSON projection of RepoContextReleaseClaimResult returned by the handler; stale, missing, and unclaimed release attempts are reported as released=false rather than errors."
       },
       "errors": [
         {
@@ -11981,7 +12915,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Source describes idempotency, resume/status polling, or state-based retry semantics; inspect status when a result is ambiguous.",
+        "basis": "Release is idempotent for stale, missing, or unclaimed records and never lowers the fencing high-water mark.",
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ReleaseClaimAsync"
       },
       "concurrency": {
@@ -12473,7 +13407,7 @@
       ],
       "response": {
         "type": "RepoContextSearchResult",
-        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler."
+        "shape": "Structured JSON projection of RepoContextSearchResult returned by the handler, including retrievalPath and reasons such as chunk:symbol, chunk:file, chunk:memory, symbol:<fqName>, and topic:<topic>."
       },
       "errors": [
         {
@@ -12529,7 +13463,7 @@
       ],
       "response": {
         "type": "RepoContextStatsResult",
-        "shape": "Structured JSON projection of RepoContextStatsResult returned by the handler."
+        "shape": "Structured JSON projection of RepoContextStatsResult returned by the handler, counted over answered repocontext_context bundles and using each bundle's estimated responseTokens."
       },
       "errors": [
         {
