@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
 
@@ -23,10 +25,8 @@ namespace Orleans.Lattice.Dashboards.Tests;
 /// This fixture makes that state executable in both directions. Forward: every
 /// <c>repocontext.*</c> instrument declared in source has a row. Reverse: every
 /// row names an instrument that still exists, so a stale row cannot survive a
-/// rename. It also pins the recorded state itself - each row reads
-/// <c>not charted</c> - and asserts no bundled dashboard references a
-/// <c>repocontext_</c> token, so the day a panel does land the mismatch fails
-/// here rather than shipping a map that contradicts the dashboards.
+/// rename. Each row's charted/not-charted claim must agree with actual panel
+/// expressions, and every referenced token must resolve to a documented instrument.
 /// </para>
 /// <para>
 /// Every scan carries a floor, because a guard whose scan matches nothing
@@ -120,49 +120,114 @@ public sealed class RepoContextMetricsToPanelMapTests
     }
 
     [Test]
-    public void Every_repocontext_panel_map_row_records_the_instrument_as_not_charted()
+    public void Every_repocontext_panel_map_row_agrees_with_actual_panel_expressions()
+        => AssertPanelMapAgrees(ReadPanelReferences());
+
+    private static void AssertPanelMapAgrees(HashSet<(string Token, string Dashboard, string Panel)> referenced)
     {
         var rows = ReadPanelMapRows();
-
-        var charted = rows
-            .Where(row => !row.Value.Text.Contains("not charted", StringComparison.OrdinalIgnoreCase))
+        var mismatches = rows
+            .Where(row =>
+            {
+                var forms = PrometheusForms(row.Key, row.Value.Text).ToHashSet(StringComparer.Ordinal);
+                var matches = referenced.Where(reference => forms.Contains(reference.Token)).ToArray();
+                var cells = row.Value.Text.Split('|');
+                return cells[5].Contains("not charted", StringComparison.OrdinalIgnoreCase)
+                    ? matches.Length != 0
+                    : !matches.Any(reference => cells[4].Trim() == reference.Dashboard
+                        && cells[5].Trim().StartsWith(reference.Panel, StringComparison.Ordinal));
+            })
             .OrderBy(row => row.Key, StringComparer.Ordinal)
             .Select(row => $"- {row.Key}  ({PanelMapRelativePath}:{row.Value.LineNumber})")
             .ToList();
 
         Assert.That(
-            charted,
+            mismatches,
             Is.Empty,
-            "The following panel-map rows no longer record their instrument as '**not charted**'. That is a "
-                + "welcome change, but it must land together with the panel: update "
-                + $"{nameof(No_bundled_dashboard_references_a_repocontext_instrument)} and the surrounding "
-                + $"prose in {PanelMapRelativePath}, which both still state that no bundled dashboard charts "
-                + "this meter."
+            "The following map rows disagree with bundled panel expressions. Update the panel and map together:"
                 + Environment.NewLine
-                + string.Join(Environment.NewLine, charted));
+                + string.Join(Environment.NewLine, mismatches));
     }
 
     [Test]
-    public void No_bundled_dashboard_references_a_repocontext_instrument()
+    public void Every_bundled_repocontext_panel_token_resolves_to_a_documented_instrument()
     {
-        var referenced = new SortedSet<string>(StringComparer.Ordinal);
+        var expected = ReadPanelMapRows()
+            .SelectMany(row => PrometheusForms(row.Key, row.Value.Text))
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.That(ReadPanelReferences().Select(reference => reference.Token).Except(expected), Is.Empty,
+            "A panel references an unknown repocontext metric or the wrong Prometheus unit/type suffix.");
+    }
+
+    [Test]
+    public void Exact_scan_cost_panels_are_present_and_do_not_fabricate_zero_or_filter_by_tree()
+    {
+        using var json = JsonDocument.Parse(LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Overview));
+        var panels = json.RootElement.GetProperty("panels").EnumerateArray()
+            .Where(panel => panel.GetProperty("title").GetString()!.StartsWith("Exact KNN ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.That(panels, Has.Length.EqualTo(3));
+        foreach (var panel in panels)
+        foreach (var target in panel.GetProperty("targets").EnumerateArray())
+        {
+            var expression = target.GetProperty("expr").GetString();
+            Assert.That(expression, Does.Not.Contain("or vector(0)").And.Not.Contain("tree="));
+        }
+    }
+
+    [TestCase("uncharted-token")]
+    [TestCase("missing-panel")]
+    [TestCase("empty-scan")]
+    public void Panel_map_guard_rejects_perturbed_production_dashboard(string perturbation)
+    {
+        var failure = Assert.Throws<AssertionException>(() => AssertPanelMapAgrees(ReadPanelReferences(json =>
+        {
+            if (perturbation == "empty-scan") return "{}";
+            if (perturbation == "uncharted-token")
+                return json.Replace("repocontext_retrieval_exact_scan_vectors_total", "repocontext_calls_total",
+                    StringComparison.Ordinal);
+
+            var root = JsonNode.Parse(json)!.AsObject();
+            var panels = root["panels"]!.AsArray();
+            var removed = panels.FirstOrDefault(panel => panel?["title"]?.GetValue<string>() == "Exact KNN gather work");
+            if (removed is not null) panels.Remove(removed);
+            return root.ToJsonString();
+        })));
+        Assert.That(failure!.Message, Does.Contain(perturbation switch
+        {
+            "uncharted-token" => "repocontext.calls",
+            "missing-panel" => "repocontext.retrieval.exact_scan.pages",
+            _ => "Positive control failed",
+        }));
+    }
+
+    private static IEnumerable<string> PrometheusForms(string name, string row)
+    {
+        var token = name.Replace('.', '_');
+        var unit = row.Contains("(`s`)", StringComparison.Ordinal) ? "_seconds"
+            : row.Contains("(`ms`)", StringComparison.Ordinal) ? "_milliseconds"
+            : row.Contains("(`By`)", StringComparison.Ordinal) ? "_bytes" : "";
+        if (!token.EndsWith(unit, StringComparison.Ordinal)) token += unit;
+        if (row.Contains("histogram", StringComparison.OrdinalIgnoreCase))
+            return [token + "_sum", token + "_count", token + "_bucket"];
+        return [row.Contains("| counter", StringComparison.OrdinalIgnoreCase) ? token + "_total" : token];
+    }
+
+    private static HashSet<(string Token, string Dashboard, string Panel)> ReadPanelReferences(
+        Func<string, string>? perturb = null)
+    {
+        var referenced = new HashSet<(string Token, string Dashboard, string Panel)>();
         var positiveControl = new SortedSet<string>(StringComparer.Ordinal);
         var dashboardCount = 0;
 
         foreach (var kind in LatticeDashboards.All)
         {
             var json = LatticeDashboards.GetGrafanaDashboardJson(kind);
+            if (perturb is not null) json = perturb(json);
             dashboardCount++;
 
-            foreach (Match match in RepoContextTokenRegex.Matches(json))
-            {
-                referenced.Add($"{match.Value}  (dashboard {kind})");
-            }
-
-            foreach (Match match in PositiveControlTokenRegex.Matches(json))
-            {
-                positiveControl.Add(match.Value);
-            }
+            using var document = JsonDocument.Parse(json);
+            CollectExpressions(document.RootElement, kind.ToString(), "", referenced, positiveControl);
         }
 
         Assert.That(
@@ -178,14 +243,37 @@ public sealed class RepoContextMetricsToPanelMapTests
                 + "bundled dashboard(s), which is below the floor. Token extraction is broken, so the "
                 + "repocontext half of this test is measuring nothing and its silence means nothing.");
 
-        Assert.That(
-            referenced,
-            Is.Empty,
-            "A bundled dashboard now references a repocontext instrument token. That contradicts the "
-                + $"'**not charted**' rows and the surrounding prose in {PanelMapRelativePath}, which this "
-                + "fixture holds in place. Update the map's Panel(s) column and its prose in the same change:"
-                + Environment.NewLine
-                + string.Join(Environment.NewLine, referenced.Select(token => $"- {token}")));
+        return referenced;
+    }
+
+    private static void CollectExpressions(
+        JsonElement element,
+        string dashboard,
+        string panel,
+        HashSet<(string Token, string Dashboard, string Panel)> references,
+        SortedSet<string> positiveControl)
+    {
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in element.EnumerateArray())
+                CollectExpressions(child, dashboard, panel, references, positiveControl);
+        }
+        else if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("title", out var title)) panel = title.GetString()!;
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Name == "expr" && property.Value.ValueKind == JsonValueKind.String)
+                {
+                    var expression = property.Value.GetString()!;
+                    foreach (Match match in RepoContextTokenRegex.Matches(expression))
+                        references.Add((match.Value, dashboard, panel));
+                    foreach (Match match in PositiveControlTokenRegex.Matches(expression))
+                        positiveControl.Add(match.Value);
+                }
+                else CollectExpressions(property.Value, dashboard, panel, references, positiveControl);
+            }
+        }
     }
 
     private static Dictionary<string, string> DiscoverDeclaredInstrumentNames()
