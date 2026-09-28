@@ -376,7 +376,9 @@ internal sealed class AggregationApplier(
         var slot = Slot(sourceKey, _fanout);
         var key = InverseKey(groupKey, slot);
         var bytes = await store.GetAsync(key, cancellationToken);
-        var map = bytes is null ? new Dictionary<string, MemberEntry>(StringComparer.Ordinal) : DecodeInverse(bytes);
+        var map = bytes is null || IsEmpty(bytes)
+            ? new Dictionary<string, MemberEntry>(StringComparer.Ordinal)
+            : DecodeInverse(bytes);
 
         if (add is { } entry)
         {
@@ -535,6 +537,14 @@ internal sealed class AggregationApplier(
         // every `.Values` access otherwise allocates a throwaway ValueCollection.
         foreach (var (_, bytes) in shards)
         {
+            // GetManyAsync can return a slot holding the empty sentinel (and a
+            // buffered delete reads as absent), exactly as the accumulator pass
+            // above guards for. Skip those rather than handing them to the decoder.
+            if (bytes is null || IsEmpty(bytes))
+            {
+                continue;
+            }
+
             foreach (var (_, entry) in DecodeInverse(bytes))
             {
                 hasAny = true;
@@ -623,7 +633,9 @@ internal sealed class AggregationApplier(
     {
         var key = FoldInverseKey(groupKey, Slot(sourceKey, _fanout));
         var bytes = await store.GetAsync(key, cancellationToken);
-        var map = bytes is null ? new Dictionary<string, FoldMember>(StringComparer.Ordinal) : DecodeFoldInverse(bytes);
+        var map = bytes is null || IsEmpty(bytes)
+            ? new Dictionary<string, FoldMember>(StringComparer.Ordinal)
+            : DecodeFoldInverse(bytes);
 
         if (add is { } entry)
         {
@@ -669,6 +681,13 @@ internal sealed class AggregationApplier(
         // otherwise allocates a throwaway ValueCollection wrapper per call.
         foreach (var (_, bytes) in shards)
         {
+            // See MaterialiseInverseAsync: an empty-sentinel or absent slot is not
+            // a decodable row.
+            if (bytes is null || IsEmpty(bytes))
+            {
+                continue;
+            }
+
             foreach (var (sourceKey, member) in DecodeFoldInverse(bytes))
             {
                 members.Add((sourceKey, member));
