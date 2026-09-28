@@ -2557,7 +2557,8 @@ internal sealed partial class WalShardGrain(
         // on every metric record (including the deactivation hook
         // and the preflight-timeout counter) that the production
         // activation contract provides.
-        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeId);
+        var metricTreeId = optionsResolver.GetMetricTreeId(_treeId);
+        _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId);
         _tenantTag = LatticeTenantLabel.ForTree(_treeId);
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
         // Mirror OnActivateAsync's ordering: reconcile any
