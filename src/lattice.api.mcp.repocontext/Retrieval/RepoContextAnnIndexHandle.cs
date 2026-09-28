@@ -57,6 +57,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     private DurableVectorIndex? _index;
     private VectorIndexBuildProgress _progress;
+    private readonly Lock _progressGate = new();
     private int _pendingFlush;
 
     /// <summary>
@@ -174,6 +175,10 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
         _repoId = repoId;
         _space = space;
+        var spaceLabel = RepoContextAnnBuildSliceReporter.DescribeSpace(space);
+        HeldVectorTags = RepoContextAnnIndexRegistry.CreateMetricTags(repoId, spaceLabel, "held");
+        ExpectedVectorTags = RepoContextAnnIndexRegistry.CreateMetricTags(repoId, spaceLabel, "expected");
+        PartitionTags = RepoContextAnnIndexRegistry.CreateMetricTags(repoId, spaceLabel);
         _source = source;
         _store = store;
         _options = options;
@@ -233,10 +238,18 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     }
 
     /// <summary>
-    /// The build progress the last completed step reported, which is what the
-    /// plane surfaces as its honest "warming up or steady state" answer.
+    /// The last published open, build, or maintenance progress, including work
+    /// banked by a failed build step. Reads are safe from metric collector threads.
     /// </summary>
-    public VectorIndexBuildProgress Progress => _progress;
+    public VectorIndexBuildProgress Progress
+    {
+        get { lock (_progressGate) return _progress; }
+        private set { lock (_progressGate) _progress = value; }
+    }
+
+    internal KeyValuePair<string, object?>[] HeldVectorTags { get; }
+    internal KeyValuePair<string, object?>[] ExpectedVectorTags { get; }
+    internal KeyValuePair<string, object?>[] PartitionTags { get; }
 
     /// <summary>
     /// Whether the loaded index came from durable records rather than from a
@@ -314,16 +327,22 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 return _progress;
             }
 
+            if (phase is not null)
+            {
+                phase.InitialProgress = index.Progress;
+            }
+
             if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
             {
                 var restoredAtOpen = index.Progress.RestoredFromDurableState;
                 phase?.Enter(MapStepPhase(index.Progress.Phase));
                 try
                 {
-                    _progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
+                    Progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch
                 {
+                    Progress = index.Progress;
                     // The index has moved its own phase as far as it got, so this
                     // reading places the fault inside the step rather than at the
                     // step's entry. See the remarks above.
@@ -614,7 +633,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             }
 
             _pendingFlush += applied;
-            _progress = index.Progress;
+            Progress = index.Progress;
             await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -646,7 +665,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
             await index.FlushAsync(cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
-            _progress = index.Progress;
+            Progress = index.Progress;
         }
         finally
         {
@@ -771,7 +790,10 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 // this: an exception thrown from inside a catch clause is not
                 // caught by a sibling clause of the same try. Same reasoning as
                 // that arm's own "record before the rethrow" note.
-                _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted);
+                _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted, "timeout");
+                _logger.LogWarning(
+                    "Repository-context approximate index load for {RepoId} faulted: {Reason}. No identifier mappings were banked.",
+                    _repoId, "timeout");
                 throw new InvalidOperationException(
                     $"The repository-context approximate index for '{_repoId}' in space "
                     + $"{_space.ModelId}/{_space.Dimension} reached its {budget} open budget "
@@ -868,11 +890,12 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                     + "refused admission to the WAL replay permit queue {Attempts} times in succession "
                     + "without banking a single identifier mapping. The silo has been saturated for the "
                     + "whole of that window; the open is abandoning this attempt rather than retrying for "
-                    + "ever.",
+                    + "ever. Reason: {Reason}.",
                     _repoId,
                     _space.ModelId,
                     _space.Dimension,
-                    MaxEmptyOpenDeferrals);
+                    MaxEmptyOpenDeferrals,
+                    "admission_refused");
                 throw;
             }
 
@@ -880,10 +903,11 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 ex,
                 "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} was refused "
                 + "admission to the WAL replay permit queue and yielded; the progress it banked is resumed on "
-                + "the next tick.",
+                + "the next tick. Reason: {Reason}.",
                 _repoId,
                 _space.ModelId,
-                _space.Dimension);
+                _space.Dimension,
+                "admission_refused");
 
             return null;
         }
@@ -893,13 +917,33 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // propagation, and so faults and resumptions are counted on the same
             // path. The instance is deliberately NOT cleared: its banked progress
             // is what the next attempt resumes from.
-            _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted);
+            var reason = LoadFaultReason(ex);
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Faulted, reason);
+            _logger.LogWarning(ex,
+                "Repository-context approximate index load for {RepoId} faulted: {Reason}. Banked load progress is retained.",
+                _repoId, reason);
             throw;
         }
 
-        _load?.Record(resuming
-            ? RepoContextAnnIndexLoadOutcome.Resumed
-            : RepoContextAnnIndexLoadOutcome.Fresh);
+        if (_loading.LoadDiscardReason != VectorIndexLoadDiscardReason.None)
+        {
+            var reason = _loading.LoadDiscardReason switch
+            {
+                VectorIndexLoadDiscardReason.CountMismatch => "count_mismatch",
+                VectorIndexLoadDiscardReason.EmbeddingSpaceChange => "embedding_space_change",
+                _ => "unloadable_record",
+            };
+            _load?.Record(RepoContextAnnIndexLoadOutcome.Discarded, reason);
+            _logger.LogWarning(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} discarded durable state: {Reason}. Rebuilding from source.",
+                _repoId, _space.ModelId, _space.Dimension, reason);
+        }
+        else
+        {
+            _load?.Record(resuming
+                ? RepoContextAnnIndexLoadOutcome.Resumed
+                : RepoContextAnnIndexLoadOutcome.Fresh);
+        }
 
         // The open completed, so whatever admission refusals preceded it are behind
         // a walk that finished. Clearing on success as well as on progress matters
@@ -910,12 +954,12 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
         _index = _loading;
         _loading = null;
-        _progress = _index.Progress;
+        Progress = _index.Progress;
 
         _logger.LogInformation(
             "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} opened in phase "
             + "{Phase} holding {VectorsIndexed} vectors (restored from durable state: {Restored}, "
-            + "resumed a previously faulted load: {Resumed}).",
+            + "resumed identifier-map progress from an earlier faulted, deferred or refused attempt: {Resumed}).",
             _repoId,
             _space.ModelId,
             _space.Dimension,
@@ -925,6 +969,18 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             resuming);
 
         return _index;
+    }
+
+    private static string LoadFaultReason(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is TimeoutException) return "timeout";
+            if (current is EmbeddingSpaceMismatchException) return "embedding_space_change";
+            if (current is VectorIndexFormatException) return "unloadable_record";
+        }
+
+        return "other";
     }
 
     /// <summary>
@@ -1108,7 +1164,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             // shortfall would be paid for forever instead of once.
             await index.FlushAsync(cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
-            _progress = index.Progress;
+            Progress = index.Progress;
         }
 
         await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
@@ -1137,7 +1193,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             var attemptedAt = index.Count;
             await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
-            _progress = index.Progress;
+            Progress = index.Progress;
 
             var partitioned = index.Status.PartitionCount > 0;
             _partitioning?.RecordRepartition(partitioned);
@@ -1193,7 +1249,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
             await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
-            _progress = index.Progress;
+            Progress = index.Progress;
             return;
         }
 
@@ -1201,7 +1257,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         {
             await index.FlushAsync(cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
-            _progress = index.Progress;
+            Progress = index.Progress;
         }
     }
 
@@ -1276,7 +1332,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
 
     private void MarkServing(DurableVectorIndex index)
     {
-        _progress = index.Progress;
+        Progress = index.Progress;
         if (IsServing)
         {
             return;

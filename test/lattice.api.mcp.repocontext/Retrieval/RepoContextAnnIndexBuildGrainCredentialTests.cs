@@ -188,6 +188,8 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
     {
         /// <summary>Makes every write throw. Armed by a fixture once the build reaches training.</summary>
         public bool FaultWrites { get; set; }
+        public Func<Exception>? WriteFaultFactory { get; set; }
+        public string? FaultWriteKey { get; set; }
 
         /// <summary>How many writes were refused, so a fixture can prove the fault was reached.</summary>
         public int RefusedWrites { get; private set; }
@@ -205,10 +207,10 @@ public sealed partial class RepoContextAnnIndexBuildGrainCredentialTests
         public Task WriteAsync(
             IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
         {
-            if (FaultWrites)
+            if (FaultWrites && (FaultWriteKey is null || entries.Any(entry => entry.Key == FaultWriteKey)))
             {
                 RefusedWrites++;
-                throw new LeafProjectionStaleException(
+                throw WriteFaultFactory?.Invoke() ?? new LeafProjectionStaleException(
                     "Leaf projection for tree 'repo-context-vector-index' partition 1 cannot be rebuilt "
                     + "from the WAL: the durable projection checkpoint has fallen off the log.");
             }

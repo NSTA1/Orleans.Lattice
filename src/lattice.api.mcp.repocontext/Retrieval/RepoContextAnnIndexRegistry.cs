@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Vector.Persistence;
 
@@ -53,6 +54,7 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     private readonly RepoContextRetrievalReadinessState? _readiness;
 
     private bool _disposed;
+    private readonly Meter _meter = new(RepoContextUsageRecorder.MeterName);
 
     /// <summary>Creates the registry.</summary>
     /// <param name="backing">The factory binding each index to its store of record and its durable store. Must not be <see langword="null"/>.</param>
@@ -73,6 +75,12 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
         _options = options;
         _logger = logger;
         _readiness = readiness;
+        _vectors = _meter.CreateObservableGauge<long>(
+            "repocontext.ann.vectors", ObserveVectors, "{vector}",
+            "Held and last-counted expected vectors in each opened approximate index.");
+        _partitions = _meter.CreateObservableGauge<long>(
+            "repocontext.ann.partitions", ObservePartitions, "{partition}",
+            "Partitions held by each opened approximate index; zero means untrained.");
     }
 
     /// <inheritdoc />
@@ -292,6 +300,7 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
         _entries.Clear();
         _partitioning.Dispose();
         _load.Dispose();
+        _meter.Dispose();
     }
 
     private RepoContextAnnIndexHandle GetOrCreate(string repoId, EmbeddingSpaceTag space)
@@ -327,4 +336,33 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     }
 
     private readonly record struct PlaneKey(string RepoId, EmbeddingSpaceTag Space);
+
+    internal static KeyValuePair<string, object?>[] CreateMetricTags(
+        string repoId, string space, string? count = null) => count is null
+        ? [new("repository", repoId), new("space", space), LatticeTenantLabel.Platform]
+        : [new("repository", repoId), new("space", space), new("count", count), LatticeTenantLabel.Platform];
+
+    private IEnumerable<Measurement<long>> ObserveVectors()
+    {
+        // No Values snapshot or per-plane tag arrays: handles cache their labels once.
+        foreach (var entry in _entries)
+        {
+            var handle = entry.Value;
+            var progress = handle.Progress;
+            yield return new Measurement<long>(progress.VectorsIndexed, handle.HeldVectorTags);
+            yield return new Measurement<long>(progress.VectorsExpected, handle.ExpectedVectorTags);
+        }
+    }
+
+    private IEnumerable<Measurement<long>> ObservePartitions()
+    {
+        foreach (var entry in _entries)
+        {
+            yield return new Measurement<long>(
+                entry.Value.Progress.PartitionsTotal, entry.Value.PartitionTags);
+        }
+    }
+
+    private readonly ObservableGauge<long> _vectors;
+    private readonly ObservableGauge<long> _partitions;
 }

@@ -24,6 +24,36 @@ elsewhere, and you should read those first:
 What follows is only the part neither of those covers: how *this* deployment is
 produced and operated.
 
+### Reading ANN lifecycle progress
+
+Read `repocontext.ann.build.slice` alongside `repocontext.ann.vectors`, selecting
+the same `repository` and `space`. A first coordinator step compares against the
+progress observed immediately after opening the index, including a cached or
+durably restored index. Merely holding old vectors is not an `advanced` step.
+`advanced` means vectors or persisted partitions increased between two readings;
+check the held-vector gauge for ingest advancement and partition persistence when
+the build is committing. A phase-only change is `churned`; no change is `idle`.
+Repeated churn with flat held counts is a livelock diagnostic, not proof of useful
+ingest. `starved` and `VectorIndexBuildProgress.IsStarvedBySource` remain the
+authoritative source-deadline signals; lifetime deadline counts are per index
+instance and must not be compared across restarts.
+
+The `count="expected"` vector gauge is the last source count captured by the
+build, not a fresh census. Held counts include restored vectors and banked
+in-memory work, which may not yet be durable. `repocontext.ann.partitions` reports
+trained partitions, not persisted partitions. A scrape can miss a short-lived
+rise or reset, so interpret gauges and step outcomes together, not as identical
+samples. No known handle means no series; a created but unopened handle reads
+zero. Registry disposal removes its series.
+
+`repocontext.ann.index.load` records `discarded` when an open removes invalid
+derived state, with a bounded `reason` identifying why. Inspect the matching
+warning before treating a drop in held vectors as normal rebuilding. `faulted`
+retains resumable load progress; `refused` identifies admission saturation rather
+than a broken snapshot. The reason tag changes the label set: migrate exact-label
+consumers by aggregating it away. See the complete outcomes and legal reasons in
+[retrieval economics](retrieval-economics.md).
+
 ### Before you start the stack
 
 **Every resource knob is now derived per-deployment, and the stack will refuse to
