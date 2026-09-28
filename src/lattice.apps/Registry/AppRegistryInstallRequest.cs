@@ -35,4 +35,12 @@ public sealed record AppRegistryInstallRequest
     /// would otherwise roll back an upgrade that landed after the read.
     /// </summary>
     [Id(4)] public AppVersion? ExpectedVersion { get; init; }
+
+    /// <summary>
+    /// The consented app UI bridge grants to record, or <c>null</c> to leave them as they are: an upgrade
+    /// keeps the grants the current record carries, and an install records none. Consent is never widened
+    /// implicitly, so an upgrade that requests more than the kept grants cannot activate until it is
+    /// re-consented.
+    /// </summary>
+    [Id(5)] public AppUiBridgeRequest? BridgeConsent { get; init; }
 }

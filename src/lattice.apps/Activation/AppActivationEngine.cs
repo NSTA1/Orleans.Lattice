@@ -172,6 +172,23 @@ internal sealed class AppActivationEngine
         _ => AppActivationFailure.SourceUnavailable,
     };
 
+    private static IReadOnlyList<AppManifestError> DescribeBridgeExcess(AppUiBridgeRequest added)
+    {
+        var errors = new AppManifestError[added.Grants.Length];
+        for (var i = 0; i < errors.Length; i++)
+        {
+            var grant = added.Grants[i];
+            errors[i] = new AppManifestError(
+                "bridge-consent",
+                "$.ui.bridge",
+                grant.Tree is null
+                    ? $"Bridge operation '{grant.Operation}' has not been consented; update the app's bridge consent."
+                    : $"Bridge operation '{grant.Operation}' on tree '{grant.Tree}' has not been consented; update the app's bridge consent.");
+        }
+
+        return errors;
+    }
+
     private static IReadOnlyList<AppManifestError> DescribeCompilation(AppRuleCompilation compilation)
     {
         var errors = new List<AppManifestError>(compilation.Excesses.Count + compilation.UnknownRoleBindings.Count);
@@ -421,7 +438,7 @@ internal sealed class AppActivationEngine
             var manifest = applied;
             if (manifest is null && record!.State != AppRegistryLifecycleState.Uninstalled)
             {
-                var resolved = await engine._source.ResolveAsync(slug, record.Version, cancellationToken).ConfigureAwait(false);
+                var resolved = await engine._source.ResolveInstalledAsync(record, cancellationToken).ConfigureAwait(false);
                 manifest = resolved.Manifest;
             }
 
@@ -472,7 +489,7 @@ internal sealed class AppActivationEngine
         /// </summary>
         private async Task<Step> ActivateAsync(AppRegistryRecord record, CancellationToken cancellationToken)
         {
-            var resolved = await engine._source.ResolveAsync(slug, record.Version, cancellationToken).ConfigureAwait(false);
+            var resolved = await engine._source.ResolveInstalledAsync(record, cancellationToken).ConfigureAwait(false);
             if (!resolved.IsResolved || resolved.Manifest is not { } manifest)
             {
                 return Step.Fail(record, MapSourceStatus(resolved.Status), resolved.Errors, applied);
@@ -490,6 +507,15 @@ internal sealed class AppActivationEngine
             if (!validation.IsValid)
             {
                 return Step.Fail(record, AppActivationFailure.InvalidManifest, validation.Errors, applied);
+            }
+
+            // A bridge grant the operator never consented to (typically added by an upgrade) blocks the
+            // activation until it is re-consented, exactly as a widened capability ceiling does.
+            var bridgeAdded = AppUiBridgeRequest.FromManifest(manifest)
+                .AddedRelativeTo(record.ConsentedBridge ?? AppUiBridgeRequest.Empty);
+            if (!bridgeAdded.IsEmpty)
+            {
+                return Step.Fail(record, AppActivationFailure.BridgeConsentRequired, DescribeBridgeExcess(bridgeAdded), applied);
             }
 
             // Cross-app scopes compile only against the installed owners of their targets.

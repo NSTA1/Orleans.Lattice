@@ -1,9 +1,10 @@
+using Orleans.Lattice.Apps;
 using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
 [TestFixture]
-public sealed class AppMcpRoleGateTests
+public sealed class AppRoleGateTests
 {
     private static readonly LatticeSubject Alice = new("alice");
 
@@ -11,7 +12,7 @@ public sealed class AppMcpRoleGateTests
     public async Task A_role_is_held_only_when_every_operation_is_allowed_on_one_scope()
     {
         var gate = new GrantingAccessGate().Grant("alice", "t1", LatticeOperation.Read);
-        var role = new AppMcpRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Tree("t1")]);
+        var role = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Tree("t1")]);
 
         Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
 
@@ -25,7 +26,7 @@ public sealed class AppMcpRoleGateTests
         var gate = new GrantingAccessGate()
             .Grant("alice", "t1", LatticeOperation.Read)
             .Grant("alice", "t2", LatticeOperation.Read | LatticeOperation.Write);
-        var role = new AppMcpRoleGate(
+        var role = new AppRoleGate(
             LatticeOperation.Read | LatticeOperation.Write,
             [LatticeScope.Tree("t1"), LatticeScope.Tree("t2")]);
 
@@ -38,7 +39,7 @@ public sealed class AppMcpRoleGateTests
         var gate = new GrantingAccessGate()
             .Grant("alice", "t1", LatticeOperation.Read)
             .Grant("alice", "t2", LatticeOperation.Write);
-        var role = new AppMcpRoleGate(
+        var role = new AppRoleGate(
             LatticeOperation.Read | LatticeOperation.Write,
             [LatticeScope.Tree("t1"), LatticeScope.Tree("t2")]);
 
@@ -49,7 +50,7 @@ public sealed class AppMcpRoleGateTests
     public async Task Each_operation_bit_is_asked_separately_with_the_key_of_a_key_scope()
     {
         var gate = new GrantingAccessGate().Grant("alice", "t1", LatticeOperation.Read | LatticeOperation.Write);
-        var role = new AppMcpRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Key("t1", "k")]);
+        var role = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Key("t1", "k")]);
 
         await role.IsHeldAsync(gate, Alice, CancellationToken.None);
 
@@ -63,7 +64,7 @@ public sealed class AppMcpRoleGateTests
     {
         var keeps = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(k => k.StartsWith("p/", StringComparison.Ordinal)) };
         var drops = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(_ => false) };
-        var prefix = new AppMcpRoleGate(LatticeOperation.Read, [LatticeScope.Prefix("t1", "p/")]);
+        var prefix = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Prefix("t1", "p/")]);
 
         Assert.Multiple(async () =>
         {
@@ -76,7 +77,7 @@ public sealed class AppMcpRoleGateTests
     public async Task A_filtered_allow_never_holds_a_whole_tree_scope()
     {
         var gate = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(_ => true) };
-        var role = new AppMcpRoleGate(LatticeOperation.Read, [LatticeScope.Tree("t1")]);
+        var role = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Tree("t1")]);
 
         Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
     }
@@ -88,12 +89,25 @@ public sealed class AppMcpRoleGateTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(await new AppMcpRoleGate(LatticeOperation.None, [LatticeScope.Tree("t1")]).IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
-            Assert.That(await new AppMcpRoleGate(LatticeOperation.Read, []).IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
+            Assert.That(await new AppRoleGate(LatticeOperation.None, [LatticeScope.Tree("t1")]).IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
+            Assert.That(await new AppRoleGate(LatticeOperation.Read, []).IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
         });
     }
 
     [Test]
     public void Constructor_rejects_null_scopes()
-        => Assert.Throws<ArgumentNullException>(() => new AppMcpRoleGate(LatticeOperation.Read, null!));
+        => Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, null!));
+
+    [Test]
+    public async Task The_tool_gate_delegates_to_the_shared_role_gate()
+    {
+        var gate = new GrantingAccessGate().Grant("alice", "t1", LatticeOperation.Read);
+        var held = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Tree("t1")]);
+        var notHeld = new AppRoleGate(LatticeOperation.Write, [LatticeScope.Tree("t1")]);
+
+        Assert.That(await AppMcpRoleGate.IsHeldAsync(held, gate, Alice, CancellationToken.None), Is.True);
+        Assert.That(await AppMcpRoleGate.IsHeldAsync(notHeld, gate, Alice, CancellationToken.None), Is.False);
+        Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(null!, gate, Alice, CancellationToken.None));
+        Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(held, null!, Alice, CancellationToken.None));
+    }
 }

@@ -27,6 +27,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\lattice.apps\Activation\TestCatalogSource.cs" Link="Shared\TestCatalogSource.cs" />
+    <Compile Include="..\lattice.apps\Activation\UiTestManifests.cs" Link="Shared\UiTestManifests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.api.mcp.apps\Orleans.Lattice.Api.Mcp.Apps.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>

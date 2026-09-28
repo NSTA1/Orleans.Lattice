@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
 /// <summary>Registers and maps the single app-control gRPC endpoint.</summary>
-public static class LatticeAppsApiGrpcServiceCollectionExtensions
+public static partial class LatticeAppsApiGrpcServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the binding with default-deny authorization. Supply Orleans serialization
