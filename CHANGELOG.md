@@ -233,6 +233,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - `performance-report.ps1` threw at startup.** Its `-NamePrefix` parameter is declared again, so Layer 1, Layer 2 and self-provisioning Layer 3 sweeps no longer fail under StrictMode, and a gate checks that every documented script parameter is declared. ([#3804](https://github.com/NSTA1/Orleans.Lattice/issues/3804)) (`repository-wide`)
 
+- **Replication - Inbound peer contact went unrecorded for single-entry pushes.** The dead-letter decorator's single-entry and per-entry retry paths bypassed the applier's only recording site, so inbound gauges and the inbound-silence health signal missed low-rate peers. Both paths now record contact. ([#3848](https://github.com/NSTA1/Orleans.Lattice/issues/3848)) (`Orleans.Lattice.Replication`)
+
 ### Security
 
 - **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
