@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Explorer.Shell.Areas.Data;
 internal sealed class DataAdminGate
 {
     private readonly IServiceProvider _services;
-    private readonly Dictionary<string, Task<bool>> _verdicts = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task<bool>> _answersByTree = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
 
     /// <summary>Creates the gate.</summary>
@@ -49,10 +49,10 @@ internal sealed class DataAdminGate
         Task<bool> verdict;
         lock (_gate)
         {
-            if (!_verdicts.TryGetValue(stateTreeId, out verdict!))
+            if (!_answersByTree.TryGetValue(stateTreeId, out verdict!))
             {
                 verdict = ProbeAsync(stateTreeId);
-                _verdicts.Add(stateTreeId, verdict);
+                _answersByTree.Add(stateTreeId, verdict);
             }
         }
 
