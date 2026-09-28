@@ -1,5 +1,6 @@
-using System.Reflection;
+using System.Text.RegularExpressions;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.AppKit;
 using Orleans.Lattice.Explorer.Shell.Framing;
 using Orleans.Lattice.Explorer.Shell.Framing.Broker;
 using F1 = Orleans.Lattice.Apps;
@@ -41,7 +42,9 @@ public sealed class AppFrameProtocolTests
 
     [TestCase("orders", true)]
     [TestCase("a", true)]
-    [TestCase("0.log_v-2", true)]
+    [TestCase("log_v-2", true)]
+    [TestCase("0log", false)]
+    [TestCase("a.b", false)]
     [TestCase("", false)]
     [TestCase("Orders", false)]
     [TestCase("-orders", false)]
@@ -95,51 +98,42 @@ public sealed class AppFrameProtocolTests
         });
     }
 
-    /// <summary>
-    /// Pins every host constant to AppKit's public <c>AppKitProtocol</c>. F5 (issue #3814)
-    /// builds that type in parallel; until it is in the AppKit assembly this test reports
-    /// itself ignored, and it activates the moment the type lands, with no edit.
-    /// </summary>
     [Test]
-    public void Every_constant_matches_AppKitProtocol()
+    public void The_host_speaks_AppKits_protocol_sets_and_version()
     {
-        var appKit = Assembly.Load("Orleans.Lattice.Explorer.AppKit");
-        var protocol = appKit.GetType("Orleans.Lattice.Explorer.AppKit.AppKitProtocol");
-        if (protocol is null)
+        Assert.Multiple(() =>
         {
-            Assert.Ignore("AppKitProtocol (F5, issue #3814) is not in the AppKit assembly yet.");
-        }
+            Assert.That(AppFrameProtocol.Version, Is.EqualTo(AppKitProtocol.Version));
+            Assert.That(AppFrameProtocol.Operations, Is.EquivalentTo(AppKitProtocol.Operations.All));
+            Assert.That(AppFrameProtocol.ErrorCodes, Is.EquivalentTo(AppKitProtocol.ErrorCodes.All));
+            Assert.That(AppFrameProtocol.FailureCodes, Is.EquivalentTo(AppKitProtocol.FailureCodes.All));
+            Assert.That(
+                new[] { AppFrameProtocol.RevokedDisabled, AppFrameProtocol.RevokedUninstalled, AppFrameProtocol.RevokedUpgraded, AppFrameProtocol.RevokedRevision, AppFrameProtocol.RevokedClosed },
+                Is.EquivalentTo(AppKitProtocol.RevokedReasons.All));
+            Assert.That(AppFrameRoute.BootstrapDocument, Is.EqualTo(AppKitProtocol.FrameDocument));
+            Assert.That(AppFrameRoute.AppKitContentPath, Does.EndWith("/" + AppKitProtocol.AssetDirectory));
+        });
+    }
 
-        var constants = protocol.GetNestedTypes()
-            .Prepend(protocol)
-            .SelectMany(type => type.GetFields(BindingFlags.Public | BindingFlags.Static))
-            .Where(field => field.IsLiteral)
-            .Select(field => field.GetRawConstantValue())
-            .ToHashSet();
-
-        var hostStrings = new object[]
-        {
-            AppFrameProtocol.Ready, AppFrameProtocol.Hello, AppFrameProtocol.Bundle, AppFrameProtocol.Loaded, AppFrameProtocol.Failed,
-            AppFrameProtocol.ContextChanged, AppFrameProtocol.NavChanged, AppFrameProtocol.Revoked,
-            AppFrameProtocol.ActionGet, AppFrameProtocol.ActionScan, AppFrameProtocol.ActionSet, AppFrameProtocol.ActionDelete,
-        }
-            .Concat(AppFrameProtocol.Operations)
-            .Concat(AppFrameProtocol.ErrorCodes)
-            .Concat(AppFrameProtocol.FailureCodes);
-
-        var hostNumbers = new object[]
-        {
-            AppFrameProtocol.MaxValueBytes, AppFrameProtocol.MaxResponseBytes, AppFrameProtocol.MaxRequestBytes,
-            AppFrameProtocol.MaxPageSize, AppFrameProtocol.MaxNotifyLength, AppFrameProtocol.MaxKeyLength,
-            AppFrameProtocol.MaxTreeNameLength, AppFrameProtocol.MaxPathLength, AppFrameProtocol.MaxContinuationLength,
-        };
+    [Test]
+    public void IsLogicalTreeName_agrees_with_AppKits_tree_name_pattern()
+    {
+        var pattern = new Regex(AppKitProtocol.TreeNamePattern, RegexOptions.CultureInvariant);
+        string[] corpus =
+        [
+            "orders", "a", "a1", "a_b-c", "log_v-2", "", "0log", "_x", "-x", "a.b", "A", "aB", "a/b", "t/default/a/app/orders",
+            "a:b", "a b", "a\u0131", "\u0430", new string('a', AppKitProtocol.Limits.MaxTreeNameLength),
+        ];
 
         Assert.Multiple(() =>
         {
-            foreach (var value in hostStrings.Concat(hostNumbers))
+            foreach (var tree in corpus)
             {
-                Assert.That(constants, Does.Contain(value), $"AppKitProtocol declares no constant equal to {value}");
+                var expected = tree.Length <= AppKitProtocol.Limits.MaxTreeNameLength && pattern.IsMatch(tree);
+                Assert.That(AppFrameProtocol.IsLogicalTreeName(tree), Is.EqualTo(expected), tree);
             }
+
+            Assert.That(AppFrameProtocol.IsLogicalTreeName(new string('a', AppKitProtocol.Limits.MaxTreeNameLength + 1)), Is.False);
         });
     }
 }

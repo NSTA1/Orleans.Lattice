@@ -49,7 +49,7 @@ internal sealed partial class AppBridgeBroker(
     private const int Text = 1 << 8;
 
     /// <summary>The largest base64 text that can decode to at most <see cref="AppFrameProtocol.MaxValueBytes"/>.</summary>
-    private const int MaxValueBase64Length = ((AppFrameProtocol.MaxValueBytes + 2) / 3) * 4;
+    private const int MaxValueBase64Length = Orleans.Lattice.Explorer.AppKit.AppKitProtocol.Limits.MaxValueBase64Length;
 
     private static readonly JsonDocumentOptions ParseOptions = new()
     {
