@@ -41,7 +41,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// code in a different method.
 /// </para>
 /// </summary>
-public sealed class LeafSplitFaultAccountingTests
+public sealed partial class LeafSplitFaultAccountingTests
 {
     private sealed record Measurement(long Value, string Outcome, string FailureClass);
 
@@ -121,6 +121,32 @@ public sealed class LeafSplitFaultAccountingTests
         int maxLeafKeys = 1_000_000,
         Exception? siblingFault = null)
     {
+        var grainFactory = SplitGrainFactory(
+            rowCount,
+            siblingFault is null
+                // A faulted Task rather than a synchronous throw, so the failure
+                // arrives the way a real cross-grain call failure does: at the
+                // await, after the caller has already committed to the division.
+                ? _ => Task.CompletedTask
+                : _ => Task.FromException(siblingFault));
+
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "tree-split-faults";
+        state.State.ShardIndex = 0;
+
+        return await LeafOverAsync(grainFactory, state, maxLeafKeys);
+    }
+
+    /// <summary>
+    /// A grain factory whose snapshot storage serves <paramref name="rowCount"/>
+    /// rows and whose split sibling answers <c>InitializeSiblingAsync</c> with
+    /// <paramref name="siblingInitialisation"/>, invoked once per call so a
+    /// fixture can fail the first attempt and admit a later one.
+    /// </summary>
+    private static IGrainFactory SplitGrainFactory(
+        int rowCount,
+        Func<SiblingInitialization, Task> siblingInitialisation)
+    {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<LeafSnapshotBlob?>(new LeafSnapshotBlob
@@ -137,31 +163,28 @@ public sealed class LeafSplitFaultAccountingTests
         sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
         sibling.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
-
-        if (siblingFault is null)
-        {
-            sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(Task.CompletedTask);
-        }
-        else
-        {
-            // A faulted Task rather than a synchronous throw, so the failure
-            // arrives the way a real cross-grain call failure does: at the
-            // await, after the caller has already committed to the division.
-            sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
-                .Returns(_ => Task.FromException(siblingFault));
-        }
+        sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
+            .Returns(call => siblingInitialisation(call.Arg<SiblingInitialization>()));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(sibling);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(sibling);
+        return grainFactory;
+    }
 
+    /// <summary>
+    /// A fresh leaf activation over <paramref name="state"/>, brought online
+    /// from the factory's snapshot. Passing the state an earlier activation
+    /// persisted is how a fixture models a reactivation.
+    /// </summary>
+    private static async Task<BPlusLeafGrain> LeafOverAsync(
+        IGrainFactory grainFactory,
+        FakePersistentState<LeafNodeState> state,
+        int maxLeafKeys)
+    {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString("N")));
-
-        var state = new FakePersistentState<LeafNodeState>();
-        state.State.TreeId = "tree-split-faults";
-        state.State.ShardIndex = 0;
 
         var grain = new BPlusLeafGrain(
             context,
