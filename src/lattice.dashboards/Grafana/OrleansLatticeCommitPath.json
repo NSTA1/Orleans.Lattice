@@ -1238,6 +1238,24 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_duration_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} mean ms" }
       ]
+    },
+    {
+      "id": 167,
+      "title": "Leaf deactivation BARRIER elisions/s by barrier - issue #3643 (redundant frontier_pin publishes skipped)",
+      "description": "Graceful-deactivation barriers skipped (orleans.lattice.leaf.deactivation.barrier.elided), split by barrier - issue #3643. Today only frontier_pin elides: the teardown persist tail publishes the frontier pin, and when the pin store acknowledged that publish in the SAME deactivation and every partition of the batch the frontier_pin barrier would send is dominated on both frontier and offset, the barrier skips its pin-store round trip. Acknowledged means every shard write landed; a faulted or shed write, or a deactivation whose tail did not run, always publishes. Read it beside panel 166, whose frontier_pin duration is still recorded for an elided barrier: this rate over that histogram's count rate is the fraction of drains whose pin publish was redundant. A line that falls to zero while drains continue is a regression that stopped eliding. ABSENT means no barrier has elided yet: the counter is not zero-primed.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 419 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_elided_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} elided/s" }
+      ]
     }
   ]
 }

@@ -87,12 +87,14 @@ public sealed class LeafCursorReporterTeardownFallbackTests
     {
         var (reporter, storage) = Create(new RejectingPinGrain());
 
-        await reporter.FlushDurableMaterialiserFrontierAsync(
+        var acknowledged = await reporter.FlushDurableMaterialiserFrontierAsync(
             Tree, Reports((ConsumerA, Hlc(100))), CancellationToken.None);
 
         Assert.That(storage.TryReadPin(Tree, ConsumerA, out var pinned), Is.True,
             "A pin-grain rejection during teardown must fall back to a direct durable-store write.");
         Assert.That(pinned, Is.EqualTo(Hlc(100)));
+        Assert.That(acknowledged, Is.True,
+            "issue #3643: the direct-store fallback landed the pin, so the flush is acknowledged.");
     }
 
     [Test]
@@ -117,11 +119,13 @@ public sealed class LeafCursorReporterTeardownFallbackTests
         // direct store: a genuine transient fault re-flushes on the next
         // checkpoint through the grain, and a spurious direct-store on every
         // transient hiccup would bypass the grain's coalescing/debounce.
-        await reporter.FlushDurableMaterialiserFrontierAsync(
+        var acknowledged = await reporter.FlushDurableMaterialiserFrontierAsync(
             Tree, Reports((ConsumerA, Hlc(100))), CancellationToken.None);
 
         Assert.That(storage.WriteCount, Is.EqualTo(0),
             "A non-shutdown transient fault must be swallowed, not routed to the direct-store fallback.");
+        Assert.That(acknowledged, Is.False,
+            "issue #3643: a swallowed fault landed nothing, so it must not be reported as acknowledged.");
     }
 
     [Test]

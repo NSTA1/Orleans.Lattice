@@ -209,11 +209,23 @@ internal interface ILeafCursorReporter
     /// are never blocked; a missed flush only narrows the protection window and
     /// the next flush catches up. Implementations with no durable backing (no
     /// grain factory, pre-WAL hosts) treat this as a no-op.
+    /// <para>
+    /// <b>Acknowledgement (issue #3643).</b> Because failures are swallowed,
+    /// returning normally does not by itself mean the merge landed. The result
+    /// says whether it did: <see langword="true"/> only when every routed
+    /// shard write for the batch completed (or there was nothing to write),
+    /// <see langword="false"/> when any write faulted (and was swallowed) or was
+    /// shed. A caller that records
+    /// what the pin store holds - the leaf's banked pin offsets and its
+    /// deactivation-barrier elision record - must do so only on
+    /// <see langword="true"/>, or a swallowed failure is banked as a landed pin.
+    /// </para>
     /// </summary>
     /// <param name="treeName">Logical tree id whose leaf is flushing its frontier.</param>
     /// <param name="reports">One real-frontier pin per WAL partition; each report's consumer id must not be <see langword="null"/> or whitespace.</param>
     /// <param name="cancellationToken">Cancellation token observed before the durable writes.</param>
-    Task FlushDurableMaterialiserFrontierAsync(
+    /// <returns><see langword="true"/> when the pin store acknowledged every report in the batch; <see langword="false"/> when any shard write faulted and was swallowed, or was shed.</returns>
+    Task<bool> FlushDurableMaterialiserFrontierAsync(
         string treeName,
         IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken);

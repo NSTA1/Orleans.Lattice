@@ -109,6 +109,8 @@ public partial class BPlusLeafGrainTests
                     Record(report.CheckpointOffset);
                     onDurablePinFlushed?.Invoke(report.CheckpointOffset);
                 }
+
+                return true;
             });
         reporter
             .When(r => r.NoteDurableMaterialiserFrontier(

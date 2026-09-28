@@ -94,9 +94,12 @@ internal sealed class InMemoryLeafCursorReporter(IWalCursorRegistry registry) : 
         => Task.CompletedTask;
 
     /// <inheritdoc />
-    public Task FlushDurableMaterialiserFrontierAsync(
+    public Task<bool> FlushDurableMaterialiserFrontierAsync(
         string treeName,
         IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken)
-        => Task.CompletedTask;
+        => AcknowledgedTask;
+
+    // Nothing to write is trivially acknowledged; cached so the no-op allocates nothing.
+    private static readonly Task<bool> AcknowledgedTask = Task.FromResult(true);
 }
