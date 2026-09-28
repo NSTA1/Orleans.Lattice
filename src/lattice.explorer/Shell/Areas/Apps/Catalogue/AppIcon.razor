@@ -1,0 +1,28 @@
+@*
+    An app's icon: a verified image drawn only through <img src="data:..."> - never
+    inline SVG, so an icon cannot run script (epic decision E6) - or, when there is
+    no drawable icon, a two-letter monogram. Decorative: the app's name always sits
+    beside it, so it carries an empty alternative text.
+*@
+@if (DataUrl is not null)
+{
+    <img class="@(Large ? "lt-apps-icon lt-apps-icon--large" : "lt-apps-icon")" src="@DataUrl" alt="" />
+}
+else
+{
+    <span class="@(Large ? "lt-apps-icon lt-apps-icon--monogram lt-apps-icon--large" : "lt-apps-icon lt-apps-icon--monogram")" aria-hidden="true">@AppsPresentation.Monogram(Slug)</span>
+}
+
+@code {
+    /// <summary>The icon's <c>data:</c> URL, from a verified icon asset, or <see langword="null"/> for the monogram.</summary>
+    [Parameter]
+    public string? DataUrl { get; set; }
+
+    /// <summary>The app slug the monogram is drawn from.</summary>
+    [Parameter, EditorRequired]
+    public string Slug { get; set; } = string.Empty;
+
+    /// <summary>Whether to draw the large icon of a review heading.</summary>
+    [Parameter]
+    public bool Large { get; set; }
+}
