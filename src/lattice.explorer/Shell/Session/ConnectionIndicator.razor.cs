@@ -45,7 +45,7 @@ public partial class ConnectionIndicator
 
     private LatticeConnectionStatus Status => Explorer.Connection.Status;
 
-    [CascadingParameter(Name = SessionPresentation.BreakpointCascadeName)]
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
     private LtBreakpoint? Breakpoint { get; set; }
 
     private bool Folded => SessionPresentation.IsFolded(Breakpoint);
