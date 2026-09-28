@@ -1,0 +1,300 @@
+/*
+ * Orleans.Lattice Explorer - the Replication area.
+ *
+ * The estate drawn as an order diagram (DESIGN.md): this region is the marker
+ * node at the head of a hairline spine, each peer region hangs from it as a
+ * node, and each direction is an edge whose line style and state colour follow
+ * the link health - always beside the health's glyph and word, never alone.
+ * Plus the area's section links, status line and row notes.
+ *
+ * No width query appears here: the compact band is the layout's
+ * lt-shell--compact class. The marker paints only aria-current states and the
+ * join node, always with a weight or a ring. No shadows on the page, no cards.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+/* ==========================================================================
+   1. Sections - the estate and the enrolled trees
+   ========================================================================== */
+
+.lt-replication-sections {
+  margin: 0 0 var(--lt-space-5);
+  border-bottom: 1px solid var(--lt-rule);
+  overflow-x: auto;
+}
+
+.lt-replication-sections__list {
+  display: flex;
+  gap: var(--lt-space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-replication-sections__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lt-replication-sections__link:hover {
+  color: var(--lt-ink);
+}
+
+.lt-replication-sections__link[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+  box-shadow: inset 0 -3px 0 var(--lt-marker);
+}
+
+.lt-replication-sections__link:focus-visible,
+.lt-replication-map__peer-link:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+/* ==========================================================================
+   2. Toolbar, status line, notes and actions
+   ========================================================================== */
+
+.lt-replication-toolbar {
+  align-items: flex-end;
+}
+
+.lt-replication-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-3);
+  margin: var(--lt-space-3) 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-replication-note {
+  max-width: 42rem;
+  margin: var(--lt-space-3) 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-replication-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  margin: var(--lt-space-3) 0;
+}
+
+.lt-replication-heading {
+  margin: var(--lt-space-6) 0 var(--lt-space-3);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-replication-owner {
+  color: var(--lt-ink-2);
+}
+
+.lt-replication-form {
+  display: grid;
+  gap: var(--lt-space-4);
+}
+
+/* ==========================================================================
+   3. The estate diagram
+   ========================================================================== */
+
+.lt-replication-map {
+  max-width: 64rem;
+  margin: var(--lt-space-4) 0 var(--lt-space-5);
+}
+
+.lt-replication-map__caption {
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-replication-map__local {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+}
+
+.lt-replication-map__region {
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
+.lt-replication-map__local .lt-replication-map__region {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-replication-map__role {
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-replication-map__empty {
+  margin: var(--lt-space-3) 0 0;
+  padding-inline-start: var(--lt-space-5);
+  color: var(--lt-ink-2);
+}
+
+.lt-replication-map__peers {
+  margin: 0;
+  padding: 0 0 0 calc(var(--lt-diagram-node-size-lg) / 2);
+  list-style: none;
+}
+
+.lt-replication-map__peer {
+  position: relative;
+  padding: var(--lt-space-2) 0 var(--lt-space-3) var(--lt-space-6);
+}
+
+/* The spine: from this region down to the last peer's node. */
+.lt-replication-map__peer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-start: 0;
+  width: var(--lt-diagram-edge-width);
+  background: var(--lt-diagram-edge);
+}
+
+.lt-replication-map__peer:last-child::before {
+  bottom: auto;
+  height: calc(var(--lt-space-2) + var(--lt-op-control-height) / 2);
+}
+
+/* The branch from the spine to the peer's node. */
+.lt-replication-map__peer::after {
+  content: "";
+  position: absolute;
+  top: calc(var(--lt-space-2) + var(--lt-op-control-height) / 2);
+  inset-inline-start: 0;
+  width: calc(var(--lt-space-6) - var(--lt-space-1));
+  height: var(--lt-diagram-edge-width);
+  background: var(--lt-diagram-edge);
+}
+
+.lt-replication-map__peer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  min-height: var(--lt-op-control-height);
+  padding-inline: var(--lt-space-1) var(--lt-space-2);
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-label);
+  text-decoration: none;
+}
+
+.lt-replication-map__peer-link:hover {
+  background: var(--lt-marker-soft);
+}
+
+.lt-replication-map__peer-link[aria-current] {
+  font-weight: var(--lt-weight-strong);
+  box-shadow: inset 0 -3px 0 var(--lt-marker);
+}
+
+.lt-replication-map__edges {
+  display: grid;
+  gap: var(--lt-space-1);
+  margin: var(--lt-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-replication-map__edge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-1) var(--lt-space-3);
+  min-height: 2rem;
+  font-size: var(--lt-text-sm);
+}
+
+/* The edge itself: its line style and state colour follow the health. */
+.lt-replication-map__line {
+  flex: 0 0 var(--lt-space-6);
+  height: 0;
+  border-top: 2px solid var(--lt-op-state-healthy);
+}
+
+.lt-replication-map__edge[data-health="lagging"] .lt-replication-map__line {
+  border-top-style: dashed;
+  border-top-color: var(--lt-op-state-lagging);
+}
+
+.lt-replication-map__edge[data-health="stalled"] .lt-replication-map__line {
+  border-top-width: 3px;
+  border-top-style: dotted;
+  border-top-color: var(--lt-op-state-stalled);
+}
+
+.lt-replication-map__edge[data-health="unknown"] .lt-replication-map__line {
+  border-top-style: dotted;
+  border-top-color: var(--lt-op-state-unknown);
+}
+
+.lt-replication-map__edge[data-health="none"] .lt-replication-map__line {
+  border-top-width: 1px;
+  border-top-style: dotted;
+  border-top-color: var(--lt-rule-strong);
+}
+
+.lt-replication-map__direction {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-1);
+  min-width: 10rem;
+  color: var(--lt-ink-2);
+}
+
+.lt-replication-map__arrow {
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+}
+
+.lt-replication-map__backlog {
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+}
+
+.lt-replication-map__count,
+.lt-replication-map__idle {
+  color: var(--lt-ink-3);
+}
+
+.lt-replication-map__alert {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+/* Compact: the edge's facts wrap under its direction. */
+.lt-shell--compact .lt-replication-map__peer {
+  padding-inline-start: var(--lt-space-5);
+}
+
+.lt-shell--compact .lt-replication-map__peer::after {
+  width: calc(var(--lt-space-5) - var(--lt-space-1));
+}
+
+.lt-shell--compact .lt-replication-map__direction {
+  flex-basis: 100%;
+  min-width: 0;
+}
