@@ -15,11 +15,11 @@ internal sealed class AppMcpToolCatalog
     /// <summary>Initializes a new <see cref="AppMcpToolCatalog"/>.</summary>
     /// <param name="epoch">The registry epoch the catalog was built from.</param>
     /// <param name="byTenant">The installs, per tenant, ordered by slug.</param>
-    /// <param name="activations">Every activation built for the epoch, keyed by app and version.</param>
+    /// <param name="activations">Every activation built for the epoch, keyed by app, version and source key.</param>
     public AppMcpToolCatalog(
         long epoch,
         Dictionary<TenantId, AppMcpInstalledApp[]> byTenant,
-        Dictionary<(AppSlug Slug, AppVersion Version), AppMcpToolActivation> activations)
+        Dictionary<(AppSlug Slug, AppVersion Version, string Source), AppMcpToolActivation> activations)
     {
         ArgumentNullException.ThrowIfNull(byTenant);
         ArgumentNullException.ThrowIfNull(activations);
@@ -43,8 +43,8 @@ internal sealed class AppMcpToolCatalog
     /// <summary>The registry epoch the catalog was built from.</summary>
     public long Epoch { get; }
 
-    /// <summary>Every activation built for the epoch, keyed by app and version.</summary>
-    public IReadOnlyDictionary<(AppSlug Slug, AppVersion Version), AppMcpToolActivation> Activations { get; }
+    /// <summary>Every activation built for the epoch, keyed by app, version and source key.</summary>
+    public IReadOnlyDictionary<(AppSlug Slug, AppVersion Version, string Source), AppMcpToolActivation> Activations { get; }
 
     /// <summary>The activations that failed, ordered by slug.</summary>
     public IReadOnlyList<AppMcpToolActivation> Failures { get; }

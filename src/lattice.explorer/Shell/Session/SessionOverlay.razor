@@ -1,0 +1,22 @@
+@implements IDisposable
+
+@if (!State.IsInitialized)
+{
+    <span class="lt-visually-hidden" role="status">Loading the connection settings</span>
+}
+else if (State.ReauthRequired)
+{
+    <ReauthInterstitial />
+}
+else if (!Explorer.IsConfigured)
+{
+    <ConnectionDialog AllowCancel="false" />
+}
+else if (State.Overlay == SessionOverlayKind.Configuration)
+{
+    <ConnectionDialog AllowCancel="true" Initial="Explorer.Current" OnSaved="_close" OnCancelled="_close" />
+}
+else if (State.Overlay == SessionOverlayKind.SignIn)
+{
+    <SignInDialog OnClosed="_close" />
+}

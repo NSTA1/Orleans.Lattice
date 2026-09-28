@@ -64,6 +64,15 @@ public sealed record AppRegistryRecord
     /// </summary>
     [Id(12)] public string? ConsentedBy { get; init; }
 
+    /// <summary>
+    /// The app UI bridge grants the operator consented to, or <c>null</c> when none was ever recorded (a
+    /// record written before bridge consent existed). An activation refuses a manifest whose requested
+    /// bridge grants (<see cref="AppUiBridgeRequest.FromManifest(AppManifest)"/>) add anything this set does
+    /// not cover, so an upgrade that widens the bridge must be re-consented, exactly as a widened ceiling
+    /// must. A null value covers nothing.
+    /// </summary>
+    [Id(13)] public AppUiBridgeRequest? ConsentedBridge { get; init; }
+
     /// <summary>The tenant that owns the install (shorthand for <see cref="AppIsolationContext.Tenant"/>).</summary>
     public TenantId Tenant => Isolation.Tenant;
 

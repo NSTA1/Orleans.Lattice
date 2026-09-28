@@ -1,0 +1,11 @@
+{
+  "name": "physical-tree",
+  "description": "The app addresses data by physical tree id and by an undeclared tree.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"data.read"},{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toast":"Hostile: physical=denied undeclared=denied"}
+}

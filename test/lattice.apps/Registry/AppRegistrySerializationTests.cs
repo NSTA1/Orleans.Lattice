@@ -46,6 +46,7 @@ public sealed class AppRegistrySerializationTests
             StateChangedAtUtc = AppRegistryTestData.Start.AddHours(1),
             ConsentedAtUtc = AppRegistryTestData.Start.AddMinutes(30),
             ConsentedBy = "operator",
+            ConsentedBridge = AppUiBridgeRequest.Create([new AppUiBridgeGrant(AppUiBridgeOperations.DataRead, "records"), new AppUiBridgeGrant(AppUiBridgeOperations.UiNotify)]),
         };
 
         var copy = serializer.Deserialize<AppRegistryRecord>(serializer.SerializeToArray(source));
@@ -64,7 +65,21 @@ public sealed class AppRegistrySerializationTests
         Assert.That(copy.StateChangedAtUtc, Is.EqualTo(source.StateChangedAtUtc));
         Assert.That(copy.ConsentedAtUtc, Is.EqualTo(source.ConsentedAtUtc));
         Assert.That(copy.ConsentedBy, Is.EqualTo(source.ConsentedBy));
+        Assert.That(copy.ConsentedBridge, Is.EqualTo(source.ConsentedBridge));
         Assert.That(copy.IsCeilingPinnedToVersion, Is.True);
+    }
+
+    [Test]
+    public void AppRegistryRecord_without_bridge_consent_roundtrips_to_null()
+    {
+        var serializer = CreateSerializer(out var services);
+        using var _ = services;
+        var source = AppRegistryTestData.Record(AppRegistryLifecycleState.Enabled);
+
+        var copy = serializer.Deserialize<AppRegistryRecord>(serializer.SerializeToArray(source));
+
+        Assert.That(source.ConsentedBridge, Is.Null);
+        Assert.That(copy.ConsentedBridge, Is.Null);
     }
 
     [Test]

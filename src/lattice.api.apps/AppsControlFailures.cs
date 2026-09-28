@@ -33,6 +33,43 @@ internal static class AppsControlFailures
         new($"App '{slug}' could not be read from the app source ({result.Status})"
             + Detail(result.Errors, slug) + ".");
 
+    /// <summary>The exception for a slug that several sources offer when no source key was named.</summary>
+    /// <param name="slug">The app slug.</param>
+    /// <param name="result">The ambiguous source result, carrying the offering source keys.</param>
+    /// <returns>The exception to throw.</returns>
+    public static InvalidOperationException Ambiguous(AppSlug slug, AppSourceResult result) =>
+        new($"App '{slug}' is offered by more than one app source ({string.Join(", ", result.SourceKeys)}); "
+            + "name the source key to use.");
+
+    /// <summary>
+    /// Throws the facade's failure for a source result that did not resolve: <see cref="SourceNotFound"/> for an
+    /// absent app or version, <see cref="Ambiguous"/> for a slug several sources offer, and
+    /// <see cref="SourceUnusable"/> otherwise. Returns only when the result resolved.
+    /// </summary>
+    /// <param name="slug">The app slug.</param>
+    /// <param name="version">The requested version, reported for an absent app.</param>
+    /// <param name="result">The source result.</param>
+    /// <returns>The resolved manifest.</returns>
+    public static AppManifest RequireResolved(AppSlug slug, AppVersion version, AppSourceResult result)
+    {
+        if (result.Status is AppSourceStatus.NotFound or AppSourceStatus.VersionMismatch)
+        {
+            throw SourceNotFound(slug, version);
+        }
+
+        if (result.Status == AppSourceStatus.Ambiguous)
+        {
+            throw Ambiguous(slug, result);
+        }
+
+        if (!result.IsResolved || result.Manifest is not { } manifest)
+        {
+            throw SourceUnusable(slug, result);
+        }
+
+        return manifest;
+    }
+
     /// <summary>The exception for a rejected registry transition.</summary>
     /// <param name="slug">The app slug.</param>
     /// <param name="verb">The verb that was attempted, for the message.</param>

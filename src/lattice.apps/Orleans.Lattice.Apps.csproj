@@ -13,6 +13,9 @@
     <EmbeddedResource Include="Manifest\app-manifest.schema.json" />
     <None Update="Manifest\app-manifest.schema.json" Pack="true" PackagePath="schema\" />
     <InternalsVisibleTo Include="Orleans.Lattice.Apps.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Apps" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Apps.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Apps" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Apps.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />

@@ -13,7 +13,7 @@ internal sealed class AppMcpInstalledApp
     /// <param name="tenant">The owning tenant.</param>
     /// <param name="activation">The app version's successful activation.</param>
     /// <param name="roles">The manifest roles compiled for <paramref name="tenant"/>, in manifest order.</param>
-    public AppMcpInstalledApp(TenantId tenant, AppMcpToolActivation activation, AppMcpRoleGate[] roles)
+    public AppMcpInstalledApp(TenantId tenant, AppMcpToolActivation activation, AppRoleGate[] roles)
     {
         ArgumentNullException.ThrowIfNull(activation);
         ArgumentNullException.ThrowIfNull(roles);
@@ -29,5 +29,5 @@ internal sealed class AppMcpInstalledApp
     public AppMcpToolActivation Activation { get; }
 
     /// <summary>The manifest roles compiled for <see cref="Tenant"/>, in manifest order.</summary>
-    public AppMcpRoleGate[] Roles { get; }
+    public AppRoleGate[] Roles { get; }
 }

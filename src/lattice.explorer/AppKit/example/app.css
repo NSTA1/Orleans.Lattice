@@ -1,0 +1,11 @@
+/*
+ * The example app's own stylesheet. It is a bundle asset, loaded as a blob:
+ * URL after the kit stylesheet, so it can build on the kit's tokens. A blob:
+ * stylesheet has no base URL: reach other bundle assets through
+ * lattice.assetUrl(path) in script, not through url() here.
+ */
+
+.notes-empty {
+  color: var(--lt-ink-3);
+  font-style: italic;
+}

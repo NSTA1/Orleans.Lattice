@@ -1,0 +1,365 @@
+/*
+ * Orleans.Lattice Explorer AppKit, protocol v1: the kit stylesheet.
+ *
+ * What an app's UI needs to look at home inside the Explorer: the order-diagram
+ * tokens (the documentation site's own tokens.css, staged byte-identically
+ * into this directory at build time and imported below, never hand-copied),
+ * the two self-hosted fonts,
+ * and a small Operate-register vocabulary - type, spacing, booktabs tables,
+ * buttons, inputs and the focus ring. Classes use the lt-app- namespace so an
+ * app's own classes cannot collide with them.
+ *
+ * Selection is by attributes the bootstrap sets on the document element from
+ * the host's appearance (the bundle message and context.changed):
+ *   data-theme="paper|board"        (mirrored to data-bs-theme="light|dark",
+ *                                    which is what tokens.css keys off)
+ *   data-contrast="standard|more"   the high-contrast overlay
+ *   data-density="comfortable|compact"
+ *   data-reduced-motion="true|false"
+ * The high-contrast values are the Explorer's own (Shell lattice-operate.css),
+ * and AppKitStylesheetTests holds the two identical.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+@import url("tokens.css");
+
+@font-face {
+  font-family: "Recursive Sans Linear";
+  src: url("fonts/recursive-sans-linear.woff2") format("woff2");
+  font-weight: 300 850;
+  font-style: oblique 0deg 15deg;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lattice Mono";
+  src: url("fonts/cascadia-mono.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- Kit tokens --------------------------------------------------------- */
+
+:root,
+[data-theme="paper"] {
+  /* Touch targets: 44px in comfortable density, never below 24px in compact
+   * (the Explorer's responsive contract). Table rows are not targets and keep
+   * the Operate register's row heights. */
+  --lt-app-control-height: 2.75rem;
+  --lt-app-row-height: 2.25rem;
+  --lt-app-cell-padding-x: 0.75rem;
+  --lt-app-control-border: #6f7784;
+  --lt-app-focus-ring-color: var(--lt-focus);
+  --lt-app-focus-ring-width: 2px;
+  --lt-app-focus-ring-offset: 2px;
+  color-scheme: light;
+}
+
+[data-theme="board"] {
+  --lt-app-control-border: #7f8d85;
+  color-scheme: dark;
+}
+
+[data-density="compact"] {
+  --lt-app-control-height: 1.75rem;
+  --lt-app-row-height: 1.75rem;
+  --lt-app-cell-padding-x: 0.5rem;
+}
+
+/* --- High contrast ------------------------------------------------------ */
+
+[data-theme="paper"][data-contrast="more"] {
+  --lt-ink-2: #2f3540;
+  --lt-ink-3: #3f4652;
+  --lt-rule-strong: #8a929e;
+  --lt-link: #1a2890;
+  --lt-focus: #1a2890;
+  --lt-warning: #6b4000;
+  --lt-danger: #8c1a12;
+  --lt-success: #135a26;
+  --lt-app-control-border: #5d6573;
+}
+
+[data-theme="board"][data-contrast="more"] {
+  --lt-ink-2: #c4cdc7;
+  --lt-ink-3: #b3beb7;
+  --lt-rule-strong: #5b6961;
+  --lt-warning: #f7c79d;
+  --lt-danger: #ffbdb5;
+  --lt-success: #bfe6ab;
+  --lt-info: #c3cdff;
+  --lt-app-control-border: #8f9c94;
+}
+
+/* --- Page --------------------------------------------------------------- */
+
+html {
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+}
+
+body {
+  margin: 0;
+  padding: var(--lt-space-4);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-base);
+  font-weight: var(--lt-weight-body);
+  line-height: var(--lt-leading-body);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: var(--lt-space-5) 0 var(--lt-space-3);
+  font-weight: var(--lt-weight-heading);
+  line-height: var(--lt-leading-tight);
+}
+
+h1 { font-size: var(--lt-text-xl); }
+h2 { font-size: var(--lt-text-lg); }
+h3,
+h4 { font-size: var(--lt-text-base); }
+
+p {
+  margin: 0 0 var(--lt-space-3);
+  max-width: var(--lt-measure);
+}
+
+a {
+  color: var(--lt-link);
+  text-underline-offset: 0.15em;
+}
+
+a:hover {
+  color: var(--lt-link-hover);
+}
+
+code,
+kbd,
+samp,
+pre,
+.lt-app-mono {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+}
+
+code {
+  padding: 0 var(--lt-space-1);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-inline-code-bg);
+}
+
+.lt-app-muted {
+  color: var(--lt-ink-2);
+}
+
+.lt-app-stack > * + * {
+  margin-top: var(--lt-space-3);
+}
+
+.lt-app-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  align-items: center;
+}
+
+/* --- Small widths --------------------------------------------------------
+ * A frame fills the Explorer's content region at every width, down to a 360px
+ * phone. These are fluid defaults, with no width queries: media never
+ * overflows, long data wraps instead of forcing a horizontal page scroll, and
+ * a wide table scrolls inside its own lt-app-scroll wrapper. The app owns its
+ * own layout beyond that.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+code,
+kbd,
+samp,
+.lt-app-mono,
+td,
+th {
+  overflow-wrap: anywhere;
+}
+
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.lt-app-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* --- Tables: booktabs --------------------------------------------------- */
+
+.lt-app-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--lt-text-md);
+  border-top: 1.5px solid var(--lt-ink);
+  border-bottom: 1.5px solid var(--lt-ink);
+}
+
+.lt-app-table caption {
+  padding-bottom: var(--lt-space-2);
+  text-align: start;
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-app-table th,
+.lt-app-table td {
+  height: var(--lt-app-row-height);
+  padding: 0 var(--lt-app-cell-padding-x);
+  text-align: start;
+  vertical-align: middle;
+}
+
+.lt-app-table thead th {
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+  color: var(--lt-ink-2);
+  border-bottom: 1px solid var(--lt-ink);
+}
+
+.lt-app-table tbody tr + tr td,
+.lt-app-table tbody tr + tr th {
+  border-top: 1px solid var(--lt-rule);
+}
+
+/* --- Controls ----------------------------------------------------------- */
+
+.lt-app-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  min-height: var(--lt-app-control-height);
+  min-width: var(--lt-app-control-height);
+  padding: 0 var(--lt-space-3);
+  border: 1px solid var(--lt-ink);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  font: inherit;
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-label);
+  cursor: pointer;
+}
+
+.lt-app-button:hover {
+  background: var(--lt-surface-sunken);
+}
+
+.lt-app-button--quiet {
+  border-color: transparent;
+  background: transparent;
+}
+
+.lt-app-button--destructive {
+  border-color: var(--lt-danger);
+  color: var(--lt-danger);
+}
+
+.lt-app-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.lt-app-label {
+  display: block;
+  margin-bottom: var(--lt-space-1);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-app-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--lt-app-control-height);
+  padding: 0 var(--lt-space-2);
+  border: 1px solid var(--lt-app-control-border);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+  color: var(--lt-ink);
+  font: inherit;
+  font-size: var(--lt-text-md);
+}
+
+textarea.lt-app-input {
+  padding: var(--lt-space-2);
+}
+
+.lt-app-input[aria-invalid="true"] {
+  border-color: var(--lt-danger);
+}
+
+.lt-app-button:focus-visible,
+.lt-app-input:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: var(--lt-app-focus-ring-width) solid var(--lt-app-focus-ring-color);
+  outline-offset: var(--lt-app-focus-ring-offset);
+}
+
+/* --- Bootstrap notices -------------------------------------------------- */
+
+.lt-app-notice {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-md);
+}
+
+/* --- Motion and forced colours ------------------------------------------ */
+
+[data-reduced-motion="true"] *,
+[data-reduced-motion="true"] *::before,
+[data-reduced-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .lt-app-button,
+  .lt-app-input {
+    border-color: ButtonText;
+  }
+
+  .lt-app-button:focus-visible,
+  .lt-app-input:focus-visible,
+  a:focus-visible,
+  [tabindex]:focus-visible {
+    outline-color: Highlight;
+  }
+}

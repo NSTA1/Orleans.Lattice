@@ -1,0 +1,3 @@
+# The example bundle's digests are over these exact bytes, so every checkout
+# must see LF line endings whatever core.autocrlf says.
+* text eol=lf

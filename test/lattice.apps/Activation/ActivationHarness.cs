@@ -17,13 +17,13 @@ internal sealed class ActivationHarness
     public static readonly LatticeOperation ReadWrite = LatticeOperation.Read | LatticeOperation.Write;
 
     public ActivationHarness(bool withMembership = true, bool withPolicyStore = true, ILatticeMembershipContext? membership = null,
-        ILatticeReplicationConfigAuthority? replication = null)
+        ILatticeReplicationConfigAuthority? replication = null, IAppSource? source = null)
     {
         Ownership = AppRegistryTestData.CreateLedger(RegistryStore, Ledger, Facts, Time);
-        Registry = AppRegistryTestData.CreateRegistry(RegistryStore, source: Source, ownership: Ownership);
+        Registry = AppRegistryTestData.CreateRegistry(RegistryStore, source: source ?? Source, ownership: Ownership);
         Engine = new AppActivationEngine(
             Registry,
-            Source,
+            source ?? Source,
             Status,
             Trees,
             Ownership,

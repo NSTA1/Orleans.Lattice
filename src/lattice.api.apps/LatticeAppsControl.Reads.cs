@@ -74,10 +74,18 @@ internal sealed partial class LatticeAppsControl
             var live = record is { State: not AppRegistryLifecycleState.Uninstalled };
             var selected = requested ?? (live ? record!.Version : null);
 
-            var resolved = await _source.ResolveAsync(slug, selected, cancellationToken).ConfigureAwait(false);
+            // The installed version resolves from the source it was installed from, so another source offering
+            // the slug cannot make it ambiguous; any other version resolves across every source.
+            var sourceKey = live && selected == record!.Version ? record.Provenance.Source : null;
+            var resolved = await _source.ResolveFromAsync(slug, selected, sourceKey, cancellationToken).ConfigureAwait(false);
             if (resolved.Status is AppSourceStatus.NotFound or AppSourceStatus.VersionMismatch)
             {
                 return null;
+            }
+
+            if (resolved.Status == AppSourceStatus.Ambiguous)
+            {
+                throw AppsControlFailures.Ambiguous(slug, resolved);
             }
 
             if (!resolved.IsResolved || resolved.Manifest is not { } manifest)
@@ -159,5 +167,6 @@ internal sealed partial class LatticeAppsControl
             Slug = record.Slug.Value,
             Version = record.Version.Value,
             Ceiling = AppsControlMapping.ToWireCeiling(record.Ceiling),
+            BridgeGrants = AppsPresentationMapping.ToWireConsent(record.ConsentedBridge),
         };
 }

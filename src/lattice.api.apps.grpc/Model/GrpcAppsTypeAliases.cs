@@ -21,4 +21,17 @@ public static class GrpcAppsTypeAliases
     public const string AuthSchemeDescriptor = "oiag.a";
     /// <summary>Alias for the sign-in advertisement.</summary>
     public const string AuthSchemeAdvertisement = "oiag.b";
-}
+    /// <summary>Alias for the app-source list response.</summary>
+    public const string AppsSourcesResponse = "oiag.ss";
+    /// <summary>Alias for the source-app selection request.</summary>
+    public const string AppsSourceAppRequest = "oiag.sa";
+    /// <summary>Alias for a nullable icon response.</summary>
+    public const string AppsIconResponse = "oiag.ic";
+    /// <summary>Alias for the workspace app list response.</summary>
+    public const string AppsWorkspaceListResponse = "oiag.wl";
+    /// <summary>Alias for a nullable workspace description response.</summary>
+    public const string AppsWorkspaceDescribeResponse = "oiag.wd";
+    /// <summary>Alias for the UI asset request.</summary>
+    public const string AppsUiAssetRequest = "oiag.uq";
+    /// <summary>Alias for a nullable UI asset response.</summary>
+    public const string AppsUiAssetResponse = "oiag.ur";}
