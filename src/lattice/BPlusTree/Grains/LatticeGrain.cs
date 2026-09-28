@@ -145,6 +145,8 @@ internal sealed partial class LatticeGrain(
 
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
+    private string? _metricTreeId;
+    private string MetricTreeId => _metricTreeId ?? optionsResolver.GetMetricTreeId(TreeId);
 
     // Per-silo registry read coalescer (issue #3501). Resolved lazily so a
     // directly-constructed grain in a unit test, with no registration, falls
@@ -217,7 +219,7 @@ internal sealed partial class LatticeGrain(
         {
             if (!_stageTagTreeCached)
             {
-                _stageTagTreeCache = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+                _stageTagTreeCache = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId);
                 _stageTagTreeCached = true;
             }
             return _stageTagTreeCache;
@@ -4140,6 +4142,7 @@ internal sealed partial class LatticeGrain(
     /// </remarks>
     public async Task OnActivateAsync(CancellationToken cancellationToken)
     {
+        _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(TreeId);
         PrimeConfigChangeArms();
 
         try
@@ -4202,11 +4205,11 @@ internal sealed partial class LatticeGrain(
         // reads literal `new KeyValuePair<string, object?>(...)` arguments on a
         // zero-valued Add, can see both arms.
         LatticeMetrics.ConfigChanged.Add(0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"),
             LatticeTenantLabel.ForTree(TreeId));
         LatticeMetrics.ConfigChanged.Add(0,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
             LatticeTenantLabel.ForTree(TreeId));
     }

@@ -47,7 +47,14 @@ public static class LatticeMetrics
     /// </summary>
     public const string MeterName = "orleans.lattice";
 
-    /// <summary>Tag key for the logical tree id.</summary>
+    /// <summary>
+    /// Tag key for the logical tree id. Lifecycle-created physical copies use
+    /// their registry <c>DerivedFrom</c> identity, keeping series stable through
+    /// resize, shadow restore/revert and schema-remediation cutovers. Maintenance
+    /// on a retired or discarded copy remains attributed to that logical owner.
+    /// Independent trees without provenance retain their own identity; arbitrary
+    /// aliases do not rewrite creation-time ownership.
+    /// </summary>
     public const string TagTree = "tree";
 
     /// <summary>Tag key for the participating-tree count of a cross-tree atomic write.</summary>

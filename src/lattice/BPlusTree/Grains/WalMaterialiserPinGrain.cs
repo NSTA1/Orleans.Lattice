@@ -312,6 +312,13 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <inheritdoc />
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        if (_context.ActivationServices?.GetService<LatticeOptionsResolver>() is { } resolver)
+        {
+            var treeId = WalMaterialiserPinRouting.TreeNameFromKey(GrainKey);
+            _treeTag = await resolver.ResolveMetricTreeIdAsync(treeId);
+            _treeTagPair = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeTag);
+            _tenantTagPair = LatticeTenantLabel.ForTree(treeId);
+        }
         PrimeAdvanceArms();
         _configuredBuckets = WalMaterialiserPinRouting.ResolveBucketCount(_options);
         if (_pinStorage is null)

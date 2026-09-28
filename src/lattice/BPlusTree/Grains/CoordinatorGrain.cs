@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -106,8 +107,18 @@ internal abstract class CoordinatorGrain<TSelf>(
     protected virtual Task OnActivateCoreAsync(CancellationToken cancellationToken)
         => Task.CompletedTask;
 
-    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
-        => OnActivateCoreAsync(cancellationToken);
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _metricOptionsResolver = context.ActivationServices?.GetService<LatticeOptionsResolver>();
+        if (_metricOptionsResolver is not null)
+            await _metricOptionsResolver.ResolveMetricTreeIdAsync(MetricsTreeId);
+        await OnActivateCoreAsync(cancellationToken);
+    }
+
+    private LatticeOptionsResolver? _metricOptionsResolver;
+
+    /// <summary>The subject's cached logical identity for metric tags only.</summary>
+    protected string LogicalMetricsTreeId => _metricOptionsResolver?.GetMetricTreeId(MetricsTreeId) ?? MetricsTreeId;
 
     /// <summary>Reminder-registry handle used by derived classes.</summary>
     protected IReminderRegistry ReminderRegistry => reminderRegistry;
@@ -263,7 +274,7 @@ internal abstract class CoordinatorGrain<TSelf>(
         // Enrol at a run length of zero for the same reason, and at the same
         // moment. A gauge that reported only coordinators currently failing would
         // make a healthy coordinator byte-identical to an absent one.
-        _censusToken = CoordinatorPhaseTickCensus.Enrol(KeepaliveReminderName, MetricsTreeId);
+        _censusToken = CoordinatorPhaseTickCensus.Enrol(KeepaliveReminderName, LogicalMetricsTreeId);
 
         _phaseTimer = this.RegisterGrainTimer(
             OnPhaseTimerTickAsync,
@@ -393,7 +404,7 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// </summary>
     private void RecordPhaseTickRun() =>
         CoordinatorPhaseTickCensus.Record(
-            _censusToken, KeepaliveReminderName, MetricsTreeId, _consecutiveTickFailures);
+            _censusToken, KeepaliveReminderName, LogicalMetricsTreeId, _consecutiveTickFailures);
 
     /// <summary>
     /// Surrenders this activation's census enrolment so the gauge stops reporting
@@ -416,7 +427,7 @@ internal abstract class CoordinatorGrain<TSelf>(
     /// </summary>
     private KeyValuePair<string, object?>[] PhaseTickFailureTags()
     {
-        var tree = MetricsTreeId;
+        var tree = LogicalMetricsTreeId;
         return
         [
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, KeepaliveReminderName),

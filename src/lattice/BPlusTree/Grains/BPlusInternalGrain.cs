@@ -30,6 +30,15 @@ internal sealed partial class BPlusInternalGrain(
     /// </summary>
     public IGrainContext GrainContext => context;
 
+    private string? _metricTreeId;
+    private string MetricTreeId => _metricTreeId ?? state.State.TreeId ?? string.Empty;
+
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        if (state.State.TreeId is { } treeId)
+            _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(treeId);
+    }
+
     /// <summary>
     /// Per-activation gate that serialises every mutating entry into
     /// <see cref="AcceptSplitAsync"/> (and any future internal-node
@@ -542,6 +551,7 @@ internal sealed partial class BPlusInternalGrain(
     public async Task SetTreeIdAsync(string treeId)
     {
         if (state.State.TreeId is not null) return;
+        _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(treeId);
 
         // Snapshot the pre-mutation TreeId. The idempotency guard above
         // means a failing WriteStateAsync that leaks the mutated TreeId in

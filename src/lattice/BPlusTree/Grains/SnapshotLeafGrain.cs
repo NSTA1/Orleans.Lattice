@@ -23,10 +23,12 @@ internal sealed class SnapshotLeafGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    ILogger<SnapshotLeafGrain> logger) : Grain, ISnapshotLeafGrain
+    ILogger<SnapshotLeafGrain> logger,
+    LatticeOptionsResolver? optionsResolver = null) : Grain, ISnapshotLeafGrain
 {
     /// <summary>Tree this snapshot leaf belongs to (set on first <see cref="OpenAsync"/>).</summary>
     private string _treeId = string.Empty;
+    private string MetricTreeId => optionsResolver?.GetMetricTreeId(_treeId) ?? _treeId;
 
     /// <summary>Virtual shard index this snapshot leaf materialises.</summary>
     private int _shardIndex = -1;
@@ -209,6 +211,8 @@ internal sealed class SnapshotLeafGrain(
         _ownedVirtualSlots = ownedSlots;
         _ownedVirtualShardCount = ownedSlots is null ? 0 : virtualShardCount;
         _baselineToken = baselineToken;
+        if (optionsResolver is not null)
+            await optionsResolver.ResolveMetricTreeIdAsync(treeId);
         _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec());
 
         if (baselineToken != Guid.Empty)
@@ -697,7 +701,7 @@ internal sealed class SnapshotLeafGrain(
             // replay memory working for it. The starting width is configured
             // per tree (issue #2898), which matters most at exactly this site.
             var sliceReader = new ReplaySliceReader(
-                coordinator, _treeId, partition, optionsMonitor.Get(_treeId).WalReplaySliceBudget);
+                coordinator, MetricTreeId, partition, optionsMonitor.Get(_treeId).WalReplaySliceBudget);
 
             while (fromExclusive < toInclusive)
             {
@@ -775,7 +779,7 @@ internal sealed class SnapshotLeafGrain(
         // allocation cost is amortised over the WAL slice loop.
         var tags = new KeyValuePair<string, object?>[]
         {
-            new(LatticeMetrics.TagTree, _treeId),
+            new(LatticeMetrics.TagTree, MetricTreeId),
             new(LatticeMetrics.TagShard, _shardIndex),
             LatticeTenantLabel.ForTree(_treeId),
         };
@@ -814,4 +818,3 @@ internal sealed class SnapshotLeafGrain(
         }
     }
 }
-

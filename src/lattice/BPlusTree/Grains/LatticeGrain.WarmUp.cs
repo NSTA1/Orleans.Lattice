@@ -73,11 +73,11 @@ internal sealed partial class LatticeGrain
             sw.Stop();
             LatticeMetrics.WarmUpInvocations.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 LatticeTenantLabel.ForTree(TreeId));
             LatticeMetrics.WarmUpDurationMs.Record(
                 sw.Elapsed.TotalMilliseconds,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>("shard_count", shardCount),
                 LatticeTenantLabel.ForTree(TreeId));
         }

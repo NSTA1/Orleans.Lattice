@@ -385,7 +385,7 @@ internal sealed partial class ShardRootGrain
     private void RecordScanPageStall(long delta, KeyValuePair<string, object?> phase) =>
         LatticeMetrics.ScanPageStalls.Add(
             delta,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
             phase,
             LatticeTenantLabel.ForTree(TreeId));
@@ -480,7 +480,7 @@ internal sealed partial class ShardRootGrain
             var banked = TryBankPartialScanPage<T>(walk, out var partial);
             LatticeMetrics.ScanPageCeilingOutcomes.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
                 banked
                     ? LatticeMetrics.OutcomeScanPageBankedTag
@@ -1040,7 +1040,7 @@ internal sealed partial class ShardRootGrain
     private void RecordScanChainRegression(long delta, KeyValuePair<string, object?> outcome) =>
         LatticeMetrics.ScanChainRegressions.Add(
             delta,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, MyShardIndex),
             outcome,
             LatticeTenantLabel.ForTree(TreeId));

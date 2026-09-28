@@ -565,6 +565,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             {
                 var treeId = headEntry.Key;
                 var headWallTicks = headEntry.Value;
+                await _signal.InitializeMetricTreeAsync(treeId).ConfigureAwait(false);
 
                 long lagTicks = 0;
                 var frontier = await _cursors
@@ -581,7 +582,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 // distribution leading up to a trip.
                 LatticeMetrics.MaterialiserDrainLag.Record(
                     TimeSpan.FromTicks(lagTicks).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _signal.MetricTreeId(treeId)),
                     LatticeTenantLabel.ForTree(treeId));
 
                 if (!perTree.TryGetValue(treeId, out var acc))
@@ -657,7 +658,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
                     LatticeMetrics.MaterialiserLaggingConsumers.Record(
                         lagging,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _signal.MetricTreeId(treeId)),
                         LatticeTenantLabel.ForTree(treeId));
 
                     if (first is { } minimum)
@@ -799,6 +800,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
         foreach (var acc in perTree.Values)
         {
+            await _signal.InitializeMetricTreeAsync(acc.TreeId).ConfigureAwait(false);
             // Maintain the per-tree consecutive-window counter for the
             // flush-latency input. Increment on every tick whose per-
             // window flush-latency trip delta is non-zero; the stale-
@@ -1004,7 +1006,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             var previousStateTag = WalSaturationSignal.StateTagValue(previousState);
             var tags = new List<KeyValuePair<string, object?>>(capacity: 7)
             {
-                new(LatticeMetrics.TagTree, acc.TreeId),
+                new(LatticeMetrics.TagTree, _signal.MetricTreeId(acc.TreeId)),
                 LatticeTenantLabel.ForTree(acc.TreeId),
                 new(LatticeMetrics.TagWalSaturationState, newStateTag),
                 new(LatticeMetrics.TagWalSaturationPreviousState, previousStateTag),
