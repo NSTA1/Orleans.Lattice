@@ -86,7 +86,7 @@ internal sealed class AppActivationEngine
                 status = await _statusStore.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
                 statusRead = true;
                 run = new Run(this, operation, tenant, slug, status?.AppliedManifest,
-                    status?.ReplicationTrees ?? Array.Empty<string>());
+                    status?.ReplicationTrees ?? System.Collections.ObjectModel.ReadOnlyDictionary<string, bool>.Empty);
                 result = await run.ExecuteAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -129,7 +129,8 @@ internal sealed class AppActivationEngine
                     Slug = slug,
                     LastOutcome = outcome,
                     AppliedManifest = result.Applied,
-                    ReplicationTrees = run?.ReplicationTrees ?? status?.ReplicationTrees ?? Array.Empty<string>(),
+                    ReplicationTrees = run?.ReplicationTrees ?? status?.ReplicationTrees
+                        ?? System.Collections.ObjectModel.ReadOnlyDictionary<string, bool>.Empty,
                 }, cancellationToken).ConfigureAwait(false);
             }
 
@@ -228,9 +229,9 @@ internal sealed class AppActivationEngine
         TenantId tenant,
         AppSlug slug,
         AppManifest? applied,
-        IReadOnlyList<string> replicationTrees)
+        IReadOnlyDictionary<string, bool> replicationTrees)
     {
-        public IReadOnlyList<string> ReplicationTrees { get; private set; } = replicationTrees;
+        public IReadOnlyDictionary<string, bool> ReplicationTrees { get; private set; } = replicationTrees;
 
         private async Task<(AppActivationFailure Failure, AppManifestError? Diagnostic)> ApplyReplicationAsync(
             AppManifest? manifest, AppManifest? previous, CancellationToken cancellationToken)

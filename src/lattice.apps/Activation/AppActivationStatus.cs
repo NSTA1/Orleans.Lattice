@@ -24,8 +24,10 @@ public sealed record AppActivationStatus
     [Id(3)] public AppManifest? AppliedManifest { get; init; }
 
     /// <summary>
-    /// Effective tree ids whose replication enrolment this install may have authored. Written
-    /// before enrolment changes so retries and uninstall can clean up an interrupted activation.
+    /// Effective tree ids mapped to whether this install authored or may have attempted their
+    /// enable. A false value records a pre-existing enrolment, which uninstall and upgrades
+    /// must leave intact. Written before changes so interrupted activations remain cleanable.
     /// </summary>
-    [Id(4)] public IReadOnlyList<string> ReplicationTrees { get; init; } = Array.Empty<string>();
+    [Id(4)] public IReadOnlyDictionary<string, bool> ReplicationTrees { get; init; } =
+        System.Collections.ObjectModel.ReadOnlyDictionary<string, bool>.Empty;
 }

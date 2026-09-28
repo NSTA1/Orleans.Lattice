@@ -5,12 +5,12 @@ namespace Orleans.Lattice.Apps;
 /// <summary>Applies replication intent to the same tenant-composed tree ids as app provisioning.</summary>
 internal sealed class AppReplicationEnrolment(ILatticeReplicationConfigAuthority? authority)
 {
-    internal async Task<(AppActivationFailure Failure, AppManifestError? Diagnostic, IReadOnlyList<string>? Trees)> ApplyAsync(
+    internal async Task<(AppActivationFailure Failure, AppManifestError? Diagnostic, IReadOnlyDictionary<string, bool>? Trees)> ApplyAsync(
         TenantId tenant,
         AppManifest? manifest,
         AppManifest? previous,
-        IReadOnlyList<string> trackedTrees,
-        Func<IReadOnlyList<string>, Task> recordIntent,
+        IReadOnlyDictionary<string, bool> trackedTrees,
+        Func<IReadOnlyDictionary<string, bool>, Task> recordIntent,
         CancellationToken cancellationToken)
     {
         if (authority is null)
@@ -20,8 +20,12 @@ internal sealed class AppReplicationEnrolment(ILatticeReplicationConfigAuthority
 
         var desired = Resolve(tenant, manifest);
         var prior = Resolve(tenant, previous);
-        var retired = new HashSet<string>(trackedTrees, StringComparer.Ordinal);
-        retired.UnionWith(prior.Keys);
+        var pending = new Dictionary<string, bool>(trackedTrees, StringComparer.Ordinal);
+        foreach (var priorTree in prior.Keys)
+        {
+            // A manifest without provenance is not evidence that this app authored an enable.
+            pending.TryAdd(priorTree, false);
+        }
         var treeId = string.Empty;
         try
         {
@@ -38,33 +42,45 @@ internal sealed class AppReplicationEnrolment(ILatticeReplicationConfigAuthority
                     return Failure(AppActivationFailure.ReplicationModeChangeRejected, "replication-mode-change",
                         treeId, "The declared merge mode differs from the previously enabled mode or the current mode is ambiguous.");
                 }
+
+                pending[treeId] = trackedTrees.GetValueOrDefault(treeId) || status is not { Enabled: true };
             }
 
             // Persist the union before the first side effect so an interrupted upgrade can
             // still unenrol every attempted tree, even if its manifest never becomes applied.
-            var pending = new HashSet<string>(retired, StringComparer.Ordinal);
-            pending.UnionWith(desired.Keys);
             if (pending.Count > 0)
             {
-                await recordIntent(pending.ToArray()).ConfigureAwait(false);
+                await recordIntent(new Dictionary<string, bool>(pending, StringComparer.Ordinal)).ConfigureAwait(false);
             }
 
             foreach (var pair in desired)
             {
                 treeId = pair.Key;
-                await authority.EnableReplicationAsync(treeId, pair.Value, cancellationToken: cancellationToken).ConfigureAwait(false);
+                var enabled = await authority.EnableReplicationAsync(treeId, pair.Value, cancellationToken: cancellationToken).ConfigureAwait(false);
+                var authored = trackedTrees.GetValueOrDefault(treeId) || !enabled.AlreadyEnabled;
+                if (pending[treeId] != authored)
+                {
+                    pending[treeId] = authored;
+                    await recordIntent(new Dictionary<string, bool>(pending, StringComparer.Ordinal)).ConfigureAwait(false);
+                }
             }
 
-            foreach (var retiredTree in retired)
+            foreach (var entry in pending)
             {
-                treeId = retiredTree;
-                if (!desired.ContainsKey(treeId))
+                treeId = entry.Key;
+                if (entry.Value && !desired.ContainsKey(treeId))
                 {
                     await authority.DisableReplicationAsync(treeId, cancellationToken).ConfigureAwait(false);
                 }
             }
 
-            return (AppActivationFailure.None, null, desired.Keys.ToArray());
+            var retained = new Dictionary<string, bool>(desired.Count, StringComparer.Ordinal);
+            foreach (var desiredTree in desired.Keys)
+            {
+                retained.Add(desiredTree, pending[desiredTree]);
+            }
+
+            return (AppActivationFailure.None, null, retained);
         }
         catch (LatticeReplicationModeChangeRejectedException ex)
         {
@@ -81,7 +97,7 @@ internal sealed class AppReplicationEnrolment(ILatticeReplicationConfigAuthority
         }
     }
 
-    private static (AppActivationFailure, AppManifestError, IReadOnlyList<string>?) Failure(
+    private static (AppActivationFailure, AppManifestError, IReadOnlyDictionary<string, bool>?) Failure(
         AppActivationFailure failure, string code, string treeId, string message) =>
         (failure, new AppManifestError(code, "$.replication", $"Replication for tree '{treeId}' failed: {message}"), null);
 

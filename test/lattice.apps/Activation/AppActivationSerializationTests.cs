@@ -67,7 +67,11 @@ public sealed class AppActivationSerializationTests
             Slug = AppSlug.Parse("notes"),
             LastOutcome = Outcome(AppActivationFailure.None),
             AppliedManifest = ActivationHarness.Manifest(trees: new[] { ActivationHarness.Tree("records", virtualShards: 16) }),
-            ReplicationTrees = new[] { "t/acme/a/notes/records" },
+            ReplicationTrees = new Dictionary<string, bool>
+            {
+                ["t/acme/a/notes/records"] = true,
+                ["t/acme/legacy-tree"] = false,
+            },
         };
 
         var copy = serializer.Deserialize<AppActivationStatus>(serializer.SerializeToArray(source));

@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Replication;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Apps.Tests;
 
@@ -198,7 +200,8 @@ public sealed partial class AppActivationEngineTests
             ? AppActivationFailure.TreeProvisioningFailed : AppActivationFailure.ReplicationEnrolmentFailed));
         var pending = await harness.Status.GetAsync(TenantId.Default, ActivationHarness.Slug, CancellationToken.None);
         Assert.That(pending!.AppliedManifest!.Identity.Version, Is.EqualTo(ActivationHarness.V1));
-        Assert.That(pending.ReplicationTrees, Is.EquivalentTo(new[] { "a/notes/records", "a/notes/extra" }));
+        Assert.That(pending.ReplicationTrees.Keys, Is.EquivalentTo(new[] { "a/notes/records", "a/notes/extra" }));
+        Assert.That(pending.ReplicationTrees.Values, Is.All.True);
         Assert.That(pending.LastOutcome.Diagnostics.Single().Code, Is.EqualTo("replication-pending"));
 
         harness.Status.FailWrites = false;
@@ -250,5 +253,100 @@ public sealed partial class AppActivationEngineTests
 
         Assert.That((await harness.RunAsync(AppActivationOperation.Uninstall, AppRegistryTestData.Acme)).Succeeded, Is.True);
         Assert.That(authority.Disables, Is.EqualTo(new[] { "t/acme/legacy-tree" }));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Retire_app_keeps_preexisting_adopted_replication(bool upgrade)
+    {
+        const string tree = "t/acme/legacy-tree";
+        var authority = new RecordingReplicationAuthority();
+        authority.Trees[tree] = new(tree, true, LatticeMergeMode.LwwRegister, false);
+        var harness = new ActivationHarness(replication: authority);
+        var manifest = ReplicatedManifest() with
+        {
+            Trees = new[] { ActivationHarness.Tree("records", adopted: "legacy-tree") },
+            Roles = Array.Empty<AppRoleDeclaration>(),
+        };
+        await harness.InstallAsync(manifest, AppRegistryTestData.Acme, bindings: Array.Empty<AppRoleBinding>());
+        await harness.RunAsync(AppActivationOperation.Enable, AppRegistryTestData.Acme);
+        await harness.RunAsync(AppActivationOperation.Reconcile, AppRegistryTestData.Acme);
+        if (upgrade)
+        {
+            await harness.UpgradeAsync(manifest with
+            {
+                Identity = manifest.Identity with { Version = ActivationHarness.V2 },
+                Replication = Array.Empty<AppReplicationDeclaration>(),
+            }, AppRegistryTestData.Acme, bindings: Array.Empty<AppRoleBinding>());
+        }
+
+        var result = await harness.RunAsync(upgrade ? AppActivationOperation.Reconcile : AppActivationOperation.Uninstall,
+            AppRegistryTestData.Acme);
+
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(authority.Disables, Is.Empty);
+        Assert.That(authority.Trees[tree].Enabled, Is.True);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Interrupted_upgrade_restart_preserves_owned_and_preexisting_enrolment_provenance(bool reconcileFirst)
+    {
+        const string legacy = "t/acme/legacy-tree";
+        const string owned = "t/acme/a/notes/extra";
+        var authority = new RecordingReplicationAuthority();
+        authority.Trees[legacy] = new(legacy, true, LatticeMergeMode.LwwRegister, false);
+        var harness = new ActivationHarness(replication: authority);
+        var manifest = ReplicatedManifest() with
+        {
+            Trees = new[] { ActivationHarness.Tree("records", adopted: "legacy-tree") },
+            Roles = Array.Empty<AppRoleDeclaration>(),
+        };
+        await harness.InstallAsync(manifest, AppRegistryTestData.Acme, bindings: Array.Empty<AppRoleBinding>());
+        await harness.RunAsync(AppActivationOperation.Enable, AppRegistryTestData.Acme);
+        var upgraded = manifest with
+        {
+            Identity = manifest.Identity with { Version = ActivationHarness.V2 },
+            Trees = new[] { manifest.Trees.Single(), ActivationHarness.Tree("extra") },
+            Replication = new[]
+            {
+                new AppReplicationDeclaration { Tree = "records", MergeMode = LatticeMergeMode.LwwRegister },
+                new AppReplicationDeclaration { Tree = "extra", MergeMode = LatticeMergeMode.LwwRegister },
+            },
+        };
+        await harness.UpgradeAsync(upgraded, AppRegistryTestData.Acme, bindings: Array.Empty<AppRoleBinding>());
+        authority.FailEnable = _ =>
+        {
+            harness.Status.FailWrites = true;
+            return null;
+        };
+        harness.Trees.FailEnsure = _ => new IOException("interrupted after replication");
+        Assert.That((await harness.RunAsync(AppActivationOperation.Reconcile, AppRegistryTestData.Acme)).Failure,
+            Is.EqualTo(AppActivationFailure.TreeProvisioningFailed));
+        var pending = await harness.Status.GetAsync(AppRegistryTestData.Acme, ActivationHarness.Slug, CancellationToken.None);
+        Assert.That(pending!.ReplicationTrees[legacy], Is.False);
+        Assert.That(pending.ReplicationTrees[owned], Is.True);
+        Assert.That(pending.LastOutcome.Diagnostics.Single().Code, Is.EqualTo("replication-pending"));
+
+        using var services = new ServiceCollection().AddSerializer(builder =>
+            builder.AddAssembly(typeof(AppActivationStatus).Assembly)).BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer>();
+        var restoredStatus = serializer.Deserialize<AppActivationStatus>(serializer.SerializeToArray(pending));
+        var restartedAuthority = new RecordingReplicationAuthority();
+        foreach (var tree in authority.Trees)
+            restartedAuthority.Trees.Add(tree.Key, tree.Value);
+        var restarted = new ActivationHarness(replication: restartedAuthority);
+        await restarted.InstallAsync(upgraded, AppRegistryTestData.Acme, bindings: Array.Empty<AppRoleBinding>());
+        await restarted.Status.SetAsync(restoredStatus, CancellationToken.None);
+        if (reconcileFirst)
+        {
+            await restarted.Registry.EnableAsync(AppRegistryTestData.Acme, ActivationHarness.Slug);
+            Assert.That((await restarted.RunAsync(AppActivationOperation.Reconcile, AppRegistryTestData.Acme)).Succeeded, Is.True);
+        }
+
+        Assert.That((await restarted.RunAsync(AppActivationOperation.Uninstall, AppRegistryTestData.Acme)).Succeeded, Is.True);
+        Assert.That(restartedAuthority.Disables, Is.EqualTo(new[] { owned }));
+        Assert.That(restartedAuthority.Trees[legacy].Enabled, Is.True);
+        Assert.That(restartedAuthority.Trees[owned].Enabled, Is.False);
     }
 }
