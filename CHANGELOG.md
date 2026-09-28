@@ -42,6 +42,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - CRDT provenance dot scans and UTF-8 transcodes.** The OR-map, OR-set and RW-set provenance decoders walk their dot lists as spans, and the WAL pin-routing and blob cache-key hashes transcode in one pass, dropping a heap buffer on oversized consumer ids. ([#3793](https://github.com/NSTA1/Orleans.Lattice/pull/3793)) (`Orleans.Lattice`, `Orleans.Lattice.Caching.AzureBlob`)
+
 - **Performance - Leaf range reads, CRDT dot scans and index fingerprint.** A range read sorts only when a pending write appended out of order, drops bound re-tests the scan window already enforces, dot scans walk spans not the list indexer, and the fingerprint transcodes each name once. ([#3772](https://github.com/NSTA1/Orleans.Lattice/pull/3772)) (`Orleans.Lattice`, `Orleans.Lattice.GrainIndex`)
 
 - **Performance - Leaf scan and projection digest.** A bounded range scan retires its lower bound once met instead of retesting every row; the digest transcodes each string field once rather than twice; and a single-replica vector clock is fed straight through instead of rented and sorted per row. ([#3760](https://github.com/NSTA1/Orleans.Lattice/pull/3760)) (`Orleans.Lattice`)
