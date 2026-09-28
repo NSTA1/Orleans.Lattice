@@ -30,13 +30,16 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <item><description>Idempotency: repeated calls with the same outcome are
 /// no-ops. Conflicting calls (commit-then-abort or abort-then-commit)
 /// throw <see cref="InvalidOperationException"/> - they indicate a saga
-/// implementation bug, not a recoverable transient.</description></item>
+/// implementation bug, not a recoverable transient - unless the earlier
+/// decision has already been tombstoned by <c>ForgetAsync</c>: a conflicting
+/// mark then clears the tombstone and the stale decision and records the new
+/// outcome.</description></item>
 /// <item><description><c>ForgetAsync</c> tombstones the decision with a
 /// TTL (<see cref="LatticeOptions.TxDecisionRetention"/>, default 60s)
 /// rather than removing it immediately. A concurrent shard-split sweep
 /// that installs an orphan pending bucket on a destination shard
 /// <i>after</i> the saga's terminal fan-out completed can then still
-/// resolve the saga's outcome via <see cref="GetStatusAsync"/> and
+/// resolve the saga's outcome via <see cref="GetStatusManyAsync(IReadOnlyList{Guid})"/> and
 /// apply the terminal directly during its post-sweep cleanup. Setting
 /// <c>TxDecisionRetention</c> to <see cref="TimeSpan.Zero"/> restores
 /// the original "remove immediately" semantic for callers that don't

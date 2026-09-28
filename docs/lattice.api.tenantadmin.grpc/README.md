@@ -126,10 +126,10 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `InvalidOperationException` | `FailedPrecondition` | A lifecycle or residency precondition the facade refuses on a well-formed request. Not mapped on the quota-usage and self-service RPCs, where it falls through to `Internal`. |
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller does not hold the required tier. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the caller's asserted active tenant. Deliberately not `Internal`, which a client would retry. |
-| `ArgumentException` | `InvalidArgument` | A malformed tenant id or region id. |
+| `ArgumentException` | `InvalidArgument` | A malformed tenant, region, or subject id, or a grant with a blank scope, an empty operation set, or the same tenant on both sides; also a negative `BurstPercent`, and an added admin subject the identity directory cannot resolve (`LatticeDirectoryValidationException` derives from `ArgumentException`). |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, or quota-usage facade is absent from the host, so its RPCs are not served. |
-| anything else | `Internal` | The catch-all, logged server-side and returned without echoing the exception text. |
+| anything else | `Internal` | The catch-all, logged server-side and returned without echoing the exception text. It includes the tenancy package's `TenantRegistryConcurrencyException` (sustained write contention on one tenant's registry record), which a client may retry. |
 
 Each arm is explicit and separately tested. `TenantRegionNotAllowedException` and
 `TenantLastRegionException` in particular must never reach the catch-all arm: that is
@@ -205,7 +205,9 @@ Server side (an ASP.NET Core host co-located with the silo):
   `ILatticeTenantAdminApiCredentialBridge`, and the options-backed
   `ILatticeTenantAdminApiAuthSchemeSource` (which advertises nothing by default).
   Because each is a `TryAdd`, registering your own **before** this call is what
-  opts the surface in.
+  opts the surface in. The interceptor is the exception: each call appends it to the
+  gRPC pipeline again, so a repeated call authorizes every call to this service once
+  per registration - call it once.
 - `MapLatticeTenantAdminApiGrpc(this IEndpointRouteBuilder endpoints)` - maps the gRPC
   endpoint. The host must have called `AddLatticeTenantAdminApiGrpc` and must expose
   `ILatticeTenantAdmin` (via `AddLatticeTenantAdminApi`) in the same service
@@ -235,9 +237,11 @@ call's ambient scope for the duration of the call.
 The header carries only an *assertion*: the tenancy add-on re-validates it against
 the caller's subject membership downstream, exactly as it validates the caller
 credential. An absent, blank, or syntactically invalid header asserts no tenant, and
-the caller resolves the reserved `default` tenant. The self-service RPCs resolve the
-assertion, so one the caller may not use is refused as a `PermissionDenied`
-`RpcException` rather than reported as a tenant the caller does not hold. The
+the caller resolves the reserved `default` tenant. `GetCurrentTenant` and
+`ListAccessibleTenants` resolve the assertion first, so one the caller may not use is
+refused as a `PermissionDenied` `RpcException` rather than reported as a tenant the
+caller does not hold; `GetTenant` answers only for a tenant the caller administers or
+its validated current tenant, and reports anything else as `NotFound`. The
 lifecycle, region-residency, admin-subject, grant, and quota-usage RPCs authorize on
 the caller's subject and the tenant the request names, not on the asserted active
 tenant; every RPC group still maps a fail-closed tenant-resolution refusal to
@@ -261,11 +265,13 @@ The public seams a host implements or substitutes to open this surface up:
 | `AuthSchemeDescriptor` | record | One advertised credential scheme: its required `SchemeId`, a friendly `DisplayName`, and the public `Parameters` a client needs to run the sign-in challenge. |
 | `AuthSchemeAdvertisement` | record | The `GetAuthScheme` response envelope carrying the descriptor list. |
 
-The interceptor itself is internal. It bridges the accepted credential into the
-facade's authorization context per call, so the facade's fail-closed gate sees the
-caller's identity and every credential is isolated to its own call, and it scopes
-enforcement to this service by matching on the service-name prefix, so unrelated
-gRPC services hosted in the same ASP.NET Core pipeline are unaffected.
+The interceptor itself is internal. It runs the authorizer and scopes enforcement to
+this service by matching on the service-name prefix, so unrelated gRPC services hosted
+in the same ASP.NET Core pipeline are unaffected. The credential bridging happens
+after it, in the service: each RPC lifts the caller credential (through
+`ILatticeTenantAdminApiCredentialBridge`) and the asserted active tenant onto the
+ambient context for that call only, so the facade's fail-closed gate sees the caller's
+identity and every credential is isolated to its own call.
 
 ## See also
 

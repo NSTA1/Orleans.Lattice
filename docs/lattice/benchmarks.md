@@ -98,10 +98,10 @@ authoritative list with per-scenario knobs is in
 | Write-heavy random  | `current-state-no-replication`               | Steady-state per-vehicle current-state overwrites         |
 | Write-heavy random  | `skewed-key-shard-splits`                    | Adaptive shard splitting under skewed keys                |
 | Write-heavy ordered | `event-log-with-ttl`                         | Append-only event-log keyspace + TTL eviction             |
-| Read-heavy          | `read-heavy-random`                          | 95:5 read:write, random key distribution                  |
-| Read-heavy          | `read-heavy-ordered`                         | 95:5 read:write, sequential `ScanKeysAsync` walk          |
-| Read-write mix      | `read-write-mix-random`                      | 50:50 mix, random keys (YCSB-A shape)                     |
-| Read-write mix      | `read-write-mix-ordered`                     | 50:50 mix, sequential `ScanKeysAsync` walk                |
+| Read-heavy          | `read-heavy-random`                          | Nominal 95:5 read:write (see below), random key distribution |
+| Read-heavy          | `read-heavy-ordered`                         | Nominal 95:5 read:write (see below), point reads in key order |
+| Read-write mix      | `read-write-mix-random`                      | Nominal 50:50 mix (see below), random keys (YCSB-A shape) |
+| Read-write mix      | `read-write-mix-ordered`                     | Nominal 50:50 mix (see below), point reads in key order   |
 | Durable WAL         | `current-state-no-replication-azuretable`    | Same write topology with Azure Table WAL durable storage  |
 | Durable WAL         | `current-state-no-replication-azuretable-no-crow` | As above, with the WAL's phase-0 candidate row elided (`AzureTableWalStorageOptions.EliminateCandidateRowOnHotPath`) |
 | Durable WAL         | `current-state-no-replication-azuretable-pipelined` | As above, with pipelined phase-2 commits (`AzureTableWalStorageOptions.PipelinePhaseTwoCommits`) |
@@ -114,6 +114,20 @@ authoritative list with per-scenario knobs is in
 | Replication chaos   | `receiver-crash`                             | Receiver crash mid-stream, recovery cost                  |
 | Replication control | `observer-no-peer`                           | Observer-off control paired with `current-state-single-peer` |
 | Replication control | `replication-key-filter`                     | Per-key replication filter cost vs no-filter baseline      |
+
+The read-heavy and read-write-mix ratios are design-intent labels, not
+measured mixes, and they hold only at about 400 vehicles. Each scenario's
+`.env` pins the read driver's target rate - 38,000 `GetAsync` calls/s for
+`read-heavy-*`, 2,000/s for `read-write-mix-*` - while the write rate scales
+with the fleet: every vehicle publishes one telemetry sample every 200 ms and
+the Lattice sink writes each one, so each vehicle adds 5 writes/s. At the
+`.env` default of 2,000 vehicles the mixes are about 79:21 and about 1:5
+reads to writes, and the host-calibrated fleet size that `./initialise.ps1`
+writes, which overrides the `.env` value, moves them again. Neither
+`-ordered` variant walks a key scan: the read driver pages a sample of up to
+4,096 keys from a key cursor, refreshed every 10 seconds, and issues one
+`GetAsync` per key, stepping through that sample in key order; the
+`-random` variants pick keys from the same sample at random.
 
 ## Interpreting results
 
@@ -307,6 +321,17 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `orphanedsurvey` | A shard's orphaned-leaf audit against its opt-in full survey, on one 128-key orphan. |
 | `blockedcensus` | WAL GC on a blocked tree holding more pins than the diagnostic's eight-id cap: the residual scan the uncapped census needs. |
 | `detachedtransfer` | Detached-leaf split transfer planning, dictionary construction and donor removal. |
+| `leafgetmany` | A leaf multi-get with and without a committed prepared override, resolved against one fixed registry view. |
+| `leafrangeread` | Leaf key and entry range reads with and without a prepared transactional write in the range, so the cost of the signal that stops a reused scan page serving a stale transactional outcome is visible against the steady-state read. |
+| `leafrangedelete` | A four-key foreground range delete on a freshly attached 2,048-row leaf, the path that now reads and hydrates only the requested range. |
+| `crdtcoveragecollapse` | Three observed-remove dot-coverage tests that collapse a single-replica cancelling-dot list to its highest counter: the OR-Set and RW-Set live-member projections and the OR-Set folded-state decode. |
+| `crdtdotscantrims` | Three trims on the observed-remove dot primitives: span scans instead of list indexing, liveness reads that stop at the first surviving dot, and the merge-time compaction sweep. |
+| `leafdigestscantrims` | Three per-element trims on the leaf read, digest and bisect paths: the range enumerator retiring its lower-bound test once satisfied, the digest transcoding each string field once, and a single-replica vector clock fed without a pooled sort. |
+| `leafboundhoistdotspan` | Three read-path trims, each with a baseline, an optimised and a no-gain control lane: the leaf range scan dropping per-row bound re-tests its window already enforces, the key range read sorting only when fresh pending keys were appended, and the provenance decoders' dot scans walking spans instead of the list indexer. |
+| `crdtprovenancedecode` | Three CRDT provenance-decode paths an entry-history read runs for every revision: the multi-value register's delta decode and current-value projection, and the OR-Map's folded-state decode and key projection. |
+| `ormapfilterhoisttrims` | Three per-item costs: view-projection filter eligibility settled once per projection, the OR-Map delta key surrogate encoded once per dot group, and the OR-Map live-key tombstone test. |
+| `historyreadtrims` | Three per-row read-path costs: predicate JSON validation deferred until a row evaluates true, fast-path eligibility settled once instead of per row, and the entry-history per-revision delta wrapper. |
+| `dataapicrdtreads` | The three whole-collection CRDT projections the data-plane API runs on every read: an OR-Set, an OR-Map and a remove-wins set. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'
@@ -432,8 +457,10 @@ path optimisation that needs realistic Azure-side latency, runs here.
 The harness deploys a single Linux VM with accelerated networking into
 Azure. Its committed parameters file defaults to Standard_D2as_v5, the
 smallest D-family SKU that supports accelerated networking, and
-recommends Standard_D4as_v5 for the 4,000-vehicle rung, which is the size
-`benchmark/performance-report.ps1` provisions. The producer and silo run
+recommends Standard_D4as_v5 for the 4,000-vehicle rung, which is the
+default `-VmSize` of `benchmark/performance-report.ps1` - though at the
+current revision that script's Layer 1 and Layer 2 runs throw before they
+provision anything (see the note on it below). The producer and silo run
 as co-located systemd units; the silo authenticates to a real Azure
 Tables WAL via the VM's system-assigned managed identity. A cohort
 runner script applies env-var drop-ins, restarts the silo, runs the
@@ -465,6 +492,25 @@ The same harness also has a multi-silo tier on Azure Container Apps:
 runs one cohort at a given silo count. It is normally driven end to end by
 `benchmark/performance-report.ps1 -Layer3`; see
 [Performance: multi-silo scaling guide](performance-multi-silo.md).
+At the current revision that end-to-end run fails: the script still reads a
+`$NamePrefix` variable that its parameter list no longer declares, and under
+its `Set-StrictMode -Version Latest` that read throws. A Layer 3 run gets
+past it only by reusing a rig. Provision one first, using a prefix of three
+to nine lowercase letters or digits (the form `-ReuseAca` normalises a
+prefix to), then point the report at it:
+
+```powershell
+pwsh benchmark/azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>
+pwsh benchmark/performance-report.ps1 -Layer3 -ReuseAca <prefix>
+```
+
+The script's Layer 1 and Layer 2 runs hit the same failure whatever their
+arguments.
+Only `-DryRun`, which re-renders the published tables from the last
+`state.json` without touching Azure, is unaffected. For a Layer 3 replay,
+pass the switch form, `-DryRun -Layer3`: the dry run checks that switch
+rather than the resolved layer, so `-Layer 3 -DryRun` replays the
+single-silo tables instead of the multi-silo ones.
 
 The harness is **not** driven through `./benchmark.ps1` and does not
 push to the local history VictoriaMetrics stack - the result is the

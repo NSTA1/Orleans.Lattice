@@ -1,10 +1,9 @@
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Default <see cref="IReplogSink"/> registered by
-/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>.
-/// Ignores every nudge. Replaced by the doorbell-ringing sharded sink in
-/// later phases of the replication pipeline.
+/// An <see cref="IReplogSink"/> that ignores every nudge. It is not the default:
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>
+/// registers the doorbell-ringing <see cref="ShardedReplogSink"/>.
 /// </summary>
 internal sealed class NoOpReplogSink : IReplogSink
 {

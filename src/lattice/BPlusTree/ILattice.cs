@@ -650,26 +650,47 @@ public interface ILattice : IGrainWithStringKey
     Task<int> BulkAppendChunkAsync(string operationId, IReadOnlyList<KeyValuePair<string, byte[]>> sortedEntries, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Soft-deletes the entire tree. All shards are immediately marked as deleted,
-    /// causing subsequent reads and writes to throw <see cref="InvalidOperationException"/>.
-    /// A grain reminder is registered to permanently purge all tree data after the
-    /// configured <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed.
-    /// Idempotent - calling on an already-deleted tree is a no-op.
+    /// Soft-deletes the tree. The delete acts on the shards stored under this
+    /// tree's id and keeps one deletion record per id: each of those shards is
+    /// immediately marked deleted, so subsequent reads and writes on it throw
+    /// <see cref="InvalidOperationException"/>, and a grain reminder is registered
+    /// to permanently purge them after the configured
+    /// <see cref="LatticeOptions.SoftDeleteDuration"/> has elapsed. A call on an id
+    /// already recorded as deleted is a no-op.
+    /// <para>
+    /// The delete does not resolve a tree alias, so on a tree whose id is aliased
+    /// to another physical tree it does not reach the live data. After the first
+    /// resize of a populated tree, the id's deletion record already holds the
+    /// original copy the resize retired, so the call returns without deleting
+    /// anything and the tree stays readable and writable; the same holds for a tree
+    /// created again under the id of a purged one. After a shadow-cutover restore
+    /// or a schema-remediation cutover, only the id's own shards are marked, so
+    /// reads and writes through the alias keep succeeding until the purge, which
+    /// removes the tree's registry entry, alias included.
+    /// </para>
     /// </summary>
     Task DeleteTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Recovers a soft-deleted tree, restoring it to normal operation.
-    /// All data written before the delete is accessible again.
-    /// Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted, or if the purge has already completed (data is gone).
+    /// Recovers a soft-deleted tree, restoring it to normal operation and
+    /// cancelling its deferred purge. All data written before the delete is
+    /// accessible again. Throws <see cref="InvalidOperationException"/> if the tree
+    /// has not been deleted, while a purge is in progress, or if the purge has
+    /// already completed (data is gone). Like <see cref="DeleteTreeAsync"/>, it acts
+    /// on the id's own deletion record and shards without resolving a tree alias,
+    /// so after the first resize of a populated tree it recovers the original copy
+    /// the resize retired while that copy is inside its soft-delete window.
     /// </summary>
     Task RecoverTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Immediately purges a soft-deleted tree without waiting for the
     /// <see cref="LatticeOptions.SoftDeleteDuration"/> window to elapse.
-    /// Permanently removes all leaf and internal node state.
+    /// Permanently removes the leaf and internal node state of the shards stored
+    /// under the tree's id, and the id's registry entry, alias included - except
+    /// when the deletion record is a resize's retirement of the tree's original
+    /// copy, whose purge leaves the registry entry in place for the live, resized
+    /// tree. Like <see cref="DeleteTreeAsync"/>, it does not resolve a tree alias.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed.
     /// </summary>
@@ -686,9 +707,23 @@ public interface ILattice : IGrainWithStringKey
     /// The tree ID is preserved - it becomes an alias to the new physical tree.
     /// The snapshot runs online: the tree stays available for reads and writes
     /// throughout, with writes accepted during the copy shadow-forwarded to the
-    /// new physical tree. After the alias swap, the tree serves the new sizing.
+    /// new physical tree - except typed CRDT delta applies and bulk appends,
+    /// which are not forwarded (see <see cref="SnapshotAsync"/>), so one that
+    /// reaches a shard after the copy has read past the key it writes is not
+    /// reflected in the resized tree. After the alias swap, the tree serves the
+    /// new sizing.
     /// Cache invalidation is automatic: different physical trees produce different
     /// leaf grain IDs, which create fresh cache grain instances.
+    /// </para>
+    /// <para>
+    /// The copy is the same index-for-index shard copy <see cref="SnapshotAsync"/>
+    /// performs, with the same limit: it reproduces the tree only while the tree
+    /// still routes keys by the default mapping for its pinned shard count. After
+    /// an adaptive shard split, or a reshard of a tree that holds data, has
+    /// changed that mapping, a physical shard at or above the pinned count is
+    /// not carried into the resized tree, and a key that the current mapping
+    /// places on a different shard from the default mapping is not guaranteed
+    /// to be readable at its current value afterwards.
     /// </para>
     /// </summary>
     /// <param name="newMaxLeafKeys">The new maximum number of keys per leaf node. Must be greater than 1.</param>
@@ -712,15 +747,42 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Creates a snapshot of this tree into a new tree with the given
-    /// <paramref name="destinationTreeId"/>. All live key-value pairs are copied
-    /// shard-by-shard into the destination tree.
+    /// <paramref name="destinationTreeId"/>, copying the live (not deleted, not
+    /// expired) entries shard by shard with their versions and absolute
+    /// expiries.
     /// <para>
-    /// In <see cref="SnapshotMode.Offline"/> mode, the source tree is locked
-    /// (marked deleted) during the copy, guaranteeing a consistent snapshot.
+    /// In <see cref="SnapshotMode.Offline"/> mode, every source shard the copy
+    /// reads is locked (marked deleted, so its reads and writes fail) before
+    /// any is copied, and stays locked until it has been copied, so no write can
+    /// change a shard while it is copied.
     /// In <see cref="SnapshotMode.Online"/> mode, the source tree remains
-    /// available for reads and writes throughout; the result is strictly
-    /// consistent via shadow forwarding - every write accepted on the source
-    /// before the snapshot completes is reflected on the destination.
+    /// available for reads and writes throughout, and the writes it accepts
+    /// while the copy runs are shadow-forwarded to the destination: point,
+    /// batched and conditional writes, point and range deletes, merges, and the
+    /// commit or abort of an atomic write. For each key the destination keeps
+    /// whichever of the copied and the forwarded versions has the higher hybrid
+    /// logical clock timestamp, so it is a mirror maintained while the copy
+    /// runs rather than a point-in-time image. Typed CRDT delta applies
+    /// (<see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>,
+    /// <see cref="ApplyCrdtDeltaManyAsync(List{KeyValuePair{string, byte[]}}, LatticeMergeMode, CancellationToken)"/>
+    /// and the typed CRDT accessors built on them) and bulk appends
+    /// (<see cref="BulkAppendChunkAsync"/>) are not forwarded, so one that
+    /// reaches a source shard after the copy has read past the key it writes is
+    /// not reflected on the destination.
+    /// </para>
+    /// <para>
+    /// In both modes the copy, and online the shadow forward, address the
+    /// source's physical shards by index, from <c>0</c> to one less than its
+    /// pinned shard count, writing each into the destination shard with the same
+    /// index, and the destination starts with the default mapping of keys to
+    /// that many shards rather than a copy of the source's current mapping. The
+    /// result therefore reproduces the source only while the source still routes
+    /// keys by that default mapping, which an adaptive shard split, or a reshard
+    /// of a tree that holds data, replaces: a physical shard at or above the
+    /// pinned count, such as one a shard split added, is neither copied nor
+    /// shadow-forwarded, and a key that the source's current mapping places on
+    /// a different shard from the default mapping is not guaranteed to be
+    /// readable from the destination at its current value.
     /// </para>
     /// <para>
     /// The destination tree must not already exist: the snapshot creates it,
@@ -1116,16 +1178,32 @@ public interface ILattice : IGrainWithStringKey
     /// Operator-tooling rebuild: clears the materialised projection
     /// state (entries, projection hash, persisted checkpoint offset,
     /// pending-tx machinery) on every leaf in the shard's chain and
-    /// forces each leaf to deactivate so its next activation replays
-    /// the per-shard write-ahead log from offset <c>0</c> through the
-    /// existing activation-time materialiser. Topology-bearing slots
-    /// (tree id, shard index, sibling pointers, key range bounds,
-    /// parent pointer, split markers) are preserved verbatim so the
-    /// rebuild observes the same WAL-filter ownership context the
-    /// pre-rebuild leaves used. Used after a corrupt-projection
-    /// incident or a <see cref="LatticeOptions.MaxLeafReplayEntries"/>
-    /// blow-out to recover the shard state from the durable WAL
-    /// source of truth.
+    /// forces each leaf to deactivate, so its next activation
+    /// re-materialises the projection through the ordinary
+    /// activation-time path. That path first reloads the leaf's
+    /// captured snapshot where a usable one exists - the rebuild neither
+    /// clears nor bypasses it - and then replays the write-ahead log
+    /// after it: each partition the snapshot covers replays only the
+    /// entries after the snapshot's captured offset, and a partition no
+    /// snapshot covers replays from its oldest readable entry.
+    /// Topology-bearing slots (tree id, shard index, sibling pointers,
+    /// key range bounds, parent pointer, split markers) are preserved
+    /// verbatim so the rebuild observes the same WAL-filter ownership
+    /// context the pre-rebuild leaves used.
+    /// <para>
+    /// Only the part of the projection no snapshot covers is re-derived
+    /// from the write-ahead log. A row the snapshot captured wrongly -
+    /// after a corrupt-projection incident or a projection bug - survives
+    /// the rebuild unless a later log entry for that key replaces it, and
+    /// log entries trimmed before any snapshot captured them are not
+    /// recovered: the leaf rebuilds from what survives. For the same
+    /// reason, a rebuild is how a leaf refused with
+    /// <see cref="LeafProjectionStaleException"/> is brought back into
+    /// service once the loss of the trimmed range is accepted. A replay over
+    /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is not a reason to
+    /// rebuild: that budget is advisory, and an over-budget leaf replays
+    /// anyway.
+    /// </para>
     /// <para>
     /// The operator surface deliberately does not expose "edit the
     /// projection in place" or "skip a WAL entry" - those would defeat
@@ -1138,7 +1216,10 @@ public interface ILattice : IGrainWithStringKey
     /// Failures propagate. A transient storage failure on a single leaf
     /// aborts the fan-out with the unaffected leaves' rebuilds already
     /// applied; the operation is safe to retry because every leaf
-    /// rebuild is independently idempotent.
+    /// rebuild is independently idempotent. The leaf that failed keeps its
+    /// persisted state, but its live activation has already discarded its
+    /// in-memory projection and is not deactivated, so retry until the
+    /// call succeeds.
     /// </para>
     /// </summary>
     /// <param name="shardIndex">The physical shard index resolved from the per-tree <c>ShardMap</c>.</param>

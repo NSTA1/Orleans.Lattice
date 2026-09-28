@@ -14,14 +14,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <list type="number">
 /// <item><description><see cref="ResizePhase.Snapshot"/> - online snapshot of the logical
 /// tree to a new physical tree with the desired sizing. The source tree remains
-/// fully available for reads and writes; every accepted mutation is
-/// shadow-forwarded to the destination.</description></item>
+/// fully available for reads and writes; every accepted mutation except a typed
+/// CRDT delta apply or a bulk append is shadow-forwarded to the destination.
+/// The snapshot's index-for-index shard copy and its shard-map limit are
+/// described on <see cref="TreeSnapshotGrain"/>.</description></item>
 /// <item><description><see cref="ResizePhase.Swap"/> - set alias so the logical tree ID
 /// points to the new physical tree.</description></item>
-/// <item><description><see cref="ResizePhase.Reject"/> - transition every shard on the old
-/// physical tree to the Rejecting phase so any lingering client request to the old
-/// tree throws <see cref="StaleTreeRoutingException"/> and retries against the new
-/// alias target.</description></item>
+/// <item><description><see cref="ResizePhase.Reject"/> - transition shards <c>0</c> to
+/// <c>ShardCount - 1</c> of the old physical tree to the Rejecting phase so any
+/// lingering client request that reaches one of them throws
+/// <see cref="StaleTreeRoutingException"/> and retries against the new alias
+/// target. A shard at or above the pinned count, one a split added, never enters
+/// it.</description></item>
 /// <item><description><see cref="ResizePhase.Cleanup"/> - soft-delete the old physical
 /// tree to reclaim storage.</description></item>
 /// </list>
@@ -556,9 +560,10 @@ internal sealed class TreeResizeGrain(
     }
 
     /// <summary>
-    /// Transitions every shard on the old physical tree to
-    /// <c>ShadowForwardPhase.Rejecting</c>. Any lingering client request
-    /// routed to the old tree after this point throws
+    /// Transitions shards <c>0</c> to <c>ShardCount - 1</c> of the old physical
+    /// tree to <c>ShadowForwardPhase.Rejecting</c> (a shard at or above the
+    /// pinned count, one a split added, is not transitioned). Any lingering
+    /// client request that reaches one of those shards after this point throws
     /// <see cref="StaleTreeRoutingException"/>, which the stateless
     /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> routing tier handles by refreshing its
     /// alias and retrying against the new physical tree. Exposed as

@@ -130,7 +130,8 @@ internal sealed class StateToolGroup : ILatticeApiMcpToolGroup
                 "Get tree structure",
                 "Returns the bounded structural node graph of one tree (shard roots, internal nodes, leaves), depth- "
                 + "and node-budget limited, optionally scoped to one shard or descended into a named node. By default "
-                + "(no shardIndex) it enumerates every shard root - typically 64 - even for an empty tree, so scope to a "
+                + "(no shardIndex) it enumerates every shard the tree's routing map reaches - 64 by default, more "
+                + "after an adaptive split - even for an empty tree, so scope to a "
                 + "single shard or lower maxNodes to bound the cost. An "
                 + "unknown tree is reported as a structured status (status=TreeNotFound), not a transport fault. "
                 + "Read-only."),

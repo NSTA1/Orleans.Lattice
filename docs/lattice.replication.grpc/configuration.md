@@ -52,6 +52,8 @@ Each outbound transport resolves a peer into its own cached HTTP/2 channel on fi
 
 A send to a cluster id missing from `Peers` fails instead of silently dropping the batch.
 
+The keys also serve as the inbound allow-list for cross-cluster saga control. By default the receiving saga service accepts a `Prepare`, `Commit`, `Abort`, or `GetStatus` call only when the caller's origin cluster id - the origin header the sender stamps, or the request's coordinator cluster id when that header is absent - is a key in `Peers`, and refuses it with `PermissionDenied` otherwise. Register your own `ISagaPeerAuthorizer` to replace that default. See [Transport Security](../lattice.replication/transport-security.md).
+
 ### `AllowPlaintextEndpoints`
 
 Controls whether `http://` peer URIs are accepted. The default is `false`, which requires `https://` and fails closed when a peer endpoint is not protected by TLS.
@@ -87,7 +89,7 @@ siloBuilder.Services.AddLatticeReplicationGrpc(grpc =>
 });
 ```
 
-The callback runs after package defaults are applied. If a host needs to replace credentials or handlers, assign the desired values directly in the callback.
+The callback runs after package defaults are applied. If a host needs to replace credentials or handlers, assign the desired values directly in the callback. The package default for `Credentials` is a composite that carries the shared-secret call credentials (the call-time injection of the secret and origin headers), so assigning `Credentials` in the callback removes that injection: the peer then sees no shared secret and, with receiver authentication on, rejects the call as `Unauthenticated`. Client certificates for mTLS can instead be attached through a custom `HttpHandler`, which leaves `Credentials` in place.
 
 ### `LocalClusterId`
 
@@ -97,6 +99,6 @@ Use this only when an advanced host has a deliberate reason to expose a differen
 
 ## Relationship to replication options
 
-`LatticeReplicationGrpcOptions.Peers` answers "where do I dial this peer?" `LatticeReplicationOptions.ReplicationPeers` answers "which peer ids should this tree ship to?" Configure both for a normal sender. A receiver-only host can leave `Peers` empty and still call `MapLatticeReplicationGrpc`.
+`LatticeReplicationGrpcOptions.Peers` answers "where do I dial this peer?" `LatticeReplicationOptions.ReplicationPeers` answers "which peer ids should this tree ship to?" Configure both for a normal sender. A receiver-only host can leave `Peers` empty and still call `MapLatticeReplicationGrpc` to accept live push, peer probes, and snapshot pulls, but with the default saga peer gate it then refuses every inbound saga control call (see [`Peers`](#peers)).
 
 For wire-version, compression, adaptive batch sizing, flow-control hints, and security secret sources, use the replication package options and security extensions described in [Configuration](../lattice.replication/configuration.md) and [Transport Security](../lattice.replication/transport-security.md).

@@ -397,7 +397,7 @@ The invariant holds **per poll**, with no bounded-window caveat, across
 
 | Invariant | Mechanism under test |
 |---|---|
-| Continuous reader observes zero-or-all keys at every poll | WAL-metadata reader-isolation primitive driven through `BPlusLeafGrain`'s prepared-write commit path |
+| Continuous reader observes zero-or-all keys at every poll | The leaf's prepared-write commit path stages every saga write in a per-transaction pending bucket, and every key a read reaches resolves against one transaction-registry decision, the tree-wide visibility flip |
 | Saga drives 16 keys spanning multiple leaves through the full prepare → terminal pipeline | `AtomicWriteGrain` per-shard terminal broadcast, idempotent under concurrent retry |
 | Final post-round value is preserved across 50 iterations | LWW resolution under saga commit ordering |
 
@@ -476,7 +476,7 @@ gate the digest's value as a cross-silo divergence detector:
 
 | Invariant | Mechanism under test |
 |---|---|
-| Digest hash is byte-stable across repeated calls when no writes occur in between | Hash function fed by a deterministically-ordered key+value enumeration over the leaf projection |
+| Digest hash is byte-stable across repeated calls when no writes occur in between | The digest is an order-independent XOR fold of per-entry XxHash128 contributions, maintained at each mutation and aggregated up the internal nodes, so once the last coalesced publish has landed, repeated reads in a write-quiescent window hash the same persisted aggregate |
 | Sum of per-shard `EntryCount` equals `CountAsync` | Shard-level digest counts are accountable against the tree's own population view |
 | Digest computation is safe to call concurrently with foreground writer / scanner traffic | No exception is observed on any worker - digest rendering does not block or interfere with the read / write path |
 
@@ -505,10 +505,10 @@ shipped via the WAL replication transport to two peer sites must be
 observed all-or-nothing on every receiver, even when the inter-site
 delivery topology is partitioned and healed mid-workload. It is the
 cross-cluster sibling of [Test 5](#test-5---atomic-write-reader-isolation-atomicvisibilitychaostests)
-and exercises the same WAL-metadata reader-isolation primitive
-through the receiver-side prepared/terminal apply seam
-(`IReplicationApplyGrain.ApplyPreparedSetAsync` /
-`ApplyPreparedDeleteAsync` / `ApplyTxTerminalAsync`).
+and exercises the same reader-isolation mechanism - prepared writes
+staged in per-transaction pending buckets and made visible by one
+transaction-registry decision - through the receiver-side
+prepared/terminal apply seam.
 
 ### What it proves
 

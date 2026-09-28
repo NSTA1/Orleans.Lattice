@@ -25,7 +25,11 @@ namespace Orleans.Lattice.Replication.Grains;
 ///   phase.</description></item>
 ///   <item><description><b>Fence expiry.</b> If the decision never arrives
 ///   before the fence deadline, auto-compensate (roll back) - the
-///   coordinator-loss safety net.</description></item>
+///   coordinator-loss safety net. The compensation request is rebuilt from the
+///   persisted state, which records no set id, so the net is complete for a
+///   single-tree restore only: a backup-set restore's compensation reaches the
+///   restore participant as a single-tree abort that lifts the fence but leaves
+///   the member shadows in place.</description></item>
 /// </list>
 /// The fence is durable because it is anchored on an Orleans reminder (grain
 /// timers do not survive deactivation); retention cleanup reuses the
@@ -110,7 +114,10 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
 
         // Coordinator-loss safety net: the decision never arrived before the
         // fence expired. Auto-compensate (roll back) so the prepared action
-        // does not leak, and record the abort.
+        // does not leak, and record the abort. The request is rebuilt from the
+        // persisted state, which carries no set id, so for a backup-set restore
+        // this reaches the restore participant as a single-tree abort: the fence
+        // is lifted but the member shadows are not garbage collected.
         Logger.LogWarning(
             "Cross-cluster saga participant {SagaId}: cutover fence expired without a coordinator " +
             "decision; auto-compensating.",
@@ -361,7 +368,10 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         }
     }
 
-    /// <summary>Rebuilds the control request from persisted identity fields.</summary>
+    /// <summary>
+    /// Rebuilds the control request from persisted identity fields. The set id is
+    /// not persisted, so a rebuilt request never carries one.
+    /// </summary>
     private SagaControlRequest RequestFromState() => new()
     {
         SagaId = SagaId,

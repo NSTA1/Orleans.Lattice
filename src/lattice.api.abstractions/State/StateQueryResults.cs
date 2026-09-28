@@ -107,10 +107,14 @@ public sealed record TreeStructureResult
     public IReadOnlyList<NodeStateSummary> Roots { get; init; } = Array.Empty<NodeStateSummary>();
 
     /// <summary>
-    /// Whether the node-count budget was exhausted, so some subtrees were
-    /// truncated and can be re-read with a sub-path descent. The per-node
-    /// <see cref="NodeStateSummary.HasMoreChildren"/> flags identify exactly
-    /// which nodes were truncated.
+    /// Whether any part of the graph was cut short - by the node-count budget or
+    /// by the depth limit. A truncated subtree's parent carries
+    /// <see cref="NodeStateSummary.HasMoreChildren"/> and can be re-read with a
+    /// sub-path descent, but a whole-tree read that runs out of budget also
+    /// omits the remaining shard roots entirely, and an omitted root carries no
+    /// flag of its own. A <see langword="false"/> value therefore means every
+    /// shard root is present; under <see langword="true"/>, read a missing
+    /// shard with a single-shard request.
     /// </summary>
     public bool Truncated { get; init; }
 

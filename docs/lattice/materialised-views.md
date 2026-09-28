@@ -131,8 +131,11 @@ the caller. Prefer `CreateAsync` for runtime creation.
 A view name is not just a label. It is the view maintainer's grain key, and it is
 interpolated into the view tree id, which is itself a grain key and is carried
 into the shard-root grain's composite key - a *persistent* grain. Keyed storage
-backends reject some characters there (Azure Table grain storage puts a grain key
-into the Partition/Row key columns and the request URL), so a name is validated at
+backends cannot hold some characters there: Azure Table grain storage puts a grain
+key into the Partition/Row key columns and the request URL, where the Table
+service rejects control characters (an HTTP 400 on the state read or write) and
+Orleans rewrites `/`, `\`, `#` and `?` to `_`, so two names differing only in
+those characters would share one stored row. A name is therefore validated at
 creation and must not contain:
 
 - the control characters `0x00-0x1F` and `0x7F-0x9F`;

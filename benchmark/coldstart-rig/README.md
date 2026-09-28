@@ -12,7 +12,7 @@ measurement taken here. Sub-issue: [#1838](https://github.com/NSTA1/Orleans.Latt
 ## Isolation is structural, not careful
 
 Decision **D11**: the rig must be *incapable* of touching a live deployment, not
-merely careful about it. Four identities are kept separate, and a fail-closed
+merely careful about it. The identities below are kept separate, and a fail-closed
 guard refuses to start when any of them is violated:
 
 | | Live deployment | This rig |
@@ -519,6 +519,12 @@ and per-shard WAL sizes, WAL data/commit/trim record counts (by walking the
 file-WAL framing described in `FileWalRecordFormat`), per-tree leaf counts,
 leaf-snapshot rows and bytes per key prefix, per-partition projection
 checkpoints, and grain-state size by grain type.
+
+Its WAL walk reads the host staging copy that `prepare-master.ps1` extracted for
+the configured backup, `benchmark/.run/coldstart-rig/state/<tarball file name without extension>`
+(the grain-state half prefers the master volume; see `-SqliteSource` below).
+`-BackupTarball` selects the staging copy of a different tarball, and
+`-StagingPath` names any staging directory outright.
 
 Output: `benchmark/.run/coldstart-rig/census/census-<stamp>.json` (or the path
 `-OutputPath` names) plus a `census-latest.json` copy beside it. Every figure

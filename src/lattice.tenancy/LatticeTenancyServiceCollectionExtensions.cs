@@ -130,9 +130,10 @@ public static class LatticeTenancyServiceCollectionExtensions
 
         // The tenant-policy decision engine: the in-memory decision surface that
         // resolves a subject's allowed tenants, validates an active tenant, and
-        // resolves cross-tenant grants against the compiled snapshot. Registering
-        // it is inert: nothing on the data path consults it until a later feature
-        // wires enforcement in.
+        // resolves cross-tenant grants against the compiled snapshot. It is live on
+        // the data path: the tenant context resolver and the tenant gate enforcer
+        // registered below consult it to validate the active tenant and to admit a
+        // cross-tenant crossing, and the tenant observability view reads it too.
         builder.Services.TryAddSingleton<LatticeTenantPolicyEngine>();
         builder.Services.TryAddSingleton<ITenantPolicyEngine>(
             sp => sp.GetRequiredService<LatticeTenantPolicyEngine>());
@@ -288,8 +289,9 @@ public static class LatticeTenancyServiceCollectionExtensions
         // this cluster's grow-only counter component on the caller's cadence; and the
         // public billing reader folds every cluster's counters into a converged
         // aggregate a billing consumer can poll. Overage never sits on the warm
-        // admission path. Registering the stack is inert until a later feature drives
-        // the metering cadence in.
+        // admission path. The metering cadence is driven by the usage-metering
+        // hosted service registered above, which accrues overage on every metering
+        // tick, whether or not that tick's usage sample is published.
         builder.Services.TryAddSingleton<ITenantOverageStore, TenantOverageStore>();
         builder.Services.TryAddSingleton<TenantOverageMeter>();
         builder.Services.TryAddSingleton<ITenantOverageBilling, LatticeTenantOverageBilling>();

@@ -42,12 +42,17 @@ public interface ITenantRegistry
     /// Merges <paramref name="record"/> into the stored record for its tenant
     /// (creating it when absent) and persists the merged result. Because the
     /// write is a last-writer-wins join, replaying an older write never regresses
-    /// a field and re-applying the same write is idempotent.
+    /// a field and re-applying the same write is idempotent. The merge is written
+    /// back conditionally on the version it was read at and, if a competing writer
+    /// advanced the record in between, re-read and re-merged; that is retried
+    /// immediately, without backoff, up to a bounded number of attempts.
     /// </summary>
     /// <param name="record">The record to merge in. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The stored record after the merge.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="record"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="record"/> carries the uninitialised <c>default(TenantId)</c>.</exception>
+    /// <exception cref="TenantRegistryConcurrencyException">Competing writers to the same tenant kept advancing its record, so every attempt lost the conditional write and the bounded attempt budget was exhausted without the merge landing.</exception>
     Task<TenantRecord> PutAsync(TenantRecord record, CancellationToken cancellationToken = default);
 
     /// <summary>

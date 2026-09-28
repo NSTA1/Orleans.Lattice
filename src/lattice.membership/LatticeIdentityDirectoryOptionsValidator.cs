@@ -3,9 +3,9 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.Membership;
 
 /// <summary>
-/// Validates <see cref="LatticeIdentityDirectoryOptions"/> at silo start: rejects
-/// a non-positive default or maximum page size, and a default page size that
-/// exceeds the maximum.
+/// Validates <see cref="LatticeIdentityDirectoryOptions"/> when the named options
+/// value is resolved - on first read, not at silo start: rejects a non-positive
+/// default or maximum page size, and a default page size that exceeds the maximum.
 /// </summary>
 internal sealed class LatticeIdentityDirectoryOptionsValidator : IValidateOptions<LatticeIdentityDirectoryOptions>
 {

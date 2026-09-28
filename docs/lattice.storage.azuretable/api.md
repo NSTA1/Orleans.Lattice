@@ -53,6 +53,8 @@ The helper also registers a default `ZstdLatticeCompressor` fallback at `Default
 | Highest offset | Returns the shard's stored tail, raised by the contiguous run of already-durable batches this instance's completion worker has accepted, or the empty-log sentinel defined by the core contract. |
 | Lowest offset | Returns the lowest retained offset for a shard after trim. |
 | Retained bytes | Reports retained payload size for capacity and trimming decisions. |
+| Physical bytes | Not overridden: returns the contract's `-1` "unsupported" sentinel, so callers fall back to the retained total. Trim deletes rows outright, so the provider holds no dead bytes. |
+| Compaction evaluation | Not overridden: the contract's default is a no-op, because trim already deletes the storage it releases and there is nothing to reclaim by rewriting. |
 | Trim | Removes retained entries at or below the supplied offset without moving the committed tail backward. |
 | Reconcile | Repairs interrupted append state before normal operation relies on the stored tail. |
 | Flush | Drains the commit completions outstanding at the moment of the call, across every shard the instance has appended to, so already-appended batches become readable. Rethrows a failed completion instead of swallowing it, and leaves it observable to the next append. A no-op when commit completions are synchronous. |

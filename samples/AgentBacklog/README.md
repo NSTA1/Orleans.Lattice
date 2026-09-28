@@ -137,7 +137,7 @@ maximum.
 
 ```text
 repocontext_renew_claim(key: "repo/lattice/mem/backlog/issue-2101",
-                        fencingToken: <token from step 1>)
+                        fencingToken: <token from step 1>, leaseSeconds: 60)
 ```
 
 A reason of `superseded` is the authoritative "you have lost this item" signal. A

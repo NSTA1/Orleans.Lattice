@@ -49,7 +49,7 @@ All are immutable, serializable value types.
 
 | Member | Type | Meaning |
 |---|---|---|
-| `OverThreshold` | `bool` | Aggregate retained WAL bytes crossed the configured threshold. |
+| `OverThreshold` | `bool` | The retained WAL bytes of the trees that declare a `WalMaxRetainedBytes` ceiling reached `RetainedBytesAdvisoryRatio` of their summed ceilings. A tree with no ceiling contributes neither bytes nor budget, so the flag stays `false` when no tree declares one. |
 | `WalRetainedBytes` | `long` | Total retained WAL bytes across every catalogue key. |
 | `Accounts` | `IReadOnlyList<WalAccountPressure>` | Per-catalogue-key breakdown; never `null`. |
 | `Recommendation` | `WalRebalanceRecommendation?` | Optional rebalance suggestion, or `null`. |
@@ -117,6 +117,19 @@ IHealthChecksBuilder AddLatticeScalingHealthCheck(this IHealthChecksBuilder buil
 Registers the health check that projects the signal onto a single `HealthStatus`.
 `name` defaults to `LatticeScalingHealthCheckOptions.DefaultName`. See
 [configuration](configuration.md#latticescalinghealthcheckoptions).
+
+## Options types
+
+- `LatticeScalingSignalOptions` - the signal's knobs, bound by the `configure`
+  callback of `AddLatticeScalingSignal`, with a public `Default*` constant or
+  static field for every default.
+- `LatticeScalingHealthCheckOptions` - the health check's knobs, bound as named
+  options under the check's registered name, plus the `DefaultName` and
+  `DefaultComputePressure` defaults and the nested
+  `LatticeScalingHealthCheckOptions.DoubleTier(double Degraded, double Unhealthy)`
+  record struct that carries the tiered compute bound.
+
+Every member, its default and guidance are in [configuration](configuration.md).
 
 ## Serialization aliases
 

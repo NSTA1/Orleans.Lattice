@@ -29,9 +29,13 @@ internal sealed partial class LatticeAppsControl
     /// <remarks>
     /// The ceiling is replaced through a same-version registry upgrade, which keeps the
     /// installed identity, provenance, role bindings and lifecycle state. An enabled app
-    /// is then reconciled so a reduced ceiling cannot leave stale authority; when that
-    /// re-application fails the pipeline withdraws the app's grants (fail closed) and the
-    /// failure is thrown, noting that the consent itself was recorded.
+    /// is then reconciled so a reduced ceiling cannot leave stale authority. When that
+    /// re-application fails because the installed version can no longer be activated -
+    /// for example its manifest is unavailable or invalid, or its roles exceed the new
+    /// ceiling - the pipeline withdraws the app's grants (fail closed); a transient
+    /// tree-provisioning or rule-write failure, or an unexpected fault, keeps the existing
+    /// grants so a retry is not an outage. Either way the failure is thrown, noting that
+    /// the consent itself was recorded.
     /// </remarks>
     public async Task<AppConsentReport> UpdateConsentAsync(AppConsentUpdate request, CancellationToken cancellationToken = default)
     {

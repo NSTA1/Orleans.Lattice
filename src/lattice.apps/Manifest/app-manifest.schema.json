@@ -43,7 +43,7 @@
         "name": { "$ref": "#/$defs/name" },
         "adoptedTreeId": { "type": ["string", "null"], "minLength": 1, "maxLength": 1024, "pattern": "^(?!a/|_lattice_|sys-|t/|\\*(?![\\s\\S]))[^\\s\\x00-\\x1F\\x7F-\\x9F](?:[^\\x00-\\x1F\\x7F-\\x9F]*[^\\s\\x00-\\x1F\\x7F-\\x9F])?(?![\\s\\S])", "description": "Existing pre-app physical tree, never the cluster-wide sentinel, without surrounding white space or control characters. Requires operator-approved exception scopes in the install ceiling; never structurally granted. Adopted ids must be unique within the manifest." },
         "shardCount": { "type": ["integer", "null"], "minimum": 1, "maximum": 4096 },
-        "virtualShardCount": { "type": ["integer", "null"], "minimum": 1, "description": "Fixed at creation. Cannot change during manifest upgrade." },
+        "virtualShardCount": { "type": ["integer", "null"], "minimum": 1, "description": "Pinned when the tree is first registered and never re-pinned; cannot change during manifest upgrade. A later resize, or a reshard of the still-empty tree, leaves it routing over the default virtual slot count (4096)." },
         "maxLeafKeys": { "type": ["integer", "null"], "minimum": 2 },
         "maxInternalChildren": { "type": ["integer", "null"], "minimum": 3 },
         "walPartitions": { "type": ["integer", "null"], "minimum": 1 },

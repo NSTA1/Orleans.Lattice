@@ -101,7 +101,8 @@ when none is open, makes the next item and opens its pull request to `main`.
 - **What outlives a worktree.** Each run works in a fresh worktree, so what must
   survive one lives in a per-user state directory outside every checkout:
   `%LOCALAPPDATA%\orleans-lattice\videos` on Windows,
-  `~/.local/state/orleans-lattice/videos` elsewhere, or wherever `VIDEOS_HOME`
+  `$XDG_STATE_HOME/orleans-lattice/videos` elsewhere (`~/.local/state` when
+  `XDG_STATE_HOME` is unset), or wherever `VIDEOS_HOME`
   names. It holds the series voice's Python environment (`npm run voice:setup`),
   a copy of every narration clip and take, and the lease. A fresh checkout
   copies clips and takes back from it, so an unchanged cue is never spoken
@@ -166,10 +167,10 @@ when none is open, makes the next item and opens its pull request to `main`.
 | `npm run series -- check` | fail if `series.json` and `series.md` disagree, or an episode is published ahead of one before it in the production order; the required check runs it too |
 | `npm run series -- status` | every item of the production order: done, next, held or to make |
 | `npm run series -- next [--json]` | the next item to make, or the hold that stops the queue; `--json` adds the ending the plan gives it and its companion page's Where next |
-| `npm run series -- ending <code>` | the ending the plan gives an episode, as narration to start its closing scene from |
+| `npm run series -- ending <code>` | the ending the plan gives an episode, named by its item code or its slug, as narration to start its closing scene from |
 | `npm run series -- endings` | fail if a published episode's closing scene does not name what the plan says it leads to |
 | `npm run series -- lease take --owner <run>` | take the production lease (and `renew`, `release` or `status` it), so that one run makes the series at a time |
-| `npm run packet -- <slug>` | the episode's review packet, the body of its pull request; `--review-copy` makes a copy of the video small enough to attach, and `--upload` attaches it |
+| `npm run packet -- <slug>` | the episode's review packet, the body of its pull request; `--review-copy` makes a copy of the video small enough to attach, and `--upload` attaches it, with `GH_TOKEN` set to the token of the account that raises the pull request |
 | `npm run voice:setup` | make the series voice's Python environment in the state directory |
 | `npm run ascii` | fail on any non-ASCII character in this folder |
 | `npm test` | unit tests for the tools and the browser runtime |

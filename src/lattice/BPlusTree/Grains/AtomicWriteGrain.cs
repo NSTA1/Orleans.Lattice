@@ -1679,8 +1679,9 @@ internal sealed class AtomicWriteGrain(
         await FlushPendingTerminalsAsync(initialRecords);
 
         // Orphan-window closure: re-fetch participants and drain any
-        // late arrivals. The initial GetParticipantsAsync fetch above
-        // is a single snapshot, but a concurrent
+        // late arrivals. The initial fan-out above targets TouchedShards,
+        // a routing-derived snapshot (drift-corrected and transitively
+        // expanded, with no registry participant fetch), but a concurrent
         // TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync
         // can register a destination shard as a participant via
         // RecordAffectedLeafIfPreparedAsync AFTER the snapshot and
@@ -1703,11 +1704,19 @@ internal sealed class AtomicWriteGrain(
         // to the late shards using the same per-shard subset / full-
         // backstop logic as the initial pass; (5) persist the
         // updated TouchedShards so crash-resume picks up the same
-        // closure. Bounded by MaxLateRefetchRounds to guarantee
-        // liveness under continuous cascading splits - the leaf-side
-        // _recentlyTerminal dedup makes re-targeting an already-
-        // terminalled shard a safe no-op, so the cap is a wall-
-        // clock guard, not a correctness guard.
+        // closure. Bounded by MaxLateRefetchRounds - a round count, not
+        // a wall-clock budget - to guarantee liveness under continuous
+        // cascading splits. The leaf-side _recentlyTerminal dedup makes
+        // re-targeting an already-terminalled shard a safe no-op, so an
+        // extra round is harmless, but the loop is not a correctness
+        // guarantee: a participant that registers after its last fetch -
+        // whether it stopped on a round that found nothing new or on the
+        // cap - receives no terminal from this saga. Its
+        // prepared bucket is left to best-effort re-checks against the
+        // registry's recorded decision - the split sweep's post-sweep
+        // cleanup, while the decision is within TxDecisionRetention of
+        // ForgetAsync, and the leaf's activation-time self-
+        // terminalisation sweep, until the decision's row is pruned.
         if (registry is not null)
         {
             const int MaxLateRefetchRounds = 5;

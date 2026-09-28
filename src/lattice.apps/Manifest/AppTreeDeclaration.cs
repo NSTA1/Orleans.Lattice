@@ -10,7 +10,13 @@ public sealed record AppTreeDeclaration
     /// <summary>Initial physical shard count, when pinned.</summary>
     [Id(1)] public int? ShardCount { get; init; }
 
-    /// <summary>Virtual slot count fixed at creation; a manifest upgrade must not change this pin.</summary>
+    /// <summary>
+    /// Virtual slot count, pinned when the app pipeline first registers the tree; the
+    /// pipeline never re-pins an existing tree, and a manifest upgrade must not change
+    /// this value. A later resize of the tree, or a reshard while it is still empty,
+    /// replaces its routing map, after which it routes over the default virtual slot
+    /// count (4096) rather than this one.
+    /// </summary>
     [Id(2)] public int? VirtualShardCount { get; init; }
 
     /// <summary>Maximum leaf keys, when pinned; at least two.</summary>
@@ -25,7 +31,11 @@ public sealed record AppTreeDeclaration
     /// <summary>Positive soft-delete retention, or null to inherit the host duration.</summary>
     [Id(6)] public TimeSpan? SoftDeleteDuration { get; init; }
 
-    /// <summary>Whether app-scoped recovery may rederive this tree instead of restoring its bytes.</summary>
+    /// <summary>
+    /// Whether the app declares this tree rebuildable from other data rather than needing its
+    /// bytes restored. Descriptive metadata: it is echoed in the app's description, and no backup
+    /// or restore path in this version acts on it.
+    /// </summary>
     [Id(7)] public bool Rebuildable { get; init; }
 
     /// <summary>

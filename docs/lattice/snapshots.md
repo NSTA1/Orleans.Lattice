@@ -1,7 +1,8 @@
 # Snapshots
 
-Orleans.Lattice supports creating point-in-time snapshots of a tree into a new
-destination tree. Snapshots are useful for backups, creating read-only copies for
+Orleans.Lattice supports copying a tree into a new destination tree: an offline
+snapshot is a point-in-time copy, and an online snapshot keeps mirroring the
+source's writes until it completes. Snapshots are useful for backups, creating read-only copies for
 analytics, or forking a dataset for experimentation.
 
 ## Snapshot Modes
@@ -11,14 +12,15 @@ For the consistency contract of each mode, see
 
 ### Offline (`SnapshotMode.Offline`)
 
-The source tree is **locked** (all shards marked as deleted) at the start of the
+The source tree is **locked** (its shards marked as deleted) at the start of the
 snapshot. Each shard is unlocked individually after its entries have been copied,
 so earlier shards become readable again while later shards are still being
 processed.
 
 Each shard follows a three-phase pattern:
 
-1. **Lock** (once) - mark all source shards as deleted. The intent is persisted
+1. **Lock** (once) - mark every source shard in the copied range (see
+   [Requirements](#requirements)) as deleted. The intent is persisted
    before marking so that a crash mid-lock can be recovered.
 2. **Copy** - drain live entries from the source shard's leaf chain, sort them,
    and bulk-load into the corresponding destination shard.
@@ -30,10 +32,13 @@ later shards are copied.
 ### Online (`SnapshotMode.Online`)
 
 The source tree **remains available** for reads and writes during the snapshot.
-Each shard's live entries are drained under the shadow-forward primitive while
-live mutations are mirrored to the destination with their original HLCs; LWW
-commutativity guarantees the destination converges to a consistent view of the
-source at the drain's completion instant.
+Each shard's live entries are drained, keeping their source HLCs, while the
+shadow-forward primitive mirrors the source's live mutations to the destination
+shard with the same index; a last-writer-wins merge on the destination
+reconciles a mirrored write with the drain's copy of the same key. Typed CRDT
+deltas (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync` and the typed accessors
+built on them) are not mirrored, so a delta applied to a source shard after that
+shard has been drained does not reach the destination.
 
 When the snapshot completes, it releases the shadow-forward on every source
 shard before it reports itself complete, so writes to the source after that
@@ -41,7 +46,9 @@ point no longer reach the destination, the destination can be written to or
 deleted independently, and the source can be snapshotted online (or resized)
 again. The shadow-forward that ResizeAsync runs its internal online snapshot
 under is not released here - the resize coordinator carries it on through its
-swap and reject phases and clears it itself.
+swap, then moves the source shards into their rejecting phase; it clears the
+shadow-forward itself only when the resize is undone, and on a completed resize
+the old physical tree is soft-deleted and later purged instead.
 
 ## Usage
 
@@ -64,6 +71,16 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 - **Same shard count (automatic)**: the snapshot registers the destination
   tree itself, pinned to the source tree's shard count, so the two always
   match - there is no destination shard count to configure or mismatch.
+  The copy covers source shard indices `0` to `ShardCount - 1`, each into the
+  destination shard with the same index, and the destination routes keys by
+  the default shard map. A shard that an adaptive split allocated above that
+  range is not copied (a split gives its target shard an index above every
+  index allocated so far and leaves the pinned shard count unchanged), so a
+  snapshot of a tree whose shard map routes keys to such a shard does not
+  include the keys that shard holds. The split also leaves the moved keys in
+  place on the shard that gave them up - hidden there from reads - and the copy
+  includes them, so in the destination a key that already existed when a split
+  moved it reads the value it held at that moment rather than its current one.
 - **Destination must not exist**: the destination tree ID must not already be
   registered in the tree registry (`InvalidOperationException` otherwise).
   Choose a new tree ID for each snapshot.
@@ -111,7 +128,7 @@ later be changed only with `ResizeAsync`.
 ## Tombstoned Keys
 
 Snapshots only copy **live** entries. Keys that have been deleted (tombstoned)
-in the source tree are excluded from the destination. Each copied entry keeps
+or have expired in the source tree are excluded from the destination. Each copied entry keeps
 its source HLC and any remaining time-to-live: an entry with a TTL reappears on
 the destination with the same absolute expiry, not a fresh one. The destination tree gets
 its own tombstone compaction reminder registered upon snapshot completion.

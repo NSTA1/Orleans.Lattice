@@ -30,8 +30,12 @@ all-or-nothing guarantees of the guarded atomic batch see
    a JSON document and evaluates the IR against it, independent of `T`. Keys
    whose value does not match are skipped; live values that match flow back.
 
-Because evaluation is value-shape driven (JSON), the predicate sees the same
-field names your type serializes to. Missing or tombstoned keys are treated as
+Because evaluation is value-shape driven (JSON), each member the lambda names is
+looked up by its C# member name in the value's serialized document - an exact
+match first, then a case-insensitive one, so a camelCase naming policy still
+resolves - and a member the serializer renames (for example with
+`[JsonPropertyName]`) or omits resolves as missing. A value that is not
+well-formed JSON never matches. Missing or tombstoned keys are treated as
 non-matches.
 
 Every predicate overload on this page has a sibling that also takes an explicit

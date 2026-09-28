@@ -102,8 +102,8 @@ internal sealed class ShardRootState
     /// <summary>
     /// Non-null when this shard is participating in an online tree-level
     /// operation (e.g. online resize) as the <em>source</em>. Drives
-    /// parallel shadow-forwarding of every accepted mutation to the
-    /// corresponding shard on
+    /// parallel shadow-forwarding of each last-writer-wins mutation (not a
+    /// typed CRDT delta or a bulk append) to the shard with the same index on
     /// <c>ShadowForwardState.DestinationPhysicalTreeId</c>, and post-swap
     /// rejection of new operations with <see cref="StaleTreeRoutingException"/>.
     /// Cleared by the coordinator after the destination tree has been

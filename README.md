@@ -203,7 +203,7 @@ flowchart TD
 
     Storage --> StoragePkgs["Storage.AzureTable<br/>Storage.File<br/>Backup.AzureBlob"]
     Identity --> IdentityPkgs["Membership<br/>Membership.Oidc<br/>Membership.Entra<br/>Auth"]
-    Governance --> GovernancePkgs["Schema<br/>Tenancy"]
+    Governance --> GovernancePkgs["Schema<br/>Tenancy<br/>Apps"]
     Replication --> ReplicationPkgs["Replication<br/>Replication.Grpc"]
     Administration --> AdminPkgs["Backup<br/>Api.TreeAdmin<br/>Api.TenantAdmin"]
     Observability --> ObsPkgs["Dashboards<br/>Scaling<br/>Api.Telemetry"]

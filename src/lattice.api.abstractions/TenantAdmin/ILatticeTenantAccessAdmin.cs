@@ -78,17 +78,17 @@ public interface ILatticeTenantAccessAdmin
     /// </summary>
     /// <remarks>
     /// When the cluster runs a real upstream identity directory and
-    /// <c>ValidationRequired</c> is set, the subject id is resolved against it
-    /// before the grant lands, so a typo'd, retired, or not-yet-provisioned id can
-    /// never be recorded as a live tenant-admin grant - the same contract
-    /// <see cref="ILatticeTenantAdmin.CreateTenantAsync"/> applies to an explicit
-    /// seed set.
+    /// <c>ValidationRequired</c> is set, the subject id must resolve to a principal
+    /// in it before the grant lands, so a typo'd, retired, or not-yet-provisioned id
+    /// can never be recorded as a live tenant-admin grant. Only resolution is
+    /// checked: the kind of principal the id resolves to is not.
     /// </remarks>
     /// <param name="tenantId">The tenant id to grant authority over. Must be a valid, non-empty tenant id.</param>
     /// <param name="subjectId">The subject id to grant tenant-admin authority to. Must not be <c>null</c>, empty, or whitespace.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The change result, carrying the resulting admin-subject set.</returns>
     /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c>, empty, or not a valid tenant id, or <paramref name="subjectId"/> is <c>null</c>, empty, or whitespace.</exception>
+    /// <exception cref="Orleans.Lattice.Membership.LatticeDirectoryValidationException">A real identity directory is active, validation is required, and <paramref name="subjectId"/> does not resolve to any principal in it.</exception>
     /// <exception cref="TenantNotFoundException">The caller is a platform operator and no tenant with that id is registered.</exception>
     /// <exception cref="ReservedTenantOperationException"><paramref name="tenantId"/> is the reserved default tenant.</exception>
     /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is neither a platform operator nor an admin subject of that tenant.</exception>

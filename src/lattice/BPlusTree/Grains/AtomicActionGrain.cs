@@ -620,9 +620,10 @@ internal sealed class AtomicActionGrain(
         if (outcome.Status == AtomicActionStatus.CompensationFailed)
         {
             throw new CompensationFailedException(
-                $"Atomic-action saga '{OperationId}' faulted on step {outcome.FailedStepIndex} and a compensating "
-                + $"effect itself faulted; the saga parked in CompensationFailed and requires operator intervention. "
-                + $"Originating failure: {state.State.FailureMessage}",
+                $"Atomic-action saga '{OperationId}' faulted on a forward step, and the compensating effect of "
+                + $"step {outcome.FailedStepIndex} itself faulted past its retry budget; the saga parked in "
+                + $"CompensationFailed and requires operator intervention. "
+                + $"Compensation failure: {state.State.FailureMessage}",
                 outcome.FailedStepIndex);
         }
 

@@ -62,7 +62,13 @@ tree, a key prefix, or a single key). When several rules match, the engine
 resolves them deterministically: the most-specific scope wins; within a scope
 tier a user rule outranks a group rule (on by default, configurable), and
 otherwise deny overrides allow; with no matching rule the configured default
-effect applies. The recommended and default
+effect applies. Cluster-wide capabilities that do not attach to a tree - such as
+telemetry and app installation - are granted by a whole-tree rule on the
+cluster-wide `*` scope. An opt-in all-trees tier
+(`LatticeAuthOptions.AllTreesGrantsEnabled`, off by default) also lets such a
+cluster-wide rule govern ordinary trees: an all-trees deny then wins outright, and
+an all-trees allow applies only where the tree's own rules decide nothing. The
+recommended and default
 posture is **default-deny**. A small set of **bootstrap administrators** forms
 the root-of-trust that seeds the first rules and performs break-glass operations.
 
@@ -114,9 +120,9 @@ Three of them are this layer's own surfaces:
   state-query surface, which honours the same read visibility.
 
 The other facades - tree administration, backup, replication, schema, tenant
-administration, and telemetry - authorize their operations through the same
-gate, and the Model Context Protocol endpoint projects those facades as agent
-tools. The full set is listed in [PACKAGES.md](../../PACKAGES.md).
+administration, app installation, and telemetry - authorize their operations
+through the same gate, and the Model Context Protocol endpoint projects those
+facades as agent tools. The full set is listed in [PACKAGES.md](../../PACKAGES.md).
 
 The [Explorer](../lattice.explorer/connecting-to-an-auth-enabled-state-api.md)
 runs an extensible login challenge against an auth-enabled State API endpoint,

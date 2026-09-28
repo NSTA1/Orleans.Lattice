@@ -29,8 +29,9 @@ returns a verdict, with no `Task`/`await`, no wall-clock or HLC read, no Orleans
 types, and no storage. The production grain hot path calls the core to make the
 real decision, and a Coyote model calls the *same* core to check it under every
 explored ordering, so a property proven of the core is a property of production. The
-cores are `internal` and exposed to the test assembly through
-`InternalsVisibleTo`.
+extracted cores are `internal` and exposed to the test assembly through
+`InternalsVisibleTo`; the in-memory cursor registry the cursor models drive
+directly is the public `InMemoryWalCursorRegistry`.
 
 ### The extracted WAL cores
 

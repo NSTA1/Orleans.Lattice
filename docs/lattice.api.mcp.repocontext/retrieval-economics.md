@@ -98,7 +98,7 @@ first that the ceiling bounds:
   factor, because every tool result is serialized twice - once as structured
   content and once as text. The factor is a conservative 3.5 rather than 2,
   because the text copy is escaped JSON, which tokenizes worse than the structured
-  copy. This **never exceeds** `budgetTokens`.
+  copy. This **never exceeds** `budgetTokens`; an empty bundle reports `0`.
 - `totalTokens` - the narrower exact BPE sum of the packed source text alone.
   Useful as "how much source did I get", but it is not what the budget bounds:
   charging content alone once let a bundle reporting a few thousand tokens land
@@ -172,7 +172,9 @@ read-replacement credit. Because crediting is this conservative, `netSavedTokens
 correct, not a defect. It turns positive as a task delivers real bodies (`slices`) and
 reuses a `session` so repeated context is suppressed and never re-charged, and it is
 deliberately not clamped at zero so the surface can honestly report when it is not yet
-paying for itself. The figures are recorded per answered context call on a
+paying for itself. The charge side has one exception: an empty bundle - one that failed
+closed, or whose search matched nothing - reports `responseTokens` 0 although its
+scaffolding still ships, so it is counted as a call that spent nothing. The figures are recorded per answered context call on a
 bounded in-memory window and are also emitted as
 `System.Diagnostics.Metrics` counters carrying a low-cardinality `command`
 tag, so a host already scraping OpenTelemetry sees them flow through the existing

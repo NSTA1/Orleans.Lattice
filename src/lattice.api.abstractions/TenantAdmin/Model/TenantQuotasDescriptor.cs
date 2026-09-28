@@ -22,7 +22,11 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 [Immutable]
 public readonly record struct TenantQuotasDescriptor
 {
-    /// <summary>The maximum total stored value bytes, or <see langword="null"/> for unbounded.</summary>
+    /// <summary>
+    /// The maximum total storage footprint in bytes - the write-ahead log, snapshot,
+    /// and persisted leaf-state bytes of the tenant's trees - or
+    /// <see langword="null"/> for unbounded.
+    /// </summary>
     [Id(0)] public long? MaxBytes { get; init; }
 
     /// <summary>The maximum total live key count, or <see langword="null"/> for unbounded.</summary>

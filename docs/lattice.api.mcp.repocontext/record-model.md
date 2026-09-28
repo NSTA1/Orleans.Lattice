@@ -72,7 +72,7 @@ Every record is addressed by a hierarchical key rooted at its repository id:
 | Session | `repo/{repoId}/session/{sessionId}` |
 | Vector metadata | `repo/{repoId}/vec/{vectorId}` |
 | Vector payload | `repo/{repoId}/vpay/{contentAddress}` |
-| Vector membership | `repo/{repoId}/vmem/{sourceId}` |
+| Vector membership | `repo/{repoId}/vmem/{sourceId}`, plus the `vmem/nil-{sourceId}` and `vmem/memkey-{memoryKey}` marker flags (see [Membership presence](#membership-presence-and-multi-cluster-replication)) |
 | Vector-coverage digest | `repo/{repoId}/vcov/p{page}` (three-digit page) and `repo/{repoId}/vcov/state` |
 | Approximate index | `repo/{repoId}/vidx/{spaceFingerprint}/...` (one exclusive prefix per embedding space) |
 
@@ -98,7 +98,7 @@ Bulk reads (`repocontext_scan`, semantic-search hydration) do **not** evaluate s
 
 ## Membership presence and multi-cluster replication
 
-Vector membership is the answer to "which sources are currently embedded", read on every back-fill pass to detect gaps and written on every embed and retire. It is stored as **one add-wins presence flag per source** at `repo/{repoId}/vmem/{sourceId}`: an embed enables the source's flag; a retire disables it (a causal tombstone, not a key delete, so a delete converges add-wins against a concurrent re-embed on another cluster). A read scans the per-repo `vmem` range and keeps the sources whose flag is enabled.
+Vector membership is the answer to "which sources are currently embedded", read on every back-fill pass to detect gaps and written on every embed and retire. It is stored as **one add-wins presence flag per source** at `repo/{repoId}/vmem/{sourceId}`: an embed enables the source's flag; a retire disables it (a causal tombstone, not a key delete, so a delete converges add-wins against a concurrent re-embed on another cluster). A read scans the per-repo `vmem` range and keeps the sources whose flag is enabled. The same range also holds two kinds of marker flag that stand for no embedding and are excluded from `embeddedVectorCount`: `repo/{repoId}/vmem/nil-{sourceId}` records a file that was read and found to carry no embeddable content, so the gap scan stops re-driving it, and `repo/{repoId}/vmem/memkey-{memoryKey}` records an embedded memory entry under its own record key, so a memory vector orphaned by its entry's expiry can be found by comparing the recorded keys against the live ones.
 
 The format is **always** an `OrFlag`, independent of whether replication is configured, precisely because the embedding index is expensive and must never be re-derived: coupling the on-disk value shape to a runtime replication toggle would corrupt existing membership the moment replication is enabled or disabled. A single-cluster host authors flag dots under a fixed local replica id; enabling replication later is pure configuration - the same rows keep converging, now authored under the configured cluster id, with no migration and no re-index. Because merge is a union of dots, the dot-authoring replica id may change over a repository's lifetime with no format change.
 

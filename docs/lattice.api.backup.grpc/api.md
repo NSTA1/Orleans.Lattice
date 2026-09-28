@@ -12,7 +12,7 @@ Static extensions.
 
 - `IServiceCollection AddLatticeBackupApiGrpc(this IServiceCollection services, Action<LatticeBackupApiGrpcOptions>? configure = null)`
 
-  Registers the binding: the method-definition singleton, the server-side service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. The interceptor is registered globally but scopes enforcement to the backup control-API service by service-name prefix, so unrelated gRPC services on the same host are unaffected. Idempotent. Throws `ArgumentNullException` when `services` is null.
+  Registers the binding: the method-definition singleton, the server-side service, the default-deny authorizer, the header credential bridge, the options-backed auth-scheme source, and the authorization interceptor. The interceptor is registered globally but scopes enforcement to the backup control-API service by service-name prefix, so unrelated gRPC services on the same host are unaffected. Call it once: the service registrations are TryAdd-guarded, but every call layers its `configure` delegate and adds the authorization interceptor to the gRPC pipeline again, so after two calls the interceptor runs twice on every RPC. Throws `ArgumentNullException` when `services` is null.
 
 - `IEndpointRouteBuilder MapLatticeBackupApiGrpc(this IEndpointRouteBuilder endpoints)`
 

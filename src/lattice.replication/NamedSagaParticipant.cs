@@ -13,8 +13,10 @@ namespace Orleans.Lattice.Replication;
 /// call unchanged and preserves the inner participant's vote and idempotency, so
 /// the name is used for diagnostics only and never affects the saga wire contract
 /// or the drive model. One closed generic implementation type per
-/// <typeparamref name="TParticipant"/> keeps the enumerable registration
-/// idempotent per participant type.
+/// <typeparamref name="TParticipant"/> keeps repeated named registrations of a
+/// participant type idempotent; because that type differs from
+/// <typeparamref name="TParticipant"/> itself, a named and an unnamed registration
+/// of the same participant type are two enlistments, not one.
 /// </para>
 /// </summary>
 /// <typeparam name="TParticipant">The wrapped participant implementation type.</typeparam>

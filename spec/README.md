@@ -52,9 +52,11 @@ interleaving of the protocol's decision and broadcast steps.
   visible.
 - **Reshard / migration** (`ShadowForwardOrphan`, `OrphanDrain`) - an abstract
   online shard-split step that shadow-forwards a stale prepared write onto a
-  leaf that already applied the saga's terminal, and the orphan guard that
-  makes that late bucket fall through instead of shadowing the authoritative
-  value (the #1584 class at design level).
+  leaf that already applied the saga's terminal, and the leaf's discard of
+  that late bucket. Until it is discarded, the gate's orphan guard
+  (`AlreadyTerminal`, which `SurfaceViaGate` reads) makes the bucket fall
+  through instead of shadowing the authoritative value (the #1584 class at
+  design level).
 
 ## Properties checked
 
@@ -183,6 +185,11 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit
 
 A clean run ends with `Model checking completed. No error has been found.`
 and reports zero invariant or temporal-property violations and no deadlock.
+
+TLC keeps its working files in a `states/` directory beside the specification
+by default, and git does not ignore `spec/states/`: delete it after a run, or
+pass `-metadir` with a directory outside the repository. The NUnit fixture
+below avoids it by running every model in a scratch directory.
 
 ### How the NUnit fixture finds the toolchain
 
@@ -317,5 +324,5 @@ contributor without the external toolchain should not be blocked. Absence is
 handled asymmetrically and deliberately - the fixture skips locally (a visible
 `Skipped` count, not `Assert.Inconclusive`, which NUnit counts as neither passed
 nor failed nor skipped and which has already produced a false green here) and
-**fails** when `GITHUB_ACTIONS` is set, because in CI a missing toolchain is a
+**fails** when `GITHUB_ACTIONS` is `true`, because in CI a missing toolchain is a
 broken pipeline rather than a missing convenience.

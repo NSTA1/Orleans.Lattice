@@ -143,8 +143,9 @@ internal static class ViewNameValidator
             reason = string.Format(
                 CultureInfo.InvariantCulture,
                 "View name '{0}' contains the reserved character '{1}'. A view name becomes part of a persistent "
-                + "grain's key, and keyed storage backends (Azure Table grain storage in particular) reject "
-                + "'/', '\\', '#' and '?' there. Choose a name without them.",
+                + "grain's key, and Azure Table grain storage rewrites '/', '\\', '#' and '?' in a key to '_', so the "
+                + "name would share a stored row with the same name spelled with '_' in their place. Choose a name "
+                + "without them.",
                 Describe(viewName),
                 viewName[unsafeIndex]);
             return false;

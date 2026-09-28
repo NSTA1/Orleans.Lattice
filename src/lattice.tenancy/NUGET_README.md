@@ -46,8 +46,7 @@ the tenant's metered usage is beyond its quota and burst allowance, with a
 `ResourceExhausted` carrying the breached dimension). A cluster-wide operations-per-second budget is
 apportioned across live silos and enforced silo-locally by a token bucket, so
 rate limiting needs no per-request cross-silo hop. Usage above a steady-state cap
-that the burst allowance still admits is accrued as billable overage on every
-metering tick.
+is accrued as billable overage on every metering tick.
 
 ## Region residency and observability
 

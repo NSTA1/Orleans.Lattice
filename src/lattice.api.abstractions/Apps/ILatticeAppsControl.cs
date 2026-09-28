@@ -44,8 +44,10 @@ public interface ILatticeAppsControl
 
     /// <summary>
     /// Uninstalls an app, removing its owned grants and soft-deleting its trees
-    /// under their configured retention policy. Never physically purges data:
-    /// purge remains a separate <see cref="LatticeOperation.TreeLifecycle"/> operation.
+    /// under their configured retention policy. Never purges the trees itself: the
+    /// core purges each soft-deleted tree once its soft-delete window elapses unless
+    /// it is recovered first, and an immediate purge remains a separate
+    /// <see cref="LatticeOperation.TreeLifecycle"/> operation.
     /// </summary>
     /// <param name="appSlug">The non-empty app slug to uninstall.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

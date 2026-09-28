@@ -519,10 +519,16 @@ for a saga that may well have committed would serve superseded data
 as current, with no error and no metric. `Indeterminate` instead
 *hides* the prepared key: absence asserts nothing, is never wrong
 about a value, and resolves correctly the moment the outcome becomes
-determinable again. The same reading is produced when a cross-tree
+determinable again. Every read path applies this one rule - point
+reads, `GetManyAsync`, the key and entry scans, the counts, and the
+leaf statistics behind the diagnostics and storage-usage reports - so a
+key a point read hides is hidden from a multi-key read too (issue
+#3665). The same reading is produced when a cross-tree
 saga's coordinator cannot be dialled at all (see
-[Cross-tree atomic writes](#cross-tree-multi-tree-atomic-writes)), and
-when a leaf has no tree id bound yet and so has no registry to consult.
+[Cross-tree atomic writes](#cross-tree-multi-tree-atomic-writes)), and,
+on a multi-key read, when a leaf has no tree id bound yet and so has no
+registry to consult; a single-key read on such a leaf instead resolves
+the saga as in flight and serves the pre-saga value.
 
 Snapshots carry the masked row explicitly rather than dropping it, so
 absence from a snapshot means only "no decision recorded". That
@@ -559,7 +565,7 @@ turn a network blip into a silent `Get` of `null` or `Exists` of
 `false`, indistinguishable from the key really being absent.
 
 The exception carries `TreeId`, the `Key` (single-key reads) or
-`KeyCount` (scans), and the unresolved `TransactionIds`. It derives
+`KeyCount` (multi-key reads), and the unresolved `TransactionIds`. It derives
 from `TimeoutException`, so an existing `catch (TimeoutException)`
 keeps working, and implements `ILatticeDomainFault`. It is raised on
 the first transport failure with no retry inside the leaf - a grain
@@ -569,12 +575,11 @@ a genuine registry fault propagates as itself, and cancellation is
 never swallowed. A read of a key with no prepared mutation never
 consults the registry, so it is unaffected.
 
-Multi-key reads (`GetManyAsync`, `CountAsync`, `CountPerShardAsync`,
-and the `KeysAsync` / `EntriesAsync` scans) resolve every key against
-one registry snapshot and then verify, after the fan-out, that no saga
-committed while it ran. When the registry cannot be reached for either
-step, the read cannot vouch for that single view, so it **fails closed
-only when its result depends on the registry**:
+Multi-key reads (`GetManyAsync`, `CountAsync` and `CountPerShardAsync`)
+resolve every key against one registry snapshot and then verify, after
+the fan-out, that no saga committed while it ran. When the registry
+cannot be reached for either step, the read cannot vouch for that single
+view, so it **fails closed only when its result depends on the registry**:
 
 - if no key the read reached carried a prepared mutation, no value
   depended on a saga decision and the result is returned;
@@ -583,10 +588,13 @@ only when its result depends on the registry**:
   `LatticeTransactionOutcomeUnavailableException` rather than return a
   result that could be torn (some keys post-saga, some pre-saga).
 
-A streaming scan whose starting snapshot cannot be fetched keeps going
-until a page reaches a prepared key, which then throws; every page
-already yielded held no prepared key, so what the caller received is
-consistent. Previously each of these failures was treated as "stable",
+The streaming `KeysAsync` / `EntriesAsync` scans instead pin the one
+snapshot they capture at scan start for every page, and are not re-run
+under a fresh one. A streaming scan whose starting snapshot cannot be
+fetched keeps going until a page reaches a prepared key, which then
+throws at once; every page already yielded held no prepared key, so
+what the caller received is consistent. Previously each of these
+failures was treated as "stable",
 which let a registry blip certify exactly the torn read the check
 exists to prevent.
 

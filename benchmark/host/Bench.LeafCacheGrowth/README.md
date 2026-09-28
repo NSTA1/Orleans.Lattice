@@ -36,8 +36,10 @@ For each `(entry_count x value_bytes)` point the probe:
 
 1. Activates a **real** `BPlusLeafGrain` (primary leaf) seeded with `entry_count`
    entries of `value_bytes` each, via `SetManyAsync`. No Orleans silo - the
-   grains are hand-instantiated with NSubstitute runtime seams, exactly like the
-   `Bench.Microbench` harness and the unit-test fakes.
+   grains are hand-instantiated with NSubstitute runtime seams, as the
+   unit-test fakes are. (The `Bench.Microbench` harness hand-instantiates its
+   grains too, but has since moved its grain context and grain factory onto
+   hand-rolled fakes.)
 2. Activates a **real** `LeafCacheGrain` in front of it and warms it to a full
    mirror (the first read trips the epoch-mismatch full-snapshot delivery).
 3. Runs a uniform-random read workload for a fixed duration, sampling at

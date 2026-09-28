@@ -35,11 +35,14 @@ re-implemented here.
 ## Per-tree, selection auto-loads
 
 Schema state is per tree. Each tab starts empty; picking a tree from the tree
-list immediately probes that tree (there is no separate **Load** button - selecting
-a tree loads it). The area is capability-gated as a whole (see below), and the
-per-tree load also reports whether the specific tree is governed by a policy at
-all - a tree with no policy accepts all values, and the area says so rather than
-showing an error.
+list immediately probes that tree, and the Policy and Versions tabs load its
+policy and version state as soon as they are shown (there is no separate **Load**
+button for either). Two reads stay explicit because they can be expensive: the
+compliance audit runs only when you start it, and the dead-letter queue loads
+only when you press **Load dead letters**. The area is capability-gated as a
+whole (see below), and the per-tree load also reports whether the specific tree
+is governed by a policy at all - a tree with no policy accepts all values, and
+the area says so rather than showing an error.
 
 ## The three tabs
 
@@ -57,7 +60,8 @@ showing an error.
   add-on to be registered on the silo; when it is not, the area reports that
   clearly instead of failing opaquely.
 - **Dead letters** - list the writes that strict-mode validation diverted (the
-  schema-rejected entries), and show their count.
+  schema-rejected entries), and show their count. The queue loads on demand,
+  from the **Load dead letters** button, because it can be large.
 
 ## Capability-aware, demote not hide
 

@@ -35,8 +35,9 @@ storage-axis pressure as an operator recommendation that maps onto the
   worst-case `WalSaturationState` the answering silo has observed across its
   trees. The dominant dimension times the current replica count is the raw
   replica demand.
-- **Storage axis (`StoragePressure`)** - whether aggregate retained WAL bytes
-  crossed the configured threshold, the aggregate retained bytes, a
+- **Storage axis (`StoragePressure`)** - whether the retained WAL bytes of the
+  trees that declare a `WalMaxRetainedBytes` ceiling reached the configured
+  fraction of those ceilings, the aggregate retained bytes, a
   per-catalogue-key breakdown (`WalAccountPressure`) that classifies each
   account as throughput-bound or capacity-bound, and an optional
   `WalRebalanceRecommendation`.

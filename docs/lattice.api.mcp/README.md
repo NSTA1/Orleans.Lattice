@@ -52,7 +52,7 @@ app.MapLatticeMcp();
 
 Permission-scoped discovery reads each caller's grants through the auth facade, so a deployment also registers `AddLatticeAuth(...)` and `AddLatticeAuthApi()` on the silo (the minimal snippet above omits them); without the auth facade, discovery grants no group and an authenticated caller is offered only `lattice_capabilities` (see [Setup](setup.md#prerequisites)). An MCP client then connects to the mapped endpoint, calls `lattice_capabilities` to see which facade groups its credential unlocks (the session's tool list is itself already scoped to the caller's grants), and invokes tools such as `lattice_state_list_trees`, `lattice_data_get`, or `lattice_data_read_range`.
 
-For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`McpServer`](../../samples/McpServer) sample under [`samples/`](../../samples).
+For a co-hosted silo that serves the MCP endpoint, see the [`McpServer`](../../samples/McpServer) sample under [`samples/`](../../samples). As written it registers no `ILatticeApiMcpAuthorizer`, so the default `DenyAllMcpAuthorizer` leaves its agent with only `lattice_capabilities` - its README describes the missing registration.
 
 ## Reference
 

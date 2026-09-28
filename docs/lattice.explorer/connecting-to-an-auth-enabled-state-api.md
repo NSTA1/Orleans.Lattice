@@ -17,9 +17,10 @@ authority, tenant, client id, and audience).
 
 The advertisement carries only public configuration. It never contains a secret,
 a signing key, or any user-specific data, so it is safe to serve without a
-credential. An endpoint that advertises nothing (the default) leaves the
-Explorer to fall back to manual scheme selection or the built-in Basic form,
-which keeps older or anonymous endpoints working unchanged.
+credential. An endpoint that advertises nothing (the default), or whose probe
+fails, leaves the sign-in dialog on the built-in Basic form, which keeps older or
+anonymous endpoints working unchanged; a host can still select another registered
+method itself through `IExplorerAuthSession.LoginWithMethodAsync`.
 
 ## Selecting a login method
 
@@ -174,6 +175,15 @@ authentication credential never flows through this seam.
 - `IExplorerAuthSession` - the session that discovers schemes and drives sign-in
   (`DiscoverAsync`, `LoginAsync`, `LoginWithMethodAsync`, `CurrentScheme`).
 - `ExplorerAccessTokenSource` - the proactive, single-flight token-refresh engine.
+- `LatticeStateApiException` - the typed failure a state-API call surfaces, in
+  place of the raw gRPC fault (kept as the inner exception), once any single
+  silent token refresh and the inline transient retries are spent, or when no
+  endpoint is configured yet. Its `Message` is safe to show the user.
+  `IsTransient` marks a failure the endpoint may recover from, including a
+  load-shed `ResourceExhausted` refusal, which is never retried inline;
+  `RequiresAuthentication` marks a gRPC `Unauthenticated` or `PermissionDenied`
+  rejection; and `IsPermissionDenied` narrows that to `PermissionDenied` - a
+  caller refused for want of a grant, which signing in again cannot fix.
 - `LatticeConnectionSettings.TransportHeaders` - non-secret headers attached to
   every call regardless of the sign-in state (for example an origin-lock routing
   header), seedable via `LATTICE_EXPLORER_TRANSPORT_HEADERS`. Every

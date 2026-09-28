@@ -75,7 +75,8 @@ internal sealed class LatticeStateQuery(
     /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeTenantAccessDeniedException">
-    /// The resolver denied the operation (no valid active tenant).
+    /// The resolver denied the operation: the asserted tenant failed validation,
+    /// or the name is a reserved or malformed namespace under an asserted tenant.
     /// </exception>
     private ValueTask<string> EffectiveTreeIdAsync(string treeId, CancellationToken cancellationToken)
     {

@@ -40,8 +40,9 @@ public interface IAppActivationPipeline
     Task<AppActivationOutcome> DisableAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Withdraws an app's rules, soft-deletes its structural trees (never purging them, and never
-    /// touching adopted trees), and marks it uninstalled.
+    /// Withdraws an app's rules, soft-deletes its structural trees (never purging them itself, and
+    /// never touching adopted trees), and marks it uninstalled. The core purges each soft-deleted
+    /// tree once its soft-delete window elapses unless it is recovered first.
     /// </summary>
     /// <param name="tenant">The tenant the app is installed for.</param>
     /// <param name="slug">The app to uninstall.</param>

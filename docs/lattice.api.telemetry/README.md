@@ -68,7 +68,7 @@ and the backend-side credential are two independent halves of the trust boundary
 and validating the options. Register `LatticeTelemetryOptionsValidator` as an
 `IValidateOptions<LatticeTelemetryOptions>` to enforce the rules above (an absolute
 backend address, the credential member each static auth mode needs, strictly
-positive timeout and guardrails, and a non-empty allow-list under
+positive timeout and guardrails, and a non-empty allow-list with no blank entry under
 `DenyAllExceptAllowed`) when the options are first resolved.
 
 ## The allow-list is enforced on extracted names, not on the raw string
@@ -221,7 +221,7 @@ transport binding can name them without referencing this package:
 | Exception | Means |
 |---|---|
 | `TelemetryQueryNotFoundException` | The query id is unknown **or** not offered by this deployment. The two are deliberately indistinguishable, so a caller learns nothing about the deployment from a refusal. |
-| `TelemetryQueryBoundsException` | A well-formed request whose window or step exceeds the guardrails. |
+| `TelemetryQueryBoundsException` | A well-formed request whose window the entry's declared bounds or the deployment-wide `MaxRange` / `MaxStep` guardrails refuse - descending, too long, starting too far back, yielding too many points, or with a step above `MaxStep`. Its `Violation` carries the typed `TelemetryBoundsViolation` reason. |
 | `TelemetryBackendException` | The backend was unreachable, timed out, or answered unusably. Not the caller's fault. |
 
 `QueryAsync` can also refuse the caller. Before anything else it throws

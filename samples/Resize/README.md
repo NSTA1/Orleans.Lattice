@@ -52,8 +52,12 @@ Done.
 - Changing the shard count - that requires re-hashing keys and is done with
   `ReshardAsync`, not `ResizeAsync`.
 - Casually or on the hot path. A resize on a populated tree copies the whole
-  tree (roughly 2x storage during the window) and adds a forward hop to every
-  write until the swap; prefer an off-peak window for large trees.
+  tree and adds a forward hop to every write until the swap. After the alias
+  swap the resize soft-deletes the retired copy rather than purging it, so
+  storage stays at roughly 2x until the soft-delete window
+  (`LatticeOptions.SoftDeleteDuration`, 72 hours by default, during which
+  `UndoResizeAsync` can still restore it) elapses; prefer an off-peak window for
+  large trees.
 
 ## Feature doc
 

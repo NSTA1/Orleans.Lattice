@@ -87,8 +87,10 @@ public sealed class UserGrain(
 `[Indexed]` is an Orleans facet attribute that stands in for
 `[PersistentState]`, so it takes the same state name and optional storage name.
 Deriving from `IndexedGrain<TState>` is the convenience route: it exposes
-`State`, `WriteStateAsync`, `ReadStateAsync`, and `ClearStateAsync`, each of
-which re-projects the grain's entries as part of the operation.
+`State`, `WriteStateAsync`, `ReadStateAsync`, and `ClearStateAsync` and forwards
+them to the `[Indexed]` state object, which publishes the grain's entries on a
+write, reconciles them on a re-read, and withdraws them on a clear. The base
+class holds no enrolment logic of its own.
 
 A grain with `[Indexed]` but no matching declaration is not indexed, and a
 declaration whose grain is not annotated is never populated at all - not even by

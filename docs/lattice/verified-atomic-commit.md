@@ -109,6 +109,8 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 | `SpanAdmissionMigrationModel` | `SplitBoundary` - a cross-shard migration import is subject to the same declared-span admission as any other commit | #3117 |
 | `MovedAwaySealInheritanceModel` | `SplitBoundary` - a leaf divided from a sealed leaf is born carrying the donor's moved-away seal | #3121 |
 
+The same directory also holds the models of the other verified protocols - the write-ahead log, the distributed lock and the atomic action - which [Verified WAL](verified-wal.md), [Verified Distributed Lock](verified-lock.md) and [Verified Atomic Action](verified-atomic-action.md) document.
+
 ### Every model ships a non-vacuous guard test
 
 A model that checks a property only has value if the property can actually fail.
@@ -216,7 +218,12 @@ catalogue above) and all five temporal properties. A clean run enumerates a few
 thousand distinct states with no invariant, temporal-property, or deadlock
 violation. The spec's invariant names are the same names used by the property
 catalogue above; the [refinement note](../../spec/Refinement.md) is the mapping
-between the two levers.
+between the two levers. It maps every property the cfg checks to the core or
+production seam that plays its protocol role, with the test that would detect a
+regression there, and names `TypeOK` - a type-only well-formedness check with no
+production counterpart - as its one reasoned exclusion.
+`RefinementPropertyCoverageTests` fails the build when a checked property is
+neither mapped nor excluded.
 
 TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
 `[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
@@ -238,8 +245,9 @@ The three verification layers are deliberately complementary and cross-checked:
 - **The property catalogue** bounds *what* is checked, enumerating the full
   safety and liveness contract so no property is silently unverified.
 - **The TLA+ spec** checks the *design* independently of the implementation
-  language, and its refinement note ties the abstract invariants back to the
-  code cores name-for-name.
+  language, and its refinement note ties each checked property back, by name, to
+  the core or production seam that implements it (`TypeOK` excepted, with its
+  reason).
 
 A gap in any one lever is visible from the others: a catalogued property with no
 model home, or a spec invariant with no matching catalogue entry, is a tracked

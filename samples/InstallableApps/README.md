@@ -33,8 +33,11 @@ The program walks five acts:
    with `LatticeAppOwnedRuleException`. Reducing consent below the manifest's
    requested operations records a structured activation failure and withdraws the
    app rules without stopping the silo.
-5. **Disable and uninstall.** The lifecycle facade removes app-owned rules and
-   soft-deletes the app tree. Data is not purged by uninstall.
+5. **Disable and uninstall.** Disable and uninstall each withdraw whatever
+   app-owned rules remain - none do by this point, because the failed activation
+   in act 4 already withdrew them - and uninstall soft-deletes the app tree.
+   Uninstall does not purge the data: the tree stays
+   recoverable until its soft-delete window (30 minutes in this manifest) elapses.
 
 ## Run it
 
@@ -60,10 +63,11 @@ The process exits `0` on success and `1` if any guard fails to hold.
 
 The gate runs default-deny. `platform-operator` is configured as a bootstrap
 administrator and therefore holds the cluster-wide `AppInstall` operation that
-all Apps API verbs require. The manifest's `writer` role is bound to the
-membership group `sample-crm-writers`; activation compiles that binding into
-ordinary authorization rules over `a/sample-crm/records`. Only `alice`, the user
-placed in that group, can read and write the app tree.
+every Apps API verb except the advisory capability probe requires. The manifest's
+`writer` role is bound to the membership group `sample-crm-writers`; activation
+compiles that binding into ordinary authorization rules over
+`a/sample-crm/records`. Apart from the bootstrap administrator, only `alice`, the
+user placed in that group, can read and write the app tree.
 
 The sample intentionally reduces the app's consent to `Read` after a successful
 enable. The manifest still requests `Read` and `Write`, so reconciliation fails

@@ -14,8 +14,23 @@ namespace Orleans.Lattice.BPlusTree;
 /// <c>ShardCount</c>) stored on <see cref="State.TreeRegistryEntry"/>.
 /// <para>
 /// Every grain that needs structural sizing goes through this resolver; the
-/// registry is the single source of truth. A user tree without a complete
-/// pin is an invariant violation and causes <see cref="InvalidOperationException"/>.
+/// registry is the single source of truth for the fields it pins. A user tree
+/// without a complete pin does not fault the resolve. When the registry has no
+/// row for the tree, or its row lacks any of the three structural fields,
+/// <see cref="ResolveAsync"/> calls <see cref="ILatticeRegistry.RegisterAsync"/>
+/// inside the registry read it shares with concurrent resolves of the same
+/// tree, then reads the entry again. Registration is idempotent: it seeds a
+/// <em>new</em> row with the <see cref="LatticeConstants"/> structural defaults
+/// and the then-current <see cref="LatticeOptions.WalPartitions"/> as the WAL
+/// partition pin, but leaves an existing row untouched, so a field missing
+/// from an existing row is never written back. A structural field still
+/// missing after the second read resolves to its <see cref="LatticeConstants"/>
+/// default for that call, and a missing WAL partition pin resolves to the live
+/// <see cref="LatticeOptions.WalPartitions"/> value. Only
+/// <see cref="ResolveAsync"/> registers; the single-field fast paths are pure
+/// reads and never seed a row.
+/// </para>
+/// <para>
 /// System trees (IDs beginning with <see cref="LatticeConstants.SystemTreePrefix"/>)
 /// resolve to the canonical defaults in <see cref="LatticeConstants"/>
 /// without consulting the registry, to avoid circular bootstrap. System
@@ -85,7 +100,12 @@ internal sealed class LatticeOptionsResolver(
     /// from the silo's then-current <see cref="LatticeOptions.WalPartitions"/> and is
     /// documented as tree-immutable thereafter (see <see cref="State.TreeRegistryEntry.WalPartitions"/>),
     /// so process-local memoisation is safe even though other resolved fields
-    /// remain dynamic via <see cref="IOptionsMonitor{TOptions}"/>.
+    /// remain dynamic via <see cref="IOptionsMonitor{TOptions}"/>. The one
+    /// exception is a row that carries no pin (see <see cref="ResolveAsync"/>):
+    /// the cached value is then the live option value first read, and a later
+    /// runtime change to <see cref="LatticeOptions.WalPartitions"/> does not
+    /// reach the cache, although a full resolve of that row reads the live
+    /// value afresh.
     /// <para>
     /// The cache exists to elide the per-call <see cref="ILatticeRegistry.GetEntryAsync"/>
     /// grain RPC on the foreground WAL commit path. Without it, every
@@ -253,7 +273,11 @@ internal sealed class LatticeOptionsResolver(
             // Lazy first-use seeding: every user tree must have a
             // structural pin, but callers should not have to register
             // explicitly for simple scenarios. RegisterAsync is
-            // idempotent and fills nulls with LatticeConstants defaults.
+            // idempotent: it fills nulls with LatticeConstants defaults
+            // only when it creates the row, and is a no-op for a row
+            // that already exists, so an existing row missing a field
+            // stays incomplete and ResolveAsync falls back to the
+            // LatticeConstants default for that field on every resolve.
             await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
             entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
 #if LATTICE_DIAG
@@ -345,8 +369,11 @@ internal sealed class LatticeOptionsResolver(
 
     /// <summary>
     /// Fast-path resolver for the WAL <see cref="LatticeOptions.WalPartitions"/>
-    /// pin only. Returns the cached value when present; on a miss, performs the
-    /// one-shot registry lookup, caches the resulting pin, and returns it.
+    /// pin only. Returns the cached value when present; on a miss, performs one
+    /// registry read (a pure read that never seeds a row), caches the pin it
+    /// finds - or, when there is no row or the row carries no pin, the live
+    /// <see cref="LatticeOptions.WalPartitions"/> value, the same fallback
+    /// <see cref="ResolveAsync"/> applies - and returns it.
     /// <para>
     /// Intended for hot-path producers (the foreground commit-log writer)
     /// that need the partition count to route an append and nothing else.
@@ -384,11 +411,11 @@ internal sealed class LatticeOptionsResolver(
         var baseOptions = optionsMonitor.Get(treeId);
         var partitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
         // First writer wins the cache slot; if a racing ResolveAsync
-        // populates it concurrently with a structurally identical value
-        // (the pin is tree-immutable, so it MUST be identical) the
-        // GetOrAdd here is a no-op and we return the racing winner's
-        // value. Using TryAdd avoids overwriting a value installed by
-        // ResolveAsync that may have run the lazy-register seam.
+        // populates it concurrently (with an identical value whenever both
+        // read a pinned row, since the pin is tree-immutable) the TryAdd
+        // here is a no-op and we return the racing winner's value. Using
+        // TryAdd avoids overwriting a value installed by ResolveAsync that
+        // may have run the lazy-register seam.
         _walPartitionsCache.TryAdd(treeId, partitions);
         return _walPartitionsCache.TryGetValue(treeId, out var afterRace) ? afterRace : partitions;
     }
@@ -840,10 +867,12 @@ internal sealed class LatticeOptionsResolver(
             //      stamped at first RegisterAsync from the silo's
             //      then-current LatticeOptions.WalPartitions.
             //   2. Live IOptionsMonitor<LatticeOptions> value: fallback
-            //      for legacy registry rows persisted before the
-            //      WalPartitions slot was added. These rows resolve to
-            //      the live value once; the next RegisterAsync stamps
-            //      the pin and subsequent resolves read from it.
+            //      for a row with no pin, such as a legacy row persisted
+            //      before the WalPartitions slot was added. RegisterAsync
+            //      is a no-op for a row that already exists, so it never
+            //      stamps such a row: every full resolve reads the live
+            //      value again, while the GetWalPartitionsAsync cache keeps
+            //      the first value this resolver recorded.
             // The pin is required because the foreground commit-log
             // writer hashes each mutation key modulo this value to
             // route the write to a WAL partition grain - flipping the
@@ -995,11 +1024,13 @@ internal sealed class LatticeOptionsResolver(
         resolved.MaintainProjectionDigest = maintainDigest;
 
         // WalPartitions is sourced from the per-tree pin (registry entry) for
-        // user trees and from LatticeConstants for system trees, never from the
-        // live silo-wide LatticeOptions.WalPartitions. The pin is established at
-        // first RegisterAsync and is thereafter tree-immutable, so the foreground
-        // commit-log writer and the activation-time materialiser always agree on
-        // the partition fan-out shape for the lifetime of the tree.
+        // user trees and from LatticeConstants for system trees. Only a
+        // user-tree row that carries no pin falls back to the live silo-wide
+        // LatticeOptions.WalPartitions (see the precedence above). The pin is
+        // established at first RegisterAsync and is thereafter tree-immutable,
+        // which is what keeps the foreground commit-log writer and the
+        // activation-time materialiser on the same partition fan-out shape for
+        // the lifetime of a pinned tree.
         resolved.WalPartitions = walPartitions;
 
         // MaxCacheValueBytes is sourced from the per-tree runtime override

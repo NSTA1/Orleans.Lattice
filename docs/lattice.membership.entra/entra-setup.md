@@ -184,7 +184,8 @@ signature (via OIDC/JWKS discovery from `Authority`), and lifetime. The full
 list of options - multi-tenant allow-lists, a `SchemeHint`, clock skew, and JWKS
 refresh intervals - is on `LatticeEntraAuthenticatorOptions`. See the
 [`EntraAuthorization` sample](../../samples/EntraAuthorization/Program.cs) for a
-complete, compiled host that acquires a token and enforces a rule end to end.
+complete, compiled host that acquires a token, names the caller's `oid` its sole
+bootstrap administrator, and enforces a default-deny gate end to end.
 
 ## Acquiring a token yourself
 

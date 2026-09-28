@@ -37,14 +37,14 @@ before `AddLatticeApps` fails fast.
 
 | Verb | Behaviour |
 |---|---|
-| `InstallAsync(AppInstallRequest)` | Installs an exact source version with role-to-group bindings and an explicit ceiling. Installation does not enable the app. Installing a different version over a live install upgrades it in place, keeping its lifecycle state, and re-applies an enabled app. Installing the version already installed is refused; change consent with `UpdateConsentAsync` instead. |
+| `InstallAsync(AppInstallRequest)` | Installs an exact source version with role-to-group bindings and an explicit ceiling; every binding must name a role the manifest declares. Installation does not enable the app. Installing a different version over a live install upgrades it in place, keeping its lifecycle state, and re-applies an enabled app. Installing the version already installed is refused; change consent with `UpdateConsentAsync` instead. |
 | `EnableAsync(slug)` | Runs the activation pipeline: validates the manifest, checks it against the ceiling, provisions trees and grants roles. An excess fails activation until re-consented. |
 | `DisableAsync(slug)` | Withdraws the app's grants; trees and data stay. |
-| `UninstallAsync(slug)` | Withdraws the app's grants and soft-deletes its structural trees. Never purges data. |
+| `UninstallAsync(slug)` | Withdraws the app's grants and soft-deletes its structural trees; adopted trees are untouched. It never purges data itself, but each soft-deleted tree is purged by the core once its soft-delete window elapses, unless the app is installed and enabled again first. |
 | `ListAsync()` | Summaries of the installs in the caller's tenant, including uninstalled records. |
 | `DescribeAsync(slug, version?)` | The manifest's requested capabilities (trees, roles with operations and scopes, subscriptions, MCP tools, replication and schema declarations) plus the install's state, provenance, bindings and ceiling. Works before installation, without loading app code; returns `null` for an unknown app or version. |
 | `GetConsentAsync(slug)` | The ceiling pinned to the installed version, or `null` when the app is not installed. |
-| `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
+| `UpdateConsentAsync(AppConsentUpdate)` | Replaces the whole ceiling for the explicitly named installed version, then re-applies an enabled app so a reduced ceiling cannot leave stale authority. If that re-application fails, the failure is thrown with a note that the consent itself was recorded; a failure the consent or manifest causes, such as a ceiling excess, also withdraws the app's grants. Never enables a disabled app. If another upgrade lands between the facade's read and its write, the update is refused with an `InvalidOperationException` rather than rolling that upgrade back; an upgrade through `InstallAsync` is pinned the same way. |
 | `GetCapabilitiesAsync()` | An advisory, default-deny probe of what the caller may do. It never grants anything; every verb authorizes independently. |
 
 Lifecycle results report the slug, version, resulting `AppLifecycleState` and whether
@@ -99,17 +99,21 @@ shapes are rejected before anything changes.
 
 ## No physical ids on the wire
 
-Responses echo app slugs and **app-local** tree names only. Composed physical ids
+Responses echo app slugs, **app-local** tree names and, for an adopted tree, the
+pre-app tree id the manifest or ceiling names. Composed physical ids
 (`a/{app}/{tree}`, `t/{tenant}/a/{app}/{tree}`) never appear in a response, and
-exception messages are sanitised before they cross the facade: a composed id is
-rewritten to its app-local name (or `{app}:{tree}` for another app), the tenant
-segment is stripped, and inner exceptions are dropped. The whole inner and aggregated
-exception graph is inspected, and a graph too large to inspect fully is treated as
-carrying a composed id and replaced. Exception categories are
+exception messages are sanitised before they cross the facade: an exception whose
+message, or any inner or aggregated exception's message, carries a composed id is
+replaced by one whose id is rewritten to its app-local name (or `{app}:{tree}` for
+another app), with the tenant segment stripped and the inner exceptions dropped. A
+graph too large to inspect fully is treated as carrying a composed id and replaced.
+Exception categories are
 preserved for transports: invalid input is an `ArgumentException`, an unknown app or
 version is a `KeyNotFoundException`, a denied call is a
-`LatticeAuthorizationDeniedException`, and any other failure is an
-`InvalidOperationException`.
+`LatticeAuthorizationDeniedException`, a denied tenant resolution is a
+`LatticeTenantAccessDeniedException`, and a failed precondition or activation is an
+`InvalidOperationException`. A replaced exception also keeps a cancellation or timeout
+category, and becomes an `InvalidOperationException` when it had any other type.
 
 ## See also
 

@@ -159,6 +159,12 @@ lattice-usage profiles below plus a micro-benchmark control.
 | atomic              | `atomic-write`                    | `SetManyAtomicAsync` saga driver, single cluster         | off         | none  |
 | atomic              | `atomic-write-replication`        | Saga drivers on both clusters, bidirectional replication | on (both)   | none  |
 
+The read:write ratios in the read-heavy and read/write-mix rows are the design
+intent: each scenario pins the read driver's rate while writes follow the fleet
+(one sample per vehicle per 200 ms simulator tick), so the offered ratio moves
+with the calibrated fleet size - see
+[`benchmark-scenarios.md`](./benchmark-scenarios.md).
+
 Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a file omits the ones its scenario does not use):
 
 | Variable                       | Purpose                                                  |
@@ -176,7 +182,7 @@ Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a f
 | `BENCH_CHAOS_TARGET`           | Compose service name to apply chaos to                    |
 | `BENCH_CHAOS_AFTER_SECONDS`    | Delay before chaos action                                 |
 | `BENCH_CHAOS_DURATION_SECONDS` | How long the disruption lasts                             |
-| `BENCH_DESCRIPTION`            | One-line scenario description (documentary; the runner does not read it) |
+| `BENCH_DESCRIPTION`            | One-line scenario description (documentary; the runner only records it in `results.json`'s `config` block) |
 | `BENCH_KIND`                   | `microbench` routes the scenario to the BenchmarkDotNet harness instead of the docker stack |
 | `BENCH_MICROBENCH_*`           | Microbench fidelity, workload filter, key / value / batch sizes, and profiling knobs (`microbench` only) |
 | `BENCH_READ_DRIVER_ENABLED`, `BENCH_READ_RATE_PER_SECOND`, `BENCH_READ_PATTERN`, `BENCH_READ_CONCURRENCY`, `BENCH_READ_WARMUP` | Read-driver switch, offered read rate, `Random` \| `Sequential` pattern, concurrency, and warm-up delay (read-heavy and read/write-mix scenarios) |
@@ -187,6 +193,19 @@ Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a f
 | `BENCH_ATOMIC_SAGA_DRIVER_*`, `BENCH_REPLICA_ATOMIC_SAGA_DRIVER_*` | `SetManyAtomicAsync` saga driver on the origin / replica silo (atomic-write scenarios) |
 | `BENCH_WAL_PROVIDER`, `BENCH_WAL_TABLE_NAME` | `memory` (default) \| `azuretable` WAL provider, and its table name |
 | `BENCH_WAL_ELIMINATE_CANDIDATE_ROW`, `BENCH_WAL_PIPELINE_PHASE_TWO` | Azure Table WAL optimisation toggles (the `-azuretable-no-crow` / `-azuretable-pipelined` variants). The benchmark silo turns each on only for the value `true`, so every other azuretable scenario runs with both off, although the provider defaults both to on |
+
+No shipped `.env` sets every knob the stack reads. `docker-compose.yml` and
+`docker-compose.replication.yml` also interpolate `BENCH_*` overrides that only
+the environment supplies - for example `BENCH_TREE_ID`, `BENCH_BATCH_SIZE`,
+`BENCH_FLUSH_INTERVAL`, `BENCH_CHANNEL_CAPACITY`, `BENCH_DROP_ON_FULL`,
+`BENCH_SHIP_PHASE_TIMER_MS`, the `BENCH_LATTICE_WAL_*` knobs that
+`benchmark-attribution.ps1` stamps, and the `BENCH_WAL_RETRY_*` Azure Table WAL
+retry budget - each falling back to the compose file's default, where an empty
+default leaves the library or Azure SDK default in place. `benchmark.ps1` itself
+reads `BENCH_API_URL`, `BENCH_PROMETHEUS_URL`, `BENCH_HISTORY_VM_URL` and
+`BENCH_HISTORY_GRAFANA_URL` to override its endpoints (defaults
+`http://localhost:8080`, `http://localhost:9090`, `http://localhost:8428` and
+`http://localhost:3001`).
 
 ## Calibrating fleet size for this host
 
@@ -212,8 +231,11 @@ The initialisation script:
    would distort the saturation signal). Default ladder: `500, 1000, 2000,
    4000, 8000, 16000`.
 3. After each rung, classifies it against three saturation signals:
-   - **Sink drops** - `sink_dropped_combined_increase > 0` means the producer's
-     bounded channel overflowed; the rung is past the producer-side knee.
+   - **Sink drops** - `sink_dropped_combined_increase > 0` marks the rung as
+     past the producer-side knee. With the sink's default `DropOnFull=true`,
+     though, a full channel evicts its oldest sample and the write still
+     succeeds, so an overflow is never counted as a drop and this signal does
+     not fire on it; the knee then has to surface in the two signals below.
    - **Throughput plateau** - if `lattice_commits_per_second` grew less than 10 %
      between the previous rung and this one despite the fleet roughly doubling,
      the silo is past the commit-path knee (adding load no longer adds work).
@@ -449,19 +471,21 @@ question without templating-var juggling:
 The Overview dashboard is the recommended landing page: it shows every
 persona's headline KPIs in a single view (one row per persona, scoped to
 that persona's scenarios) so a regression in any workload class is visible
-without flipping dashboards. Click any KPI tile to drill into the matching
-persona dashboard for trend strips and per-run barcharts.
+without flipping dashboards. Its tiles carry no drill-down links, so open the
+matching persona dashboard for trend strips and per-run barcharts.
 
 Each persona dashboard has the same **3-band** layout, top-to-bottom:
 
 1. **Headline KPIs** - three or four stat tiles with threshold-coloured
    backgrounds binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
    `bench_replication_ship_p95_ms`). The stable-alias layer is curated in
-   `benchmark.ps1`'s `$ScalarPanelExtra` and `$ScalarAliases`; KPI metric-name resolution is
-   validated at dashboard-generation time, so a typo or rename fails fast. As
-   committed, the Replication and WAL Performance dashboards show this band as bar
-   charts instead: they were edited by hand after generation, and regenerating
-   restores the stat tiles.
+   `benchmark.ps1`'s `$ScalarPanelExtra` and `$ScalarAliases`. KPI metric names are
+   validated at dashboard-generation time against the `$ScalarPanelExtra` keys and
+   the auto-discovery key shapes (not the `$ScalarAliases` keys), so a typo or
+   rename fails fast. As committed, the Replication and WAL Performance dashboards
+   show this band as bar charts instead, as do the Overview's Replication, WAL
+   Performance and Atomic Writes rows: those files were edited by hand after
+   generation, and regenerating restores the stat tiles.
 2. **Trends across runs** - one timeseries per metric family (commit, cache,
    sink, replication, read, wal, process, microbench), points-mode with one line per
    `{__name__, scenario, git_sha}` so a regression appears as a visible step
@@ -471,11 +495,15 @@ Each persona dashboard has the same **3-band** layout, top-to-bottom:
    click away.
 
 Dashboards regenerate from `benchmark/history/Generate-Dashboards.ps1`. Adding
-a scenario or moving it between personas is a one-line edit to the `$Personas`
-table at the top of that script - re-run, wait ~30 s for Grafana's
-file-provider rescan, done. The script rewrites every `BenchmarkHistory*.json`,
-so it also deletes the hand-maintained atomic-writes dashboard; restore that
-file from git after regenerating.
+a scenario or moving it between personas is a one-line edit to its `$Personas`
+table, and Grafana's file provider picks the regenerated JSON up within ~30 s.
+As committed, though, the script aborts at its KPI validation before writing
+anything: the Replication persona's two headline KPIs
+(`bench_replication_ship_p95_ms`, `bench_replication_apply_lag_p95_ms`) are
+`$ScalarAliases` keys, which that check does not read. When it does run, it
+rewrites every `BenchmarkHistory*.json`: it deletes the hand-maintained
+atomic-writes dashboard and regenerates the Overview without its hand-added
+Atomic Writes row, so restore both files from git afterwards.
 
 See [`history/README.md`](./history/README.md) for the full data model, label
 schema, and ad-hoc query path.
@@ -487,7 +515,8 @@ Grafana provisions every embedded **Orleans.Lattice** dashboard, which
 <http://localhost:3000> - anonymous viewer access is enabled, admin
 credentials are `admin/admin`.
 
-The dashboards bind against the meters:
+Besides the .NET runtime instrumentation (the `dotnet_*` series), the benchmark
+silo exports these meters to Prometheus (`host/Bench.Silo/Program.cs`):
 
 | Meter                                  | Source                                              |
 |----------------------------------------|-----------------------------------------------------|
@@ -497,6 +526,13 @@ The dashboards bind against the meters:
 | `vehicle_fleet_simulator.read_driver`  | `LatticeReadDriver` (read-heavy / mix scenarios)   |
 | `vehicle_fleet_simulator.write_driver` | `LatticeWriteDriver` (replica-side writes in bidirectional scenarios) |
 | `vehicle_fleet_simulator.atomic_saga_driver` | `LatticeAtomicSagaDriver` (atomic-write scenarios) |
+
+None of the embedded dashboards reads a `vehicle_fleet_simulator.*` series: those
+four meters feed the `results.json` capture and can be queried in Prometheus
+directly. Five of the synced dashboards - Identity & Authorization, Backup &
+Restore, Replication Transport (gRPC), Autoscaling Signal and Per-Tenant
+Observability - bind only to meters the benchmark silo does not export, so they
+render empty on this stack.
 
 Prometheus is at <http://localhost:9090> for raw query access.
 
@@ -528,6 +564,21 @@ the fidelity via `-Fidelity` (`dry` / `quick` / `full`), and opt into per-method
 EventPipe profiling via `-Profile` (`off` / `alloc` / `cpu` / `both`; profiling
 perturbs the measurement, so a profiled run is not a cohort baseline). The
 fidelity comment in `scenarios/microbench.env` carries the cost / rigour trade-off.
+
+`scenarios/microbench.env` does not set every knob the harness reads; the
+per-workload sizing knobs are documented where `LatticeMicroBenchmarks.cs` reads
+them, and a few others change how a run behaves. `BENCH_MICROBENCH_AUTH=enforcing`
+measures every operation through a real authorization gate instead of the
+disabled baseline. `BENCH_MICROBENCH_FIDELITY` also accepts `quick-oop`
+(`Job.ShortRun` on the forking toolchain, for the gate-enabled configuration),
+which `-Fidelity` does not offer, so set it in the `.env` or run the harness
+directly. `BENCH_MICROBENCH_INVOCATIONS` fixes the invocation count per
+iteration and skips BenchmarkDotNet's pilot stage. For the default suite only,
+`BENCH_REGRESSION_GATE_ENABLED=true` (or a baseline named by
+`BENCH_BASELINE_PATH` / `--baseline`) compares the fresh `results.json` against
+the bundled `baseline-v3.4.0.json` (or the named file) within
+`BENCH_REGRESSION_TOLERANCE` / `--tolerance` percent (default 10), and any
+violation makes the run exit non-zero.
 
 
 ## `azure-throughput` - real-Azure WAL throughput harness
@@ -593,6 +644,16 @@ The script is the **only** way the published single-silo doc should be refreshed
 the marker blocks are mechanically managed, and a CI hygiene test
 (`PerformanceReportMarkerHygieneTests`) fails the build if the marker contract
 drifts. Prose around the markers stays hand-editable.
+
+**As committed, only the `-DryRun` lines below run.** #3597 removed the script's
+`-NamePrefix` parameter but left two reads of `$NamePrefix` in place, and under the
+script's `Set-StrictMode -Version Latest` each read throws. The full sweep, `-Layer1`,
+`-Layer2`, `-Layer 2 -Workloads ...`, `-KeepVm -ReuseVm ...` and `-CaptureCounters`
+invocations therefore all stop at startup, before anything is provisioned, and a
+Layer 3 sweep that would provision its own rig stops the same way. A Layer 3 sweep
+runs only as `-Layer 3 -ReuseAca <prefix>` against a rig provisioned first with
+`azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>` (see
+[`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps)).
 
 ```powershell
 ./benchmark/performance-report.ps1                                  # full sweep (~80-95 min, ~$0.50)

@@ -12,13 +12,30 @@ namespace Orleans.Lattice.BPlusTree.State;
 [Alias(TypeAliases.TreeRegistryEntry)]
 internal sealed record TreeRegistryEntry
 {
-    /// <summary>Maximum number of keys per leaf node, or <c>null</c> to use configured defaults.</summary>
+    /// <summary>
+    /// Maximum number of keys per leaf node, or <c>null</c> when the row carries
+    /// no pin. Registering a new row fills a <c>null</c> here with
+    /// <see cref="LatticeConstants.DefaultMaxLeafKeys"/>, and the options resolver
+    /// substitutes that default for a row that lacks it; there is no configured
+    /// option to fall back to.
+    /// </summary>
     [Id(0)] public int? MaxLeafKeys { get; init; }
 
-    /// <summary>Maximum number of children per internal node, or <c>null</c> to use configured defaults.</summary>
+    /// <summary>
+    /// Maximum number of children per internal node, or <c>null</c> when the row
+    /// carries no pin. Registering a new row fills a <c>null</c> here with
+    /// <see cref="LatticeConstants.DefaultMaxInternalChildren"/>, and the options
+    /// resolver substitutes that default for a row that lacks it.
+    /// </summary>
     [Id(1)] public int? MaxInternalChildren { get; init; }
 
-    /// <summary>Number of shards, or <c>null</c> to use configured defaults.</summary>
+    /// <summary>
+    /// The tree's pinned shard count, or <c>null</c> when the row carries no pin.
+    /// Registering a new row fills a <c>null</c> here with
+    /// <see cref="LatticeConstants.DefaultShardCount"/>, and the options resolver
+    /// substitutes that default for a row that lacks it. Adaptive shard splits
+    /// add physical shards through <see cref="ShardMap"/> without changing it.
+    /// </summary>
     [Id(2)] public int? ShardCount { get; init; }
 
     /// <summary>
@@ -96,10 +113,14 @@ internal sealed record TreeRegistryEntry
     [Id(8)] public bool? ProjectionDigestPermanentlyDisabled { get; init; }
 
     /// <summary>
-    /// Pinned WAL partition count for this tree. Stamped at first
-    /// <see cref="ILatticeRegistry.RegisterAsync"/> from the silo's
-    /// then-current <see cref="LatticeOptions.WalPartitions"/> value;
-    /// never mutated thereafter. <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>
+    /// Pinned WAL partition count for this tree. Stamped when
+    /// <see cref="ILatticeRegistry.RegisterAsync"/> creates the row, from the
+    /// registering caller's value when it supplies one and otherwise from the
+    /// silo's then-current <see cref="LatticeOptions.WalPartitions"/> value;
+    /// never changed thereafter, except that a resize clears it on the
+    /// logical tree's row when it re-points the logical id at the resized
+    /// copy (which carries its own pin), and an undo of that resize restores
+    /// the row it replaced. <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>
     /// prefers this slot over the live <c>IOptionsMonitor&lt;T&gt;</c>
     /// value so the resolved <c>WalPartitions</c> seen by every grain
     /// is tree-immutable for the lifetime of the tree.
@@ -117,10 +138,10 @@ internal sealed record TreeRegistryEntry
     /// <see langword="null"/> on registry rows persisted before this
     /// slot was introduced; the resolver falls back to the live
     /// <c>IOptionsMonitor&lt;T&gt;</c> value in that case, exactly
-    /// matching the legacy pre-pin behaviour. Once any first-class
-    /// caller of <see cref="ILatticeRegistry.RegisterAsync"/> runs
-    /// against the upgraded library, the slot is stamped and every
-    /// subsequent resolve reads from the pin.
+    /// matching the legacy pre-pin behaviour. Registration does not
+    /// stamp such a row: <see cref="ILatticeRegistry.RegisterAsync"/> is a
+    /// no-op for a row that already exists, so every resolve of it keeps
+    /// falling back, and the pin protection above does not cover it.
     /// </para>
     /// </summary>
     [Id(9)] public int? WalPartitions { get; init; }

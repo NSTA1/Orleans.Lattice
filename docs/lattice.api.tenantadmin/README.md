@@ -13,7 +13,9 @@ once and no transport concern leaks into the control logic.
 This package is the control plane for the [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md)
 companion. It mirrors the [TreeAdmin](../lattice.api.treeadmin/README.md) packaging
 convention exactly: the contracts live in `Orleans.Lattice.Api.Abstractions` (under
-`TenantAdmin/`), the implementations here, the gRPC binding in a sibling package, and
+`TenantAdmin/`) - except `ILatticeTenantScopedTreeAdmin` and its
+`TenantScopeRequiredException`, which this package declares - the implementations
+here, the gRPC binding in a sibling package, and
 an MCP `TenantAdmin` tool group. It **composes** the existing tree-administration
 facade (`ILatticeTreeAdmin`) and the schema engine's in-process admin
 (`ILatticeSchemaAdmin`) rather than reimplementing them.
@@ -43,6 +45,12 @@ The facades exposed are:
 - **`ILatticeTenantQuotaUsage`** - the read-only usage-against-quota report: per
   dimension, a tenant's consumption next to its steady-state and burst-adjusted
   ceilings.
+
+The [gRPC binding](../lattice.api.tenantadmin.grpc/README.md) serves every facade
+above except `ILatticeTenantScopedTreeAdmin`, which no transport binding exposes. The
+MCP binding exposes the self-service reads and, behind its control opt-in, only the
+lifecycle, quota, and region-residency verbs (see the
+[tenancy guide](../lattice.tenancy/README.md#tenant-aware-surfaces)).
 
 ## Core properties
 
@@ -80,23 +88,15 @@ The facades exposed are:
   record's admin-subject set, so a tenant created with none is mutable but
   invisible - even to the operator who just created it. `CreateTenantAsync`
   therefore takes an optional `adminSubjects` set and seeds it onto the new
-  record. Omit it and the **calling subject** is seeded, so the creator can always
-  see what it created; supply one and it is used **verbatim** (the caller is not
-  added on top), which is how you hand a tenant to its delegated admins in a
-  single call. Every entry must be a non-blank subject id, a blank or `null`
+  record. Omit it (or pass an empty set) and the **calling subject** is seeded, so the
+  creator can always see what it created; supply a non-empty one and it is used
+  **verbatim** (the caller is not added on top), which is how you hand a tenant to
+  its delegated admins in a single call. Every entry must be a non-blank subject id, a blank or `null`
   entry fails closed with an `ArgumentException`, and duplicates collapse. A
   caller that cannot be resolved to a subject (an anonymous or system-origin
   create) seeds nothing rather than inventing an owner; grant access explicitly
   in that case. The seeded set is echoed back on
-  `TenantCreationResult.AdminSubjects`. Because membership of that set *is* the
-  tenant-admin capability, an explicitly supplied id is validated against the
-  upstream identity directory when one is configured and
-  `LatticeIdentityDirectoryOptions.ValidationRequired` is set, exactly as the
-  authorization-admin facade validates a group member: an unresolvable id is
-  refused with a `LatticeDirectoryValidationException` rather than being accepted
-  as a dangling grant that whoever later registers that id would inherit. The
-  caller-seeded default is not directory-validated - it comes from the
-  authenticated caller's own resolved subject, not from the wire.
+  `TenantCreationResult.AdminSubjects`.
 - **Authorize, then validate, then write.** Every `ILatticeTenantAdmin` lifecycle
   verb first parses the tenant id (a purely syntactic step over the caller's own
   argument, which on create also rejects an id shadowing the `sys-` or `_lattice_`
@@ -121,9 +121,16 @@ The facades exposed are:
   unbounded on that dimension; passing `TenantQuotasDescriptor.Unbounded` lifts every
   cap again. `BurstPercent` is the transient headroom above the bounded ceilings and
   must be non-negative (a negative value fails closed with an `ArgumentException`). The
-  reserved `default` tenant can never be given quotas. The authored allocation is
-  surfaced back on `ILatticeTenantSelfService.GetTenantAsync` (`TenantStatusReport.Quotas`),
-  so an operator can confirm it without a follow-up read.
+  reserved `default` tenant can never be given quotas. The quotas now in effect come
+  back on `TenantQuotasUpdateResult.Quotas`, and stay readable on
+  `ILatticeTenantSelfService.GetTenantAsync` (`TenantStatusReport.Quotas`) for any
+  caller that can see the tenant.
+- **Write contention.** Every mutating verb commits through the tenancy registry's
+  optimistic read-merge-write, so under sustained contention on one tenant's record
+  it can fail with the tenancy package's `TenantRegistryConcurrencyException` (see
+  [Store write contention](../lattice.tenancy/README.md#store-write-contention))
+  instead of its domain outcome; the write that exhausted its retries is not applied,
+  and the call can be retried.
 
 ## Registration
 
@@ -204,9 +211,10 @@ the record the registry commits. Because the pre-write check has already refused
 single-writer case, a merged record with no resident region can only mean a concurrent
 removal, so the call repairs the regions **it** drained (restoring their prior status
 at a strictly later stamp), leaves the other caller's removal standing, and refuses
-with `TenantLastRegionException`. Both racing callers are refused and the tenant keeps
-at least one resident region; retrying either call afterwards meets the ordinary
-pre-write guard.
+with `TenantLastRegionException`. Only the caller whose commit observes the emptied
+set is refused; the other caller's removal, committed while a region was still
+resident, succeeds and stands. Either way the tenant keeps at least one resident
+region, and retrying the refused call afterwards meets the ordinary pre-write guard.
 
 For the same reason both write operations report the **merged** record rather than the
 caller's pre-write view, so a concurrent change from another writer is present in the
@@ -311,10 +319,18 @@ or a live admin subject of the target tenant - and a caller holding neither is t
 | `AddAdminSubjectAsync` | `Task<TenantAdminSubjectChangeResult> AddAdminSubjectAsync(string tenantId, string subjectId, CancellationToken cancellationToken = default)` |
 | `RemoveAdminSubjectAsync` | `Task<TenantAdminSubjectChangeResult> RemoveAdminSubjectAsync(string tenantId, string subjectId, CancellationToken cancellationToken = default)` |
 
-Add and remove are idempotent (`Changed` reports whether the set moved). An added
-subject id is validated against the upstream identity directory when one is
-configured and `ValidationRequired` is set, exactly as an explicit create-time seed
-is. Removing a tenant's last admin subject is refused with
+Add and remove are idempotent (`Changed` reports whether the set moved). When a real
+identity directory provider is registered (anything but the default
+`NullIdentityDirectory`) and `LatticeIdentityDirectoryOptions.ValidationRequired` is
+set, an add of a subject that is not already a member - checked after authorization
+and the reserved-tenant check - requires the id to resolve: an id the directory
+resolves to nothing is refused with a `LatticeDirectoryValidationException` (an
+`ArgumentException`) before the write. Resolution is the only directory check. Unlike
+the `UpsertGroupAsync` and `AddMemberAsync` paths of the
+[authorization-admin facade](../lattice.api.auth/README.md), the principal's kind is
+not checked, so an id that resolves to a group is accepted. Admin-subject membership
+is matched against the caller's own subject id with no group expansion, so such an
+entry never authorizes the group's members. Removing a tenant's last admin subject is refused with
 `TenantLastAdminSubjectException` - including when two concurrent removals of
 different subjects would together empty the set, which is detected on the merged
 record and repaired before the refusal - and the reserved `default` tenant's
@@ -337,7 +353,9 @@ Each step is authorized for the platform operator or a live admin subject of one
 specific tenant: the **granting** tenant offers, the **grantee** tenant approves or
 rejects, **either** party may revoke, and a listing is the listed tenant's own.
 `scope` names the granting tenant's data the grant covers (a tree name or tree-name
-prefix) and `operations` must not be `TenantGrantAccess.None`. An offer never
+prefix), `operations` must not be `TenantGrantAccess.None`, and the two tenants must
+differ: a blank scope, an empty operation set, or the same tenant on both sides fails
+with an `ArgumentException`. An offer never
 requires the grantee to exist and may not name the reserved `default` tenant on
 either side. A grant that was never offered - or whose granting tenant is not
 registered - is reported identically as `TenantGrantNotFoundException`; asking for

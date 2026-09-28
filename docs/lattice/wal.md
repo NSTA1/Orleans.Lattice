@@ -156,17 +156,22 @@ follow:
   successfully, the mutation is in the WAL and visible to any replay. If the
   WAL append throws, the in-memory projection is untouched, and the caller sees
   the exception.
-- **In-memory projection is reconstructable from the WAL alone.** The
+- **In-memory projection is reconstructable from the WAL and the leaf's
+  snapshot.** The
   projection has no independent durability guarantee. The leaf still persists
   its grain-state row for the projection-checkpoint flush (below) and for
   tree-metadata paths (sibling pointer updates, tree-id stamping, split
   lifecycle, last-compaction-version snapshotting), but those persist
   *metadata*, not a fallback copy of the entry values. The grain-state row never
-  stores committed entry values as a backup: apart from the small replay ledger
+  stores committed entry values as a backup: apart from the replay ledger
   that records unresolved saga prepares and undrained deferred terminals
   verbatim (see
   [Resumable cold replay](projection-rebuild.md#resumable-cold-replay)), entry
-  values live in the WAL until they reach a durable snapshot.
+  values live in the WAL until they reach a durable snapshot, after which the
+  WAL GC may trim the snapshot-covered prefix. The ledger is empty in the
+  steady state, but a backlog of sagas whose terminals never land grows it
+  without limit (see
+  [Tree Storage](tree-storage.md#sizing-surface-1---leaf-grain-state-row)).
 - **Replication consumers see exactly the foreground commit ordering.** A peer
   replicating from this shard sees the same `LatticeMutation` envelopes in the
   same order that the local projection saw them. The WAL is the linearization
@@ -341,8 +346,8 @@ writer routes the record to its WAL partition:
    writer asks `ILatticeOriginClusterIdResolver.Resolve(treeId)` for the
    local id.
 
-`ILatticeOriginClusterIdResolver` is a public seam in
-`Orleans.Lattice.BPlusTree.Grains`. The core ships
+`ILatticeOriginClusterIdResolver` is a public seam in the `Orleans.Lattice`
+namespace. The core ships
 `DefaultLatticeOriginClusterIdResolver` (returns `string.Empty`) so a
 single-cluster host gets an empty stamp and downstream consumers ignore
 it. Hosts that register `Orleans.Lattice.Replication` get
@@ -635,9 +640,12 @@ batch.
 
 
 When a leaf grain activates, it rebuilds its in-memory projection by
-replaying the WAL through the per-partition `ILeafReplayCoordinatorGrain`,
-seeding the cache first from its own latest durable snapshot when that
-snapshot is newer than its checkpoint. Three cases:
+replaying the WAL through a per-partition replay coordinator, seeding the
+cache first from its own latest durable snapshot - when that snapshot is
+newer than its partition-0 checkpoint, and also when it is at or behind it
+but the cache starts empty or a WAL prefix has been trimmed (see
+[Snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net)).
+Three cases:
 
 - **Tail replay.** The last persisted projection checkpoint is at offset *N*,
   the newest WAL entry is at offset *M* (the WAL head, the next offset to be
@@ -646,8 +654,9 @@ snapshot is newer than its checkpoint. Three cases:
   each to its projection. Replay is in-process and typically completes in a
   few milliseconds.
 - **Fresh-leaf tail replay.** A leaf created mid-run by a split (or by the
-  first write to a virgin shard) carries the -1 "nothing applied" sentinel
-  in its `ProjectionCheckpointOffset`. The fall-off-log detector exempts the
+  first write to a virgin shard) has no checkpoint yet: a never-assigned
+  checkpoint reads as the -1 "nothing applied" sentinel on every partition
+  (issue #2703). The fall-off-log detector exempts the
   sentinel from the replay-budget and trim triggers: the leaf has no
   projection state to lose, and the per-leaf range filter inside the
   materialiser (`ShouldApplyDuringReplay`) drops every WAL entry that falls
@@ -668,12 +677,12 @@ snapshot is newer than its checkpoint. Three cases:
   and parent pointers, tree id, shard index, key range, moved-away slots,
   split lifecycle, last-compaction-version), the leaf's hybrid-logical clock
   and version vector, the projection checkpoints, the running projection
-  hash and its publish sequence, a snapshot-size hint and the small replay
+  hash and its publish sequence, a snapshot-size hint and the replay
   ledger - it is never the source of truth for committed entry values.
 
 In both replay cases, the projection that a reader observes after activation is
-byte-equivalent to the projection at the moment the leaf last deactivated (or
-empty, for a freshly-created leaf).
+byte-equivalent to the projection at the moment the leaf last deactivated (for
+a freshly-created leaf, the records the WAL holds for its own range).
 
 ### Replay reads are filtered at the source
 
@@ -855,10 +864,10 @@ applied frontier into it - the materialiser drain-lag back-pressure is live
 for every write workload out of the box, not only on materialiser /
 replication hosts. The registry is process-local and loses its state on silo
 restart. A host that needs cross-restart durability supplies its own
-`IWalCursorRegistry` implementation through the
-`AddWalCursorRegistry(factory)` overload, which replaces that in-memory
+`IWalCursorRegistry` implementation by passing a factory to
+`AddWalCursorRegistry(factory)`, which replaces that in-memory
 default regardless of registration order. `AddLatticeReplication(...)` and
-the durable storage helpers call the no-factory overload instead, which keeps
+the durable storage helpers call it without a factory instead, which keeps
 the in-memory registry and adds the durable-pin-aware leaf reporter described
 under [Surviving a full restart](#surviving-a-full-restart).
 
@@ -992,11 +1001,13 @@ LatticeWalGcReport report = await gc.RunOnceAsync(
     cancellationToken: cancellationToken);
 
 // The report exposes the inputs and the outcome:
+//   - report.TreeName        - the tree the pass targeted
 //   - report.MinCursor       - minimum cursor across registered consumers, or null
 //   - report.TtlCeilingHlc   - TTL ceiling synthesised from WalRetention, or null
 //   - report.CausalStable    - pointwise-min VersionVector across consumers, or null
 //   - report.BlockedFloor    - lowest buffer pin across consumers, or null
-//   - report.ShardsScanned   - number of WAL shards walked
+//   - report.ShardsScanned   - WAL partitions whose provider resolved and were
+//                              visited; zero means none could be, not an empty WAL
 //   - report.EntriesTrimmed  - total entries the pass found eligible and asked the
 //                              provider to trim, across all shards
 //   - report.ByteCeiling, RetainedBytesBefore, RetainedBytesAfter,

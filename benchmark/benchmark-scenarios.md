@@ -96,18 +96,24 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `current-state-no-replication` / `current-state-single-peer`.
 
 - [x] **observer-no-peer: Observer-off vs. observer-on delta.**
-  Controlled A/B of identical simulator load with `IMutationObserver`
-  unregistered vs. registered (no-op). Isolates observer-dispatch cost on
-  the hot write path. Pairs with `current-state-single-peer` /
-  `replication-key-filter` to attribute latency between dispatch overhead,
-  filter cost, and downstream replication work.
+  Replication is enabled with no peer configured: the replication commit
+  observer is registered and runs on every commit to the tree, but no shipper
+  runs, so nothing is shipped. Against `current-state-no-replication`, which
+  registers no observer, it isolates the observer's cost on the hot write
+  path; it pairs with `current-state-single-peer` / `replication-key-filter`
+  to attribute latency between observer overhead, filter cost, and
+  downstream replication work.
 
 - [x] **read-heavy-random: 95:5 read:write, random keys.**
   Same write topology as `current-state-no-replication` plus a read-driver
   (in `Bench.Sink/LatticeReadDriver`) issuing `GetAsync` at a steady rate
-  against random keys discovered via cursor pagination. Read:write ratio
-  approximates 95:5, mirroring YCSB workload B. Measures cache
-  effectiveness and `Get` fast-path tail latency under random access.
+  against random keys discovered via cursor pagination. The 95:5 ratio,
+  mirroring YCSB workload B, is the design intent rather than a fixed
+  property: the read rate is pinned (`BENCH_READ_RATE_PER_SECOND=38000`)
+  while every vehicle publishes one sample per 200 ms simulator tick, so the
+  offered ratio is 95:5 only at a fleet of about 400 vehicles and falls to
+  about 79:21 at the documentary 2,000. Measures cache effectiveness and
+  `Get` fast-path tail latency under random access.
 
 - [x] **read-heavy-ordered: 95:5 read:write, sequential keyspace walk.**
   Same write topology as `read-heavy-random` but the read-driver walks the
@@ -117,11 +123,14 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
   `read-heavy-random` is itself a regression metric.
 
 - [x] **read-write-mix-random: 50:50 read/write, random keys.**
-  Balanced YCSB-A-shape mix. Drives fixed-rate writes (batched `SetManyAsync`)
-  from the simulator and an equal-rate `GetAsync` from the read-driver against
-  random keys. Stresses the contention between the read fast path and the
-  commit path on the same shard, which neither pure-write nor pure-read
-  scenarios isolate.
+  YCSB-A-shape mix by design. Drives writes (batched `SetManyAsync`) from the
+  simulator and a fixed-rate `GetAsync` stream
+  (`BENCH_READ_RATE_PER_SECOND=2000`) from the read-driver against random
+  keys. The two rates match only at a fleet of about 400 vehicles (one
+  sample per vehicle per 200 ms tick); at the documentary 2,000 the writes
+  outnumber the reads about five to one. Stresses the contention between
+  the read fast path and the commit path on the same shard, which neither
+  pure-write nor pure-read scenarios isolate.
 
 - [x] **read-write-mix-ordered: 50:50 read/write, sequential walks.**
   Same shape as `read-write-mix-random` but the read-driver walks
@@ -279,7 +288,8 @@ public sealed class LatticeSink : ITelemetrySink, IHostedService, IAsyncDisposab
 {
     public LatticeSink(IGrainFactory grainFactory, IOptions<LatticeSinkOptions> options, ILogger<LatticeSink> logger);
     // PublishTelemetryAsync: Channel<VehicleTelemetryEvent>.Writer.TryWrite, return synchronously
-    //   (with DropOnFull, the default, a full channel drops its oldest sample instead of blocking).
+    //   (with DropOnFull, the default, a full channel drops its oldest sample instead of blocking;
+    //   the write still succeeds, so that eviction is not counted as dropped).
     // PublishEventAsync: no-op - discrete events are not written to the tree.
     // StartAsync: start the background drain - one SetManyAsync per batch (SetAsync with a TTL for
     //   the event-log key shape); faults surface via metrics, never out of the producer path.
@@ -327,7 +337,10 @@ write latency, contaminating every scenario. Implementations MUST:
 - Apply backpressure by either bounding the channel and recording drops
   via a metric, or by using `BoundedChannelFullMode.Wait` with a hard
   timeout. Silently blocking the producer is a benchmark contamination
-  bug - surface it loudly.
+  bug - surface it loudly. The shipped sink meets neither variant as
+  written: with `DropOnFull=true` (the default) its channel evicts the
+  oldest sample without recording a drop, and with `DropOnFull=false` it
+  waits on the producer's cancellation token with no timeout of its own.
 - Handle `IClusterClient` / Lattice-side faults entirely inside the drain
   loop. The producer side never observes them.
 
@@ -409,9 +422,12 @@ Each benchmark scenario interprets these meter sources side-by-side:
 - `vehicle_fleet_simulator.atomic_saga_driver` - the saga driver
   (atomic-write scenarios): `sagas`, `errors`, `duration_ms`.
 
-All of these meters are registered with the same OpenTelemetry exporter in
-`benchmark/host/Bench.Silo/Program.cs` so latency attribution is visible
-in a single dashboard.
+All of these meters are registered with the same OpenTelemetry Prometheus
+exporter in `benchmark/host/Bench.Silo/Program.cs`, so one scrape - and so
+one `results.json` capture - carries them side by side. The embedded Grafana
+dashboards read only the Lattice meters; the `vehicle_fleet_simulator.*`
+series reach `results.json` (and, for the sink and the read driver, the
+history stack's persona dashboards).
 
 > **Reading the sink latency split.** The sink emits two latency histograms,
 > `inline_publish_duration_ms` (producer-side cost: enqueueing the event into

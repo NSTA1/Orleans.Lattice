@@ -36,7 +36,7 @@ See [Configuration](configuration.md) for defaults and semantics.
 | Type | Purpose |
 |---|---|
 | `IndexedAttribute` | Orleans facet attribute standing in for `[PersistentState]`, marking a grain's state as indexed. Takes an optional state name and storage name. |
-| `IndexedGrain<TState>` | Base class exposing `State`, `RecordExists`, `Etag`, `PersistentState`, and `WriteStateAsync`/`ReadStateAsync`/`ClearStateAsync`, each of which re-projects the grain's entries. |
+| `IndexedGrain<TState>` | Optional base class exposing `State`, `RecordExists`, `Etag`, `PersistentState`, and `WriteStateAsync`/`ReadStateAsync`/`ClearStateAsync`. It holds no enrolment logic: it forwards to the `[Indexed]` state object, whose write publishes the grain's entries, whose re-read reconciles them against what it reads, and whose clear withdraws them. |
 
 ## Querying
 
@@ -72,7 +72,7 @@ See [Queries](queries.md).
 | Type | Purpose |
 |---|---|
 | `IGrainKeySource` | The application-supplied key population. `EnumerateKeysAsync(string? resumeAfterExclusive, CancellationToken)` and the optional `TryGetApproximateCountAsync(CancellationToken)`. |
-| `IGrainIndexBackfillActivator` | Resolves an index's backfill grain. |
+| `IGrainIndexBackfillActivator` | The replaceable seam the backfill uses to onboard one dormant grain: `ActivateAsync(IGrainIndexDefinition, string grainKey, CancellationToken)` brings the grain into existence so its `[Indexed]` state enrols it. The default addresses the grain through the index's key codec and asks the runtime to deactivate it when idle. |
 | `GrainIndexBackfillState` | `NotStarted`, `Running`, `Paused`, `Completed`, `Failed`. |
 | `GrainIndexBackfillStatus` | A crawl's state, checkpoint, and progress. |
 | `GrainIndexBackfillBatchResult` | The outcome of one pass. |
@@ -146,5 +146,5 @@ See [Architecture](architecture.md#key-encoding).
 | `GrainIndexPropertyNotIndexedException` | A predicate names a property that is not `Include`d. Reports the index, the path, and the indexed properties. |
 | `GrainIndexConfigurationDriftException` | A drift-breaking declaration change is rejected at startup. Names the index and the drifted fields. |
 | `GrainIndexReplicationNotAllowedException` | An index tree is configured to replicate while `AllowReplication` is `false`. |
-| `GrainIndexKeyEncodingException` | A grain key cannot be encoded or decoded by the index's codec. |
+| `GrainIndexKeyEncodingException` | A grain key cannot be encoded or decoded by the index's codec, or - from `AddGrainIndex` - a declaration supplies no `WithKeyCodec` and no built-in codec matches `TGrain` (it declares none, or more than one, of the string, `Guid` and integer key interfaces). |
 | `NotSupportedException` | A predicate uses a construct the planner cannot route. See [Unsupported constructs](queries.md#unsupported-constructs). |

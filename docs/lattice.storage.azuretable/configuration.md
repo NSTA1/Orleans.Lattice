@@ -93,6 +93,8 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`Compression`](#compression) | `LatticeCompression` | `Zstd` |
 | [`CompressionMinPayloadBytes`](#compressionminpayloadbytes) | `int` | 256 |
 
+Every non-null default above is also published as a public member of `AzureTableWalStorageOptions`: the constants `DefaultTableName`, `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultHonorSaturationSignal`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultCompression`, and `DefaultCompressionMinPayloadBytes`, and the `static readonly` `TimeSpan` fields `DefaultRetryNetworkTimeout`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultSaturationShortCircuitCooldown`, and `DefaultPhaseOneTransientRetryBaseDelay`. `DefaultPhaseOneTransientRetryMaxDelay` (250 ms) is not an option's default but the fixed cap on the phase-1 retry backoff.
+
 ## Option guidance
 
 ### `ConnectionString`

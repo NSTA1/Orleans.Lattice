@@ -479,7 +479,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "costs you - delivered content plus each entry's JSON envelope and the bundle's own "
                     + "scaffolding, scaled by 3.5 because the MCP SDK serializes every result twice and the "
                     + "second copy is escaped JSON text that tokenizes worse - and never exceeds 'budgetTokens'; "
-                    + "'totalTokens' reports the "
+                    + "an empty bundle (it failed closed, the search matched nothing, or every candidate was "
+                    + "already held) reports 0; 'totalTokens' reports the "
                     + "narrower BPE sum of the packed source text alone. A unit is a descriptor, not a second copy "
                     + "of the text: an entry's 'content' is the join of its units, so the text ships exactly once. "
                     + "When even the cheapest entry does not fit, it FAILS CLOSED: 'entries' is "
@@ -517,7 +518,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "conservatively replaced "
                     + "('readsReplacedTokens' - credited only for delivered whole-file-equivalent content, never for "
                     + "discovery or partial detail or content the caller already held), the net tokens saved "
-                    + "('netSavedTokens'), and the window length ('windowSeconds'). It carries no body, query, path, "
+                    + "('netSavedTokens' - signed: 'readsReplacedTokens' minus 'responseTokens', so it is negative "
+                    + "when the responses cost more than the reads they replaced), and the window length "
+                    + "('windowSeconds'). It carries no body, query, path, "
                     + "or repository identity - aggregate figures only. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
@@ -714,7 +717,13 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Removes a repository-context entry. By default it hard-deletes the entry immediately; set "
                     + "'lapse' to true to instead re-write it with a short time-to-live (default 60 seconds) so it "
-                    + "lapses on its own, which lets concurrent readers drain gracefully. A lapse succeeds even "
+                    + "lapses on its own, which lets concurrent readers drain gracefully. On a memory entry whose "
+                    + "value decodes, the lapse is merged with the expiry the entry already carries by keeping the "
+                    + "later of the two: it lapses a durable entry, but it cannot shorten one whose existing expiry "
+                    + "is later than the lapse window. Any other lapse - a non-memory record, or a memory entry "
+                    + "that cannot be decoded - re-writes the entry directly with the lapse expiry, replacing any "
+                    + "expiry it carried. Either way 'expiresAtUtc' reports the expiry actually in force. "
+                    + "A lapse succeeds even "
                     + "when the stored value is malformed and cannot be decoded - retiring a record does not "
                     + "require reading it, so a corrupt entry is recoverable without the hard delete that would "
                     + "destroy it - and that case is reported back as 'undecodable', so a store can never quietly "

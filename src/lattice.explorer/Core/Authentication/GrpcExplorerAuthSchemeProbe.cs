@@ -12,8 +12,8 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// <c>GetAuthScheme</c> RPC, mapping the wire advertisement onto the explorer's
 /// <see cref="ExplorerAuthSchemeAdvertisement"/>. An endpoint that does not
 /// implement the RPC (an older server) or is unreachable yields
-/// <see cref="ExplorerAuthSchemeAdvertisement.Empty"/> so discovery degrades to
-/// manual selection instead of failing.
+/// <see cref="ExplorerAuthSchemeAdvertisement.Empty"/> so the sign-in falls back to
+/// the Basic (username and password) flow instead of failing.
 /// </summary>
 public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDisposable
 {
@@ -58,7 +58,7 @@ public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDis
             // Transport headers gate the unauthenticated probe the same way they
             // gate every other call (for example an origin-routing header a
             // fronting proxy requires); without them a proxy-guarded endpoint
-            // rejects the probe and discovery wrongly falls back to manual/Basic.
+            // rejects the probe and the sign-in wrongly falls back to Basic.
             var invoker = LatticeGrpcChannelFactory.ApplyTransportHeaders(
                 channel.CreateCallInvoker(),
                 transportHeaders);
@@ -76,7 +76,8 @@ public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDis
         catch (RpcException)
         {
             // Endpoint does not advertise (Unimplemented), is unreachable, or
-            // rejected the probe: fall back to manual/Basic selection.
+            // rejected the probe: an empty advertisement, so the sign-in falls
+            // back to Basic (there is no manual scheme picker).
             return ExplorerAuthSchemeAdvertisement.Empty;
         }
     }

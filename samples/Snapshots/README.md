@@ -2,9 +2,14 @@
 
 ## What it shows
 
-`SnapshotAsync` makes a **point-in-time copy of an entire tree** into a new
-destination tree - useful for backups, read-only analytics forks, or cloning a
-dataset for experimentation. This sample uses `SnapshotMode.Offline`: every source
+`SnapshotAsync` **copies a tree** into a new destination tree - an offline
+snapshot as a point-in-time copy - which is useful for backups, read-only
+analytics forks, or cloning a dataset for experimentation. The copy carries only
+live entries (never tombstoned or expired ones) and covers the tree's pinned
+shard range, so it leaves out any shard an adaptive split later added; an online
+snapshot also does not mirror typed CRDT deltas (see
+[Snapshots](../../docs/lattice/snapshots.md)). This
+sample uses `SnapshotMode.Offline`: every source
 shard is locked when the copy starts and each is unlocked again once its own
 entries have been copied, producing a strictly consistent image.
 It then verifies the copy matches the source and shows the two trees are fully

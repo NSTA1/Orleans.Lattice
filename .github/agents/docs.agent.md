@@ -36,7 +36,7 @@ Run the phases in order. Each phase must complete with evidence before the next 
 
 ### Phase 1 - Enumerate the corpus
 
-0. **Sweep durable memory first.** `repocontext_search` the docs area under audit, and `repocontext_scan` scope `MemoryTopic` topic `conventions` (then `decisions`). Prior sweeps record which claims were verified, which drift was deliberate, and which conventions the prose must reflect - re-deriving them from source is the expensive path. Per `.github/instructions/repocontext.instructions.md`, this is moment 1.
+0. **Sweep durable memory first.** This is moment 1 of `.github/instructions/repocontext.instructions.md`: `repocontext_list_topics` for the map, then `repocontext_scan` scope `MemoryTopic` over the whole `gotchas` topic (unconditional every session, per that file), then `conventions` and `decisions`, and `repocontext_search` the docs area under audit as a supplement. Prior sweeps record which claims were verified, which drift was deliberate, and which conventions the prose must reflect - re-deriving them from source is the expensive path.
 1. `git ls-files "*.md"` to get the authoritative file list. Note the count. `.scratch/` is gitignored and absent from this list by construction. This stays a `git ls-files` contract: the corpus must be the tracked working tree, not the index, because you are auditing uncommitted prose too.
 2. If the user gave a narrower scope, filter the list and report the filtered count.
 3. **Do not** glob the filesystem with `Get-ChildItem` - that pulls in `bin/`, `obj/`, `node_modules/`, and stale untracked files. `git ls-files` is the contract.
@@ -63,7 +63,7 @@ Identify the **claim categories** to audit. The repeatable axes for this repo:
 | **Enumerated-inventory completeness** (any doc table or list that claims to enumerate a source set - the `PACKAGES.md` package inventory foremost, plus feature tables, metric catalogs, and option tables) | the full source set: for the package inventory, every packable `src/<project>/` (a `.csproj` whose `<PackageId>` is set and `<IsPackable>` is not `false`) cross-checked against released `git tag` prefixes; for other inventories, the relevant source registry | **reverse set-diff, source -> doc.** Enumerate the source set, extract the doc set, and report every source item with no row/entry as an omission. For the package inventory: `git tag` prefixes and packable-csproj `<PackageId>`s must each have a row in `PACKAGES.md` and in both tables of `docs/RELEASING.md`. Note the root `README.md` no longer carries a child-package table at all - it delegates to `PACKAGES.md`, as `AGENTS.md` states - so diffing `PackageId`s against `README.md` reports every package as a false "missing" row. Nested projects (e.g. the shared `Explorer.*` libraries under `src/lattice.explorer/`) are separate packages - do not assume one `src/<project>/` maps to one package |
 | **Relative links** | filesystem | the link scanner described in Phase 6 |
 
-For each axis, decide which docs to load. Do not pre-load all 457 files - load only when an axis points at them.
+For each axis, decide which docs to load. Do not pre-load the whole corpus - load only when an axis points at them.
 
 ### Phase 3 - Source verification (the depth pass)
 
@@ -105,7 +105,7 @@ After each batch of edits, re-run the wide-net grep that originally surfaced the
 
 ### Phase 5 - Hygiene-gate compliance
 
-Documentation edits trip three repo-wide gates. Run them, paste the tail of each transcript, and confirm `Failed: 0`. These are unskippable.
+Documentation edits trip three repo-wide gates. Run them, paste the tail of each transcript, and confirm every fixture reports `FAILED=0` with a non-zero `EXECUTED` count (the runner prints `dotnet test`'s own `Failed:` summary only for a fixture that did not pass). These are unskippable.
 
 The two test gates are invoked through `tools/Invoke-RepositoryWideGates.ps1`, never through a hand-composed `dotnet test --filter`. A raw filter that matches nothing - a typo, or an invented fixture name - prints `No test matches the given testcase filter` and **exits 0**, so a gate that never ran is byte-identical to a gate that passed. The runner reports the EXECUTED count per fixture and fails any gate that executed zero tests. See issue #3017.
 
@@ -122,6 +122,8 @@ The two test gates are invoked through `tools/Invoke-RepositoryWideGates.ps1`, n
    ```powershell
    pwsh tools/Invoke-RepositoryWideGates.ps1 -Fixture EmDashHygieneTests -Project test/lattice
    ```
+
+   The `test/lattice` fixture scans its own `src/lattice` and `test/lattice` slice plus every tracked file outside the slices registered to other test projects, which covers `docs/`, `.github/` and the root files; a tracked file inside another project's registered slice (for example `src/lattice.replication/NUGET_README.md`) is scanned only by that package's own `EmDashHygieneTests`, so a file edited there is verified only by running the same command with `-Project test/<package>`.
 
 3. **XML doc cref resolution** - every `<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>` in the source you touched (and, on a full sweep, across every packable project) must resolve to a real symbol, because the generated XML ships inside the NuGet package. `Directory.Build.targets` suppresses the cref-warning family for normal builds, so re-expose it explicitly:
 
@@ -206,7 +208,7 @@ These are protocol violations specific to this agent:
 - **Inline-PowerShell heredocs with `Add-Content` for multi-line edits.** The repo has a documented history of inline-PowerShell leaking variable-assignment text into target files. For any multi-line edit, use `replace_string_in_file` directly or seed a `.scratch/<name>.ps1` script and dot-source it.
 - **Em-dash leaks from copy-paste.** Word processors auto-convert `--` to `U+2014`. The em-dash hygiene gate is repo-wide; a single leak fails the gate.
 - **Folding the broken-link pass into the claim-fix phase.** They share output streams but verify different things; running them as separate phases keeps the evidence cleanly attributable.
-- **"I verified the snippet harness compiles" without running it.** The `DocsSnippetCompilationTests` filter is cheap. Run it, paste the `Failed: 0` line.
+- **"I verified the snippet harness compiles" without running it.** The `DocsSnippetCompilationTests` filter is cheap. Run it through the runner and paste its `EXECUTED=... FAILED=0 ... OK` line.
 
 ## Tooling rules of thumb
 

@@ -15,10 +15,17 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// on coordinator loss); see <see cref="ISagaParticipant"/> for the full
     /// contract.
     /// <para>
-    /// Registration is idempotent per participant type: calling this for the same
-    /// <typeparamref name="TParticipant"/> more than once enlists it once (the
-    /// enumerable entry is added via
-    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddEnumerable(IServiceCollection, ServiceDescriptor)"/>).
+    /// Registration is idempotent per participant type <b>and per form</b>. Each
+    /// enlistment is added via
+    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddEnumerable(IServiceCollection, ServiceDescriptor)"/>,
+    /// which deduplicates on the enlisted implementation type, so repeated unnamed
+    /// calls for the same <typeparamref name="TParticipant"/> enlist it once, and
+    /// repeated named calls enlist its diagnostic wrapper once (the first call's name
+    /// is kept; a later call's name is ignored). Mixing the two forms is <b>not</b>
+    /// deduplicated: an unnamed and a named call for the same
+    /// <typeparamref name="TParticipant"/> enlist two entries that both delegate to
+    /// the one participant instance, so every saga drives that instance through
+    /// each phase twice. Use a single form per participant type.
     /// <typeparamref name="TParticipant"/> is registered as a singleton and
     /// resolved from the container, so it may take constructor dependencies on
     /// other registered services.
@@ -75,8 +82,11 @@ public static partial class LatticeReplicationServiceCollectionExtensions
 
         // Enlist a named diagnostic wrapper. The closed generic
         // NamedSagaParticipant<TParticipant> is a distinct implementation type per
-        // participant type, so TryAddEnumerable still dedupes correctly per
-        // participant while the wrapper adds only diagnostic logging.
+        // participant type, so TryAddEnumerable dedupes repeated named calls per
+        // participant (keeping the first name) while the wrapper adds only
+        // diagnostic logging. It is also distinct from TParticipant itself, so a
+        // named call does NOT dedupe against an unnamed one for the same type:
+        // mixing the two forms enlists the participant twice.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ISagaParticipant, NamedSagaParticipant<TParticipant>>(
                 sp => new NamedSagaParticipant<TParticipant>(

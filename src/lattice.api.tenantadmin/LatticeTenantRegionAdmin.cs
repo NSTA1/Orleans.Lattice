@@ -46,7 +46,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// strictly later stamps, and then refuses with
 /// <see cref="TenantLastRegionException"/>. Re-asserting the whole pre-merge set
 /// would resurrect the other caller's legitimate removal, so the repair is
-/// always scoped to this call's own keys. Both racing callers are refused and
+/// always scoped to this call's own keys. The registry commits each write with an
+/// optimistic compare-and-set, so the first of two racing callers to commit sees a
+/// join that still holds the other's region and succeeds; only the caller whose
+/// merged result has no resident region repairs its own removals and is refused, and
 /// the tenant keeps at least one resident region - the fail-closed direction.
 /// </para>
 /// </remarks>

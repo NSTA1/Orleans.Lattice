@@ -72,7 +72,7 @@ report's per-shard counts would still disclose the keys they counted. See
 | Field | What a healthy value looks like | What an unhealthy value points at |
 |---|---|---|
 | `ShardCount` | The tree's physical shard count. It rises by one with each committed split - adaptive, or driven by an online reshard - and falls when automatic shard healing folds an over-split tree back towards its registry-pinned base shard count. | A value you did not expect means you are looking at a different tree than you think, or splits or healing changed the topology: check `RecentSplits` and `orleans.lattice.shard.splits_committed`. See [Shard splitting](shard-splitting.md), [Online reshard](online-reshard.md), and [`ShardHealingEnabled`](configuration.md#shardhealingenabled). |
-| `VirtualShardCount` | A compile-time constant (4096). Persisted shard maps reference virtual slots by index, so it is not configurable. | Nothing to act on - it is the routing map's resolution, not a load signal. See [Tree sizing](tree-sizing.md). |
+| `VirtualShardCount` | 4096 by default - a compile-time constant - or the slot count an installed app's manifest declared for a tree it created (see [Virtual shard space](configuration.md#virtual-shard-space-constant)). It is not a runtime option: persisted shard maps reference virtual slots by index. | Nothing to act on - it is the routing map's resolution, not a load signal. See [Tree sizing](tree-sizing.md). |
 | `TotalLiveKeys` | Tracks your expected working-set size. | Growth that outruns your model points at [Slow scans](#slow-scans) and admission headroom. Compare against `LatticeOptions.MaxLiveKeys` if you have set one. |
 | `TotalTombstones` | Small relative to `TotalLiveKeys`. | A large share of the total points at [tombstone bloat](#slow-scans). Only populated when `deep: true`. |
 | `SampledAt` | Within `DiagnosticsCacheTtl` (default 5 s) of now. | Older than the TTL means you are reading a cached report; see [the traps](#traps-when-reading-a-report). |
@@ -309,13 +309,16 @@ Two things this is *not*:
   there are `LeafSnapshotSegmentBytes`, `MaxLeafKeys`, `MaxLeafBytes`, the
   value sizes you write, and swapping that provider.
 - **Admission control caps total growth, not row size.** `MaxLiveKeys` and
-  `MaxEstimatedBytes` make the tree refuse point, batch and CRDT writes with a
+  `MaxEstimatedBytes` make the tree refuse the write calls that check them -
+  `SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`,
+  `ApplyCrdtDeltaAsync` and `ApplyCrdtDeltaManyAsync` - with a
   typed, actionable `LatticeQuotaExceededException` once the whole tree
   reaches a ceiling, and the non-enforcing `AdmissionAdvisoryLiveKeys` /
   `AdmissionAdvisoryBytes` dry-run ceilings help you size them; see
-  [Configuration](configuration.md). They bound the tree's total footprint,
-  not any single row, and the bulk-load paths do not check them, so they
-  complement the fixes above rather than replace them.
+  [Configuration](configuration.md#maxestimatedbytes). They bound the tree's
+  total footprint, not any single row, and the atomic batches,
+  `SetManyWherePredicateAsync`, the bulk-load paths and `MergeAsync` do not
+  check them, so they complement the fixes above rather than replace them.
 
 ---
 
@@ -526,7 +529,12 @@ activity](#concurrent-split-activity) first - the scan is a symptom of the
 topology churn, not the cause. `GetManyAsync` spends the same budget when a
 shard-map change or a concurrently committing atomic-write saga races its
 batched read; its exhaustion message tells you to reduce the concurrent saga
-rate instead. See [Consistency](consistency.md) for the enumeration
+rate instead. A multi-key read whose result depended on a pending atomic
+write while the transaction registry could not be reached throws
+`LatticeTransactionOutcomeUnavailableException` (a `TimeoutException`)
+instead of either message: a transient condition, so retry after a back-off;
+see [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception).
+See [Consistency](consistency.md) for the enumeration
 guarantees.
 
 ---
@@ -635,6 +643,7 @@ Two secondary checks:
 | `BulkOperationPending` stuck on | [Concurrent split activity](#concurrent-split-activity) and [Bulk loading](bulk-loading.md) |
 | Scan latency climbing while live keys stay flat | [Slow scans](#slow-scans) |
 | `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity); from `GetManyAsync`, concurrent [atomic writes](atomic-writes.md) |
+| `LatticeTransactionOutcomeUnavailableException` on a read | [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception) - the transaction registry was unreachable for a key under a pending atomic write: transient, retry after a back-off |
 | `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry |
 | Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |

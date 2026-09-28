@@ -33,7 +33,11 @@ opt-ins; both need `AddExplorerTelemetry()`.
 - **Availability detection.** On a cluster that serves no telemetry facade, or
   that offers the caller no queries at all, the surface reports unavailable, so
   a telemetry plugin's gate resolves to the four-state model's unavailable state
-  and renders nothing.
+  and renders nothing. A cluster that does not serve the facade answers gRPC
+  `Unimplemented`; the client wrapper raises that as
+  `TelemetryUnavailableException`, which the seam reports as
+  `TelemetryQueryStatus.Unavailable` - distinct from a denial and from a
+  backend fault.
 
 ## Usage
 

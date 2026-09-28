@@ -51,7 +51,8 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     /// <param name="probe">
     /// Optional scheme-discovery probe. When registered, <see cref="DiscoverAsync"/>
     /// asks the endpoint which scheme it requires; when absent, discovery yields
-    /// an empty advertisement and the explorer falls back to manual/Basic.
+    /// an empty advertisement and the explorer falls back to the Basic
+    /// (username and password) sign-in.
     /// </param>
     /// <param name="timeProvider">The clock passed to token-based challenges. Defaults to the system clock.</param>
     public ExplorerAuthSession(

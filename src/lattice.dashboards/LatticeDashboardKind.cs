@@ -73,9 +73,11 @@ public enum LatticeDashboardKind
     /// Identity and authorization operator view. Charts the enforcement gate's
     /// decision throughput (by <c>effect</c> and by <c>operation</c>),
     /// decision-latency percentiles (<c>decision.duration</c>), compiled-snapshot
-    /// rebuild rate and the snapshot <c>epoch</c> / <c>age</c> gauges from the
+    /// rebuild rate, the snapshot <c>epoch</c> / <c>age</c> gauges and the count of
+    /// distinct subjects the compiled policy names, from the
     /// <c>orleans.lattice.auth</c> meter, alongside the subject-resolution cache
-    /// hit-ratio and hit / miss throughput from the
+    /// hit-ratio and hit / miss throughput and the identity-directory search
+    /// latency percentiles, hit / miss throughput and hit-ratio from the
     /// <c>orleans.lattice.membership</c> meter. Sources the
     /// <c>orleans.lattice.auth</c> and <c>orleans.lattice.membership</c> meters;
     /// useful only when the authentication / authorization packages are
@@ -88,8 +90,10 @@ public enum LatticeDashboardKind
     /// duration percentiles, per-backup size / artifact / entry distributions,
     /// cumulative processed throughput, retention reclaim and prune rates,
     /// incremental lag (entries and age behind the base cut), capture / restore
-    /// failure rates broken out by reason, scheduler skipped-run and overrun
-    /// counters, the cross-tree-consistent fence selection / drain counters, and
+    /// failure rates broken out by reason, the capture retry / fallback rate,
+    /// scheduler skipped-run and overrun counters and scheduler capture failures by
+    /// reason, the cross-tree-consistent fence selection / drain and retry counters
+    /// with drain-wait percentiles, and
     /// the inventory observable gauges (tracked count, max chain depth, catalog
     /// bytes, oldest / newest age, and per-scope last-run status and
     /// last-success age). Sources the <c>orleans.lattice.backup</c> meter; useful

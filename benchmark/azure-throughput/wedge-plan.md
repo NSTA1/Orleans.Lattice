@@ -20,7 +20,9 @@
 > repro. References below to the repro "in this folder" and to
 > `repro/wedge-orleans/` describe the deleted repro, and `benchmark/vm/` (sections
 > 23.2 and 23.4) was never a path in this repository: the cohort runner is
-> `scripts/run-cohort.ps1` in this folder.
+> `scripts/run-cohort.ps1` in this folder. The ACI-era `scripts/40-ladder.ps1` and
+> its `-LocalBuild` / `-SkipBuild` switches that sections 10, 12, 13 and 19 cite no
+> longer exist either; the rung sweep is now `scripts/ladder.ps1` in this folder.
 
 ## 1. Reproducibility
 
@@ -906,6 +908,11 @@ Two changes shipped to make this failure mode unmissable to the next investigato
 ### 23.3 Saturation knobs catalogue (what to turn when offered exceeds drain)
 
 Reference for future cycles. Knobs are listed in the order an investigator typically reaches for them. Each knob comes with the failure mode it addresses; misdiagnosing the failure mode and turning the wrong knob is what made this campaign go on as long as it did.
+
+> **Snapshot note (added later):** the Default column records 2026-06-04. The library
+> default for `WalMaxPendingBatches` has since risen to 16 and the rig inherits it, so the
+> `BENCH_WAL_MAX_PENDING_BATCHES` row's "8 (bench), 1 (library default)" is out of date;
+> the Saturation knobs table in this folder's `README.md` carries the current defaults.
 
 | Knob | Default | What it bounds | When to turn |
 |---|---|---|---|

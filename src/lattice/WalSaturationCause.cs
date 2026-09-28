@@ -4,11 +4,15 @@ namespace Orleans.Lattice;
 /// Which of the sampler's inputs drove a
 /// <see cref="WalSaturationStateChange"/>. Several independent inputs map to the
 /// same <see cref="WalSaturationState"/>, so the state alone does not say what a
-/// host should look at: two different conditions both raise
-/// <see cref="WalSaturationState.Throttled"/>, and four both raise
-/// <see cref="WalSaturationState.Saturated"/>. This discriminator names the one
-/// the sampler attributed the transition to, so an observer can route an alert
-/// at the subsystem actually under pressure.
+/// host should look at: <see cref="AdmissionDepth"/>,
+/// <see cref="MaterialiserDrainLag"/> and <see cref="MaterialiserPinLatency"/>
+/// all raise <see cref="WalSaturationState.Throttled"/>, while
+/// <see cref="DispatchTimeouts"/>, <see cref="ProviderFailures"/> and
+/// <see cref="FlushLatency"/> raise <see cref="WalSaturationState.Saturated"/>,
+/// as does <see cref="AdmissionDepth"/> when
+/// <see cref="LatticeOptions.WalSaturationAcuteOnly"/> is disabled. This
+/// discriminator names the one the sampler attributed the transition to, so an
+/// observer can route an alert at the subsystem actually under pressure.
 /// <para>
 /// Attribution is best-effort and single-valued. When more than one input
 /// crossed in the same sample window the sampler reports the one evaluated
@@ -21,8 +25,10 @@ public enum WalSaturationCause
 {
     /// <summary>
     /// No single input was attributed. The value carried on every transition
-    /// back to <see cref="WalSaturationState.Healthy"/>, and on any transition
-    /// published by a host predating cause attribution.
+    /// back to <see cref="WalSaturationState.Healthy"/>, on a transition to
+    /// <see cref="WalSaturationState.Throttled"/> that only the
+    /// <see cref="LatticeOptions.WalSaturationRecoveryWindow"/> hold produced,
+    /// and on any transition published by a host predating cause attribution.
     /// </summary>
     None = 0,
 
@@ -41,8 +47,8 @@ public enum WalSaturationCause
     ProviderFailures = 2,
 
     /// <summary>
-    /// WAL flush latency stayed at or above
-    /// <see cref="LatticeOptions.WalSaturationFlushLatencyThreshold"/> for
+    /// At least one WAL flush met or exceeded
+    /// <see cref="LatticeOptions.WalSaturationFlushLatencyThreshold"/> in each of
     /// <see cref="LatticeOptions.WalSaturationFlushLatencySampleWindows"/>
     /// consecutive windows.
     /// </summary>
@@ -57,7 +63,10 @@ public enum WalSaturationCause
     AdmissionDepth = 4,
 
     /// <summary>
-    /// The in-memory materialiser drain lag stayed at or above
+    /// The materialiser drain lag - how far the WAL head has run ahead of the
+    /// slowest fresh consumer cursor in the tree's in-memory WAL cursor
+    /// registry, across leaf materialisers and tree-wide tailers such as view
+    /// maintainers, WAL subscribers and replication shippers - stayed above
     /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> for
     /// <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>
     /// consecutive windows.
@@ -65,9 +74,9 @@ public enum WalSaturationCause
     MaterialiserDrainLag = 5,
 
     /// <summary>
-    /// Durable materialiser-pin writes stayed at or above
-    /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>
-    /// for
+    /// At least one durable materialiser-pin write faulted, or met or exceeded
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>,
+    /// in each of
     /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencySampleWindows"/>
     /// consecutive windows.
     /// <para>

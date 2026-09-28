@@ -11,7 +11,7 @@ Bind it through `AddEntraCredentialAuthenticator(configure)`. Each call register
 | Constant | Type | Value | Meaning |
 |---|---|---|---|
 | `DefaultIssuerTemplate` | `string` | `"https://login.microsoftonline.com/{tenantid}/v2.0"` | The default Entra v2.0 issuer template. `{tenantid}` is replaced with each token's tenant id when validating the issuer, so both single-tenant and multi-tenant tokens validate against one template. |
-| `DefaultAuthorityHost` | `string` | `"https://login.microsoftonline.com"` | The default Entra login host used to derive the OIDC metadata address. |
+| `DefaultAuthorityHost` | `string` | `"https://login.microsoftonline.com"` | The public-cloud Entra login host, provided as a convenience for composing `Authority` (for example `$"{LatticeEntraAuthenticatorOptions.DefaultAuthorityHost}/{tenantId}/v2.0"`). The authenticator never reads it: the discovery document address comes only from `MetadataAddress` or `Authority` (see `ResolveMetadataAddress()`). |
 | `DefaultAlgorithm` | `string` | `"RS256"` | The default token signature algorithm Entra issues v2.0 tokens with (`SecurityAlgorithms.RsaSha256`). `Algorithms` is pre-populated with this single value. |
 
 ### Properties

@@ -1,16 +1,23 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// The data-plane operation an access-gate authorizes for a single logical
-/// call. Modelled as flags so a composite request (for example an atomic
-/// write that both writes and deletes keys) can carry the union of the
-/// capabilities it exercises, and a future policy can grant a caller a set of
+/// The operation an access-gate authorizes for a single logical call: a
+/// data-plane read or write, or one of the control-plane and cluster-wide
+/// capabilities below. Modelled as flags so a composite request (for example
+/// an atomic write that both writes and deletes keys) can carry the union of
+/// the capabilities it exercises, and a policy can grant a caller a set of
 /// capabilities in one mask.
 /// </summary>
 /// <remarks>
-/// This is in-process request vocabulary consumed by an
-/// <see cref="ILatticeAccessGate"/>. It is never persisted or sent on the wire
-/// by the core library, so it carries no Orleans serialization attributes.
+/// This is the request vocabulary consumed by an
+/// <see cref="ILatticeAccessGate"/>. It carries no Orleans serialization
+/// attributes of its own, but it is not in-process only: the core library's
+/// <see cref="LatticeAuthorizationDeniedException"/> and
+/// <see cref="LatticeWriteRejectedException"/> serialize the operation they
+/// carry when they travel back to a caller, and add-on packages persist
+/// operation masks with the Orleans serializer (for example an installed
+/// app's consented capability ceiling). Its numeric values are therefore wire
+/// and storage format and must never be renumbered.
 /// </remarks>
 [Flags]
 public enum LatticeOperation
@@ -56,7 +63,8 @@ public enum LatticeOperation
     /// write (for example snapshot, merge, compaction, a leaf-projection
     /// rebuild, or reconfiguring per-tree settings). Destructive or structural
     /// lifecycle verbs - dropping, recovering or purging a tree, reshard,
-    /// resize, and WAL placement moves - require <see cref="TreeLifecycle"/>
+    /// resize and its undo, orphaned-leaf repair, and WAL placement moves -
+    /// require <see cref="TreeLifecycle"/>
     /// instead, which this capability does not confer.
     /// </summary>
     Admin = 256,
@@ -131,9 +139,11 @@ public enum LatticeOperation
 
     /// <summary>
     /// Perform an <b>irreversible or structural whole-tree lifecycle</b>
-    /// operation: dropping / purging a tree, changing its shard count or topology
-    /// (reshard), changing its B+ node capacity (resize), or moving its
-    /// write-ahead-log placement. These are the highest-blast-radius verbs the
+    /// operation: dropping, recovering, or purging a tree, changing its shard
+    /// count or topology (reshard), changing its B+ node capacity (resize) or
+    /// undoing that change, unsplicing orphaned leaves, or moving its
+    /// write-ahead-log placement and reclaiming the moved-away source. These
+    /// are the highest-blast-radius verbs the
     /// tree-administration control plane exposes, so this capability is
     /// deliberately <b>distinct</b> from <see cref="Admin"/>: holding
     /// <see cref="Admin"/> does not confer it, and holding it does not confer
@@ -150,11 +160,16 @@ public enum LatticeOperation
     TreeLifecycle = 16384,
 
     /// <summary>
-    /// Install, upgrade, or uninstall an <b>app</b> on the cluster: a
+    /// Install, upgrade, enable, disable, or uninstall an <b>app</b> on the
+    /// cluster, including re-consenting an installed version's capability
+    /// ceiling and reconciling its grants: a
     /// <b>cluster-wide, scopeless</b> capability, granted over
     /// <c>LatticeScope.ClusterWide()</c> exactly as <see cref="Telemetry"/>
     /// is. It does not attach to a tree, prefix, or key - it authorizes changing
-    /// the cluster's installed app set as a whole. A scopeless capability is
+    /// the cluster's installed apps and their lifecycle as a whole. The app
+    /// lifecycle control surface also requires it to list or describe apps and
+    /// read their consent, because an install record carries the app's consented
+    /// ceiling and role bindings. A scopeless capability is
     /// evaluated against the cluster-wide scope, so a collision between that scope
     /// and a real tree id is harmless: scopeless capability bits never overlap the
     /// data-plane operation bits, so a data-plane grant over such a tree can never

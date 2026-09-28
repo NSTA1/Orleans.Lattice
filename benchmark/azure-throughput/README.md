@@ -47,7 +47,9 @@ journald-backed log capture with no scraper indirection.
 |------|---------|
 | `Producer/Program.cs` | Generates `VehicleTelemetryEvent` records and writes JSON lines over TCP, or (Layer 3, `BENCH_PRODUCER_MODE=orleans-client`) drives `ILattice` directly as an Orleans client. |
 | `Silo/Program.cs` | Lattice silo host; TCP listener (or, on Layer 3, cluster ingest) -> the `BENCH_WORKLOAD_MODE` operation (default `ILattice.SetManyAsync`). |
-| `Engine/` | Shared ingest engine both the silo and the Orleans-client producer run: batching, workload dispatch, and the per-second and `FINAL` report lines. |
+| `Engine/` | Shared ingest engine both the silo and the Orleans-client producer run: batching, workload dispatch, the read-mode pre-seed, the stall watchdog, and the per-second and `FINAL` report lines. |
+| `Producer/ChannelGenerator.cs`, `Producer/GeneratorChannelReader.cs`, `Producer/GeneratorProgress.cs` | The Orleans-client producer's generator (also what `--dry-run` drains): per-worker vehicle slices, the chunked bounded channel and the reader that hands the engine single entries, and the `genBlockedFrac` / `slipMaxMs` accounting (see [Parallel Layer 3 producer](#parallel-layer-3-producer)). |
+| `Silo/BenchSaturationLogger.cs`, `Silo/SiloBenchSaturationGate.cs`, `Silo/WarmUpMembershipGate.cs`, `Silo/PhaseADiagnosticReporter.cs`, `Silo/NullGrainStorage.cs` | Silo-side helpers: the `[silo:saturation]` transition logger and the saturation gate the silo hands the ingest engine, the `BENCH_EXPECTED_SILOS` warm-up gate, the `[phaseA]` percentile reporter (`BENCH_PHASEA_REPORT_SEC`), and the no-op grain storage behind `BENCH_LEAF_STORAGE_KIND=null`. |
 | `Producer/Dockerfile`, `Silo/Dockerfile` | Container images for the Layer 3 (Azure Container Apps) rig. |
 | `infra/main.bicep` | VM + VNet + public IP + NIC (accelerated networking) + NSG + one storage account per `-WalAccountCount` + managed-identity role assignments (Table, Blob and Queue Data Contributor) + the auto-shutdown schedule. |
 | `infra/cloud-init.yaml` | First-boot bootstrap (`.NET 10 SDK`, dotnet diagnostic tools, `/opt/lattice` tree). |
@@ -61,7 +63,7 @@ journald-backed log capture with no scraper indirection.
 | `scripts/run-cohort.ps1` | Single cohort: applies env drop-ins, restarts silo, starts producer, waits for FINAL, extracts journals, prints summary. |
 | `scripts/ladder.ps1` | Thin loop over `run-cohort.ps1` for rung sweeps; writes `.ladder-results.csv`. |
 | `scripts/vm.ps1` | Day-to-day helper: `start` / `stop` / `status` / `ssh` / `logs` / `refresh-ip`. |
-| `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer). |
+| `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
 | `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Regression tests for `performance-report.ps1`'s Layer 3 grading: the read-mode preseed gate, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
@@ -172,7 +174,7 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `cross-tree-atomic-64` | The same cross-tree saga with 64 keys (32 per tree). |
 | `set-point` | One `SetAsync` per key. |
 | `set-point-mv` | `set-point` with an asynchronous materialised view attached to the tree - the A/B partner that shows whether maintaining a view perturbs the source write path. |
-| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
+| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. `performance-report.ps1`'s Layer 2 rows do not pass it, so their `get-point` and `get-many` cohorts read keys that were never written (each cohort gets a fresh tree). In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
 
 In the four atomic modes each saga is its own flush unit: it takes its own
@@ -263,6 +265,7 @@ automatically.
 Host         : <vCPU> vCPU / <MiB> MiB / <kernel>
 Cohort       : v<vehicles>-h<tickHz>-<durationSec>s-<utc>
 Producer     : <systemd state of lattice-producer>
+  [producer] DONE total=<n> elapsed=<s>s avg=<n> msg/s
 Silo FINAL   : [silo] FINAL ops=<n> failed=<n> discarded=<n> elapsed=<s>s active=<s>s ...
 Steady mean  : <n> e/s (n=<samples> samples, t>=15s, rate>0) inFlight med/max=<n>/<n>
 FINAL active : <n> entries in <s>s active = <n>/s
@@ -308,7 +311,7 @@ current short version, in the order an investigator reaches for them:
 | `BENCH_VEHICLE_COUNT`, `BENCH_TICK_HZ` | 4000, 5 (`run-cohort.ps1` defaults) | Offered rate. The producer's own fallbacks, when nothing sets them, are 1000 and 5. |
 | `BENCH_RESPONSE_TIMEOUT_SEC` | 30 | Silo grain-RPC deadline. **Raise to 180 when saturating** or you'll see `[silo] grain-rpc-deadline` failures that look like wedges but aren't. The `ladder.ps1` script pins this to 180 by default for exactly this reason. |
 | `BENCH_BATCH_SIZE` | 4096 | Entries per `SetManyAsync`. |
-| `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flushes from `TcpIngestService`. |
+| `BENCH_FLUSH_CONCURRENCY` | 8 | Parallel in-flight flush units the ingest engine dispatches (one saga per unit in the atomic modes; see [Workloads](#workloads)). |
 | `BENCH_POINT_FANOUT` | `BENCH_FLUSH_CONCURRENCY` | Concurrent calls per flush slot in the point modes (`set-point`, `set-point-mv`, `get-point`). The ACA cohort script sets it to the per-silo flush bound so point-mode in-flight scales linearly with silo count. |
 | `BENCH_WAL_PARTITIONS` | `LatticeOptions.DefaultWalPartitions` (currently 8) | WAL grain count per tree. Pairs with `BENCH_FLUSH_CONCURRENCY`. Inherited from the shipping default so the bench tracks the library; override explicitly to A/B against a non-default fan-out. |
 | `BENCH_WAL_MAX_PENDING_BATCHES` | `LatticeOptions.DefaultWalMaxPendingBatches` (currently 16) | Per-WalShardGrain pipeline depth. Inherited from the shipping default so the bench tracks the library; see [WAL Tuning](../../docs/lattice/wal-tuning.md) for the storage-account-throughput envelope above which raising this further stops helping. |
@@ -357,15 +360,21 @@ az group delete --name rg-lat --yes --no-wait
 
 ## Caveats
 
-- The harness measures **end-to-end commit throughput** with a single silo and
-  a single lattice tree. It is not a proxy for the partitioned-WAL benchmark
+- The VM harness measures **end-to-end throughput of the `BENCH_WORKLOAD_MODE`
+  operation** with a single silo and a single lattice tree (the cross-tree modes
+  also write a sibling `{treeId}-b` tree, and `set-point-mv` also maintains a
+  materialised view of the tree). It is not a proxy for the partitioned-WAL benchmark
   (`benchmark/host/Bench.WalAzureTable`), which is a structural correctness probe.
 - Managed identity role propagation can take up to 60s after `deploy.ps1`
   completes. `deploy.ps1` waits for cloud-init to finish before chaining to
   `update.ps1`, which is usually enough; if the silo's first WAL write fails
   with a 403, wait a minute and run `update.ps1` again to bounce the silo.
-- The tree's keys are `Guid.ToString("N")` so the workload is uniform-random
-  across shards. To skew distribution, edit `Producer/Program.cs`.
+- Each vehicle has one key, the `Guid.ToString("N")` form of a GUID derived from
+  its index, so every write overwrites that vehicle's key; the tree hashes keys to
+  shards, so load spreads evenly across them. To skew the distribution, change the
+  vehicle-id derivation in `Producer/Program.cs` (TCP producer) and
+  `Producer/ChannelGenerator.cs` (Orleans-client producer), and in
+  `Engine/BenchPreseed.cs`, which mirrors it for the read-mode pre-seed.
 
 ## Historical context
 
@@ -386,6 +395,14 @@ count in `-SiloCounts` (default `1, 2, 4, 6, 8`) through `scripts/run-cohort-aca
 and deletes the resource group afterwards unless `-KeepAca` is set or the rig was
 reused. `-Resume` continues an interrupted sweep from its saved state. Both scripts can
 also be run by hand.
+
+At present a provisioning run stops before it creates anything: the script still reads
+a `-NamePrefix` parameter it no longer declares, which its `Set-StrictMode -Version Latest`
+refuses, so only `-ReuseAca <prefix>` gets past prefix resolution. Provision with
+`scripts/deploy-aca.ps1 -NamePrefix <prefix>` first, pass `-ReuseAca <prefix>`, and
+delete the rig yourself afterwards (a reused rig is kept). Layer 1 and Layer 2 runs
+resolve their prefix through the same missing parameter and stop the same way;
+`-DryRun` does not reach it.
 
 Layer 3 publishes completed-work throughput, not offered load. A cell whose first
 cohort completes at least `-SaturationRatio` (default 0.9) of the load it offered is
@@ -461,6 +478,8 @@ earlier cohort set that this cohort does not name (#3514). Secret-backed variabl
 the removal rides the same update, so each cohort still mints exactly one revision.
 
 Neither script deletes the rig. `performance-report.ps1` tears down the rigs it
-provisions; for a rig deployed by hand, delete `rg-<prefix>` yourself, or dot-source
-`scripts/aca-common.ps1` and run `Invoke-AcaTeardown -NamePrefix <prefix>`, which checks
-the ownership tag before deleting.
+provisions, but as committed it can provision none (see
+[Layer 3](#layer-3-multi-silo-azure-container-apps) above) and it keeps a rig it
+reused, so every rig is currently deployed by hand: delete `rg-<prefix>` yourself, or
+dot-source `scripts/aca-common.ps1` and run `Invoke-AcaTeardown -NamePrefix <prefix>`,
+which checks the ownership tag before deleting.

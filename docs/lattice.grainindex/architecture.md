@@ -11,7 +11,8 @@ bookkeeping lives in a single system tree, `__grainindex/.registry`.
 
 ```
 __grainindex/.registry      the definition records, drift fingerprints,
-                            backfill checkpoints, and the pending-projection outbox
+                            per-grain enrolment markers, backfill checkpoints,
+                            and the pending-projection outbox
 __grainindex/users          one application index
 __grainindex/orders         another
 ```
