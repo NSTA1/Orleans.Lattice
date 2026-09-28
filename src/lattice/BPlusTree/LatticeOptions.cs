@@ -49,6 +49,7 @@ public class LatticeOptions
     /// the <see cref="ILattice"/> write surface (<see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
     /// and its TTL overload, <see cref="ILattice.SetIfVersionAsync"/>,
     /// <see cref="ILattice.GetOrSetAsync"/>, <see cref="ILattice.SetManyAsync"/>,
+    /// <see cref="ILattice.SetManyWherePredicateAsync"/>,
     /// and the CRDT delta-apply path). When set, a write whose key is longer
     /// than this bound is rejected with an <see cref="ArgumentException"/>
     /// before any shard work, so a client cannot drive unbounded heap growth

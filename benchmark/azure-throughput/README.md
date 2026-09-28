@@ -396,13 +396,10 @@ and deletes the resource group afterwards unless `-KeepAca` is set or the rig wa
 reused. `-Resume` continues an interrupted sweep from its saved state. Both scripts can
 also be run by hand.
 
-At present a provisioning run stops before it creates anything: the script still reads
-a `-NamePrefix` parameter it no longer declares, which its `Set-StrictMode -Version Latest`
-refuses, so only `-ReuseAca <prefix>` gets past prefix resolution. Provision with
+A provisioning run names its rig from `-NamePrefix <prefix>` when given, otherwise from
+a fresh prefix. To sweep a rig you provisioned yourself, run
 `scripts/deploy-aca.ps1 -NamePrefix <prefix>` first, pass `-ReuseAca <prefix>`, and
-delete the rig yourself afterwards (a reused rig is kept). Layer 1 and Layer 2 runs
-resolve their prefix through the same missing parameter and stop the same way;
-`-DryRun` does not reach it.
+delete the rig yourself afterwards (a reused rig is kept).
 
 Layer 3 publishes completed-work throughput, not offered load. A cell whose first
 cohort completes at least `-SaturationRatio` (default 0.9) of the load it offered is

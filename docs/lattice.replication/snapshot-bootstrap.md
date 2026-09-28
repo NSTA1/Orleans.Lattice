@@ -59,13 +59,11 @@ before calling `AddLatticeReplication`.
   completes. The one exception is an in-flight saga's prepared delete,
   which ships as a prepared row with `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
-- **A live key's TTL is not carried.** The default provider's
-  committed-projection row sets only `Key`, `Value`, and `Timestamp`, so
-  it leaves `ExpiresAtTicks` at `0` even though the per-key read it is
-  built from carries the key's expiry. A key that has a TTL on the source
-  is therefore installed as a durable entry on the bootstrapped peer and
-  does not expire there. Only a prepared saga row carries its
-  `ExpiresAtTicks`.
+- **A live key's TTL is carried.** Every exported row - a
+  committed-projection row as well as a prepared saga row - carries the
+  source entry's absolute `ExpiresAtTicks` (`0` for a durable key), so a
+  key that has a TTL on the source expires at the same instant on the
+  bootstrapped peer.
 
 ## Default implementation
 
@@ -727,7 +725,9 @@ registry shard of the tree:
    recorded as `Aborted` are dropped; sagas still `InFlight` (or
    `Indeterminate`) against
    the snapshot are hidden from the committed scan because the
-   prepared rows pass above has already shipped them. The wrapper
+   prepared rows pass above has already shipped them. Each emitted row
+   carries the key's value, commit-time HLC, and absolute
+   `ExpiresAtTicks` from the same per-key version read. The wrapper
    matters here because the export is long-running and latency-prone:
    a per-key version read and a (potentially proxied, cross-cluster)
    stream write interleave between pulls, so the source grain

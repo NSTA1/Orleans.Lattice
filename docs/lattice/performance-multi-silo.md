@@ -549,18 +549,11 @@ out-of-the-box configuration instead.
 ## Re-running it yourself
 
 The sweep is a single switch, `-Layer3`, on the same harness that produces
-the other two tiers, but at present that harness can only run it against a
-rig you have deployed first.
-
-**The self-provisioning form is currently broken.** Run with no rig named,
-`pwsh benchmark/performance-report.ps1 -Layer3` is meant to provision a rig,
-sweep it and delete it, but it stops with `The variable '$NamePrefix' cannot
-be retrieved because it has not been set.` before it provisions anything:
-[#3597](https://github.com/NSTA1/Orleans.Lattice/pull/3597) removed the
-script's `-NamePrefix` parameter but not the lines that still read it (the
-Layer 1 and Layer 2 paths are affected too). `-DryRun` is unaffected. Until
-the script is fixed, deploy the rig yourself and point the sweep at it with
-`-ReuseAca`.
+the other two tiers. Run with no rig named,
+`pwsh benchmark/performance-report.ps1 -Layer3` provisions a rig, sweeps it
+and deletes it; `-NamePrefix <prefix>` names that rig, and without it the
+sweep mints a fresh prefix. To sweep a rig you have deployed yourself
+instead, point the sweep at it with `-ReuseAca`.
 
 Give the rig a prefix of three to nine lowercase letters and digits.
 `deploy-aca.ps1` needs at least three letters or digits, and the sweep

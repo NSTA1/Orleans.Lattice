@@ -266,7 +266,12 @@ param(
 	# publishes whatever each row's starting rung measured.
 	[double] $SaturationRatio = 0.9,
 	[int] $MaxRungEscalations = 3,
-	[string] $ParametersFile
+	[string] $ParametersFile,
+
+	# Force a specific run prefix; see .PARAMETER NamePrefix. Read by both the
+	# Layer 1/2 and the Layer 3 prefix resolution, so it must stay declared:
+	# under Set-StrictMode a read of an undeclared variable throws at startup.
+	[string] $NamePrefix
 )
 
 $ErrorActionPreference = 'Stop'

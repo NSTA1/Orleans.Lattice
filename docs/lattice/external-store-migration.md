@@ -214,11 +214,12 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
 - **It does not enforce the write-size bounds.** `LatticeOptions.MaxKeyLength`
   and `LatticeOptions.MaxValueSizeBytes` are opt-in and unset by default. When
   set, they are checked on entry by `SetAsync` (both overloads),
-  `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `ApplyCrdtDeltaAsync`
-  (both overloads) and `ApplyCrdtDeltaManyAsync`, and on an atomic batch only
-  when its saga writes the batch, where a violation rolls the whole batch back
-  and the call throws `InvalidOperationException`. No bulk-load path checks
-  them, and neither do `SetManyWherePredicateAsync` or `MergeAsync`. A key or
+  `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`,
+  `SetManyWherePredicateAsync`, `ApplyCrdtDeltaAsync` (both overloads) and
+  `ApplyCrdtDeltaManyAsync`, and on an atomic batch only when its saga writes
+  the batch, where a violation rolls the whole batch back and the call throws
+  `InvalidOperationException`. No bulk-load path checks them, and neither does
+  `MergeAsync`. A key or
   value you successfully bulk-load can therefore be rejected by a later
   `SetAsync` against the same tree. Check the bounds in the producer if you
   have configured them. See

@@ -21,6 +21,13 @@ public sealed class AdmissionControlClusterFixture
     /// <summary>Tree with an enforcing live-key cap.</summary>
     public const string EnforcingTreeId = "adm-enforce";
 
+    /// <summary>
+    /// Tree with the same enforcing live-key cap, reserved for the conditional
+    /// batch-write coverage so it never shares a key population with
+    /// <see cref="EnforcingTreeId"/>.
+    /// </summary>
+    public const string ConditionalEnforcingTreeId = "adm-enforce-where";
+
     /// <summary>Tree with only an advisory (non-enforcing) live-key ceiling.</summary>
     public const string AdvisoryTreeId = "adm-advisory";
 
@@ -44,6 +51,11 @@ public sealed class AdmissionControlClusterFixture
 
         var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(EnforcingTreeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = TestShardCount,
+        });
+        await registry.RegisterAsync(ConditionalEnforcingTreeId, new TreeRegistryEntry
         {
             MaxLeafKeys = SmallMaxLeafKeys,
             ShardCount = TestShardCount,
@@ -74,6 +86,12 @@ public sealed class AdmissionControlClusterFixture
                 o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
             });
             siloBuilder.ConfigureLattice(EnforcingTreeId, o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
+                o.MaxLiveKeys = MaxLiveKeys;
+            });
+            siloBuilder.ConfigureLattice(ConditionalEnforcingTreeId, o =>
             {
                 o.DigestCoalescingWindowMs = 0;
                 o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
