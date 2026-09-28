@@ -225,6 +225,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
+
+- **Security - Replication peers could act under another cluster's origin.** `Push` and `GetPeerHighWaterMark` trusted the body-declared origin, so any mesh-secret holder could advance or read a third cluster's high-water mark. Both now bind it to the stamped caller, as the manifest exchange did. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Replication.Grpc`)
+
 - **Security - A view row decoder trusted a peer-supplied count.** Under `ShipView` a view tree is replication-enrolled, so its aggregation rows reach the decoder from a peer. It pre-sized a map from a wire `Int32` and read past a truncated row; counts and reads are now bounded. ([#3784](https://github.com/NSTA1/Orleans.Lattice/pull/3784)) (`Orleans.Lattice`)
 
 - **Security - Restore authorization was skippable, late, and leaky.** The facade skipped its gate when the target was unresolvable, the engine dispatched the cross-cluster saga before authorizing, and the admission probe was ungated and disclosed stored size and shard count. ([#3747](https://github.com/NSTA1/Orleans.Lattice/pull/3747)) (`Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)
