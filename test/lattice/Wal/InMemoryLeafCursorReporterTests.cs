@@ -97,4 +97,23 @@ public sealed class InMemoryLeafCursorReporterTests
         var snapshot = await registry.SnapshotAsync(Tree, CancellationToken.None);
         Assert.That(snapshot, Is.Empty);
     }
+
+    [Test]
+    public async Task Durable_frontier_flush_is_trivially_acknowledged()
+    {
+        var registry = new InMemoryWalCursorRegistry();
+        var reporter = new InMemoryLeafCursorReporter(registry);
+
+        // Issue #3643: with no durable backing there is nothing that could fail
+        // to land, so the no-op flush reports acknowledgement and never makes a
+        // caller withhold its bank.
+        var acknowledged = await reporter.FlushDurableMaterialiserFrontierAsync(
+            Tree,
+            new[] { new MaterialiserPinReport("consumer", Hlc(7), 7) },
+            CancellationToken.None);
+
+        Assert.That(acknowledged, Is.True);
+        Assert.That(await registry.SnapshotAsync(Tree, CancellationToken.None), Is.Empty,
+            "the no-op flush must not leak into the in-memory cursor registry.");
+    }
 }

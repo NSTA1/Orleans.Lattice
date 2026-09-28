@@ -104,7 +104,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var (grain, _, state) = CreateGrainWithReporterForPartitions(partitions, reporter);
         var projection = AsProjection(grain);
@@ -201,7 +201,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         // walHead 0 == "the WAL shard is empty" (see ICommitLogReader).
         var (grain, _, state) = CreateGrainWithReporterForPartitions(
@@ -254,7 +254,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var (grain, _, _) = CreateGrainWithReporterForPartitions(
             partitions, reporter, walHead: 1L);
@@ -294,7 +294,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var (grain, _, _) = CreateGrainWithReporterForPartitions(
             partitions, reporter, walHead: 0L, headReadThrows: true);
@@ -350,7 +350,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => flushes.Add(r)),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var (grain, _, state) = CreateGrainWithReporterForPartitions(
             partitions, reporter, walHead: 0L);

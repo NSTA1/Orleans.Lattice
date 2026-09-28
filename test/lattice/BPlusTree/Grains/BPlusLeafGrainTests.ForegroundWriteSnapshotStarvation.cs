@@ -97,7 +97,7 @@ public partial class BPlusLeafGrainTests
                 Arg.Any<string>(),
                 Arg.Do<IReadOnlyList<MaterialiserPinReport>>(r => captured = r),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(true));
 
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())

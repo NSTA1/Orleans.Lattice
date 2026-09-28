@@ -94,6 +94,27 @@ internal sealed partial class BPlusLeafGrain
     private long[]? _lastBankedDurablePinOffsets;
 
     /// <summary>
+    /// Whether this deactivation's teardown tail has acknowledged a pin batch
+    /// the <c>frontier_pin</c> barrier may elide against (issue #3643). Reset
+    /// at the start of every graceful deactivation.
+    /// </summary>
+    private bool _deactivationPinAcknowledged;
+
+    /// <summary>
+    /// Per partition, the highest frontier this deactivation's tail has had
+    /// acknowledged. Meaningful only while <see cref="_deactivationPinAcknowledged"/>;
+    /// allocated once and reused.
+    /// </summary>
+    private HybridLogicalClock[]? _deactivationAckedFrontiers;
+
+    /// <summary>
+    /// Per partition, the highest offset this deactivation's tail has had
+    /// acknowledged. Meaningful only while <see cref="_deactivationPinAcknowledged"/>;
+    /// allocated once and reused.
+    /// </summary>
+    private long[]? _deactivationAckedOffsets;
+
+    /// <summary>
     /// Reports the leaf's current projection HLC to the registered
     /// <see cref="ILeafCursorReporter"/>, lazy-gated on
     /// <c>state.State.Clock &gt; HybridLogicalClock.Zero</c>. Called from
@@ -225,6 +246,15 @@ internal sealed partial class BPlusLeafGrain
     /// cancelled still propagates, into the barrier's own fault containment,
     /// so a genuine defect is still reported as a fault.
     /// </para>
+    /// <para>
+    /// Since issue #3643 the barrier resolves the pin exactly as before and
+    /// then ELIDES the pin-store call when the resolved batch is dominated by
+    /// what the teardown persist's tail acknowledged in this deactivation; see
+    /// <see cref="IsDominatedByDeactivationPinAcknowledgement"/> for the rule
+    /// and its safety and liveness argument. An elided barrier is counted on
+    /// <see cref="LatticeMetrics.LeafDeactivationBarrierElided"/> and still
+    /// records its duration.
+    /// </para>
     /// </remarks>
     /// <param name="cancellationToken">The deactivation deadline.</param>
     internal async Task FlushDurableMaterialiserFrontierOnDeactivateAsync(CancellationToken cancellationToken)
@@ -237,7 +267,7 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+            await FlushDurableMaterialiserFrontierCoreAsync(DurablePinFlushPurpose.DeactivationBarrier, cancellationToken);
         }
         catch (InvalidOperationException ex)
             when (cancellationToken.IsCancellationRequested && ex is not ILatticeDomainFault)
@@ -307,7 +337,38 @@ internal sealed partial class BPlusLeafGrain
     /// publisher those fixtures used now skips - so a direct call is the only
     /// way to keep the clamp observable.
     /// </remarks>
-    internal async Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
+    internal Task<int> FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
+        => FlushDurableMaterialiserFrontierCoreAsync(DurablePinFlushPurpose.Ordinary, cancellationToken);
+
+    /// <summary>
+    /// Why a batched durable pin flush is running, which decides whether its
+    /// acknowledgement is recorded for, or checked against, the
+    /// <c>frontier_pin</c> barrier elision (issue #3643).
+    /// </summary>
+    private enum DurablePinFlushPurpose
+    {
+        /// <summary>Any flush outside the graceful-deactivation hook. Banks on acknowledgement only.</summary>
+        Ordinary,
+
+        /// <summary>
+        /// The teardown persist tail's publish (before and after its snapshot
+        /// recheck). Its acknowledgement is the only one the barrier may elide against.
+        /// </summary>
+        DeactivationTail,
+
+        /// <summary>The <c>frontier_pin</c> barrier. Elided when dominated by a <see cref="DeactivationTail"/> acknowledgement.</summary>
+        DeactivationBarrier,
+    }
+
+    /// <summary>
+    /// The body of <see cref="FlushDurableMaterialiserFrontierAsync"/>, with the
+    /// deactivation elision of issue #3643 selected by <paramref name="purpose"/>.
+    /// </summary>
+    /// <param name="purpose">Which caller is flushing; see <see cref="DurablePinFlushPurpose"/>.</param>
+    /// <param name="cancellationToken">As for <see cref="FlushDurableMaterialiserFrontierAsync"/>.</param>
+    private async Task<int> FlushDurableMaterialiserFrontierCoreAsync(
+        DurablePinFlushPurpose purpose,
+        CancellationToken cancellationToken)
     {
         // Issue #3453: a never-written leaf (Clock == Zero) is no longer turned
         // away here unconditionally. Its release branches resolve to
@@ -386,10 +447,157 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        await reporter.FlushDurableMaterialiserFrontierAsync(
+        // Issue #3643: the frontier_pin barrier elides the pin-store call when
+        // the batch it just resolved - exactly as it always has - is dominated
+        // on both axes, partition by partition, by what this deactivation's
+        // tail had acknowledged. Checked after the #3453 early return above and
+        // after the release counting, so neither changes shape.
+        if (purpose == DurablePinFlushPurpose.DeactivationBarrier
+            && IsDominatedByDeactivationPinAcknowledgement(reports))
+        {
+            RecordDeactivationBarrierElision();
+            return releases;
+        }
+
+        var acknowledged = await reporter.FlushDurableMaterialiserFrontierAsync(
             treeId, reports, cancellationToken);
-        RecordBankedDurablePinOffsets(reports);
+
+        // Issue #3643 (clarification A): the reporter swallows a faulted shard
+        // write, so returning normally is NOT acknowledgement. Bank - and so
+        // stand down the #3599 coverage-lag trigger that reads the bank - only
+        // when every shard write for this batch landed.
+        if (acknowledged)
+        {
+            RecordBankedDurablePinOffsets(reports);
+            if (purpose == DurablePinFlushPurpose.DeactivationTail)
+            {
+                RecordDeactivationPinAcknowledgement(reports);
+            }
+        }
+
         return releases;
+    }
+
+    /// <summary>
+    /// Discards any acknowledgement recorded for the <c>frontier_pin</c>
+    /// elision, so the barrier can elide only against a publish of the
+    /// deactivation now starting (issue #3643).
+    /// </summary>
+    private void ResetDeactivationPinAcknowledgement() => _deactivationPinAcknowledged = false;
+
+    /// <summary>
+    /// Records a batch the pin store acknowledged from this deactivation's
+    /// teardown tail, merged by per-partition maximum on each axis
+    /// independently, exactly as the pin store merges it (issue #3643).
+    /// </summary>
+    /// <remarks>
+    /// A later tail publish that is NOT acknowledged leaves the record as it
+    /// was: the earlier batch did land, so it is still a true lower bound on
+    /// what the pin store holds, and the barrier's dominance check compares
+    /// the fresh resolution against it anyway.
+    /// </remarks>
+    private void RecordDeactivationPinAcknowledgement(MaterialiserPinReport[] reports)
+    {
+        var frontiers = _deactivationAckedFrontiers;
+        var offsets = _deactivationAckedOffsets;
+        var fresh = !_deactivationPinAcknowledged;
+        if (frontiers is null || offsets is null || frontiers.Length != reports.Length || offsets.Length != reports.Length)
+        {
+            frontiers = new HybridLogicalClock[reports.Length];
+            offsets = new long[reports.Length];
+            _deactivationAckedFrontiers = frontiers;
+            _deactivationAckedOffsets = offsets;
+            fresh = true;
+        }
+
+        for (var i = 0; i < reports.Length; i++)
+        {
+            var report = reports[i];
+            if (fresh)
+            {
+                frontiers[i] = report.Frontier;
+                offsets[i] = report.CheckpointOffset;
+            }
+            else
+            {
+                if (report.Frontier > frontiers[i])
+                {
+                    frontiers[i] = report.Frontier;
+                }
+
+                offsets[i] = Math.Max(offsets[i], report.CheckpointOffset);
+            }
+        }
+
+        _deactivationPinAcknowledged = true;
+    }
+
+    /// <summary>
+    /// Whether the <c>frontier_pin</c> barrier's freshly resolved
+    /// <paramref name="reports"/> are dominated by the pin batch this
+    /// deactivation's teardown tail had acknowledged, so publishing them would
+    /// be a no-op merge (issue #3643).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The rule.</b> Every partition must have an in-deactivation
+    /// acknowledgement, and its resolved pin must be dominated on BOTH axes:
+    /// frontier HLC and offset, each <c>&lt;=</c> the acknowledged value.
+    /// The pin store merges the two axes by independent monotonic maximum, so
+    /// a report dominated on both changes nothing, and one exceeding either
+    /// does. One partition that is not dominated - a capture raised its
+    /// coverage, a write advanced the clock, or a #3103 / #3453 release
+    /// resolved above the acknowledged record - sends the FULL batch, never a
+    /// partial one. With no acknowledgement recorded (no pending advance, so
+    /// no tail ran; or every tail publish faulted, was cancelled, or went
+    /// unacknowledged) the barrier always publishes.
+    /// </para>
+    /// <para>
+    /// <b>Safety.</b> Eliding cannot cost data. It skips only a report the
+    /// pin store's merge would have discarded; and even where the store's
+    /// durable copy has regressed below the acknowledgement, a lower durable
+    /// pin is always GC-safe - it can only retain more WAL, never let the GC
+    /// trim past this leaf's durable checkpoint or coverage.
+    /// </para>
+    /// <para>
+    /// <b>Liveness, and why only THIS deactivation counts.</b> The pin store's
+    /// durable write is coalesced, so a pin-store activation lost inside its
+    /// coalescing window after acknowledging a merge can regress the durable
+    /// pin. The barrier's re-merge is what heals that, and a leaf that
+    /// deactivates may stay dormant for a long time with nothing else ever
+    /// republishing it. Trusting an acknowledgement from earlier in the
+    /// activation's life, possibly hours old, would remove that last healing
+    /// publish; trusting only the tail's acknowledgement from moments earlier
+    /// in the same teardown bounds the exposure to one coalescing window. The
+    /// cost of that bound is WAL retention, never correctness.
+    /// </para>
+    /// <para>Allocates nothing: it compares against arrays allocated once and reused.</para>
+    /// </remarks>
+    /// <param name="reports">The batch the barrier resolved, one report per partition.</param>
+    private bool IsDominatedByDeactivationPinAcknowledgement(MaterialiserPinReport[] reports)
+    {
+        if (!_deactivationPinAcknowledged)
+        {
+            return false;
+        }
+
+        var frontiers = _deactivationAckedFrontiers;
+        var offsets = _deactivationAckedOffsets;
+        if (frontiers is null || offsets is null
+            || frontiers.Length != reports.Length || offsets.Length != reports.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < reports.Length; i++)
+        {
+            if (reports[i].Frontier > frontiers[i] || reports[i].CheckpointOffset > offsets[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

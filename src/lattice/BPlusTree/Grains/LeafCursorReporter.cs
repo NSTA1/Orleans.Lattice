@@ -297,7 +297,7 @@ internal sealed class LeafCursorReporter(
     }
 
     /// <inheritdoc />
-    public async Task FlushDurableMaterialiserFrontierAsync(
+    public async Task<bool> FlushDurableMaterialiserFrontierAsync(
         string treeName,
         IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken)
@@ -306,12 +306,12 @@ internal sealed class LeafCursorReporter(
         if (grainFactory is null || reports.Count == 0)
         {
             // No durable backing (pre-WAL host / bare-IServiceProvider) or
-            // nothing to flush: no-op.
-            return;
+            // nothing to flush: no-op, trivially acknowledged.
+            return true;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        await PersistPinBatchDurablyAsync(treeName, reports, seed: false).ConfigureAwait(false);
+        return await PersistPinBatchDurablyAsync(treeName, reports, seed: false).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -342,7 +342,13 @@ internal sealed class LeafCursorReporter(
     /// so the flush never needed a synchronous write of its own.
     /// </para>
     /// </summary>
-    private async Task PersistPinBatchDurablyAsync(
+    /// <returns>
+    /// <see langword="true"/> when every routed shard write completed (including
+    /// the shutdown direct-store fallback), <see langword="false"/> when any
+    /// write faulted and was swallowed, or was shed (issue #3643). Returning normally is not
+    /// acknowledgement on its own, because the fault is swallowed here.
+    /// </returns>
+    private async Task<bool> PersistPinBatchDurablyAsync(
         string treeName,
         IReadOnlyList<MaterialiserPinReport> reports,
         bool seed)
@@ -364,10 +370,10 @@ internal sealed class LeafCursorReporter(
 
         if (byShard is null)
         {
-            return;
+            return true;
         }
 
-        var writes = new List<Task>(byShard.Count);
+        var writes = new List<Task<bool>>(byShard.Count);
         foreach (var (key, bucket) in byShard)
         {
             writes.Add(SeedShardAsync(key, bucket, writeThrough: seed));
@@ -375,7 +381,22 @@ internal sealed class LeafCursorReporter(
 
         try
         {
-            await Task.WhenAll(writes).ConfigureAwait(false);
+            // Awaited through the non-generic overload so no result array is
+            // allocated; every write has completed by the time it returns.
+            await Task.WhenAll((IEnumerable<Task>)writes).ConfigureAwait(false);
+
+            // A shard write that returned false was shed rather than written.
+            // This path never opts into shedding today, but a shed write is not
+            // an acknowledgement either, so it must not be reported as one.
+            for (var i = 0; i < writes.Count; i++)
+            {
+                if (!writes[i].Result)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -397,6 +418,8 @@ internal sealed class LeafCursorReporter(
                     "Failed to flush one or more durable WAL materialiser frontier pins for tree {TreeId}; will re-flush on next checkpoint or deactivation.",
                     treeName);
             }
+
+            return false;
         }
     }
 

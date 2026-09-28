@@ -102,7 +102,7 @@ public partial class BPlusLeafGrainTests
                         state.State.ProjectionCheckpointOffset,
                         grain!.GetCurrentCheckpointForPartition(0)));
                 }
-                return Task.CompletedTask;
+                return Task.FromResult(true);
             });
 
         var sc = new ServiceCollection();
