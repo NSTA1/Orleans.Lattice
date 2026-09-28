@@ -12,6 +12,7 @@ using Orleans.Lattice.Explorer.Shell.Framing.Broker;
 using Orleans.Lattice.Explorer.Shell.Transport;
 using Orleans.Lattice.Explorer.Tests.Shell.Design;
 using Orleans.Lattice.Explorer.Tests.Shell.Session;
+using Orleans.Lattice.Explorer.Tests.Shell.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.Shell.Framing;
 
@@ -204,5 +205,6 @@ public sealed class AppFrameRegistrationTests
             .AddLogging()
             .AddScoped<IExplorerSession>(_ => new FakeExplorerSession(new FakeStateConnection()))
             .AddScoped<IExplorerAuthSession, FakeAuthSession>()
+            .AddShellTransportTestHead()
             .AddLatticeExplorerShell();
 }
