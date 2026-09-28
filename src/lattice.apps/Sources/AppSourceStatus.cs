@@ -20,4 +20,17 @@ public enum AppSourceStatus
 
     /// <summary>The source holds more than one registration for the slug and will not choose between them.</summary>
     DuplicateRegistration = 5,
+
+    /// <summary>
+    /// Resolution named no source key and more than one source offers the slug. The result lists the source
+    /// keys in <see cref="AppSourceResult.SourceKeys"/>; the set never chooses between them.
+    /// </summary>
+    Ambiguous = 6,
+
+    /// <summary>
+    /// The composed source set is misconfigured (for example two sources share a key, or a source vouched for
+    /// a key other than its own), so it will not resolve. The failure is reported for the app concerned and
+    /// never fails silo startup.
+    /// </summary>
+    SourceMisconfigured = 7,
 }

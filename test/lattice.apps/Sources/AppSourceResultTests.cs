@@ -111,6 +111,63 @@ public class AppSourceResultTests
     }
 
     [Test]
+    public void UnknownSource_is_not_found_and_names_the_key()
+    {
+        var result = AppSourceResult.UnknownSource(Slug, "nowhere");
+
+        Assert.That(result.Status, Is.EqualTo(AppSourceStatus.NotFound));
+        Assert.That(result.Errors.Single(), Is.EqualTo(new AppManifestError(
+            "unknown-source", "$.source", "No app source 'nowhere' is configured.")));
+        Assert.That(result.SourceKeys, Is.Empty);
+        Assert.Throws<ArgumentNullException>(() => AppSourceResult.UnknownSource(Slug, null!));
+    }
+
+    [Test]
+    public void Ambiguous_copies_and_lists_the_source_keys()
+    {
+        var keys = new List<string> { "in-image", "feed" };
+
+        var result = AppSourceResult.Ambiguous(Slug, keys);
+        keys.Clear();
+
+        Assert.That(result.Status, Is.EqualTo(AppSourceStatus.Ambiguous));
+        Assert.That(result.IsResolved, Is.False);
+        Assert.That(result.SourceKeys, Is.EqualTo(new[] { "in-image", "feed" }));
+        Assert.That(result.Errors.Single().Code, Is.EqualTo("ambiguous"));
+        Assert.That(result.Errors.Single().Message, Does.Contain("in-image, feed"));
+    }
+
+    [Test]
+    public void Ambiguous_rejects_null_fewer_than_two_or_null_containing_keys()
+    {
+        Assert.Throws<ArgumentNullException>(() => AppSourceResult.Ambiguous(Slug, null!));
+        Assert.Throws<ArgumentException>(() => AppSourceResult.Ambiguous(Slug, ["only"]));
+        Assert.Throws<ArgumentException>(() => AppSourceResult.Ambiguous(Slug, ["a", null!]));
+    }
+
+    [Test]
+    public void SourceMisconfigured_copies_the_errors()
+    {
+        var errors = new List<AppManifestError> { new("duplicate-source", "$.sources[1].key", "Twice.") };
+
+        var result = AppSourceResult.SourceMisconfigured(Slug, errors);
+        errors.Clear();
+
+        Assert.That(result.Status, Is.EqualTo(AppSourceStatus.SourceMisconfigured));
+        Assert.That(result.Errors.Single().Code, Is.EqualTo("duplicate-source"));
+        Assert.Throws<ArgumentNullException>(() => AppSourceResult.SourceMisconfigured(Slug, null!));
+        Assert.Throws<ArgumentException>(() => AppSourceResult.SourceMisconfigured(Slug, []));
+        Assert.Throws<ArgumentException>(() => AppSourceResult.SourceMisconfigured(Slug, [null!]));
+    }
+
+    [Test]
+    public void Existing_outcomes_carry_no_source_keys()
+    {
+        Assert.That(AppSourceResult.NotFound(Slug).SourceKeys, Is.Empty);
+        Assert.That(AppSourceResult.DuplicateRegistration(Slug).SourceKeys, Is.Empty);
+    }
+
+    [Test]
     public void AppSourceStatus_values_are_stable()
     {
         Assert.That((int)AppSourceStatus.Resolved, Is.EqualTo(0));
@@ -119,5 +176,7 @@ public class AppSourceResultTests
         Assert.That((int)AppSourceStatus.InvalidManifest, Is.EqualTo(3));
         Assert.That((int)AppSourceStatus.IdentityMismatch, Is.EqualTo(4));
         Assert.That((int)AppSourceStatus.DuplicateRegistration, Is.EqualTo(5));
+        Assert.That((int)AppSourceStatus.Ambiguous, Is.EqualTo(6));
+        Assert.That((int)AppSourceStatus.SourceMisconfigured, Is.EqualTo(7));
     }
 }
