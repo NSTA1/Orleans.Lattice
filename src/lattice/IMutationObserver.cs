@@ -15,6 +15,13 @@ namespace Orleans.Lattice;
 /// </para>
 /// </summary>
 /// <remarks>
+/// <para><b>Tree identity.</b> <see cref="LatticeMutation.TreeId"/> identifies
+/// the logical tree through which the write was routed, not the derived
+/// physical backing created by a resize, shadow restore, or schema remediation.
+/// Subscriptions and enrollment filters therefore keep matching after an
+/// alias swap. Writes made directly to physical grains without a logical
+/// routing context identify that physical tree instead.
+/// </para>
 /// <para><b>Threading and latency.</b> <see cref="OnMutationAsync"/> runs
 /// on the originating grain's single-threaded scheduler and is awaited
 /// inline before the grain method returns. Every millisecond spent inside

@@ -19,7 +19,13 @@ namespace Orleans.Lattice;
 [Immutable]
 public readonly record struct LatticeMutation
 {
-    /// <summary>The logical tree id the mutation was committed to.</summary>
+    /// <summary>
+    /// The logical tree id used to route the observed write, stable across
+    /// resize, shadow restore, and schema-remediation alias swaps.
+    /// Direct physical-grain writes without logical routing retain their
+    /// physical tree id. Durable WAL records retain their physical identity;
+    /// converting those records does not resolve or rewrite their tree id.
+    /// </summary>
     [Id(0)] public string TreeId { get; init; }
 
     /// <summary>The kind of mutation.</summary>

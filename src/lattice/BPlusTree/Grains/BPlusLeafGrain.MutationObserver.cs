@@ -1,4 +1,5 @@
 using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -23,7 +24,8 @@ internal sealed partial class BPlusLeafGrain
         var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
-            TreeId = state.State.TreeId ?? string.Empty,
+            TreeId = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string
+                ?? state.State.TreeId ?? string.Empty,
             Kind = MutationKind.Set,
             Key = key,
             Value = committed.IsTombstone ? null : committed.Value,
@@ -54,7 +56,8 @@ internal sealed partial class BPlusLeafGrain
         var batch = LatticeAtomicBatchContext.Current;
         var mutation = new LatticeMutation
         {
-            TreeId = state.State.TreeId ?? string.Empty,
+            TreeId = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string
+                ?? state.State.TreeId ?? string.Empty,
             Kind = MutationKind.Delete,
             Key = key,
             Timestamp = tombstone.Timestamp,

@@ -1,4 +1,5 @@
 using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -42,7 +43,7 @@ internal sealed partial class ShardRootGrain
         // the historical "range deletes carry HLC.Zero" contract.
         var mutation = new LatticeMutation
         {
-            TreeId = TreeId,
+            TreeId = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string ?? TreeId,
             Kind = MutationKind.DeleteRange,
             Key = startInclusive,
             EndExclusiveKey = endExclusive,
