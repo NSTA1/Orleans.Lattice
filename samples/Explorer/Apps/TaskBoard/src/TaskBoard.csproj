@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The task-board sample app: a manifest and a UI bundle embedded in a small
+    class library, with no build toolchain. The digests in manifest.json are
+    checked (not produced) by TaskBoard.Tests, which fails with the correct
+    values when a bundle file changes.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Samples.Explorer.TaskBoard</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.Explorer.TaskBoard</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    InImageAppSource reads the manifest by name and each bundle asset from
+    "{manifest namespace}.ui.{path with '/' as '.'}", so these logical names
+    let the three-argument AddLatticeApp overload find the bundle unaided.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="manifest.json" LogicalName="Orleans.Lattice.Samples.Explorer.TaskBoard.manifest.json" />
+    <EmbeddedResource Include="ui/index.html" LogicalName="Orleans.Lattice.Samples.Explorer.TaskBoard.ui.index.html" />
+    <EmbeddedResource Include="ui/app.css" LogicalName="Orleans.Lattice.Samples.Explorer.TaskBoard.ui.app.css" />
+    <EmbeddedResource Include="ui/app.mjs" LogicalName="Orleans.Lattice.Samples.Explorer.TaskBoard.ui.app.mjs" />
+    <EmbeddedResource Include="ui/icon.svg" LogicalName="Orleans.Lattice.Samples.Explorer.TaskBoard.ui.icon.svg" />
+  </ItemGroup>
+
+</Project>

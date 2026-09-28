@@ -1,0 +1,123 @@
+/*
+ * The task board's own stylesheet, loaded as a blob: URL after the kit
+ * stylesheet. It builds only on the kit's and the documentation site's tokens,
+ * so the board follows Paper and Board (and the high-contrast overlay) with no
+ * rule of its own. It carries no width queries and no hover-only affordance:
+ * the columns reflow from three to one on their own, and every control is a
+ * kit-sized touch target.
+ */
+
+.tb-head {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+}
+
+.tb-head h1 {
+  margin: 0;
+}
+
+.tb-head p {
+  margin: 0;
+}
+
+.tb-head-text {
+  min-width: 0;
+}
+
+.tb-icon {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+}
+
+.tb-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+}
+
+.tb-add-row .lt-app-input {
+  flex: 1 1 12rem;
+  width: auto;
+  min-width: 0;
+}
+
+.tb-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: var(--lt-space-4);
+}
+
+.tb-column {
+  min-width: 0;
+  border-top: 2px solid var(--lt-rule-strong);
+  padding-top: var(--lt-space-2);
+}
+
+.tb-column h2 {
+  margin: 0 0 var(--lt-space-2);
+  font-size: var(--lt-text-md);
+}
+
+.tb-count {
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-weight: var(--lt-weight-body);
+}
+
+.tb-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tb-cards li {
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.tb-card {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--lt-app-control-height);
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.tb-card[aria-current="true"] {
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-heading);
+}
+
+.tb-card[aria-current="true"]:not(:focus-visible) {
+  outline: 2px solid var(--lt-marker);
+  outline-offset: -2px;
+}
+
+.tb-empty {
+  padding: var(--lt-space-2) 0;
+  color: var(--lt-ink-2);
+  font-style: italic;
+}
+
+.tb-detail {
+  border-top: 2px solid var(--lt-rule-strong);
+  padding-top: var(--lt-space-3);
+}
+
+.tb-detail h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tb-detail-key {
+  overflow-wrap: anywhere;
+}
+
+@media (forced-colors: active) {
+  .tb-card[aria-current="true"]:not(:focus-visible) {
+    outline-color: Highlight;
+  }
+}
