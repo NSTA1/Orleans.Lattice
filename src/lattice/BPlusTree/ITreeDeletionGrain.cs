@@ -14,7 +14,8 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ITreeDeletionGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Initiates a soft delete of the tree. Marks all shards as deleted so that
+    /// Initiates a soft delete of the logical tree, pinning its current owned
+    /// alias target independently of any retired copy. Marks all target shards as deleted so that
     /// subsequent reads and writes throw <see cref="InvalidOperationException"/>.
     /// Registers a reminder to purge the tree after the configured soft-delete
     /// duration. Idempotent - calling again on an already-deleted tree is a no-op.
@@ -43,7 +44,7 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>Recovers the retired or delegated local physical copy, including partially applied shard marks.</summary>
     Task RecoverPhysicalAsync();
 
-    /// <summary>Purges the retired local copy without affecting a logical alias.</summary>
+    /// <summary>Purges the retired or delegated local copy; its logical owner manages the alias.</summary>
     Task PurgePhysicalAsync();
 
     /// <summary>Deletes a physical copy without events or a competing purge driver.</summary>
@@ -65,8 +66,9 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task EnsureAliasWritableAsync();
 
     /// <summary>
-    /// Returns <c>true</c> if the tree has been soft-deleted (whether or not
-    /// the purge has completed).
+    /// Returns <c>true</c> while logical deletion is pending or durable
+    /// (whether or not the purge has completed). Physical retirement alone
+    /// does not make the logical tree deleted.
     /// </summary>
     [Orleans.Concurrency.AlwaysInterleave]
     Task<bool> IsDeletedAsync();
@@ -85,8 +87,8 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// Recovers a soft-deleted tree, making it accessible again. Clears the
     /// <c>IsDeleted</c> flag on all shards and unregisters the purge reminder.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted, or if the purge has already completed (data is gone).
-    /// Idempotent during the soft-delete window - calling multiple times is safe.
+    /// deleted, or if the purge has started or completed. A failed recovery
+    /// can be retried; a second call after successful recovery is rejected.
     /// </summary>
     Task RecoverAsync();
 
