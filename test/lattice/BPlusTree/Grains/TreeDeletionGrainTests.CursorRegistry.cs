@@ -57,6 +57,7 @@ public partial class TreeDeletionGrainTests
         var compaction = Substitute.For<ITombstoneCompactionGrain>();
         grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId).Returns(compaction);
         var registry = Substitute.For<ILatticeRegistry>();
+        registry.ResolveAsync(TreeId).Returns(TreeId);
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry

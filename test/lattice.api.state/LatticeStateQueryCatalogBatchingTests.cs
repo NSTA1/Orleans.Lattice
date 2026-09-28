@@ -67,6 +67,15 @@ public sealed class LatticeStateQueryCatalogBatchingTests
 
         public Task DeleteRetiredPhysicalTreeAsync() => throw new NotSupportedException();
 
+        public Task DeleteDerivedPhysicalTreeAsync() => throw new NotSupportedException();
+        public Task DeleteDelegatedAsync() => throw new NotSupportedException();
+        public Task<bool> IsPhysicalDeletedAsync() => throw new NotSupportedException();
+        public Task RecoverPhysicalAsync() => throw new NotSupportedException();
+        public Task PurgePhysicalAsync() => throw new NotSupportedException();
+        public Task BeginAliasChangeAsync(string operationId) => throw new NotSupportedException();
+        public Task EndAliasChangeAsync(string operationId) => throw new NotSupportedException();
+        public Task EnsureAliasWritableAsync() => throw new NotSupportedException();
+
         public Task<TreeDeletionSnapshot> GetDeletionStatusAsync() => throw new NotSupportedException();
 
         public Task RecoverAsync() => throw new NotSupportedException();

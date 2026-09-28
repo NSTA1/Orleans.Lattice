@@ -15,7 +15,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// walks each shard one-by-one (same pattern as <see cref="TombstoneCompactionGrain"/>),
 /// clearing all leaf and internal node state and deactivating grains.
 /// </summary>
-internal sealed class TreeDeletionGrain(
+internal sealed partial class TreeDeletionGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
@@ -47,10 +47,20 @@ internal sealed class TreeDeletionGrain(
     internal IReadOnlyList<TimeSpan> ReminderRegistrationBackoff { get; set; }
         = ReminderServiceReadiness.DefaultRegistrationBackoff;
 
-    public Task DeleteTreeAsync() => SoftDeleteAsync(retainsRegistryEntry: false);
-
     /// <inheritdoc />
-    public Task DeleteRetiredPhysicalTreeAsync() => SoftDeleteAsync(retainsRegistryEntry: true);
+    public Task DeleteRetiredPhysicalTreeAsync() => RetirePhysicalAsync(true);
+
+    public Task DeleteDerivedPhysicalTreeAsync() => RetirePhysicalAsync(false);
+
+    private async Task RetirePhysicalAsync(bool retainsRegistryEntry)
+    {
+        EnsureLifecycleOrigin();
+        var suppressed = state.State.SuppressLifecycleEvents;
+        state.State.SuppressLifecycleEvents = true;
+        try { await state.WriteStateAsync(); }
+        catch { state.State.SuppressLifecycleEvents = suppressed; throw; }
+        await SoftDeleteAsync(retainsRegistryEntry);
+    }
 
     /// <summary>
     /// The soft delete shared by <see cref="DeleteTreeAsync"/> and
@@ -66,7 +76,7 @@ internal sealed class TreeDeletionGrain(
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
-        if (state.State.IsDeleted) return;
+        if (state.State.IsDeleted && (!state.State.Delegated || state.State.PurgeComplete)) return;
 
         // Mark all shards as deleted first - including every shard an
         // adaptive split allocated above the pinned ShardCount, which the
@@ -79,6 +89,11 @@ internal sealed class TreeDeletionGrain(
             tasks[i] = shard.MarkDeletedAsync();
         }
         await Task.WhenAll(tasks);
+
+        // A failed delegated recovery may already have unmarked some shards
+        // while its durable deletion flag remains set. Reapply those marks,
+        // without changing the original deletion time or emitting another event.
+        if (state.State.IsDeleted) return;
 
         // Snapshot mutated fields BEFORE any in-memory change so a failing
         // WriteStateAsync below can revert the activation to the state every
@@ -114,7 +129,7 @@ internal sealed class TreeDeletionGrain(
         // resolves the logical tree's alias and compacts the live resized
         // copy, so unregistering it would switch compaction off for a tree
         // nobody deleted.
-        if (!retainsRegistryEntry)
+        if (!retainsRegistryEntry && !state.State.Delegated)
         {
             var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
             await compaction.UnregisterReminderAsync();
@@ -133,7 +148,8 @@ internal sealed class TreeDeletionGrain(
         var period = ClampPeriod(Options.SoftDeleteDuration);
         try
         {
-            await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            if (!state.State.Delegated)
+                await ReminderServiceReadiness.RetryWhileInitializingAsync(
                 () => reminderRegistry.RegisterOrUpdateReminder(
                     callingGrainId: context.GrainId,
                     reminderName: ReminderName,
@@ -184,7 +200,11 @@ internal sealed class TreeDeletionGrain(
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
     }
 
-    public Task<bool> IsDeletedAsync() => Task.FromResult(state.State.IsDeleted);
+    public Task<bool> IsDeletedAsync() => Task.FromResult(
+        state.State.DeletePending || state.State.LogicalPhysicalTreeId is not null
+        || (!state.State.RetainsRegistryEntry && state.State.IsDeleted));
+
+    public Task<bool> IsPhysicalDeletedAsync() => Task.FromResult(state.State.IsDeleted || state.State.Delegated);
 
     public Task<TreeDeletionSnapshot> GetDeletionStatusAsync()
     {
@@ -192,23 +212,46 @@ internal sealed class TreeDeletionGrain(
         // the diagnostics facade can dial it directly. The recovery deadline is
         // derived from the persisted delete time and the tree's configured
         // soft-delete duration; it is null while the tree is live.
-        var deletedAt = state.State.DeletedAtUtc;
+        if (state.State.LogicalPhysicalTreeId is not null)
+            return Task.FromResult(new TreeDeletionSnapshot
+            {
+                IsDeleted = true,
+                DeletedAtUtc = state.State.LogicalDeletedAtUtc,
+                RecoveryDeadlineUtc = state.State.LogicalDeletedAtUtc + Options.SoftDeleteDuration,
+                PurgeInProgress = state.State.LogicalPurgeInProgress,
+                PurgeComplete = state.State.LogicalPurgeComplete,
+            });
+        var retired = state.State.RetainsRegistryEntry;
+        var deletedAt = retired ? null : state.State.DeletedAtUtc;
         return Task.FromResult(new TreeDeletionSnapshot
         {
-            IsDeleted = state.State.IsDeleted,
+            IsDeleted = !retired && state.State.IsDeleted,
             DeletedAtUtc = deletedAt,
             RecoveryDeadlineUtc = deletedAt is { } at ? at + Options.SoftDeleteDuration : null,
-            PurgeInProgress = state.State.PurgeInProgress,
-            PurgeComplete = state.State.PurgeComplete,
+            PurgeInProgress = !retired && state.State.PurgeInProgress,
+            PurgeComplete = !retired && state.State.PurgeComplete,
         });
     }
 
     public async Task RecoverAsync()
     {
+        EnsureLifecycleOrigin();
+        if (state.State.LogicalPhysicalTreeId is not null)
+        {
+            await RecoverLogicalAsync();
+            return;
+        }
+        if (state.State.RetainsRegistryEntry)
+            throw Refuse("Cannot recover a tree that has not been deleted; its retired physical copy is separate.");
+        await RecoverPhysicalAsync();
+    }
+
+    public async Task RecoverPhysicalAsync()
+    {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
-        if (!state.State.IsDeleted)
+        if (!state.State.IsDeleted && !state.State.Delegated)
             throw new InvalidOperationException("Cannot recover a tree that has not been deleted.");
 
         if (state.State.PurgeComplete)
@@ -259,10 +302,19 @@ internal sealed class TreeDeletionGrain(
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
         var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
 
+        var delegatedSnapshot = state.State.Delegated;
+        var suppressedSnapshot = state.State.SuppressLifecycleEvents;
+        var localPinSnapshot = state.State.LocalDeleteTargetPinned;
+        var pendingSnapshot = state.State.DeletePending;
+
         // Clear deletion state.
         state.State.IsDeleted = false;
         state.State.DeletedAtUtc = null;
         state.State.RetainsRegistryEntry = false;
+        state.State.Delegated = false;
+        state.State.SuppressLifecycleEvents = false;
+        state.State.LocalDeleteTargetPinned = false;
+        state.State.DeletePending = false;
         try
         {
             await state.WriteStateAsync();
@@ -272,6 +324,10 @@ internal sealed class TreeDeletionGrain(
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
             state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
+            state.State.Delegated = delegatedSnapshot;
+            state.State.SuppressLifecycleEvents = suppressedSnapshot;
+            state.State.LocalDeleteTargetPinned = localPinSnapshot;
+            state.State.DeletePending = pendingSnapshot;
             throw;
         }
 
@@ -279,13 +335,30 @@ internal sealed class TreeDeletionGrain(
         await UnregisterAllRemindersAsync();
 
         // Re-instate the tombstone compaction reminder.
-        var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
-        await compaction.EnsureReminderAsync();
+        if (!delegatedSnapshot)
+        {
+            var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
+            await compaction.EnsureReminderAsync();
+        }
 
-        await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeRecovered);
+        if (!retainsRegistryEntrySnapshot && !suppressedSnapshot && !delegatedSnapshot)
+            await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeRecovered);
     }
 
     public async Task PurgeNowAsync()
+    {
+        EnsureLifecycleOrigin();
+        if (state.State.LogicalPhysicalTreeId is not null)
+        {
+            await PurgeLogicalAsync();
+            return;
+        }
+        if (state.State.RetainsRegistryEntry)
+            throw Refuse("Cannot purge a tree that has not been deleted; its retired physical copy is separate.");
+        await PurgePhysicalAsync();
+    }
+
+    public async Task PurgePhysicalAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
@@ -293,6 +366,12 @@ internal sealed class TreeDeletionGrain(
         if (!state.State.IsDeleted)
             throw new InvalidOperationException("Cannot purge a tree that has not been deleted.");
 
+        if (state.State.PurgeComplete && state.State.Delegated)
+        {
+            await UnregisterPurgedTreeAsync();
+            await DeregisterLeafCursorsAsync();
+            return;
+        }
         if (state.State.PurgeComplete)
             throw new InvalidOperationException("This tree has already been fully purged.");
 
@@ -345,6 +424,27 @@ internal sealed class TreeDeletionGrain(
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
+        if (reminderName == LogicalReminderName)
+        {
+            if (state.State.LogicalPhysicalTreeId is null || state.State.LogicalPurgeComplete)
+            {
+                await RemoveLogicalReminderAsync();
+                return;
+            }
+            if (DateTimeOffset.UtcNow - state.State.LogicalDeletedAtUtc >= Options.SoftDeleteDuration)
+            {
+                using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+                try { await PurgeLogicalAsync(); }
+                catch (Exception fault)
+                {
+                    logger.LogError(fault,
+                        "Tree {TreeId}: logical purge failed; the durable reminder will retry on its next tick.",
+                        TreeId);
+                }
+            }
+            return;
+        }
+        if (state.State.Delegated) return;
         if (!state.State.IsDeleted) return;
 
         if (state.State.PurgeComplete)
@@ -484,6 +584,12 @@ internal sealed class TreeDeletionGrain(
     }
 
     private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
+    {
+        if (state.State.RetainsRegistryEntry || state.State.SuppressLifecycleEvents) return;
+        await PublishLogicalLifecycleEventAsync(kind);
+    }
+
+    private async Task PublishLogicalLifecycleEventAsync(LatticeTreeEventKind kind)
     {
         // Emit lifecycle metrics unconditionally - operators need to see tree
         // deletions / recoveries / purges even when the event stream is disabled.

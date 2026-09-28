@@ -1,4 +1,5 @@
 using System.Text;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Schema.Tests;
 
@@ -33,6 +34,32 @@ public sealed class SchemaRemediationIntegrationTests
     private static byte[] Utf8(string s) => Encoding.UTF8.GetBytes(s);
 
     private static string Text(byte[]? value) => value is null ? string.Empty : Encoding.UTF8.GetString(value);
+
+    [Test]
+    public async Task Remediated_tree_lifecycle_deletes_recovers_and_purges_the_live_copy()
+    {
+        const string treeId = "remediation-lifecycle";
+        var tree = Grains.GetGrain<ILattice>(treeId);
+        await tree.SetAsync("key", Utf8("{\"v\":1}"));
+        var remediation = Grains.GetGrain<ILatticeSchemaRemediationGrain>(treeId);
+        var policy = new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() });
+        await remediation.StartAsync(LatticeValueTransform.Passthrough(), policy);
+        var registry = Grains.GetLatticeRegistry();
+        var physical = await registry.ResolveAsync(treeId);
+        Assert.That(physical, Is.Not.EqualTo(treeId));
+
+        await tree.DeleteTreeAsync();
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await tree.GetAsync("key"));
+        Assert.ThrowsAsync<InvalidOperationException>(() => tree.SetAsync("other", Utf8("{}")));
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            remediation.StartAsync(LatticeValueTransform.Passthrough(), policy));
+        await tree.RecoverTreeAsync();
+        Assert.That(Text(await tree.GetAsync("key")), Is.EqualTo("{\"v\":1}"));
+        await tree.DeleteTreeAsync();
+        await tree.PurgeTreeAsync();
+        Assert.That(await registry.ExistsAsync(physical), Is.False);
+        Assert.That(await tree.TreeExistsAsync(), Is.False);
+    }
 
     [Test]
     public async Task Remediation_rewrites_values_cuts_over_and_enforces_the_new_policy()

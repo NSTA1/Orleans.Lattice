@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class TreeResizeAliasLifecycleIntegrationTests
+public partial class TreeResizeAliasLifecycleIntegrationTests
 {
     private SmallLeafClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
@@ -56,10 +56,10 @@ public class TreeResizeAliasLifecycleIntegrationTests
         // The resize soft-deleted the retired physical copy, whose id is the
         // logical id. Purge it now, exactly as the purge reminder does once
         // LatticeOptions.SoftDeleteDuration has elapsed.
-        await _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName).PurgeNowAsync();
+        await _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName).PurgePhysicalAsync();
 
         var status = await _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(treeName).GetDeletionStatusAsync();
-        Assert.That(status.PurgeComplete, Is.True, "the retired physical copy was not purged");
+        Assert.That(status.IsDeleted, Is.False, "retiring a physical copy must not delete its logical tree");
         Assert.That(await tree.TreeExistsAsync(), Is.True,
             "purging the retired physical copy unregistered the live logical tree");
         Assert.That(await registry.ResolveAsync(treeName), Is.EqualTo(resizedPhysical),

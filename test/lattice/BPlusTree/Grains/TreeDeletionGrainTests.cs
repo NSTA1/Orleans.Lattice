@@ -56,6 +56,8 @@ public partial class TreeDeletionGrainTests
         // Set up registry grain mock.
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.ResolveAsync(TreeId).Returns(TreeId);
+        registry.GetAliasesTargetingAsync(Arg.Any<string>()).Returns(Array.Empty<string>());
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry
             {

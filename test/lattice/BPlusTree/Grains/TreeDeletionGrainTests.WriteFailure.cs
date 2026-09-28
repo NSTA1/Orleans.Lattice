@@ -24,13 +24,17 @@ public partial class TreeDeletionGrainTests
     [Test]
     public void DeleteTree_reverts_in_memory_state_when_WriteStateAsync_throws()
     {
-        var (grain, state, _, _, _) = CreateGrain();
+        var (grain, state, _, factory, _) = CreateGrain();
 
         // Pre-conditions: a freshly-constructed deletion grain is not deleted.
         Assume.That(state.State.IsDeleted, Is.False);
         Assume.That(state.State.DeletedAtUtc, Is.Null);
 
-        state.ThrowOnWrite = new InvalidOperationException("simulated storage failure");
+        factory.GetGrain<IShardRootGrain>($"{TreeId}/0").MarkDeletedAsync().Returns(_ =>
+        {
+            state.ThrowOnWrite = new InvalidOperationException("simulated storage failure");
+            return Task.CompletedTask;
+        });
 
         Assert.ThrowsAsync<InvalidOperationException>(async () => await grain.DeleteTreeAsync());
 

@@ -64,7 +64,7 @@ public partial class TreeDeletionGrainTests
         var (grain, state, _, grainFactory, _) = CreateGrain();
         await grain.DeleteRetiredPhysicalTreeAsync();
 
-        await grain.PurgeNowAsync();
+        await grain.PurgePhysicalAsync();
 
         for (int i = 0; i < ShardCount; i++)
         {
@@ -116,7 +116,7 @@ public partial class TreeDeletionGrainTests
         var (grain, state, _, _, _) = CreateGrain();
         await grain.DeleteRetiredPhysicalTreeAsync();
 
-        await grain.RecoverAsync();
+        await grain.RecoverPhysicalAsync();
 
         Assert.That(state.State.IsDeleted, Is.False);
         Assert.That(state.State.RetainsRegistryEntry, Is.False);
@@ -125,8 +125,12 @@ public partial class TreeDeletionGrainTests
     [Test]
     public void DeleteRetiredPhysicalTree_reverts_the_retention_when_WriteStateAsync_throws()
     {
-        var (grain, state, _, _, _) = CreateGrain();
-        state.ThrowOnWrite = new InvalidOperationException("simulated storage failure");
+        var (grain, state, _, factory, _) = CreateGrain();
+        factory.GetGrain<IShardRootGrain>($"{TreeId}/0").MarkDeletedAsync().Returns(_ =>
+        {
+            state.ThrowOnWrite = new InvalidOperationException("simulated storage failure");
+            return Task.CompletedTask;
+        });
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteRetiredPhysicalTreeAsync());
 
@@ -141,7 +145,7 @@ public partial class TreeDeletionGrainTests
         await grain.DeleteRetiredPhysicalTreeAsync();
         state.ThrowOnWrite = new InvalidOperationException("simulated storage failure");
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverPhysicalAsync());
 
         // A retry must still see a retirement, not an ordinary deletion whose
         // purge would unregister the live logical tree.

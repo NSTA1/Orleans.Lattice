@@ -77,10 +77,12 @@ public partial class LatticeSchemaRemediationGrainTests
         Func<IAsyncEnumerable<KeyValuePair<string, byte[]>>> entriesFactory,
         SchemaRemediationState? seedState,
         ILatticeSchemaRegistry? schemaRegistry,
-        LatticeSchemaPolicy? existingPolicy)
+        LatticeSchemaPolicy? existingPolicy,
+        IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("remediation", TreeId));
+        if (activationServices is not null) context.ActivationServices.Returns(activationServices);
 
         var source = Substitute.For<ILattice>();
         source.EntriesAsync().Returns(_ => entriesFactory());

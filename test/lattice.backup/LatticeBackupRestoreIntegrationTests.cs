@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// artifact is rejected before anything is installed.
 /// </summary>
 [Category("Integration")]
-public sealed class LatticeBackupRestoreIntegrationTests
+public sealed partial class LatticeBackupRestoreIntegrationTests
 {
     private const string Source = "orders";
 

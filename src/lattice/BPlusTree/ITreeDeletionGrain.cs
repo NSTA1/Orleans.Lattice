@@ -14,7 +14,8 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ITreeDeletionGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Initiates a soft delete of the tree. Marks all shards as deleted so that
+    /// Initiates a soft delete of the logical tree, pinning its current owned
+    /// alias target independently of any retired copy. Marks all target shards as deleted so that
     /// subsequent reads and writes throw <see cref="InvalidOperationException"/>.
     /// Registers a reminder to purge the tree after the configured soft-delete
     /// duration. Idempotent - calling again on an already-deleted tree is a no-op.
@@ -34,10 +35,42 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// </summary>
     Task DeleteRetiredPhysicalTreeAsync();
 
+    /// <summary>Retires a derived physical copy whose registry entry is disposable.</summary>
+    Task DeleteDerivedPhysicalTreeAsync();
+
+    /// <summary>Reports deletion or partially applied delegated deletion of the local physical copy, not the logical alias.</summary>
+    Task<bool> IsPhysicalDeletedAsync();
+
+    /// <summary>Recovers the retired or delegated local physical copy, including partially applied shard marks.</summary>
+    Task RecoverPhysicalAsync();
+
+    /// <summary>Purges the retired or delegated local copy; its logical owner manages the alias.</summary>
+    Task PurgePhysicalAsync();
+
+    /// <summary>Deletes a physical copy without events or a competing purge driver.</summary>
+    Task DeleteDelegatedAsync();
+
+    /// <summary>Reserves the logical lifecycle for an idempotent alias operation.</summary>
+    Task BeginAliasChangeAsync(string operationId);
+
     /// <summary>
-    /// Returns <c>true</c> if the tree has been soft-deleted (whether or not
-    /// the purge has completed).
+    /// Releases only the matching alias-operation reservation. Internal-origin
+    /// control-plane callers only; an absent or different reservation is a no-op.
+    /// Owning coordinators use this after completion or to abandon a persisted
+    /// preparation while idle, never on a time-based lease expiry.
     /// </summary>
+    Task EndAliasChangeAsync(string operationId);
+
+    /// <summary>Rejects alias writes while logical deletion is pending or durable.</summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task EnsureAliasWritableAsync();
+
+    /// <summary>
+    /// Returns <c>true</c> while logical deletion is pending or durable
+    /// (whether or not the purge has completed). Physical retirement alone
+    /// does not make the logical tree deleted.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<bool> IsDeletedAsync();
 
     /// <summary>
@@ -54,8 +87,8 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// Recovers a soft-deleted tree, making it accessible again. Clears the
     /// <c>IsDeleted</c> flag on all shards and unregisters the purge reminder.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted, or if the purge has already completed (data is gone).
-    /// Idempotent during the soft-delete window - calling multiple times is safe.
+    /// deleted, or if the purge has started or completed. A failed recovery
+    /// can be retried; a second call after successful recovery is rejected.
     /// </summary>
     Task RecoverAsync();
 
