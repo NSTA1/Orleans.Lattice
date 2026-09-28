@@ -148,25 +148,37 @@ on:
       - 'lattice.grainindex-v*'
 
 jobs:
-  publish:
+  # ---------------------------------------------------------------------------
+  # PREPARE. Everything that can refuse the release before any runner is spent
+  # on tests: the release-line guard, the tag parse, and the csproj version
+  # check. Then plans the released package's test legs with the same planner,
+  # shard partition and duration table as ci.yml.
+  #
+  # WHY THE RELEASE IS SPLIT INTO JOBS. This workflow used to be one job that
+  # ran the released package's whole suite serially before it packed anything.
+  # For `lattice` that was 27 minutes of test time in a 30-minute run on one
+  # two-core runner (lattice-v9.8.0: chaos 8.7 min, then deterministic 18.2).
+  # CI stopped paying that cost when it sharded `test/lattice` across parallel
+  # legs (#2417); the release of the same package kept paying it. The legs
+  # below are planned exactly as CI plans them, so a sharded package's release
+  # tests fan out the way its pull-request tests do, and an unsharded package
+  # plans one leg that runs its project whole, which is what it ran before.
+  #
+  # Only the final `publish` job holds `contents: write` and `id-token: write`.
+  # Nothing that runs tests can mint a NuGet key or create a release.
+  # ---------------------------------------------------------------------------
+  prepare:
+    name: Prepare release
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
-
-    # Azurite supplies the local Azure Storage endpoints for the
-    # AzureStorageEmulator-category tests (storage.azuretable, caching.azureblob,
-    # backup.azureblob) so a release of those packages actually runs their emulator
-    # tests instead of skipping them. Harmless for packages that define no such
-    # tests. Pinned to the version validated locally; default command binds
-    # blob/queue/table on 0.0.0.0 and the ports map to the runner host.
-    services:
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
+      contents: read
+    outputs:
+      package: ${{ steps.parse.outputs.PACKAGE }}
+      version: ${{ steps.parse.outputs.VERSION }}
+      csproj: ${{ steps.parse.outputs.CSPROJ }}
+      test_project: ${{ steps.parse.outputs.TEST_PROJECT }}
+      legs: ${{ steps.matrix.outputs.legs }}
+      leg_count: ${{ steps.matrix.outputs.leg_count }}
 
     steps:
       - uses: actions/checkout@v5
@@ -290,34 +302,120 @@ jobs:
             exit 1
           fi
 
+      # The same planner, shard partition and duration table as ci.yml's
+      # `Plan the test matrix` step, given a selection of exactly one package.
+      # `test/lattice` therefore fans out across the shards in test-shards.json,
+      # each crossed with the deterministic / coyote / chaos tiers, and is
+      # bin-packed onto up to ten legs, and `test/lattice.api.mcp.repocontext`
+      # across its untiered shards; every unsharded package plans a single leg
+      # that runs its test project whole. A package with no test project (the
+      # explorer's hosting libraries, which share one test project) plans no
+      # legs at all, and the `test` job is skipped.
+      #
+      # WHAT THE LEGS RUN IS CI'S DEFINITION, NOT THE OLD RELEASE ONE. The
+      # previous steps ran `TestCategory!=Chaos` and then
+      # `TestCategory=Chaos&TestCategory!=AzureStorageEmulator`. VSTest
+      # evaluates `!=` per category and existentially, so a test carrying both
+      # Chaos and AzureStorageEmulator already satisfied the second filter
+      # through its Chaos category, and the two steps together covered the whole
+      # project - the same set the leg runner covers, because the three tiers
+      # partition the suite (see UNSHARDED_FILTER in plan-test-matrix.py for the
+      # measurement). Nothing that ran before is dropped by moving to the
+      # planner's definition; the release now simply runs it the way the
+      # required check does.
+      - name: Plan the test matrix
+        id: matrix
+        env:
+          PACKAGE: ${{ steps.parse.outputs.PACKAGE }}
+          TEST_PROJECT: ${{ steps.parse.outputs.TEST_PROJECT }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TEST_PROJECT}" ]; then
+            echo "::notice::${PACKAGE} has no test/${PACKAGE}/ project, so no test legs are planned."
+            {
+              echo "legs=[]"
+              echo "leg_count=0"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "${PACKAGE}" > /tmp/selected-packages.txt
+          printf '%s\n' "${PACKAGE}" > /tmp/seeded-packages.txt
+
+          python3 .github/workflows/plan-test-matrix.py \
+            --packages /tmp/selected-packages.txt \
+            --seeded /tmp/seeded-packages.txt \
+            --shards .github/workflows/test-shards.json \
+            --durations .github/workflows/test-durations.tsv \
+            --max-legs 10 \
+            --output-matrix /tmp/matrix.json \
+            --report-file "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "legs<<MATRIX_EOF"
+            cat /tmp/matrix.json
+            echo ""
+            echo "MATRIX_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "leg_count=$(python3 -c 'import json;print(len(json.load(open("/tmp/matrix.json"))))')" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # TEST. One runner per planned leg, exactly as ci.yml's `test` job: the leg
+  # runner, its per-item attribution, and its attempt-scoped result artifact.
+  # ---------------------------------------------------------------------------
+  test:
+    name: ${{ matrix.leg.name }}
+    needs: prepare
+    if: needs.prepare.outputs.leg_count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    strategy:
+      # Never fail-fast, for the reason ci.yml gives: a cancelled sibling leg is
+      # an unreported leg. A release that is going to be refused should say
+      # everything that is wrong with it in one run.
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        leg: ${{ fromJson(needs.prepare.outputs.legs) }}
+
+    # Azurite supplies the local Azure Storage endpoints for the
+    # AzureStorageEmulator-category tests (storage.azuretable, caching.azureblob,
+    # backup.azureblob) so a release of those packages actually runs their
+    # emulator tests instead of skipping them. Every leg gets it because legs are
+    # bin-packed, so which one carries an emulator fixture is not fixed. Pinned
+    # to the version validated locally; the default command binds
+    # blob/queue/table on 0.0.0.0 and the ports map to the runner host.
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Restore
         run: dotnet restore
 
-      # No global -p:Version here (see 'Verify csproj version matches tag'):
-      # the csproj <Version> drives the assembly and package version so that
-      # ProjectReference dependency floors resolve to each referenced package's
-      # real version, not the tag version.
-      #
-      # Build only the package being released rather than the whole solution.
-      # When a test project exists, building it transitively compiles the src
-      # csproj (and its dependency graph) in Release - exactly what the Test
-      # (--no-build) and Pack (--no-build) steps consume. With no test project,
-      # build the src csproj directly. A single-package release has no reason to
-      # compile every other project in the solution.
+      # Build only the released package's test project, which transitively
+      # compiles the package itself and its dependency graph in Release. A
+      # single-package release has no reason to compile every other project in
+      # the solution.
       - name: Build
-        run: |
-          set -euo pipefail
-          if [ -n "${{ steps.parse.outputs.TEST_PROJECT }}" ]; then
-            dotnet build "${{ steps.parse.outputs.TEST_PROJECT }}" --no-restore --configuration Release
-          else
-            dotnet build "${{ steps.parse.outputs.CSPROJ }}" --no-restore --configuration Release
-          fi
-
-      # The durable active-active suite is deliberately outside package test
-      # discovery: it spans core, replication, and Azure WAL concerns and is a
-      # release-wide gate rather than a package-owned suite.
-      - name: Build durable active-active release gate
-        run: dotnet build test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj --no-restore --configuration Release
+        env:
+          TEST_PROJECT: ${{ needs.prepare.outputs.test_project }}
+        run: dotnet build "${TEST_PROJECT}" --no-restore --configuration Release
 
       # Ensure Azurite is accepting connections before the
       # AzureStorageEmulator tests run (they self-skip on a connection failure).
@@ -338,11 +436,12 @@ jobs:
       # The TLA+ toolchain for the `Tlc` category in test/lattice. See
       # spec/README.md and issue #2323.
       #
-      # Provisioned unconditionally rather than only when the released package
-      # is `lattice`: the `Test (deterministic)` step below runs the released
-      # package's suite with `TestCategory!=Chaos`, which does NOT exclude
-      # `Tlc`, and TlcModelCheckTests FAILS (never skips) when the toolchain is
-      # absent under GITHUB_ACTIONS. Gating on the package would make a core
+      # Provisioned on every leg rather than only when the released package is
+      # `lattice`, for two reasons. The leg runner's deterministic tier is the
+      # complement of Chaos and Coyote, which does NOT exclude `Tlc`, and
+      # TlcModelCheckTests FAILS (never skips) when the toolchain is absent under
+      # GITHUB_ACTIONS; and which leg carries that fixture is decided by the bin
+      # packing, so it is not knowable here. Gating on either would make a core
       # release the one run that discovers the omission, at the worst moment.
       # Mirrors the steps in ci.yml; `CiTlaToolchainProvisioningTests` fails if
       # any lane drifts from the others.
@@ -367,27 +466,182 @@ jobs:
           echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
             | sha256sum --check --strict
 
+      - name: Run leg
+        env:
+          LEG: ${{ toJson(matrix.leg) }}
+          # The same digest-settle ceiling ci.yml's legs run under. The legs are
+          # CI's legs, so they get CI's environment: a difference in results
+          # between the required check and the release gate must not be
+          # attributable to a difference in timeouts. This does not mask a
+          # convergence bug - a digest that settles on a wrong value still fails.
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+          printf '%s' "$LEG" > /tmp/leg.json
+          python3 .github/workflows/run-test-leg.py \
+            --leg /tmp/leg.json \
+            --results-dir leg-results \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload leg results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          # Attempt-scoped for the reason ci.yml gives (issue #2924): artifacts
+          # are scoped to the run, so a re-run leg would otherwise upload under
+          # the name of the attempt it replaces.
+          name: leg-results-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: leg-results/
+          retention-days: 7
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-output-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: |
+            **/*.trx
+            **/*.dmp
+            **/Sequence_*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # RELEASE GATE. The durable active-active suite is deliberately outside
+  # package test discovery: it spans core, replication, and Azure WAL concerns
+  # and is a release-wide gate rather than a package-owned suite. It runs beside
+  # the test legs rather than ahead of them.
+  # ---------------------------------------------------------------------------
+  release-gate:
+    name: Durable active-active release gate
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build durable active-active release gate
+        run: dotnet build test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj --no-restore --configuration Release
+
+      # Ensure Azurite is accepting connections before the
+      # AzureStorageEmulator tests run (they self-skip on a connection failure).
+      # Build precedes this, so it is normally already satisfied; cheap guard
+      # against a cold-start race.
+      - name: Wait for Azurite
+        run: |
+          for port in 10000 10001 10002; do
+            for i in $(seq 1 30); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+                echo "Azurite port ${port} ready"; break
+              fi
+              if [ "$i" -eq 30 ]; then echo "::error::Azurite port ${port} not ready after 30s"; exit 1; fi
+              sleep 1
+            done
+          done
+
       - name: Test durable active-active release gate
         run: dotnet test test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj --no-build --configuration Release --filter "TestCategory=AzureStorageEmulator&TestCategory!=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
-      - name: Test (chaos)
-        if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
+  # ---------------------------------------------------------------------------
+  # PUBLISH. The only job that can write anything outside this run.
+  #
+  # `always()` is there so the condition below is what decides, not the
+  # default skip-on-skipped rule, and the condition admits exactly two shapes:
+  # every planned leg succeeded, or no legs were planned because the package has
+  # no test project. A failed, cancelled or skipped-for-any-other-reason `test`
+  # job refuses the release, as does anything but success from `prepare` or the
+  # release gate.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Pack and publish
+    needs: [prepare, test, release-gate]
+    if: >-
+      always()
+      && needs.prepare.result == 'success'
+      && needs.release-gate.result == 'success'
+      && (needs.test.result == 'success'
+          || (needs.test.result == 'skipped' && needs.prepare.outputs.leg_count == '0'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
 
-      # The AzureStorageEmulator category runs here against the job's Azurite
-      # service container (see `services:` above). The chaos step excludes it so
-      # the Azure chaos suite stays out of the release gate; the deterministic
-      # emulator integration tests run. Harmless for packages without the category.
-      - name: Test (deterministic)
-        if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
+    steps:
+      - uses: actions/checkout@v5
 
-      # No global -p:PackageVersion here (see 'Verify csproj version matches
-      # tag' and 'Build'): --no-build reuses the already-correct assembly, and
-      # the csproj <Version> is the single source of truth for both the package
-      # version and its emitted ProjectReference dependency floors.
+      # The pattern matches every attempt and `merge-multiple` is NOT set, for
+      # the reasons ci.yml's `Download leg results` step gives: "re-run failed
+      # jobs" re-runs only the failed legs, so the passing legs' results exist
+      # only under the earlier attempt, and every leg writes the same file name.
+      - name: Download leg results
+        if: needs.prepare.outputs.leg_count != '0'
+        uses: actions/download-artifact@v6
+        with:
+          pattern: leg-results-*
+          path: leg-results
+
+      # The same aggregate ci.yml's required check runs, and for the same
+      # reason: green legs are not enough. It fails when a shard executed zero
+      # tests across every tier - a filter that matches nothing reports green -
+      # and when a planned leg wrote no result at all. Run before anything is
+      # packed, so a vacuous release gate refuses the release rather than being
+      # discovered afterwards.
+      - name: Aggregate test legs
+        if: needs.prepare.outputs.leg_count != '0'
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/summarise-test-legs.py \
+            --results-dir leg-results \
+            --expect-legs "${{ needs.prepare.outputs.leg_count }}" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      # No global -p:Version here (see 'Verify csproj version matches tag' in
+      # the prepare job): the csproj <Version> drives the assembly and package
+      # version so that ProjectReference dependency floors resolve to each
+      # referenced package's real version, not the tag version.
+      #
+      # Only the packed project is built. The test legs built the same project
+      # in Release on their own runners; this runner builds it once more from
+      # the same commit, because build outputs are not carried between jobs.
+      - name: Build
+        env:
+          CSPROJ: ${{ needs.prepare.outputs.csproj }}
+        run: dotnet build "${CSPROJ}" --no-restore --configuration Release
+
+      # No global -p:PackageVersion here (see 'Build'): --no-build reuses the
+      # already-correct assembly, and the csproj <Version> is the single source
+      # of truth for both the package version and its emitted ProjectReference
+      # dependency floors.
       - name: Pack
-        run: dotnet pack "${{ steps.parse.outputs.CSPROJ }}" --no-build --configuration Release --output ./artifacts
+        env:
+          CSPROJ: ${{ needs.prepare.outputs.csproj }}
+        run: dotnet pack "${CSPROJ}" --no-build --configuration Release --output ./artifacts
 
       - name: NuGet login (OIDC)
         uses: NuGet/login@v1
