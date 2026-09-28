@@ -39,6 +39,14 @@ internal sealed partial class BPlusLeafGrain
     private const int ProjectionHashSize = 16;
 
     /// <summary>
+    /// Stack budget, in bytes, for the UTF-8 scratch a length-prefixed string
+    /// field is transcoded into before it is fed to the contribution hasher.
+    /// Comfortably covers every ordinary Lattice key, origin id and replica
+    /// id, so a contribution stays allocation-free.
+    /// </summary>
+    private const int DigestScratchBytes = 256;
+
+    /// <summary>
     /// Cached <see cref="XxHash128"/> reused across every per-entry
     /// contribution computed inside this grain activation. Lazily
     /// created on first use and reset (not recreated) between
@@ -563,16 +571,64 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
-    private static void FeedString(XxHash128 hasher, string value, Span<byte> scratch)
+    /// <summary>
+    /// Appends a length-prefixed UTF-8 encoding of <paramref name="value"/> to
+    /// <paramref name="hasher"/>.
+    /// <para>
+    /// The string is transcoded exactly <em>once</em>: the byte count the
+    /// length prefix carries is the count <see cref="Encoding.GetBytes(string, Span{byte})"/>
+    /// reports, which is by definition the same number a separate
+    /// <see cref="Encoding.GetByteCount(string)"/> pass would have produced, so
+    /// the emitted bytes are identical to the two-pass form this replaced while
+    /// the string is scanned half as often. The scratch buffer is sized to the
+    /// key's own worst case rather than to a fixed 256 bytes, so an ordinary
+    /// short key no longer zero-initialises a quarter-kilobyte of stack it
+    /// never reads - C# zero-fills every <c>stackalloc</c>, and this runs once
+    /// per key, once per origin id and once per vector-clock replica on every
+    /// folded row.
+    /// </para>
+    /// <para>
+    /// Internal rather than private so the microbenchmark host can drive it
+    /// against a verbatim copy of the two-pass body. Widening only; no public
+    /// API surface changes.
+    /// </para>
+    /// </summary>
+    internal static void FeedString(XxHash128 hasher, string value, Span<byte> scratch)
     {
+        if (value.Length == 0)
+        {
+            // GetByteCount("") is 0 for every encoding, so the empty case can
+            // skip the transcode entirely and still emit the same prefix.
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], 0);
+            hasher.Append(scratch[..4]);
+            return;
+        }
+
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(value.Length);
+        if (maxByteCount <= DigestScratchBytes)
+        {
+            // The whole worst case fits, so the exact byte count is not needed
+            // before the transcode: encode once and let the written length be
+            // the prefix. Only maxByteCount bytes of stack are zero-filled
+            // rather than the full budget.
+            Span<byte> tight = stackalloc byte[maxByteCount];
+            var encoded = Encoding.UTF8.GetBytes(value, tight);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], encoded);
+            hasher.Append(scratch[..4]);
+            hasher.Append(tight[..encoded]);
+            return;
+        }
+
+        // Long string: the worst case overflows the stack budget, so the exact
+        // count has to decide the buffer. This keeps the original two-pass
+        // shape, because renting for a long-but-mostly-ASCII string would cost
+        // more than the second scan it saves.
         var byteCount = Encoding.UTF8.GetByteCount(value);
         BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], byteCount);
         hasher.Append(scratch[..4]);
-        if (byteCount == 0) return;
-
-        if (byteCount <= 256)
+        if (byteCount <= DigestScratchBytes)
         {
-            Span<byte> buf = stackalloc byte[256];
+            Span<byte> buf = stackalloc byte[DigestScratchBytes];
             var written = Encoding.UTF8.GetBytes(value, buf);
             hasher.Append(buf[..written]);
         }
@@ -602,7 +658,13 @@ internal sealed partial class BPlusLeafGrain
         FeedString(hasher, value, scratch);
     }
 
-    private static void FeedVectorClock(XxHash128 hasher, VersionVector? vc, Span<byte> scratch)
+    /// <summary>
+    /// Folds <paramref name="vc"/> into <paramref name="hasher"/> in a
+    /// replica order that does not depend on dictionary insertion order.
+    /// Internal so the microbenchmark can drive it against a verbatim copy of
+    /// its pre-trim shape; not part of the public surface.
+    /// </summary>
+    internal static void FeedVectorClock(XxHash128 hasher, VersionVector? vc, Span<byte> scratch)
     {
         if (vc is null || vc.Entries.Count == 0)
         {
@@ -611,11 +673,33 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
+        // A single-replica clock is already sorted, so the rent, the copy, the
+        // one-element Array.Sort and the cleared return are all pure overhead:
+        // ArrayPool rounds a one-element rent up to its smallest bucket and
+        // clearArray: true then wipes that whole bucket on the way back, per
+        // folded row. Feed the one entry straight through instead. This is the
+        // shape a non-replicated or single-region tree always has.
+        var count = vc.Entries.Count;
+        if (count == 1)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], 1);
+            hasher.Append(scratch[..4]);
+            foreach (var (replica, clock) in vc.Entries)
+            {
+                FeedString(hasher, replica, scratch);
+                BinaryPrimitives.WriteInt64LittleEndian(scratch, clock.WallClockTicks);
+                hasher.Append(scratch[..8]);
+                BinaryPrimitives.WriteInt32LittleEndian(scratch[..4], clock.Counter);
+                hasher.Append(scratch[..4]);
+            }
+
+            return;
+        }
+
         // Replica ids are sorted with Ordinal so the digest is stable
         // regardless of which replica the dictionary insertion order
         // happened to pick. Rent the scratch array from the shared pool
         // to avoid a per-entry heap allocation on replicated trees.
-        var count = vc.Entries.Count;
         var replicas = ArrayPool<string>.Shared.Rent(count);
         try
         {
