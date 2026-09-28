@@ -60,6 +60,8 @@ The package family ships from this repository:
 | `Orleans.Lattice.Explorer.Entra` | `src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj` |
 | `Orleans.Lattice.Explorer.Entra.Web` | `src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj` |
 | `Orleans.Lattice.Explorer.DesignSystem` | `src/lattice.explorer/DesignSystem/Orleans.Lattice.Explorer.DesignSystem.csproj` |
+| `Orleans.Lattice.Explorer.Shell` | `src/lattice.explorer/Shell/Orleans.Lattice.Explorer.Shell.csproj` |
+| `Orleans.Lattice.Explorer.AppKit` | `src/lattice.explorer/AppKit/Orleans.Lattice.Explorer.AppKit.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.Abstractions` | `src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.Selection` | `src/lattice.explorer/Plugins/Selection/Orleans.Lattice.Explorer.Plugins.Selection.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.Data` | `src/lattice.explorer/Plugins/Data/Orleans.Lattice.Explorer.Plugins.Data.csproj` |
@@ -135,6 +137,8 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Explorer.Entra` | `lattice.explorer.entra-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Entra.Web` | `lattice.explorer.entra.web-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.DesignSystem` | `lattice.explorer.designsystem-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Shell` | `lattice.explorer.shell-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.AppKit` | `lattice.explorer.appkit-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.Abstractions` | `lattice.explorer.plugins.abstractions-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.Selection` | `lattice.explorer.plugins.selection-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.Data` | `lattice.explorer.plugins.data-v<X.Y.Z>` |
