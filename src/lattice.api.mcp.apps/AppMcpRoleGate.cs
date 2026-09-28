@@ -14,10 +14,12 @@ namespace Orleans.Lattice.Api.Mcp.Apps;
 /// scopes, the gate allows <em>every</em> operation bit of the role on that scope. Each
 /// bit is presented as its own <see cref="LatticeAccessRequest"/> over the scope's
 /// effective tree id: with the key for a key scope, and with no key for a tree or
-/// prefix scope. An unfiltered allow holds the bit. A key-filtered allow holds the bit
-/// only on a prefix scope and only when the filter keeps the prefix itself; on a tree
-/// scope a filtered allow means the caller holds only part of the tree, so it does not.
-/// A role with no operations or no scopes is never held.
+/// prefix scope. Only an unfiltered allow holds the bit. A key-filtered allow
+/// admits some keys rather than the whole scope, so it never holds the bit - on a
+/// prefix scope no less than on a tree scope, because the gate exposes no
+/// whole-prefix query and testing the filter at the prefix string would resolve
+/// the exact-key tier, letting a grant on the single key that spells the prefix
+/// carry the entire prefix. A role with no operations or no scopes is never held.
 /// </para>
 /// <para>
 /// The same evaluation runs when the tool is advertised and again when it is invoked,
@@ -82,8 +84,13 @@ internal sealed class AppMcpRoleGate
             if (!decision.Allowed)
                 return false;
 
-            if (decision.KeyFilter is { } filter
-                && (scope.Kind != LatticeScopeKind.Prefix || scope.KeyOrPrefix is null || !filter(scope.KeyOrPrefix)))
+            // A key-filtered allow admits some keys, not the scope. No scope kind
+            // the role gate evaluates is attached to a key (a key scope passes its
+            // key on the request itself), so a filter always means the caller holds
+            // less than the role asks for. Testing the filter at the prefix string
+            // would resolve the exact-key tier and let a grant on the single key
+            // that spells the prefix carry the whole prefix.
+            if (decision.KeyFilter is not null)
             {
                 return false;
             }
