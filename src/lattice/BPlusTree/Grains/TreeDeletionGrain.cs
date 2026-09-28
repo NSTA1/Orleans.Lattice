@@ -419,10 +419,22 @@ internal sealed partial class TreeDeletionGrain(
     {
         if (reminderName == LogicalReminderName)
         {
-            if (state.State.LogicalPhysicalTreeId is not null
-                && !state.State.LogicalPurgeComplete
-                && DateTimeOffset.UtcNow - state.State.LogicalDeletedAtUtc >= Options.SoftDeleteDuration)
-                await PurgeLogicalAsync();
+            if (state.State.LogicalPhysicalTreeId is null || state.State.LogicalPurgeComplete)
+            {
+                await RemoveLogicalReminderAsync();
+                return;
+            }
+            if (DateTimeOffset.UtcNow - state.State.LogicalDeletedAtUtc >= Options.SoftDeleteDuration)
+            {
+                using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+                try { await PurgeLogicalAsync(); }
+                catch (Exception fault)
+                {
+                    logger.LogError(fault,
+                        "Tree {TreeId}: logical purge failed; the durable reminder will retry on its next tick.",
+                        TreeId);
+                }
+            }
             return;
         }
         if (state.State.Delegated) return;

@@ -22,10 +22,12 @@ public partial class TreeResizeGrainTests
                      IGrainFactory grainFactory,
                      IOptionsMonitor<LatticeOptions> optionsMonitor) CreateGrain(
         LatticeOptions? options = null,
-        FakePersistentState<TreeResizeState>? existingState = null)
+        FakePersistentState<TreeResizeState>? existingState = null,
+        IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("resize", TreeId));
+        if (activationServices is not null) context.ActivationServices.Returns(activationServices);
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
@@ -337,7 +339,7 @@ public partial class TreeResizeGrainTests
 
         // Deleted new tree.
         await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/op1")
-            .Received(1).DeleteTreeAsync();
+            .Received(1).DeleteDerivedPhysicalTreeAsync();
 
         // Restored old config.
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>

@@ -69,6 +69,10 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     private string TreeId => context.GrainId.Key.ToString()!;
 
+    private void EnsureControlPlaneOrigin() =>
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            context.ActivationServices, TreeId, LatticeOperation.SchemaAdmin);
+
     private async Task ReserveAliasAsync()
     {
         if (!state.State.InProgress) await ReleaseAliasAsync();
@@ -99,6 +103,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(targetPolicy);
+        EnsureControlPlaneOrigin();
 
         // Reject an uncompilable / non-linear regex here rather than mid-build.
         _ = CompiledSchemaPolicy.Compile(targetPolicy);
@@ -125,6 +130,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     public async Task<LatticeSchemaRemediationReport> StartVersionMigrationAsync(
         uint schemaId, uint targetVersion, CancellationToken cancellationToken = default)
     {
+        EnsureControlPlaneOrigin();
         if (schemaRegistry is null)
         {
             throw new InvalidOperationException(
@@ -163,6 +169,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// <inheritdoc />
     public async Task RunRemediationPassAsync()
     {
+        EnsureControlPlaneOrigin();
         if (!state.State.InProgress)
         {
             await ReleaseAliasAsync();

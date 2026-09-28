@@ -88,6 +88,12 @@ internal sealed partial class TreeDeletionGrain
                 var physical = await registry.ResolveAsync(TreeId);
                 if (physical == TreeId)
                 {
+                    if (state.State.RetainsRegistryEntry)
+                    {
+                        if (!state.State.PurgeComplete)
+                            throw Refuse($"Tree '{TreeId}' resolves to its retired physical copy; undo the resize or restore the live alias first.");
+                        await ResetPurgedRetirementAsync();
+                    }
                     state.State.LocalDeleteTargetPinned = true;
                     try { await state.WriteStateAsync(); }
                     catch { state.State.LocalDeleteTargetPinned = false; throw; }
@@ -142,6 +148,24 @@ internal sealed partial class TreeDeletionGrain
                 throw Refuse($"Cannot delete alias target '{physical}': tree '{alias}' also aliases it.");
     }
 
+    private async Task ResetPurgedRetirementAsync()
+    {
+        var snapshot = (state.State.IsDeleted, state.State.DeletedAtUtc,
+            state.State.RetainsRegistryEntry, state.State.PurgeComplete, state.State.SuppressLifecycleEvents);
+        state.State.IsDeleted = false;
+        state.State.DeletedAtUtc = null;
+        state.State.RetainsRegistryEntry = false;
+        state.State.PurgeComplete = false;
+        state.State.SuppressLifecycleEvents = false;
+        try { await state.WriteStateAsync(); }
+        catch
+        {
+            (state.State.IsDeleted, state.State.DeletedAtUtc,
+                state.State.RetainsRegistryEntry, state.State.PurgeComplete, state.State.SuppressLifecycleEvents) = snapshot;
+            throw;
+        }
+    }
+
     private async Task RecoverLogicalAsync()
     {
         EnsureLifecycleOrigin();
@@ -188,6 +212,8 @@ internal sealed partial class TreeDeletionGrain
         catch { state.State.LogicalPurgeInProgress = wasPurging; throw; }
 
         await deletion.PurgePhysicalAsync();
+        if (state.State.RetainsRegistryEntry && state.State.IsDeleted && !state.State.PurgeComplete)
+            await PurgePhysicalAsync();
         await grainFactory.GetLatticeRegistry().UnregisterAsync(TreeId);
         await RemoveLogicalReminderAsync();
         state.State.LogicalPurgeInProgress = false;

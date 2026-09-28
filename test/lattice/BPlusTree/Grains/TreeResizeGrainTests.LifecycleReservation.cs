@@ -7,6 +7,19 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class TreeResizeGrainTests
 {
     [Test]
+    public void External_idle_pass_cannot_release_a_control_plane_reservation()
+    {
+        var services = Substitute.For<IServiceProvider>();
+        services.GetService(typeof(LatticeInternalOriginEnforcementMarker))
+            .Returns(new LatticeInternalOriginEnforcementMarker());
+        var (grain, state, _, _, _) = CreateGrain(activationServices: services);
+        state.State.AliasReservationId = "resize:orphan";
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(() => grain.RunResizePassAsync());
+        Assert.That(state.State.AliasReservationId, Is.EqualTo("resize:orphan"));
+        Assert.That(state.WriteCount, Is.Zero);
+    }
+
+    [Test]
     public async Task Idle_pass_releases_a_persisted_orphan_reservation_after_reactivation()
     {
         var (grain, state, _, factory, _) = CreateGrain();

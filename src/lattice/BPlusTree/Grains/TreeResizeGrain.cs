@@ -253,6 +253,8 @@ internal sealed class TreeResizeGrain(
 
     public async Task RunResizePassAsync()
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
         if (!state.State.InProgress)
         {
             await ReleaseAliasAsync();
@@ -363,7 +365,7 @@ internal sealed class TreeResizeGrain(
             await Task.WhenAll(clearTasks);
 
             var destDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
-            await destDeletion.DeleteTreeAsync();
+            await destDeletion.DeleteDerivedPhysicalTreeAsync();
 
             // Snapshot every field ResetResizeState clears so a transient
             // WriteStateAsync failure does not leave in-memory state below
@@ -437,7 +439,7 @@ internal sealed class TreeResizeGrain(
 
         // 4. Delete the snapshot tree.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
-        await newDeletion.DeleteTreeAsync();
+        await newDeletion.DeleteDerivedPhysicalTreeAsync();
 
         // 5. Restore the original registry entry (or clear overrides if none existed).
         await registry.UpdateAsync(TreeId, state.State.OldRegistryEntry ?? new TreeRegistryEntry());

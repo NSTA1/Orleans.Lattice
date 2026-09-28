@@ -8,6 +8,30 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class TreeDeletionGrainTests
 {
+    [Test]
+    public async Task External_caller_cannot_abandon_a_reservation_and_internal_release_is_idempotent()
+    {
+        var context = Substitute.For<IGrainContext>();
+        var services = Substitute.For<IServiceProvider>();
+        services.GetService(typeof(LatticeInternalOriginEnforcementMarker))
+            .Returns(new LatticeInternalOriginEnforcementMarker());
+        context.ActivationServices.Returns(services);
+        var (grain, state, _, _, _) = CreateGrain(grainContext: context);
+        state.State.AliasOperationId = "control-plane-operation";
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(() =>
+            grain.EndAliasChangeAsync("control-plane-operation"));
+        Assert.That(state.State.AliasOperationId, Is.EqualTo("control-plane-operation"));
+        Assert.That(state.WriteCount, Is.Zero);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await grain.EndAliasChangeAsync("control-plane-operation");
+            await grain.EndAliasChangeAsync("control-plane-operation");
+        }
+        Assert.That(state.State.AliasOperationId, Is.Null);
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+    }
+
     private const string PhysicalTarget = "test-tree/resized/copy";
 
     private static ITreeDeletionGrain ConfigureAlias(IGrainFactory factory)
