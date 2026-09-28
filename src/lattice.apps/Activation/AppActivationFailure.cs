@@ -70,4 +70,11 @@ public enum AppActivationFailure
     /// target. Nothing is provisioned and any rules left from an earlier activation are withdrawn.
     /// </summary>
     TreeOwnershipConflict = 18,
+
+    /// <summary>
+    /// The installed manifest requests app UI bridge grants beyond the ones the operator consented to, for
+    /// example after an upgrade that adds a bridge operation. The app cannot activate until the bridge
+    /// consent is updated, and any rules left from an earlier activation are withdrawn.
+    /// </summary>
+    BridgeConsentRequired = 19,
 }

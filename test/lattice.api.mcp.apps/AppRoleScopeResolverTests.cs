@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 /// tenant, every resolved scope equals the scope of the rule the compiler emits.
 /// </summary>
 [TestFixture]
-public sealed class AppMcpScopeResolverTests
+public sealed class AppRoleScopeResolverTests
 {
     private static readonly AppSlug Notes = AppSlug.Parse("notes");
     private static readonly AppSlug Tasks = AppSlug.Parse("tasks");
@@ -45,7 +45,7 @@ public sealed class AppMcpScopeResolverTests
         var compiled = AppRoleCompiler.Compile(manifest, tenant, [AppRoleBinding.Create("mixed", "g")], ceiling, owners);
         Assert.That(compiled.Succeeded, Is.True);
 
-        var resolved = AppMcpScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, tenant);
+        var resolved = AppRoleScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, tenant);
 
         Assert.That(resolved, Is.EquivalentTo(compiled.Rules.Select(r => r.Scope)));
     }
@@ -55,7 +55,7 @@ public sealed class AppMcpScopeResolverTests
     {
         var manifest = MixedManifest();
 
-        var resolved = AppMcpScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, TenantId.Parse("acme"));
+        var resolved = AppRoleScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, TenantId.Parse("acme"));
 
         Assert.That(resolved[0].TreeId, Is.EqualTo("t/acme/a/notes/notes"));
     }
@@ -65,7 +65,7 @@ public sealed class AppMcpScopeResolverTests
     {
         var manifest = MixedManifest();
 
-        var resolved = AppMcpScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, TenantId.Default);
+        var resolved = AppRoleScopeResolver.Resolve(Notes, manifest.Roles[0], manifest.Trees, TenantId.Default);
 
         Assert.That(resolved.Select(s => s.TreeId), Is.EqualTo(new[] { "a/notes/notes", "a/tasks/board", "old-notes", "a/notes/notes" }));
     }
@@ -75,6 +75,6 @@ public sealed class AppMcpScopeResolverTests
     {
         var role = AppMcpTestData.Role("r", LatticeOperation.Read, AppMcpTestData.TreeScope("notes"));
 
-        Assert.That(AppMcpScopeResolver.Resolve(Notes, role, [], default), Is.Empty);
+        Assert.That(AppRoleScopeResolver.Resolve(Notes, role, [], default), Is.Empty);
     }
 }
