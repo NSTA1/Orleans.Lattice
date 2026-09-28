@@ -87,7 +87,7 @@ internal sealed partial class AppFrameBundleLoader(
                 return AppFrameLaunchResult.Refused(AppFrameFailure.ProtocolUnsupported);
             }
 
-            return new AppFrameLaunchResult(new AppFrameLaunch(this, descriptor, ui), default);
+            return new AppFrameLaunchResult(new AppFrameLaunch(this, descriptor, ui, summary.Roles), default);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

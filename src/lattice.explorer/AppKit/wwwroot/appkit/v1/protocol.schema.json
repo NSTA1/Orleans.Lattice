@@ -14,6 +14,8 @@
     "maxTreeNameLength": 128,
     "maxPathLength": 1024,
     "maxContinuationLength": 4096,
+    "maxRoles": 256,
+    "maxRoleNameLength": 128,
     "maxAssets": 256,
     "maxAssetBytes": 2097152,
     "maxBundleBytes": 16777216
@@ -377,9 +379,16 @@
         "contrast": { "$ref": "#/$defs/contrast" },
         "density": { "$ref": "#/$defs/density" },
         "reducedMotion": { "type": "boolean" },
-        "tenant": { "description": "The tenant's display name, never its id; null when tenancy is off.", "type": ["string", "null"], "maxLength": 256 }
+        "tenant": { "description": "The tenant's display name, never its id; null when tenancy is off.", "type": ["string", "null"], "maxLength": 256 },
+        "roles": {
+          "description": "The caller's app role names in this app, from the host's workspace at launch: authorization metadata, not personal data, covered by context.read. Optional, so a host that predates it stays valid; a frame that finds it absent must not infer any role.",
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/roleName" }
+        }
       }
     },
+    "roleName": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_-]*$" },
     "contextUserResult": {
       "type": "object",
       "required": ["displayName"],
