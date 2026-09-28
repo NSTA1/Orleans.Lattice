@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7.2
 <#
 .SYNOPSIS
     Generates a Lattice state-API credential hash (PBKDF2-HMAC-SHA256).
@@ -17,9 +17,13 @@
     to stdout. All diagnostics go to stderr so that the 'value' and 'json'
     formats pipe cleanly.
 
-    This is the PowerShell counterpart of tools/new-lattice-state-credential.sh.
-    For an identical salt, password, and iteration count, both scripts emit the
-    byte-identical encoding.
+    This is the repository's single credential helper. It runs on any platform
+    under PowerShell 7.2 or later (pwsh), for example:
+
+        pwsh -NoProfile -File tools/New-LatticeStateCredential.ps1 -Username alice
+
+    For an identical salt, password, and iteration count it emits the
+    byte-identical encoding the server-side LatticePasswordHash produces.
 
 .PARAMETER Username
     The credential username. Must be a valid environment-variable name segment
@@ -131,7 +135,7 @@ if (-not $AllowWeakPassword) {
 
 # --- Generate (or accept an injected) salt ------------------------------------
 # LATTICE_CRED_SALT_B64 forces a deterministic salt; it exists ONLY so the
-# cross-shell parity test can compare this script against the bash counterpart.
+# parity test can compare this script against the server-side encoding.
 # Never set it in production.
 $saltOverride = [Environment]::GetEnvironmentVariable('LATTICE_CRED_SALT_B64')
 if (-not [string]::IsNullOrEmpty($saltOverride)) {
