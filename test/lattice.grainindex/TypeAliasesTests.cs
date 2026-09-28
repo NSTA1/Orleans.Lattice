@@ -18,14 +18,34 @@ public sealed class TypeAliasesTests
     /// two constants that describe the table's own conventions rather than
     /// naming a type.
     /// </summary>
-    private static IReadOnlyList<FieldInfo> AliasConstants() =>
-        typeof(TypeAliases)
+    /// <summary>
+    /// The alias table read by reflection.
+    /// <para>
+    /// The non-emptiness guard is load-bearing rather than defensive: every caller
+    /// either iterates this table or asserts that a set derived from it is empty,
+    /// and both shapes are vacuously satisfied by an empty table. The reflection
+    /// query is narrow enough to return nothing for a reason that has nothing to do
+    /// with the aliases being correct - narrowing the binding flags, or demoting a
+    /// constant from <c>const</c> to <c>static readonly</c>, clears the filter and
+    /// the whole wire-format guard would go green while asserting nothing.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<FieldInfo> AliasConstants()
+    {
+        var constants = typeof(TypeAliases)
             .GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral
                 && f.FieldType == typeof(string)
                 && f.Name != nameof(TypeAliases.Prefix))
             .OrderBy(f => f.Name, StringComparer.Ordinal)
             .ToArray();
+
+        Assert.That(constants, Is.Not.Empty,
+            "Expected at least one string alias constant on TypeAliases; an empty table would "
+            + "satisfy every alias assertion in this fixture without testing anything.");
+
+        return constants;
+    }
 
     [Test]
     public void Alias_table_is_a_non_instantiable_static_class()
