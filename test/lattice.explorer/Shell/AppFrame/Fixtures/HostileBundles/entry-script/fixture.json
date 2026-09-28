@@ -1,0 +1,11 @@
+{
+  "name": "entry-script",
+  "description": "The entry fragment embeds a script element; the host must refuse the bundle before anything reaches the frame.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [],
+  "expect": { "failure": "BundleInvalid", "toast": null }
+}

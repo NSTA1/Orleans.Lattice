@@ -1,0 +1,36 @@
+@namespace Orleans.Lattice.Explorer.Shell.Framing
+@implements IAsyncDisposable
+
+<link rel="stylesheet" href="@AppFrameAssets.Stylesheet" />
+<section class="appframe" aria-label="@AppName" @onkeydown="HandleKeyDownAsync">
+    <div class="appframe__bar">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="LeaveAsync" data-appframe-leave="before">Leave app</LtButton>
+    </div>
+
+    @switch (_phase)
+    {
+        case Phase.Authorizing:
+            <LtSkeleton Lines="3" Label="@("Opening " + AppName)" />
+            break;
+
+        case Phase.Failed:
+            <div role="alert">
+                <LtEmptyState Title="@FailureTitle(_failure)">@FailureText(_failure)</LtEmptyState>
+            </div>
+            break;
+
+        default:
+            <div class="appframe__viewport">
+                <iframe @ref="_frame"
+                        sandbox="allow-scripts"
+                        referrerpolicy="no-referrer"
+                        title="@AppName"
+                        src="@(_srcArmed ? _src : null)"></iframe>
+            </div>
+            break;
+    }
+
+    <div class="appframe__bar">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="LeaveAsync" data-appframe-leave="after">Leave app</LtButton>
+    </div>
+</section>
