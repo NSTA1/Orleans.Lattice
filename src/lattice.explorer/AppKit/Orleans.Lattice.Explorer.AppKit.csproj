@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Orleans.Lattice.Explorer.AppKit</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.AppKit</PackageId>
+    <Version>9.8.0</Version>
+    <Description>The Orleans.Lattice Explorer AppKit: the static assets that run inside a Lattice App's sandboxed frame - the app-agnostic bootstrap document, its loader, the in-frame lattice API, the kit stylesheet and fonts, and the frame protocol schema. It carries no .NET code and no project dependencies; the Explorer serves its assets under appkit/v1/ from _content/Orleans.Lattice.Explorer.AppKit.</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!--
+    Static web assets only, and deliberately dependency-free. Everything in this
+    package runs inside an untrusted, opaque-origin frame (epic #3807, E4), so it
+    must never grow a reference to the Shell, Explorer.Core, or any cluster
+    client. The protocol version is the path segment: a breaking change to the
+    frame protocol ships beside the old one as appkit/v2/, never over it.
+  -->
+
+</Project>

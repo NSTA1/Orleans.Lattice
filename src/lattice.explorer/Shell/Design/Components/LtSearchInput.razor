@@ -1,0 +1,19 @@
+<div class="lt-search" role="@(Landmark ? "search" : null)">
+    <label class="lt-visually-hidden" for="@_id">@Label</label>
+    <input @attributes="AdditionalAttributes"
+           id="@_id"
+           class="lt-input lt-search__input"
+           type="search"
+           value="@Value"
+           placeholder="@Placeholder"
+           disabled="@Disabled"
+           spellcheck="false"
+           autocomplete="off"
+           aria-keyshortcuts="@KeyShortcut"
+           @oninput="HandleInputAsync"
+           @onkeydown="HandleKeyDownAsync" />
+    @if (KeyShortcut is not null)
+    {
+        <kbd class="lt-kbd lt-search__hint" aria-hidden="true">@KeyShortcut</kbd>
+    }
+</div>

@@ -1,0 +1,29 @@
+/*
+ * Orleans.Lattice Explorer - the design system's font faces.
+ *
+ * The same two self-hosted, SIL OFL 1.1 variable fonts the documentation site
+ * serves, linked into the Shell's static web assets from
+ * docs-site/template/public/fonts/ at build time (never copied), with their
+ * licences beside them in fonts/. Nothing is fetched from a third party.
+ *
+ *   Recursive Sans Linear - every proportional voice, weight 300 to 850.
+ *   Lattice Mono          - Cascadia Mono, for data, keys and addresses.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+@font-face {
+  font-family: "Recursive Sans Linear";
+  src: url("fonts/recursive-sans-linear.woff2") format("woff2");
+  font-weight: 300 850;
+  font-style: oblique 0deg 15deg;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Lattice Mono";
+  src: url("fonts/cascadia-mono.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}

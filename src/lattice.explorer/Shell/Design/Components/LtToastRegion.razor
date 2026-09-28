@@ -1,0 +1,12 @@
+<div class="lt-toasts" role="status" aria-live="polite" aria-label="@Label">
+    @foreach (var toast in _toasts)
+    {
+        <div @key="toast.Id" class="lt-toast" data-lt-tone="@ToneKey(toast.Tone)">
+            <span class="lt-toast__tone">@ToneLabel(toast.Tone)</span>
+            <span class="lt-toast__message">@toast.Message</span>
+            <LtButton Variant="LtButtonVariant.Quiet"
+                      OnClick="() => Dismiss(toast.Id)"
+                      aria-label="@($"Dismiss: {toast.Message}")">Dismiss</LtButton>
+        </div>
+    }
+</div>

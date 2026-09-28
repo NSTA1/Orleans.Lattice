@@ -1,0 +1,16 @@
+<button @attributes="AdditionalAttributes"
+        type="button"
+        role="switch"
+        class="lt-switch"
+        aria-checked="@(Checked ? "true" : "false")"
+        aria-describedby="@(Hint is null ? null : HintId)"
+        disabled="@Disabled"
+        @onclick="ToggleAsync">
+    <span class="lt-switch__track" aria-hidden="true"><span class="lt-switch__thumb"></span></span>
+    <span class="lt-switch__label">@Label</span>
+    <span class="lt-switch__state" aria-hidden="true">@(Checked ? OnText : OffText)</span>
+</button>
+@if (Hint is not null)
+{
+    <p id="@HintId" class="lt-field__hint lt-switch__hint">@Hint</p>
+}

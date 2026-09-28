@@ -1,0 +1,84 @@
+@typeparam TItem
+@attribute [CascadingTypeParameter(nameof(TItem))]
+
+<CascadingValue Value="this" IsFixed="true">@ChildContent</CascadingValue>
+<div class="lt-table-frame" role="region" aria-labelledby="@CaptionId" tabindex="0">
+    <table class="lt-table">
+        <caption id="@CaptionId" class="@(CaptionHidden ? "lt-table__caption lt-visually-hidden" : "lt-table__caption")">@Caption</caption>
+        <thead>
+            <tr>
+                @foreach (var column in _columns)
+                {
+                    <th @key="column" scope="col" class="@HeaderClass(column)" aria-sort="@AriaSort(column)">
+                        @if (column.IsSortable)
+                        {
+                            <button type="button"
+                                    class="lt-table__sort"
+                                    data-lt-sort="@SortState(column)"
+                                    @onclick="() => SortByAsync(column)">
+                                @column.Title<span class="lt-table__sort-mark" aria-hidden="true"></span>
+                            </button>
+                        }
+                        else
+                        {
+                            @column.Title
+                        }
+                    </th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @if (_rows.Count == 0)
+            {
+                <tr class="lt-table__row">
+                    <td class="lt-table__empty" colspan="@Math.Max(1, _columns.Count)">
+                        @if (EmptyContent is not null)
+                        {
+                            @EmptyContent
+                        }
+                        else
+                        {
+                            <span>No rows.</span>
+                        }
+                    </td>
+                </tr>
+            }
+            else if (Virtualize)
+            {
+                <Virtualize Items="_rows" ItemSize="RowHeight" SpacerElement="tr" Context="item">
+                    @RenderRow(item)
+                </Virtualize>
+            }
+            else
+            {
+                @foreach (var item in _rows)
+                {
+                    @RenderRow(item)
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private RenderFragment RenderRow(TItem item) => __builder =>
+    {
+        <tr @key="RowKeyOf(item)" class="lt-table__row" aria-current="@(IsCurrent?.Invoke(item) == true ? "true" : null)">
+            @foreach (var column in _columns)
+            {
+                @if (column.RowHeader)
+                {
+                    <th scope="row" class="@CellClass(column)">@RenderCell(column, item)</th>
+                }
+                else
+                {
+                    <td class="@CellClass(column)">@RenderCell(column, item)</td>
+                }
+            }
+        </tr>
+    };
+
+    private RenderFragment RenderCell(LtColumn<TItem> column, TItem item) => column.ChildContent is { } template
+        ? template(item)
+        : __builder => __builder.AddContent(0, column.Value?.Invoke(item)?.ToString());
+}

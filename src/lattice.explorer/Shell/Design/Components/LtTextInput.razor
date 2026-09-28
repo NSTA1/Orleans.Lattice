@@ -1,0 +1,25 @@
+<div class="lt-field">
+    <label class="lt-field__label" for="@InputId">@Label</label>
+    <input @ref="_input"
+           @attributes="AdditionalAttributes"
+           id="@InputId"
+           class="@InputClass"
+           type="text"
+           value="@Value"
+           placeholder="@Placeholder"
+           disabled="@Disabled"
+           readonly="@ReadOnly"
+           spellcheck="@(Mono ? "false" : null)"
+           autocomplete="off"
+           aria-invalid="@(Error is null ? null : "true")"
+           aria-describedby="@DescribedBy"
+           @oninput="HandleInputAsync" />
+    @if (Hint is not null)
+    {
+        <p id="@HintId" class="lt-field__hint">@Hint</p>
+    }
+    @if (Error is not null)
+    {
+        <p id="@ErrorId" class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @Error</p>
+    }
+</div>
