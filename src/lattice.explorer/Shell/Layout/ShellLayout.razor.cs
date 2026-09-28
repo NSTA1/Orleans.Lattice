@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 using Orleans.Lattice.Explorer.Shell.Layout.Appearance;
 using Orleans.Lattice.Explorer.Shell.Navigation;
 using Orleans.Lattice.Explorer.Shell.Navigation.Address;
+using Orleans.Lattice.Explorer.Shell.Session;
 
 namespace Orleans.Lattice.Explorer.Shell.Layout;
 
@@ -65,6 +66,9 @@ public partial class ShellLayout : IAsyncDisposable
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    internal SessionChromeState Session { get; set; } = default!;
+
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
     // The compact modifier is how a stylesheet reacts to the band without a width
@@ -83,6 +87,7 @@ public partial class ShellLayout : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Directory.Changed -= OnDirectoryChanged;
+        Session.OverlayOpening -= OnSessionOverlayOpening;
         await _lifetime.CancelAsync();
         _lifetime.Dispose();
 
@@ -93,7 +98,11 @@ public partial class ShellLayout : IAsyncDisposable
     }
 
     /// <inheritdoc />
-    protected override void OnInitialized() => Directory.Changed += OnDirectoryChanged;
+    protected override void OnInitialized()
+    {
+        Directory.Changed += OnDirectoryChanged;
+        Session.OverlayOpening += OnSessionOverlayOpening;
+    }
 
     /// <inheritdoc />
     protected override Task OnParametersSetAsync() => SyncLocationAsync();
@@ -251,4 +260,17 @@ public partial class ShellLayout : IAsyncDisposable
     // slot's own control such as Sign in - closes the sheet first, so a session
     // overlay it opens never stacks on top of it.
     private void CloseMenu() => _menuOpen = false;
+
+    // Any session modal - asked for from anywhere, or the re-authentication
+    // interstitial raised off the renderer by Core - closes both compact sheets
+    // before it opens, so modals never stack.
+    private void OnSessionOverlayOpening(SessionOverlayKind kind) => _ = InvokeAsync(() =>
+    {
+        if (_menuOpen || _directoryOpen)
+        {
+            _menuOpen = false;
+            _directoryOpen = false;
+            StateHasChanged();
+        }
+    });
 }

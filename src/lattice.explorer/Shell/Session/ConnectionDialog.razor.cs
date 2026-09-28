@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Shell.Design.Components;
+using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 
 namespace Orleans.Lattice.Explorer.Shell.Session;
 
@@ -25,6 +26,10 @@ namespace Orleans.Lattice.Explorer.Shell.Session;
 /// On first run it is mandatory: <see cref="AllowCancel"/> is
 /// <see langword="false"/>, so it has no Cancel or Close and Escape does not
 /// dismiss it.
+/// </para>
+/// <para>
+/// Below the small breakpoint it opens as a full-screen sheet rather than a
+/// centred dialog, so it works at a phone's width.
 /// </para>
 /// </remarks>
 public partial class ConnectionDialog
@@ -71,6 +76,11 @@ public partial class ConnectionDialog
 
     [Inject]
     private IConnectionTester Tester { get; set; } = default!;
+
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
+    private LtBreakpoint? Breakpoint { get; set; }
+
+    private LtDialogPlacement Placement => SessionPresentation.DialogPlacement(Breakpoint);
 
     private bool IsBusy => _saving || _testing;
 

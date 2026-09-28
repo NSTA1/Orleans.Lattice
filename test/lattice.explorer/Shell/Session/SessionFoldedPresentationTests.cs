@@ -1,6 +1,7 @@
 using AngleSharp.Dom;
 using Bunit;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Shell.Design.Components;
 using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 using Orleans.Lattice.Explorer.Shell.Session;
 
@@ -26,10 +27,55 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
         Assert.That(SessionPresentation.IsFolded(Band(band)), Is.EqualTo(folded));
     }
 
-    [Test]
-    public void The_cascade_name_is_the_navigation_chromes()
+    [TestCase(null, "Center")]
+    [TestCase("Compact", "End")]
+    [TestCase("Medium", "Center")]
+    [TestCase("Expanded", "Center")]
+    public void Session_dialogs_are_full_screen_sheets_only_when_compact(string? band, string placement)
     {
-        Assert.That(SessionPresentation.BreakpointCascadeName, Is.EqualTo("Orleans.Lattice.Explorer.Breakpoint"));
+        Assert.That(SessionPresentation.DialogPlacement(Band(band)), Is.EqualTo(Enum.Parse<LtDialogPlacement>(placement)));
+    }
+
+    [TestCase(null, false)]
+    [TestCase("Compact", true)]
+    [TestCase("Medium", false)]
+    public void The_connection_gate_opens_as_a_sheet_only_when_compact(string? band, bool sheet)
+    {
+        var cut = RenderAt<ConnectionDialog>(Band(band));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-dialog--sheet.lt-dialog--end[role=dialog]"), Has.Count.EqualTo(sheet ? 1 : 0));
+            Assert.That(cut.FindAll(".lt-dialog-layer--sheet"), Has.Count.EqualTo(sheet ? 1 : 0));
+        });
+    }
+
+    [TestCase(null, false)]
+    [TestCase("Compact", true)]
+    [TestCase("Expanded", false)]
+    public void Sign_in_opens_as_a_sheet_only_when_compact(string? band, bool sheet)
+    {
+        var cut = RenderAt<SignInDialog>(Band(band));
+
+        Assert.That(cut.FindAll(".lt-dialog--sheet.lt-dialog--end[role=dialog]"), Has.Count.EqualTo(sheet ? 1 : 0));
+    }
+
+    [TestCase(null, false)]
+    [TestCase("Compact", true)]
+    [TestCase("Medium", false)]
+    public void Re_authentication_opens_as_a_sheet_only_when_compact(string? band, bool sheet)
+    {
+        var cut = RenderAt<ReauthInterstitial>(Band(band));
+
+        Assert.That(cut.FindAll(".lt-dialog--sheet.lt-dialog--end[role=alertdialog]"), Has.Count.EqualTo(sheet ? 1 : 0));
+    }
+
+    [Test]
+    public void The_overlay_hands_the_width_band_to_the_first_run_gate()
+    {
+        var cut = RenderAt<SessionOverlay>(LtBreakpoint.Compact);
+
+        Assert.That(cut.FindAll(".lt-dialog--sheet[role=dialog]"), Has.Count.EqualTo(1));
     }
 
     [TestCase("Medium")]
@@ -191,6 +237,6 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
     private IRenderedComponent<TComponent> RenderAt<TComponent>(LtBreakpoint? breakpoint)
         where TComponent : Microsoft.AspNetCore.Components.IComponent =>
         breakpoint is { } band
-            ? Render<TComponent>(parameters => parameters.AddCascadingValue(SessionPresentation.BreakpointCascadeName, band))
+            ? Render<TComponent>(parameters => parameters.AddCascadingValue(LtBreakpointCascade.Name, band))
             : Render<TComponent>();
 }
