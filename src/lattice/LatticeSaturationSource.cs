@@ -39,9 +39,20 @@ namespace Orleans.Lattice;
 /// batch across every shard of a saturated tree. A caller choosing a retry
 /// policy must branch on this value rather than on the exception type alone.
 /// </para>
+/// <para>
+/// Every refusal is also counted on
+/// <c>orleans.lattice.saturation.refusals</c>, tagged <c>source</c> with the
+/// snake_case form of this value (for example <c>replay_permit_admission</c>),
+/// so a refusal rate can be attributed to its seam without reading logs
+/// (issue #3761).
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeSaturationSource)]
+[InstrumentedEnum(
+    typeof(LatticeMetrics),
+    LatticeMetrics.SaturationRefusalsName,
+    LatticeMetrics.TagSaturationSource)]
 public enum LatticeSaturationSource
 {
     /// <summary>
@@ -118,6 +129,12 @@ public enum LatticeSaturationSource
     /// correlated by construction - the callers were refused by one gate at one
     /// moment - so an unjittered retry re-converges them into the thundering
     /// herd that issue #3284 removed.
+    /// </para>
+    /// <para>
+    /// A background starvation drive refused a replay permit is counted under
+    /// this source on <c>orleans.lattice.saturation.refusals</c> but is not
+    /// raised: it returns the <c>AdmissionRefused</c> drive verdict instead
+    /// (issue #3761).
     /// </para>
     /// </summary>
     ReplayPermitAdmission = 4,

@@ -51,6 +51,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 {
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",
                     "drove_not_driven", "drove_already_driving", "drove_timed_out",
+                    "drove_admission_refused",
                 }),
                 "the arm set must match what the instrument's description, the docs row and the dashboard panels all claim it is.");
         });

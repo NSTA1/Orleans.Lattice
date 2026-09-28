@@ -498,10 +498,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <para>
     /// <b>A refusal is not a failure of the leaf.</b> Drives never queue for a
     /// replay permit, so a drive that finds the per-silo GC share of the replay
-    /// gate full is refused before it replays anything, with a
-    /// <see cref="LatticeSaturatedException"/> whose
-    /// <see cref="LatticeSaturatedException.SaturationSource"/> is
-    /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> (issue #3480).
+    /// gate full is refused before it replays anything (issue #3480), and
+    /// returns <see cref="LeafStarvationDriveOutcome.AdmissionRefused"/> rather
+    /// than raising a <see cref="LatticeSaturatedException"/> (issue #3761); the
+    /// refusal is counted on <see cref="LatticeMetrics.SaturationRefusals"/> with
+    /// source <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>. A
+    /// silo running an earlier build still raises the exception, so callers
+    /// keep honouring both.
     /// A call through this method is admitted as the WAL GC sweep's, which the
     /// leaf's own coverage-lag timer drives cannot crowd out of the share
     /// (issue #3575).

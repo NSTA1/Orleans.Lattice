@@ -200,6 +200,7 @@ internal sealed partial class LatticeGrain
             ResolveSaturationSignal() is { } saturationSignal &&
             saturationSignal.GetCurrentState(TreeId) == WalSaturationState.Saturated)
         {
+            LatticeMetrics.RecordSaturationRefusal(TreeId, LatticeSaturationSource.SnapshotCursorOpen);
             throw new LatticeSaturatedException(
                 $"Snapshot cursor open for tree '{TreeId}' refused: the tree is saturated " +
                 "(WAL back-pressure); the per-shard baseline capture was not started. " +

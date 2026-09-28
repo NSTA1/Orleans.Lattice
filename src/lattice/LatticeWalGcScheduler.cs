@@ -1237,9 +1237,12 @@ internal sealed class LatticeWalGcScheduler(
 
         /// <summary>
         /// The touch reached the leaf's silo, which refused the drive admission
-        /// to its WAL replay gate before anything was replayed (issue #3575): a
-        /// <see cref="LatticeSaturatedException"/> whose source is
-        /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>.
+        /// to its WAL replay gate before anything was replayed (issue #3575): the
+        /// <see cref="LeafStarvationDriveOutcome.AdmissionRefused"/> verdict
+        /// (issue #3761), or a <see cref="LatticeSaturatedException"/> whose
+        /// source is <see cref="LatticeSaturationSource.ReplayPermitAdmission"/>
+        /// from an activation refused a place in the permit queue, or from a silo
+        /// on an earlier build.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -4878,6 +4881,7 @@ internal sealed class LatticeWalGcScheduler(
             LeafStarvationDriveOutcome.MemoryRefused => LatticeMetrics.BlockedLeafReactivationDroveMemoryRefused,
             LeafStarvationDriveOutcome.AlreadyDriving => LatticeMetrics.BlockedLeafReactivationDroveAlreadyDriving,
             LeafStarvationDriveOutcome.TimedOut => LatticeMetrics.BlockedLeafReactivationDroveTimedOut,
+            LeafStarvationDriveOutcome.AdmissionRefused => LatticeMetrics.BlockedLeafReactivationDroveAdmissionRefused,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
@@ -5001,6 +5005,24 @@ internal sealed class LatticeWalGcScheduler(
             }
 
             var drive = await leaf.DriveStarvedCheckpointAsync().ConfigureAwait(false);
+
+            // The leaf's silo had no immediate replay capacity for the drive
+            // (issue #3761). Reported as a verdict rather than raised, which is
+            // the same refusal the saturation catch below classifies for a silo
+            // on an earlier build: back-pressure, not a fault, never charged
+            // against the consumer's budget, and not graded on the offset axis
+            // because nothing was replayed.
+            if (drive == LeafStarvationDriveOutcome.AdmissionRefused)
+            {
+                RecordBlockedLeafReactivation(DriveOutcomeTag(drive), treeTag, tenantTag);
+                logger.LogDebug(
+                    "WAL GC could not drive leaf {Leaf} on tree {Tree} for blocking pin {Consumer}: the drive was refused admission to the WAL replay gate before anything was replayed (the GC share had no immediate capacity). The touch is not charged against the consumer's attempt budget, and the consumer is retried after a short delay.",
+                    leafGrainId,
+                    treeId,
+                    blockingConsumerId);
+
+                return new ReactivationTouchResult(ReactivationOutcome.AdmissionRefused, requireOffsetAdvance);
+            }
 
             // Grade the drive on the axis its admission was granted on (issue
             // #3185). The leaf's own verdict is not wrong, it is answering a

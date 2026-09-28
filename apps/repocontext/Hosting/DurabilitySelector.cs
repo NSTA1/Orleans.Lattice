@@ -232,7 +232,10 @@ public static class DurabilitySelector
     /// failure it raises is attributed to its grain and measured against the busy
     /// window and the write convoy. The busy window is read from the provider's own
     /// resolved connection string, so it cannot drift from the window the provider
-    /// actually retries for.
+    /// actually retries for. A lock failure on a WAL materialiser pin-state write or
+    /// clear is re-issued under <see cref="RepoContextGrainStorageLockRetryPolicy.PinStateWrites"/>
+    /// (issue #3761 item 6), so a bulk-ingest write convoy no longer leaves the
+    /// published pin stale.
     /// </summary>
     /// <param name="services">The service collection the provider is registered in.</param>
     /// <param name="name">The grain-storage provider name.</param>
@@ -271,7 +274,9 @@ public static class DurabilitySelector
                 inner,
                 sp.GetRequiredService<RepoContextGrainStorageLockMeter>(),
                 sp.GetRequiredService<ILogger<RepoContextLockAttributingGrainStorage>>(),
-                busyWindow);
+                busyWindow,
+                timeProvider: null,
+                retryPolicy: RepoContextGrainStorageLockRetryPolicy.PinStateWrites);
         });
 
         return services;

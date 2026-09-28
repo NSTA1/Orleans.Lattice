@@ -75,6 +75,65 @@ public sealed class RepoContextGrainStorageLockMeterTests
     }
 
     [Test]
+    public void Every_write_and_clear_retry_arm_is_on_the_exposition_at_zero_and_reads_have_none()
+    {
+        using var collector = new RepoContextMetricsCollector();
+        using var meter = new RepoContextGrainStorageLockMeter();
+
+        var lines = collector.Render().Split('\n')
+            .Where(line => line.StartsWith(RepoContextGrainStorageLockMeter.LockRetriesCounterName + "{", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            foreach (var operation in new[] { "write", "clear" })
+            {
+                foreach (var outcome in new[] { RepoContextGrainStorageLockMeter.OutcomeRecovered, RepoContextGrainStorageLockMeter.OutcomeGaveUp })
+                {
+                    Assert.That(
+                        lines.Any(line => line.Contains($"operation=\"{operation}\"", StringComparison.Ordinal)
+                            && line.Contains($"outcome=\"{outcome}\"", StringComparison.Ordinal)
+                            && line.EndsWith(" 0", StringComparison.Ordinal)),
+                        Is.True,
+                        $"The {operation}/{outcome} retry arm must be published at zero from construction.");
+                }
+            }
+
+            Assert.That(lines.Any(line => line.Contains("operation=\"read\"", StringComparison.Ordinal)), Is.False,
+                "Reads are never re-issued, so a read arm would be a series that can never move.");
+        });
+    }
+
+    [Test]
+    public void A_recorded_retry_counts_on_its_outcome_arm()
+    {
+        using var meter = new RepoContextGrainStorageLockMeter();
+        using var recorder = new MeterRecorder(meter);
+
+        meter.RecordLockRetry(RepoContextGrainStorageOperation.Write, recovered: true);
+        meter.RecordLockRetry(RepoContextGrainStorageOperation.Clear, recovered: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorder.Sum(
+                    RepoContextGrainStorageLockMeter.LockRetriesCounterName,
+                    (RepoContextGrainStorageLockMeter.OperationTag, "write"),
+                    (RepoContextGrainStorageLockMeter.OutcomeTag, RepoContextGrainStorageLockMeter.OutcomeRecovered)),
+                Is.EqualTo(1d));
+            Assert.That(recorder.Sum(
+                    RepoContextGrainStorageLockMeter.LockRetriesCounterName,
+                    (RepoContextGrainStorageLockMeter.OperationTag, "clear"),
+                    (RepoContextGrainStorageLockMeter.OutcomeTag, RepoContextGrainStorageLockMeter.OutcomeGaveUp)),
+                Is.EqualTo(1d));
+            Assert.That(recorder.Sum(
+                    RepoContextGrainStorageLockMeter.LockRetriesCounterName,
+                    (RepoContextGrainStorageLockMeter.OutcomeTag, RepoContextGrainStorageLockMeter.OutcomeGaveUp),
+                    (RepoContextGrainStorageLockMeter.OperationTag, "write")),
+                Is.Zero);
+        });
+    }
+
+    [Test]
     public void The_gauges_read_the_shared_convoy()
     {
         var convoy = new RepoContextGrainStorageConvoy();

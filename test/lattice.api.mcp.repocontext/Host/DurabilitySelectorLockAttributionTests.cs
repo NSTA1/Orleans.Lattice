@@ -79,6 +79,9 @@ public sealed class DurabilitySelectorLockAttributionTests
             Assert.That(decorator.BusyWindow, Is.EqualTo(TimeSpan.FromSeconds(15)),
                 "The busy window is read from the provider's own resolved connection string, which the "
                 + "host derives as half the 30 s request budget.");
+            Assert.That(decorator.RetryPolicy, Is.SameAs(RepoContextGrainStorageLockRetryPolicy.PinStateWrites),
+                "Issue #3761 item 6: the host re-issues pin-state writes that fail on a lock, so a "
+                + "bulk-ingest convoy does not leave the published materialiser pin stale.");
         });
     }
 

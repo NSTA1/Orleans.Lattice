@@ -1436,28 +1436,9 @@ internal sealed partial class BPlusLeafGrain
     /// lost for the lifetime of the process, and the resulting exhaustion is a
     /// silent wait rather than a fault (issue #2256).
     /// </remarks>
-    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(CancellationToken cancellationToken)
-        => await AcquireReplayPermitAsync(starvationDrive: null, cancellationToken);
-
-    /// <summary>
-    /// As <see cref="AcquireReplayPermitAsync(CancellationToken)"/>, with
-    /// non-queueing admission for background starvation drives.
-    /// </summary>
-    /// <param name="starvationDrive">
-    /// Who requested the starvation drive being admitted, or
-    /// <see langword="null"/> for an activation replay. Drives share the replay
-    /// gate but never queue, and hold at most half the permits in circulation -
-    /// the configured ceiling less any currently withheld (rounded down, with a
-    /// floor of one; issue #3610). Per-tree GC touch limits do not bound their
-    /// aggregate demand on this process-wide gate (issue #3480). Within that
-    /// share a coverage-lag timer drive never takes the last free slot, which is
-    /// kept for WAL GC sweep drives, and where the share is a single slot it
-    /// yields that slot while a refused sweep drive is waiting (issue #3575).
-    /// </param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
-    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(
-        StarvationDriveOrigin? starvationDrive, CancellationToken cancellationToken)
+    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(state.State.TreeId))
             return null;
@@ -1472,29 +1453,6 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
-
-        if (starvationDrive is { } origin)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryAcquireStarvationReplayPermit(gate, origin))
-            {
-                _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
-                throw new LatticeSaturatedException(
-                    origin == StarvationDriveOrigin.CoverageLagTimer
-                        ? "The per-silo WAL replay gate has no immediate capacity for a coverage-lag timer "
-                            + "starvation drive. GC drives never queue and share at most half the replay permits "
-                            + "still in circulation (at least one), and a timer drive never takes the last free one, "
-                            + "which is kept for WAL GC sweep drives; retry after a backoff."
-                        : "The per-silo WAL replay gate has no immediate capacity for a WAL GC sweep "
-                            + "starvation drive. GC drives never queue and share at most half the replay permits "
-                            + "still in circulation (at least one); retry after a backoff.",
-                    state.State.TreeId,
-                    LatticeSaturationSource.ReplayPermitAdmission);
-            }
-
-            _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
-            return gate;
-        }
 
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
         // incremented and before the wait is entered, because the whole point is
@@ -1529,6 +1487,7 @@ internal sealed partial class BPlusLeafGrain
             // saturation refusal in this library - back off and retry, the regime
             // clears - and a second type carrying the same contract would only
             // fragment the catch sites that already honour it.
+            LatticeMetrics.RecordSaturationRefusal(state.State.TreeId, LatticeSaturationSource.ReplayPermitAdmission);
             throw new LatticeSaturatedException(
                 $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
                 + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
@@ -1735,6 +1694,56 @@ internal sealed partial class BPlusLeafGrain
                     CirculatingReplayPermits(ceiling, Volatile.Read(ref _withheldReplayPermits)),
                     StarvationDriveOrigin.WalGcSweep);
         }
+    }
+
+    /// <summary>
+    /// Admits a background starvation drive of <paramref name="origin"/> to the
+    /// per-silo replay gate without queueing, returning the gate on admission and
+    /// <see langword="null"/> on refusal. The caller must have established that
+    /// the leaf has a tree id.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Drives share the replay gate but never queue, and hold at most half the
+    /// permits in circulation - the configured ceiling less any currently
+    /// withheld (rounded down, with a floor of one; issue #3610). Per-tree GC
+    /// touch limits do not bound their aggregate demand on this process-wide gate
+    /// (issue #3480). Within that share a coverage-lag timer drive never takes
+    /// the last free slot, which is kept for WAL GC sweep drives, and where the
+    /// share is a single slot it yields that slot while a refused sweep drive is
+    /// waiting (issue #3575).
+    /// </para>
+    /// <para>
+    /// <b>A refusal is a result, not an exception (issue #3761).</b> A full GC
+    /// share is the routine answer to a bounded background drive, not a fault,
+    /// and raising it as a <see cref="LatticeSaturatedException"/> made it the
+    /// dominant first-chance exception on a busy silo. It is counted on
+    /// <see cref="LatticeMetrics.SaturationRefusals"/> with source
+    /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> instead.
+    /// The same acquire-in-this-frame contract as
+    /// <see cref="AcquireReplayPermitAsync(CancellationToken)"/> applies to an
+    /// admitted permit.
+    /// </para>
+    /// </remarks>
+    /// <param name="origin">Who requested the drive.</param>
+    /// <param name="cancellationToken">Cancels admission.</param>
+    private async Task<SemaphoreSlim?> TryAcquireStarvationDrivePermitAsync(
+        StarvationDriveOrigin origin, CancellationToken cancellationToken)
+    {
+        _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
+        var options = await GetOptionsAsync();
+        var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryAcquireStarvationReplayPermit(gate, origin))
+        {
+            _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
+            LatticeMetrics.RecordSaturationRefusal(state.State.TreeId, LatticeSaturationSource.ReplayPermitAdmission);
+            return null;
+        }
+
+        _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
+        return gate;
     }
 
     /// <summary>
@@ -2003,10 +2012,10 @@ internal sealed partial class BPlusLeafGrain
     /// A refused admission (issue #3575). The drive asks for the replay gate's
     /// GC share as a <see cref="StarvationDriveOrigin.CoverageLagTimer"/> drive,
     /// which never takes the last free slot of the share - that one is kept for
-    /// the sweep - and a refusal arrives as a
-    /// <see cref="LatticeSaturatedException"/> from
-    /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> before anything
-    /// is replayed. It is counted on
+    /// the sweep - and a refusal arrives as the
+    /// <see cref="LeafStarvationDriveOutcome.AdmissionRefused"/> verdict before
+    /// anything is replayed (a result rather than an exception since issue
+    /// #3761). It is counted on
     /// <see cref="LatticeMetrics.DriverDeclineRecheckDriveRefused"/> and backed
     /// off: the next <see cref="ComputeTimerDriveDeferrals"/> opportunities to
     /// drive are skipped and counted on
@@ -2033,22 +2042,32 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+            var outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+            if (outcome == LeafStarvationDriveOutcome.AdmissionRefused)
+            {
+                BackOffRefusedTimerDrive();
+                return;
+            }
+
             _consecutiveTimerDriveRefusals = 0;
         }
         catch (LeafProjectionStaleException)
         {
             _consecutiveTimerDriveRefusals = 0;
         }
-        catch (LatticeSaturatedException ex)
-            when (ex.SaturationSource == LatticeSaturationSource.ReplayPermitAdmission)
-        {
-            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveRefused);
-            _consecutiveTimerDriveRefusals = Math.Min(
-                _consecutiveTimerDriveRefusals + 1, MaxTimerDriveDeferralDoublings + 1);
-            _timerDriveDeferrals = ComputeTimerDriveDeferrals(
-                context.GrainId.GetHashCode(), _consecutiveTimerDriveRefusals);
-        }
+    }
+
+    /// <summary>
+    /// Counts a refused coverage-lag timer drive and sizes the backoff that
+    /// follows it (issue #3575).
+    /// </summary>
+    private void BackOffRefusedTimerDrive()
+    {
+        ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveRefused);
+        _consecutiveTimerDriveRefusals = Math.Min(
+            _consecutiveTimerDriveRefusals + 1, MaxTimerDriveDeferralDoublings + 1);
+        _timerDriveDeferrals = ComputeTimerDriveDeferrals(
+            context.GrainId.GetHashCode(), _consecutiveTimerDriveRefusals);
     }
 
     /// <summary>
@@ -2111,10 +2130,11 @@ internal sealed partial class BPlusLeafGrain
     /// drive of <paramref name="origin"/> (issue #3575).
     /// </summary>
     /// <param name="origin">Who requested the drive.</param>
-    /// <exception cref="LatticeSaturatedException">
-    /// The GC share had no immediate capacity for a drive of
-    /// <paramref name="origin"/>; nothing was replayed.
-    /// </exception>
+    /// <returns>
+    /// The drive's verdict, <see cref="LeafStarvationDriveOutcome.AdmissionRefused"/>
+    /// when the GC share had no immediate capacity for a drive of
+    /// <paramref name="origin"/> and nothing was replayed (issue #3761).
+    /// </returns>
     private async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync(StarvationDriveOrigin origin)
     {
         if (string.IsNullOrEmpty(state.State.TreeId))
@@ -2191,7 +2211,12 @@ internal sealed partial class BPlusLeafGrain
             // The origin decides how much of that cap the drive may use: a
             // coverage-lag timer drive never takes the last free slot, which is
             // kept for the WAL GC sweep (issue #3575).
-            replayPermit = await AcquireReplayPermitAsync(starvationDrive: origin, driveCts.Token);
+            replayPermit = await TryAcquireStarvationDrivePermitAsync(origin, driveCts.Token);
+            if (replayPermit is null)
+            {
+                return LeafStarvationDriveOutcome.AdmissionRefused;
+            }
+
             acquiredAt = Stopwatch.GetTimestamp();
             permitAcquired = true;
 
@@ -2255,14 +2280,14 @@ internal sealed partial class BPlusLeafGrain
             {
                 // Reachable only when the budget expires during admission itself.
                 // GC drives never queue for a permit (issue #3480): a drive that
-                // finds no capacity is refused with a typed saturation instead,
-                // and never reaches this arm. Admission does no I/O, but it is not
+                // finds no capacity is refused with an AdmissionRefused verdict
+                // instead (issue #3761), and never reaches this arm. Admission does no I/O, but it is not
                 // free - the first drive in a process sizes the process-wide
                 // replay gate, which reads the container CPU grant and the heap
                 // ceiling and logs the result - so a budget shorter than that, or
                 // a thread stall inside it, expires before the admission check.
                 ResolveLogger()?.LogWarning(
-                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} was abandoned after {Elapsed}, before it was admitted to the per-silo WAL replay gate: its {Budget} budget expired before a replay permit was taken, so the replay never started, storage was never read and the leaf's checkpoint did not move. GC drives never queue for a replay permit - a drive that finds no capacity is refused at once with a ReplayPermitAdmission saturation rather than abandoned - so this is neither storage latency nor replay-permit contention: admission itself outlasted the budget, which means the budget is far too small or this drive's thread stalled while it was being admitted (the first drive in a process also sizes the replay gate). Raise StarvationDriveBudget. The in-flight latch has been cleared.",
+                    "WAL GC starvation drive for leaf {Leaf} on tree {Tree} was abandoned after {Elapsed}, before it was admitted to the per-silo WAL replay gate: its {Budget} budget expired before a replay permit was taken, so the replay never started, storage was never read and the leaf's checkpoint did not move. GC drives never queue for a replay permit - a drive that finds no capacity is refused at once with an AdmissionRefused verdict rather than abandoned - so this is neither storage latency nor replay-permit contention: admission itself outlasted the budget, which means the budget is far too small or this drive's thread stalled while it was being admitted (the first drive in a process also sizes the replay gate). Raise StarvationDriveBudget. The in-flight latch has been cleared.",
                     context.GrainId,
                     state.State.TreeId,
                     Stopwatch.GetElapsedTime(startedAt, abandonedAt),

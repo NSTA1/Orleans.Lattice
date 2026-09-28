@@ -376,6 +376,19 @@ The seam never forwards a raw server exception or stack trace across the gRPC bo
 
 Every group tool (everything except the two meta-tools) binds its arguments strictly: an argument the tool does not declare - typically a misspelled parameter name - is rejected before any facade call, with a message naming the offending argument and listing the accepted ones, rather than being silently ignored. Caller mistakes on the data and state tools surface as client-error statuses, never as a generic `Internal` fault that points at the cluster logs. On `lattice_data_set_many_atomic` and `lattice_data_set_many_atomic_cross_tree`, reusing an `operationId` with a different key set (or, cross-tree, a different tree or key set) than its first submission is a `FailedPrecondition` with a self-contained message; a duplicate key or an empty / `'/'`-bearing `operationId` is an `InvalidArgument`. Those two statuses are what a remote head reports from the data gRPC binding; a co-hosted server surfaces the same fault as the facade's own exception type and message. On `lattice_data_set`, a `value` that is not valid base64 is rejected up front, before any facade call, with a tool error that names the parameter ("The 'value' parameter must be base64-encoded; the supplied text is not valid base64.") rather than leaking a JSON decode error. Unknown-target reads (`lattice_state_get_entry`, `lattice_state_get_tree_structure`, `lattice_state_scan_entries`, `lattice_state_get_entry_history`) are typed statuses on a normal result - `TreeNotFound`, `KeyNotFound`, or `IndexNotFound` - not gRPC faults.
 
+### Client errors are answered, not logged as faults
+
+The ModelContextProtocol SDK logs every exception a tool throws at Error level with its stack, as "threw an unhandled exception", before it turns the exception into an error result. A caller that omits a required argument would therefore read, in the server log, exactly like a server fault. So a call rejected as the caller's mistake is answered with the same error result (`isError: true`, text `An error occurred invoking '<tool>': <message>`) without being thrown: it is logged at Debug with no stack under event `McpToolClientError`, and counted on `orleans.lattice.api.mcp.tool.client_errors`, tagged by `tool` and `reason`:
+
+| `reason` | Raised for |
+|---|---|
+| `unknown_argument` | An argument the tool does not declare (the strict-binding rejection above). |
+| `invalid_argument` | A missing, empty, or unrecognised argument, including one the SDK's argument binder cannot bind. |
+| `rejected_content` | An argument whose content is refused, for example a repository-context memory body carrying leaked tool-call framing or a credential-bearing URL. |
+| `not_found` | A record or resource the call names that does not exist, for example `repocontext_update` against a key with no record. |
+
+What the client sees is unchanged. A server fault, any fault a tool raises without classifying it as one of the reasons above, an authorization denial, and a region refusal are still thrown, so they still log at Error: a denial is never downgraded to a client error.
+
 ## Next
 
 - [Security](security.md) - how tools are gated and how the caller credential flows.

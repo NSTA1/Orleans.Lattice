@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Orleans.Lattice.Api.Data;
 
@@ -9,8 +9,10 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// <summary>
 /// Unit tests for the strict-binding guard <see cref="CredentialStampingTool"/>
 /// applies to every facade-backed tool call: an argument the wrapped tool does not
-/// declare in its input schema is rejected with an <see cref="McpException"/>
-/// naming the offender, rather than being silently discarded (issue #1941).
+/// declare in its input schema is rejected with an error result naming the
+/// offender, rather than being silently discarded (issue #1941). The rejection is
+/// answered rather than thrown, so the SDK does not log it as an unhandled server
+/// exception (issue #3761).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -19,7 +21,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// (<c>lattice_data_get</c>, which declares <c>treeId</c> and <c>key</c>). The
 /// rejection runs after the coarse authorization gate but before credential
 /// stamping and region routing, so these tests only need a permissive authorizer
-/// and an ambient HTTP context - the throw never reaches the facade.
+/// and an ambient HTTP context - the rejection never reaches the facade.
 /// </para>
 /// <para>
 /// The decorator-added <c>region</c> selector is part of the wrapped tool's
@@ -52,17 +54,19 @@ public sealed class CredentialStampingToolArgumentValidationTests
     {
         await using var services = AuthorizedServices();
 
-        var ex = Assert.ThrowsAsync<McpException>(async () =>
-            await McpToolInvocation.CallAsync(
-                WrappedDataGet(),
-                services,
-                McpToolInvocation.Args(("treeId", "orders"), ("keyy", "k"))));
+        var result = await McpToolInvocation.CallAsync(
+            WrappedDataGet(),
+            services,
+            McpToolInvocation.Args(("treeId", "orders"), ("keyy", "k")));
+        var message = ErrorText(result);
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex!.Message, Does.Contain("'keyy'"),
+            Assert.That(result.IsError, Is.True,
+                "An unknown argument is the caller's mistake, so it is answered as an error result, not thrown (issue #3761).");
+            Assert.That(message, Does.Contain("'keyy'"),
                 "The rejection must name the offending argument so the caller can spot the typo.");
-            Assert.That(ex.Message, Does.Contain("does not accept"),
+            Assert.That(message, Does.Contain("does not accept"),
                 "The rejection must state that the argument is not accepted, not silently ignore it.");
         });
     }
@@ -72,16 +76,18 @@ public sealed class CredentialStampingToolArgumentValidationTests
     {
         await using var services = AuthorizedServices();
 
-        var ex = Assert.ThrowsAsync<McpException>(async () =>
-            await McpToolInvocation.CallAsync(
-                WrappedDataGet(),
-                services,
-                McpToolInvocation.Args(("treeId", "orders"), ("keyy", "k"), ("limit", 10))));
+        var result = await McpToolInvocation.CallAsync(
+            WrappedDataGet(),
+            services,
+            McpToolInvocation.Args(("treeId", "orders"), ("keyy", "k"), ("limit", 10)));
+        var message = ErrorText(result);
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex!.Message, Does.Contain("'keyy'"));
-            Assert.That(ex.Message, Does.Contain("'limit'"));
+            Assert.That(result.IsError, Is.True,
+                "An unknown argument is the caller's mistake, so it is answered as an error result, not thrown (issue #3761).");
+            Assert.That(message, Does.Contain("'keyy'"));
+            Assert.That(message, Does.Contain("'limit'"));
         });
     }
 
@@ -93,21 +99,26 @@ public sealed class CredentialStampingToolArgumentValidationTests
         // The guard runs before region routing, so a call carrying region plus a
         // genuinely unknown argument must name only the unknown one, proving region
         // is in the accepted set even though the inner tool never declared it.
-        var ex = Assert.ThrowsAsync<McpException>(async () =>
-            await McpToolInvocation.CallAsync(
-                WrappedDataGet(),
-                services,
-                McpToolInvocation.Args(
-                    ("treeId", "orders"), ("key", "k"), ("region", "east"), ("bogus", "x"))));
+        var result = await McpToolInvocation.CallAsync(
+            WrappedDataGet(),
+            services,
+            McpToolInvocation.Args(
+                ("treeId", "orders"), ("key", "k"), ("region", "east"), ("bogus", "x")));
+        var message = ErrorText(result);
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex!.Message, Does.Contain("'bogus'"), "The genuinely unknown argument must be named.");
-            Assert.That(ex.Message, Does.Contain("the argument(s): 'bogus'."),
+            Assert.That(result.IsError, Is.True,
+                "An unknown argument is the caller's mistake, so it is answered as an error result, not thrown (issue #3761).");
+            Assert.That(message, Does.Contain("'bogus'"), "The genuinely unknown argument must be named.");
+            Assert.That(message, Does.Contain("the argument(s): 'bogus'."),
                 "region must not appear among the offenders: it is a declared (decorator-added) argument, "
                 + "so the sole rejected argument is 'bogus'.");
         });
     }
+
+    private static string ErrorText(CallToolResult result)
+        => result.Content.OfType<TextContentBlock>().Single().Text;
 
     [Test]
     public async Task Accepts_a_call_whose_arguments_are_all_declared()

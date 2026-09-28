@@ -766,7 +766,7 @@ A series that is **absent** rather than valued means the host did not construct 
 
 On the `local` profile every tree shares one SQLite file, and SQLite admits one writer at a time. A lock storm recorded on a deployed container (issue #2431) could only be attributed afterwards by proximity - which grain types appeared in the log lines near each `database is locked` - and log lines from concurrent activations interleave, so that was never attribution. It also could not say whether the busy window had actually been exhausted, or how many writers were queued when a write failed.
 
-The SQLite grain-storage arm therefore wraps the provider in an observing decorator. It changes no timeout and no retry, rethrows the provider's own exception unchanged, and ignores every failure that is not a lock failure. For each failure whose cause chain holds `SQLITE_BUSY` or `SQLITE_LOCKED` it writes one `GrainStorageLockContention` warning (category `Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextLockAttributingGrainStorage`) carrying:
+The SQLite grain-storage arm therefore wraps the provider in an attributing decorator. It changes no timeout, rethrows the provider's own exception unchanged, and ignores every failure that is not a lock failure. The one call it re-issues is a lock failure on the WAL materialiser pin store (see [Pin-store write retry](#pin-store-write-retry) below). For each failure whose cause chain holds `SQLITE_BUSY` or `SQLITE_LOCKED` it writes one `GrainStorageLockContention` warning (category `Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextLockAttributingGrainStorage`) carrying:
 
 | Field | Meaning |
 |-------|---------|
@@ -775,18 +775,26 @@ The SQLite grain-storage arm therefore wraps the provider in an observing decora
 | `SqliteErrorCode`, `SqliteExtendedErrorCode` | The primary and extended result codes, so `SQLITE_BUSY_SNAPSHOT` (517) and `SQLITE_BUSY_RECOVERY` (261) are told apart from a plain busy. |
 | `ElapsedMs`, `BusyWindowMs`, `Wait` | How long the call ran against the busy window read from the provider's own connection string. `Wait` is `exhausted` when it failed at or after the window and `early` when SQLite refused the lock before it. |
 | `WritesAtEntry`, `WritesAtFailure`, `PeakWrites`, `ReadsAtFailure` | The write convoy - writes and clears in flight, counting the failed call when it is one - when the call started and when it failed, its high-water mark since start, and the reads in flight beside it. |
+| `Attempt`, `Retrying` | Which attempt of the call failed (1 for the first), and whether the decorator will re-issue it. Every failed attempt writes its own line. |
 
-Writes and clears form the convoy because both need the write lock; reads are reported beside it, because in `WAL` journal mode a reader does not queue for that lock. Four instruments on the host meter carry the same evidence in aggregate:
+Writes and clears form the convoy because both need the write lock; reads are reported beside it, because in `WAL` journal mode a reader does not queue for that lock. Five instruments on the host meter carry the same evidence in aggregate:
 
 | Instrument | Meaning |
 |------------|---------|
-| `lattice_repocontext_grain_storage_lock_failures_total` | Lock failures by `operation` and `wait`. |
+| `lattice_repocontext_grain_storage_lock_failures_total` | Lock failures by `operation` and `wait`, one per failed attempt. |
+| `lattice_repocontext_grain_storage_lock_retries_total` | Re-issued pin-store writes and clears by `operation` and `outcome` (`recovered` or `gave_up`), one per operation rather than per attempt. |
 | `lattice_repocontext_grain_storage_lock_convoy_width` | Writes in flight when each lock failure surfaced; `_sum / _count` is the mean width at failure. |
 | `lattice_repocontext_grain_storage_writes_in_flight` | Writes and clears in flight now. |
 | `lattice_repocontext_grain_storage_writes_in_flight_peak` | The most writes and clears in flight at once since start. |
 
 **Read `wait` first.** A convoy outlasting the busy window fails `exhausted`, with a wide `WritesAtFailure`; a lock SQLite refuses without waiting fails `early`, whatever the convoy. The two call for opposite remedies - widening the write path against throttling the convoy - which is why they are separate arms rather than one total. The peak gauge exists because a scrape interval is far wider than a convoy, so the instantaneous gauge can sample either side of one.
 
-**Zero semantics.** Every arm of the failure counter is published at zero from process start, so an absent series means the host did not construct the meter or the collector refused it, never that no lock failure happened. The convoy-width summary is the exception: a zero sample would bias its mean, so it is absent until the first failure; read its absence against the failure counter. None carries a tenant dimension, because the grain store is shared by every tree on the host. Reminders share the same SQLite file but are not wrapped, so a reminder write can hold the lock without appearing in the convoy.
+**Zero semantics.** Every arm of the failure counter, and the `write` and `clear` arms of the retry counter, are published at zero from process start, so an absent series means the host did not construct the meter or the collector refused it, never that no lock failure happened. The convoy-width summary is the exception: a zero sample would bias its mean, so it is absent until the first failure; read its absence against the failure counter. None carries a tenant dimension, because the grain store is shared by every tree on the host. Reminders share the same SQLite file but are not wrapped, so a reminder write can hold the lock without appearing in the convoy.
 
 To provoke the condition rather than wait for it, hold the write lock from a second connection with `BEGIN IMMEDIATE`: every writer queued behind it waits out the window and fails `exhausted`. `RepoContextLockAttributingGrainStorageTests` does exactly that against Orleans' real ADO.NET provider and this host's schema.
+
+#### Pin-store write retry
+
+Attribution found the lock failures that remain after issue #2431 on the WAL materialiser pin store (`wal-materialiser-pins`, bucketed as `wal-materialiser-pins~b{n}`): under a bulk ingest a pin write queues behind bulk vector writes, waits out the busy window and fails `exhausted` (issue #3761 item 6). A failed pin write leaves the published pin stale, which holds the WAL trim floor down. The busy window cannot be widened for the pin store alone without widening it for every writer, so the decorator re-issues a pin-state write or clear that fails on a lock instead: up to two re-issues, after a backoff of 250 ms doubling per re-issue and jittered between half and all of it, so writers that failed together do not re-queue together.
+
+A re-issue is safe because the grain-state write is one autocommit statement: a lock failure rolls it back whole, and the provider assigns the new ETag to the grain state only after the statement succeeds, so the re-issue presents the same ETag against an unchanged row. Reads and every other state are never re-issued. Orleans' ADO.NET provider still logs its own `Error writing grain state` line for each failed attempt, so read a recovered write through `lattice_repocontext_grain_storage_lock_retries_total{outcome="recovered"}` rather than by the absence of that line; `outcome="gave_up"` is a pin write whose lock failure reached the grain.
