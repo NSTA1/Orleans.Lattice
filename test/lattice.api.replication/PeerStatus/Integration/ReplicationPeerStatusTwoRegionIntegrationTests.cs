@@ -63,15 +63,15 @@ public sealed class ReplicationPeerStatusTwoRegionIntegrationTests
         // batch that really shipped, not merely a link that exists.
         await WaitForAsync(
             async () => await destination.Client.GetGrain<ILattice>(TwoRegionStatusClusterFixture.TreeName).GetAsync(key) is not null,
-            $"'{key}' did not replicate from {sourceId} to {destinationId}");
+            () => $"'{key}' did not replicate from {sourceId} to {destinationId}");
 
         var outbound = await WaitForLinkAsync(
-            TwoRegionStatusClusterFixture.StatusOf(source),
+            source,
             destinationId,
             ReplicationLinkDirection.Outbound,
             link => link.TimeSinceLastContact is not null && link.EntriesBehind == 0 && link.InFlight == 0);
         var inbound = await WaitForLinkAsync(
-            TwoRegionStatusClusterFixture.StatusOf(destination),
+            destination,
             sourceId,
             ReplicationLinkDirection.Inbound,
             link => link.TimeSinceLastContact is not null);
@@ -93,7 +93,7 @@ public sealed class ReplicationPeerStatusTwoRegionIntegrationTests
     }
 
     private static async Task<(ReplicationPeerStatusPage Page, ReplicationPeerStatusEntry Link)> WaitForLinkAsync(
-        ILatticeReplicationStatus status,
+        TestCluster region,
         string peer,
         ReplicationLinkDirection direction,
         Func<ReplicationPeerStatusEntry, bool> settled)
@@ -104,6 +104,7 @@ public sealed class ReplicationPeerStatusTwoRegionIntegrationTests
             PeerRegionId = peer,
         };
 
+        var status = TwoRegionStatusClusterFixture.StatusOf(region);
         ReplicationPeerStatusPage? page = null;
         ReplicationPeerStatusEntry? link = null;
         await WaitForAsync(
@@ -113,19 +114,20 @@ public sealed class ReplicationPeerStatusTwoRegionIntegrationTests
                 link = page.Peers.FirstOrDefault(p => p.Direction == direction);
                 return link is not null && settled(link);
             },
-            $"the {direction} link to {peer} did not settle; last seen: {link}");
+            () => $"the {direction} link to {peer} did not settle; last reported: {link?.ToString() ?? "<none>"}; "
+                + $"raw rows on that silo: {TwoRegionStatusClusterFixture.DescribeRawStats(region)}");
 
         return (page!, link!);
     }
 
-    private static async Task WaitForAsync(Func<Task<bool>> condition, string failure)
+    private static async Task WaitForAsync(Func<Task<bool>> condition, Func<string> failure)
     {
         var deadline = DateTime.UtcNow + ConvergenceTimeout;
         while (!await condition())
         {
             if (DateTime.UtcNow >= deadline)
             {
-                Assert.Fail(failure);
+                Assert.Fail(failure());
             }
 
             await Task.Delay(50);

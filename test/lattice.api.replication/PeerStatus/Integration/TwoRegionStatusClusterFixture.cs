@@ -47,6 +47,21 @@ internal sealed class TwoRegionStatusClusterFixture : IAsyncDisposable
     public static ILatticeReplicationStatus StatusOf(TestCluster cluster) =>
         SiloServices(cluster).GetRequiredService<ILatticeReplicationStatus>();
 
+    /// <summary>
+    /// Renders every raw telemetry row <paramref name="cluster"/>'s silo holds, for
+    /// a failure message that distinguishes "never recorded" from "not reported".
+    /// </summary>
+    /// <param name="cluster">The region.</param>
+    /// <returns>One line per recorded row, or a marker when there are none.</returns>
+    public static string DescribeRawStats(TestCluster cluster)
+    {
+        var rows = SiloServices(cluster).GetRequiredService<ReplicationPeerStats>().Snapshot();
+        return rows.Count == 0
+            ? "<no rows recorded>"
+            : string.Join("; ", rows.Select(r =>
+                $"{r.Tree}/{r.Peer}/{r.Direction} entries={r.EntriesBehind} errors={r.ConsecutiveErrors} contact={r.LastContactSeconds}"));
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
