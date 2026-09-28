@@ -605,11 +605,15 @@ share is occupied, the drive raises `LatticeSaturatedException` with source
 nor retires the leaf's retention pin, and neither caller treats it as a
 fault:
 
-- the sweep records the touch as `outcome=admission_refused` on
+- the sweep records the try as `outcome=admission_refused` on
   `orleans.lattice.wal.gc.blocked_leaf_reactivations`, logs it at `Debug`
-  without a stack, and does not charge it against the consumer's attempt
-  budget, so a consumer the sweep never managed to drive is never
-  abandoned. It retries after a jittered delay of one to one and a half
+  without a stack, and does not count it as `attempted` or charge it
+  against the consumer's attempt budget, so a consumer the sweep never
+  managed to drive is never abandoned. A pass keeps no more touches in
+  flight than this silo's part of the GC share, so its own touches do not
+  refuse each other, and re-drives a refused touch once a sibling touch of
+  the same pass frees a slot (issue #3761). A consumer still refused when
+  the pass ends retries after a jittered delay of one to one and a half
   minutes that doubles with each consecutive refusal, up to its ordinary
   fifteen-minute cooldown;
 - the timer counts it as `reason=recheck_drive_refused` on

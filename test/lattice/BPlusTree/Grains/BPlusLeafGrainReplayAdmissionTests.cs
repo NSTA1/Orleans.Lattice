@@ -211,4 +211,43 @@ public sealed class BPlusLeafGrainReplayAdmissionTests
             Is.EqualTo(LatticeReplayAdmissionClass.Interactive),
             "the class must be restored when the outermost scope ends.");
     }
+
+    /// <summary>
+    /// The sweep share the WAL GC scheduler sizes its touch fan-out from reads 0
+    /// until this silo's gate is sized, so an unsized silo does not narrow a pass
+    /// to one touch on a guess (issue #3761).
+    /// </summary>
+    [Test]
+    public void SweepStarvationShare_is_zero_while_the_gate_is_unsized()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+
+        Assert.That(BPlusLeafGrain.SweepStarvationShare, Is.Zero);
+    }
+
+    /// <summary>
+    /// The sweep share is the GC half of the permits still in circulation, and it
+    /// shrinks as permits are withheld: exactly the capacity the non-queueing
+    /// sweep admission can take at once (issue #3761).
+    /// </summary>
+    [TestCase(2, 0, 1)]
+    [TestCase(6, 0, 3)]
+    [TestCase(32, 0, 16)]
+    [TestCase(6, 2, 2)]
+    [TestCase(6, 6, 1)]
+    public void SweepStarvationShare_is_the_sweep_share_of_the_circulating_permits(int ceiling, int withheld, int expected)
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling, 0);
+        BPlusLeafGrain.SeedWithheldReplayPermitsForTest(withheld);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BPlusLeafGrain.SweepStarvationShare, Is.EqualTo(expected));
+            Assert.That(
+                BPlusLeafGrain.SweepStarvationShare,
+                Is.EqualTo(BPlusLeafGrain.StarvationReplayLimit(
+                    BPlusLeafGrain.CirculatingReplayPermits(ceiling, withheld), BPlusLeafGrain.StarvationDriveOrigin.WalGcSweep)),
+                "the scheduler must read the same share the sweep admission enforces.");
+        });
+    }
 }
