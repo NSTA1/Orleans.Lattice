@@ -739,7 +739,10 @@ so an observer keyed by tree id keeps working without reacting to the swap.
 The logical id is accepted only when it was routed to the exact physical
 tree that commits the write; a write that reaches a physical tree directly,
 without going through its logical tree, reports that physical tree's own
-id. Aliasing changes no callback coverage: the paths that publish
+id. The routing tier overwrites the routed identity on every routed write,
+and under `AddLatticeAuth` the capability-stripping call filter also strips
+it from external clients, so a caller cannot choose the id observers see.
+Aliasing changes no callback coverage: the paths that publish
 callbacks, and the ones that deliberately do not (bulk load and bulk
 append, and saga terminal records, which are WAL-only), are the same as on
 an unaliased tree. The WAL records remain keyed by the physical tree; the

@@ -3,10 +3,12 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// A grain responsible for managing tree-level soft deletion and deferred purge.
-/// One activation exists per tree id, keyed by <c>{treeId}</c>, and it acts only
-/// on the shards stored under that id: it does not resolve a tree alias, so an
-/// aliased tree's live data under another physical tree is never reached.
-/// When a tree is deleted, this grain marks those shards as deleted and registers
+/// One activation exists per tree id, keyed by <c>{treeId}</c>. A logical delete
+/// of an aliased tree resolves the alias, validates that the target was derived
+/// from this tree and is aliased by no other, pins it, and delegates the shard
+/// marks and purge to the target's own deletion grain; physical retirement of a
+/// resized copy is silent and does not make the logical tree deleted.
+/// When a tree is deleted, this grain marks the shards as deleted and registers
 /// a reminder that fires after <see cref="LatticeOptions.SoftDeleteDuration"/>.
 /// When the reminder fires, it walks every shard (using the same timer-per-shard
 /// pattern as <see cref="ITombstoneCompactionGrain"/>) and permanently purges

@@ -174,7 +174,8 @@ expressible, but, like everything else, must be inside the operator's ceiling.
 Each scope template names an app-local tree declared by the app and an optional
 `kind` (`Tree`, `Key`, or `Prefix`) with its `keyOrPrefix`. A scope may instead
 name another app's tree with `app`; such a scope, like one over an adopted tree,
-requires an approved exception. No exception can approve a scope on the cluster-wide
+requires an approved exception, and compiles only while that app is installed and
+owns the tree (see [Tree ownership](#tree-ownership)). No exception can approve a scope on the cluster-wide
 sentinel `*` or on a `_lattice_`, `sys-` or `t/` tree, and no ceiling can grant a role
 `Telemetry` or `AppInstall`: the role compiler reports either as an excess even for a
 manifest that skipped validation.
@@ -244,8 +245,9 @@ pipeline's uninstall soft-deletes the app's trees, below).
 ## Tree ownership
 
 Every tree an app uses - its structural `a/{app}/{tree}` trees and every tree it
-adopts - belongs to **exactly one install** for the tree's whole lifetime, including
-its soft-delete window. Two installs can never share a tree, whichever app they are
+adopts - belongs to **exactly one install** at a time: a structural tree for its
+whole lifetime, including its soft-delete window, and an adopted tree until the
+install that adopted it releases it. Two installs can never share a tree, whichever app they are
 and whatever the operator approves, so one app's data is never readable or writable
 under another app's name.
 
@@ -290,12 +292,15 @@ per tree before installation.
 
 **Cross-app scopes need an installed owner.** A role scope or subscription that names
 another app's tree compiles only while that app is the installed owner of the tree in
-the same tenant, as the ledger records; otherwise the role scope is reported as an
-excess and the subscription is refused. The compilers take the owners as an
+the same tenant, as the ledger records. Otherwise the role scope is reported as a
+ceiling excess, so the activation fails closed (`CeilingExceeded`) and every rule the
+app owns is withdrawn, not only those over that tree; and the subscription is denied,
+so that app's subscriptions fail to activate. The compilers take the owners as an
 optional `AppTreeOwnerSnapshot` argument and stay pure. When an app is uninstalled,
 every other enabled app in the tenant whose manifest reaches it through a cross-app
-scope or subscription is reconciled, so its grants over the absent owner's trees are
-withdrawn at once.
+scope or subscription is reconciled at once, so none of its grants over the absent
+owner's trees survive; its subscriptions stop at the subscription router's next
+rebuild from the changed registry.
 
 **Aliasing is bounded by ownership.** The package registers an
 [`ITreeOwnershipGuard`](../lattice/tree-registry.md#ownership-bounded-aliasing) backed
@@ -316,18 +321,20 @@ structured failure (`AppActivationFailure`) with diagnostics. Its `GetStatusAsyn
 is ungated and in-process, so a facade that exposes it must gate it itself.
 
 **Enable** resolves the installed version's manifest from the app source, validates
-it, compiles its roles against the pinned ceiling and bindings, provisions the app's
-structural trees with their declared shape (recovering a tree soft-deleted by an
-earlier uninstall), persists the compiled rule set, enrols the app's declared
-[replication](#replication-intent), and marks the app `Enabled`. If a
+it, compiles its roles against the pinned ceiling and bindings, re-verifies its
+[tree ownership](#tree-ownership) claims, enrols the app's declared
+[replication](#replication-intent), provisions the app's structural trees with their
+declared shape (recovering a tree soft-deleted by an earlier uninstall), persists the
+compiled rule set, and marks the app `Enabled`. If a
 consent change landed while the run was in flight, it re-activates against the record
 its own transition wrote, so no grant compiled from superseded consent stays live.
 Replacing the owned rule set withdraws stale rules before writing new ones, so a
 policy-store fault part-way through never keeps a grant the current consent revoked.
 When the installed version itself cannot be activated - its manifest cannot be resolved
-or validated, its roles exceed the consented ceiling, or a binding names an undeclared
-role - any rules left from an earlier activation are withdrawn; a tree-provisioning or
-rule-write failure keeps the existing rules, so a retry is not an outage.
+or validated, its roles exceed the consented ceiling, a binding names an undeclared
+role, or it has a tree ownership conflict - any rules left from an earlier
+activation are withdrawn; a replication, tree-provisioning or rule-write failure
+keeps the existing rules, so a retry is not an outage.
 
 **Disable** removes every rule the app owns and marks it `Disabled`; its trees and
 data stay in place, and their [replication](#replication-intent) keeps running.
@@ -397,13 +404,16 @@ and dropped declarations disable only the former. A tree an operator had already
 enrolled - for example a legacy tree the app adopted - keeps replicating after the
 app is uninstalled.
 
-Activation checks the whole desired set before changing anything, and fails with
-a structured `AppActivationFailure` that leaves the app's previous rules and
-enrolments in place:
+Activation checks every declared tree's merge mode before it changes any enrolment,
+so a mode conflict changes nothing. A precondition or enrolment failure can surface
+part-way through, after some trees are enrolled; the trees a run attempts are
+recorded first, so a later reconcile completes the change and an uninstall still
+unenrols them. On an enable or reconcile, every replication failure keeps the app's
+existing rules in place:
 
 | Failure | Meaning |
 |---|---|
-| `ReplicationModeChangeRejected` | A declared merge mode differs from the mode the tree is already enrolled under, or that mode is ambiguous. Replication cannot switch a tree's merge mode in place; keep the mode, or disable replication for the tree first. |
+| `ReplicationModeChangeRejected` | A declared merge mode differs from the mode the tree is already enrolled under or from the mode the app's previous version declared for it, or the enrolled mode is ambiguous. Replication cannot switch a tree's merge mode in place, so keep the declared mode; for a tree enrolled outside the app, an operator can disable its replication first. |
 | `ReplicationPreconditionFailed` | A replication prerequisite is not met, for example the host has no configured cluster id, or the merge mode needs a configured local replica. |
 | `ReplicationEnrolmentFailed` | Reading or writing the runtime enrolment failed. The run can be retried with a reconcile. |
 
@@ -417,7 +427,8 @@ the tree as an operator; the app supplies no bootstrap source.
 ## Compiled rules
 
 `AppRoleCompiler.Compile` is a pure function from a manifest, a tenant, the role
-bindings and the ceiling to an `AppRuleCompilation`. On success it holds the full
+bindings, the ceiling and an optional cross-app `AppTreeOwnerSnapshot` to an
+`AppRuleCompilation`. On success it holds the full
 set of `LatticeAuthorizationRule` records; on failure it lists every excess
 (`AppCeilingExcess`) and every binding that names an unknown role, and emits no
 rules. A declared role with no binding emits nothing and is listed in
@@ -500,8 +511,9 @@ A subscription to the app's own trees needs no consent. A cross-app subscription
 (and a subscription to an adopted tree) must be covered by an approved exception
 scope in the ceiling, or that app's subscriptions fail to activate with a message
 naming the observed app. A cross-app subscription also needs the observed app to be
-the installed owner of the tree; when that app is uninstalled, the subscribing app is
-reconciled and the subscription stops delivering. A subscription activation failure
+the installed owner of the tree, or that app's subscriptions fail to activate the same
+way; when the observed app is uninstalled, the next routing-table rebuild denies the
+subscription and it stops delivering. A subscription activation failure
 is logged; it does not fail the enable and is not recorded in the app's activation
 status. Cross-tenant observation is not introduced: a subscription only sees trees
 composed for its own install's tenant.

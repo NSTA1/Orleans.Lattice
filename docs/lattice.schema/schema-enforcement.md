@@ -171,6 +171,9 @@ the same way and the partial destination is discarded (soft-deleted). Only a ful
 successful build cuts the logical tree over to the remediated destination: it
 installs the target policy, then repoints the tree via physical-tree aliasing, then
 arms a retained redirect that steers already-materialised readers to the new data.
+A remediation pass holds the tree's alias reservation, so a delete of the tree is
+refused while it runs and a remediation of a deleted tree is refused; see
+[Deleting an aliased tree](../lattice/tree-deletion.md#deleting-an-aliased-tree).
 
 The build copies at the logical level and does not shadow-forward writes that land
 on the source while it runs, so run a remediation while the tree is

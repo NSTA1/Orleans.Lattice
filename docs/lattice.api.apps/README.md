@@ -66,9 +66,9 @@ runs on an enabled app; there the message is prefixed to say that the consent or
 upgrade itself was recorded before re-applying failed. The replication failures
 (`ReplicationModeChangeRejected`, `ReplicationPreconditionFailed`,
 `ReplicationEnrolmentFailed`) are described under
-[Replication intent](../lattice.apps/README.md#replication-intent); they are
-detected before anything changes, so the app's previous rules and enrolments stay
-in place. `DescribeAsync` then reports the install as `Failed` until a later run
+[Replication intent](../lattice.apps/README.md#replication-intent); each keeps the
+app's existing rules in place, and a mode conflict is detected before any enrolment
+changes. `DescribeAsync` then reports the install as `Failed` until a later run
 succeeds.
 
 An install or upgrade whose trees are owned by another install, or that would take
