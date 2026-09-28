@@ -268,14 +268,23 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// Binds a body-declared origin cluster id to the origin the transport
     /// stamped on the call, and refuses the call when the two disagree.
     /// <para>
-    /// <c>ExchangeContentManifest</c> takes <c>OriginClusterId</c> from the
-    /// request body and uses it as the per-origin key of a <b>durable</b>
-    /// high-water-mark write (<c>IReplicationHighWaterMarkGrain.TryAdvanceAsync</c>).
+    /// Three receiver verbs take <c>OriginClusterId</c> from the request body and
+    /// use it as the per-origin key of the durable high-water mark
+    /// (<c>IReplicationHighWaterMarkGrain</c>): <see cref="Push"/> and
+    /// <see cref="ExchangeContentManifest"/> advance it, and
+    /// <see cref="GetPeerHighWaterMark"/> reads it back.
     /// Left unbound, a peer could name a third cluster's origin id and drive
     /// that innocent stream's recorded clock forward, which suppresses
     /// anti-entropy repair for it: the poisoned value is served back by
     /// <see cref="GetPeerHighWaterMark"/> and used as the re-replay cursor, so
-    /// a maxed cursor makes every WAL entry ineligible for re-replay.
+    /// a maxed cursor makes every WAL entry ineligible for re-replay. The same
+    /// unbound read also lets a peer enumerate a third cluster's replication
+    /// cursor, which it has no business knowing.
+    /// </para>
+    /// <para>
+    /// Every verb that consumes a body-declared origin binds it here. The
+    /// binding is deliberately uniform: a gate applied to one verb of a family
+    /// and not its siblings is not a gate, because the caller picks the verb.
     /// </para>
     /// <para>
     /// <c>GrpcChannelHardening</c> stamps
@@ -316,8 +325,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             stamped);
 
         throw new RpcException(new Status(StatusCode.PermissionDenied,
-            "ContentManifestRequest.OriginClusterId does not match the origin stamped on the call; "
-            + "a peer may only exchange manifests for its own origin."));
+            $"The origin declared by {rpc} does not match the origin stamped on the call; "
+            + "a peer may only act on its own origin."));
     }
 
     /// <summary>
@@ -357,6 +366,12 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             throw new RpcException(new Status(StatusCode.InvalidArgument,
                 "ReplicationBatchEnvelope.OriginClusterId must be non-empty."));
         }
+
+        // The applied batch advances the durable per-origin high-water mark under
+        // the origin this envelope declares, so the declared origin has to be the
+        // caller's own. Without this a peer could push under a third cluster's
+        // origin and poison that stream's cursor.
+        EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(Push));
 
         var entries = request.Entries;
 
@@ -823,6 +838,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(GetPeerHighWaterMark));
+
+        // The cursor is per-origin state. Reading it back for an origin other than
+        // the caller's own discloses a third cluster's replication position, and
+        // is also how a peer would confirm a cursor it had poisoned elsewhere.
+        EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(GetPeerHighWaterMark));
 
         // Resolve the receiver's durable per-origin high-water-mark for the
         // (tree, origin) stream. An origin the receiver has never applied
