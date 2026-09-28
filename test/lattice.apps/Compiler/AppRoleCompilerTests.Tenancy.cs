@@ -23,7 +23,8 @@ public sealed partial class AppRoleCompilerTests
             Role("peer", LatticeOperation.Read, TreeScope("items", app: "other")));
         var ceiling = Ceiling(ReadWrite, LatticeScope.Tree("legacy-audit"), LatticeScope.Tree("a/other/items"));
 
-        var result = AppRoleCompiler.Compile(manifest, Acme, [Bind("writer", "g-a"), Bind("peer", "g-a")], ceiling);
+        var result = AppRoleCompiler.Compile(manifest, Acme, [Bind("writer", "g-a"), Bind("peer", "g-a")], ceiling,
+            AppTreeOwnerSnapshot.Create([new("t/acme/a/other/items", AppSlug.Parse("other"))]));
 
         Assert.That(result.Succeeded, Is.True);
         Assert.That(result.Rules.Select(r => r.Scope), Is.EquivalentTo(new[]

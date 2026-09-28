@@ -62,7 +62,7 @@ public sealed class AppSubscriptionAliasIntegrationTests
                 projection.Publish(Record(Notes));
                 var catalog = new AppSubscriptionHandlerCatalog(services,
                     [new(Notes, "docs-feed", provider => provider.GetRequiredService<RecordingChangeFeedHandler>())]);
-                return new AppSubscriptionRouter(projection, source, catalog, NullLogger<AppSubscriptionRouter>.Instance);
+                return new AppSubscriptionRouter(projection, source, catalog, AppRegistryTestData.CreateLedger(new InMemoryAppRegistryStore()), NullLogger<AppSubscriptionRouter>.Instance);
             });
             siloBuilder.Services.AddSingleton<IMutationObserver>(services => services.GetRequiredService<AppSubscriptionRouter>());
         }

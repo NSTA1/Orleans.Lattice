@@ -36,12 +36,23 @@ internal static class AppRegistryTestData
         InMemoryAppRegistryStore store,
         ILatticeAccessGate? gate = null,
         ILatticeMembershipContext? membership = null,
-        TimeProvider? time = null) =>
+        TimeProvider? time = null,
+        IAppSource? source = null,
+        AppTreeOwnershipLedger? ownership = null) =>
         new(
             store,
             new AppInstallAuthorizer(gate ?? RecordingAccessGate.AllowAll(), membership),
             Options.Create(new ClusterOptions { ClusterId = ClusterId }),
+            ownership ?? CreateLedger(store),
+            source ?? NullAppSource.Instance,
             time ?? new ManualTimeProvider(Start));
+
+    public static AppTreeOwnershipLedger CreateLedger(
+        InMemoryAppRegistryStore store,
+        InMemoryAppTreeLedgerStore? ledger = null,
+        FakeAppTreeFacts? facts = null,
+        TimeProvider? time = null) =>
+        new(ledger ?? new InMemoryAppTreeLedgerStore(), facts ?? new FakeAppTreeFacts(), store, time ?? new ManualTimeProvider(Start));
 
     public static AppRegistryRecord Record(
         AppRegistryLifecycleState state,

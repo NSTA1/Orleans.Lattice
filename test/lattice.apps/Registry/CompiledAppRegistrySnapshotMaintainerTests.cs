@@ -197,5 +197,8 @@ public sealed class CompiledAppRegistrySnapshotMaintainerTests
         public Task<AppRegistryTransitionResult> DisableAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default) => inner.DisableAsync(tenant, slug, cancellationToken);
 
         public Task<AppRegistryTransitionResult> UninstallAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default) => inner.UninstallAsync(tenant, slug, cancellationToken);
+
+        public Task<IReadOnlyList<AppTreeOwnershipConflict>> GetTreeOwnershipConflictsAsync(TenantId tenant, AppManifest manifest, AppProvenance provenance, CancellationToken cancellationToken = default) =>
+            inner.GetTreeOwnershipConflictsAsync(tenant, manifest, provenance, cancellationToken);
     }
 }

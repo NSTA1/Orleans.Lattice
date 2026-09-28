@@ -28,6 +28,11 @@ namespace Orleans.Lattice.Apps;
 /// <c>sys-</c> tree, or a tenant-qualified <c>t/</c> id. Any denial fails the app's whole
 /// subscription activation; nothing is partially activated.
 /// </para>
+/// <para>
+/// <b>Cross-app owner.</b> A cross-app subscription additionally requires the observed app to be the
+/// installed owner of the observed tree in the same tenant, as recorded by the tree ownership ledger
+/// and passed in as an <see cref="AppTreeOwnerSnapshot"/>; otherwise it is denied.
+/// </para>
 /// </remarks>
 public static class AppSubscriptionCompiler
 {
@@ -35,16 +40,26 @@ public static class AppSubscriptionCompiler
     /// <param name="manifest">A manifest that passed <see cref="AppManifestValidator.Validate"/>; it is not re-validated.</param>
     /// <param name="tenant">The install's tenant; <see cref="TenantId.Default"/> when tenancy is off.</param>
     /// <param name="ceiling">The install's pinned capability ceiling.</param>
+    /// <param name="owners">
+    /// The installed owners of the trees the manifest observes across app boundaries, normally from
+    /// the tree ownership ledger; <c>null</c> means no tree has an installed owner, so every cross-app
+    /// subscription is denied.
+    /// </param>
     /// <returns>The resolved subscriptions, or every denial.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="manifest"/> or <paramref name="ceiling"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="tenant"/> is the uninitialised "no tenant" value, the manifest has no valid slug,
     /// or a subscription is <c>null</c>.
     /// </exception>
-    public static AppSubscriptionCompilation Compile(AppManifest manifest, TenantId tenant, AppCapabilityCeiling ceiling)
+    public static AppSubscriptionCompilation Compile(
+        AppManifest manifest,
+        TenantId tenant,
+        AppCapabilityCeiling ceiling,
+        AppTreeOwnerSnapshot? owners = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(ceiling);
+        owners ??= AppTreeOwnerSnapshot.None;
         if (tenant.Value is null)
             throw new ArgumentException("An install must be attributed to a tenant.", nameof(tenant));
         var slug = manifest.Identity?.Slug ?? default;
@@ -103,6 +118,16 @@ public static class AppSubscriptionCompiler
             }
 
             var treeId = LatticeTenantResolution.ComposeEffectiveTreeId(tenant, localTreeId);
+            if (observed != slug && !owners.IsOwnedBy(treeId, observed))
+            {
+                var scope = subscription.KeyPrefix is null
+                    ? new LatticeScope(LatticeScopeKind.Tree, localTreeId)
+                    : new LatticeScope(LatticeScopeKind.Prefix, localTreeId, subscription.KeyPrefix);
+                (denials ??= []).Add(new(subscription.Name, observed, scope,
+                    $"Subscription '{subscription.Name}' of app '{slug}' observes app '{observed}', which is not installed as the owner of tree '{subscription.Tree}' in this tenant."));
+                continue;
+            }
+
             subscriptions.Add(new(tenant, slug, subscription.Name, observed, subscription.Tree, localTreeId, treeId, subscription.KeyPrefix));
         }
 

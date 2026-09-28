@@ -19,12 +19,14 @@ internal sealed class ActivationHarness
     public ActivationHarness(bool withMembership = true, bool withPolicyStore = true, ILatticeMembershipContext? membership = null,
         ILatticeReplicationConfigAuthority? replication = null)
     {
-        Registry = AppRegistryTestData.CreateRegistry(RegistryStore);
+        Ownership = AppRegistryTestData.CreateLedger(RegistryStore, Ledger, Facts, Time);
+        Registry = AppRegistryTestData.CreateRegistry(RegistryStore, source: Source, ownership: Ownership);
         Engine = new AppActivationEngine(
             Registry,
             Source,
             Status,
             Trees,
+            Ownership,
             NullLogger<AppActivationEngine>.Instance,
             withPolicyStore ? Rules : null,
             membership ?? (withMembership ? new FixedMembershipContext() : null),
@@ -33,6 +35,12 @@ internal sealed class ActivationHarness
     }
 
     public InMemoryAppRegistryStore RegistryStore { get; } = new();
+
+    public InMemoryAppTreeLedgerStore Ledger { get; } = new();
+
+    public FakeAppTreeFacts Facts { get; } = new();
+
+    public AppTreeOwnershipLedger Ownership { get; }
 
     public AppRegistry Registry { get; }
 

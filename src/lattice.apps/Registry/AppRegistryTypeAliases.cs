@@ -14,4 +14,6 @@ internal static class AppRegistryTypeAliases
     internal const string AppRegistryInstallRequest = "oap.iq";
     internal const string AppRegistryTransitionError = "oap.te";
     internal const string AppRegistryTransitionResult = "oap.tx";
+    internal const string AppTreeClaim = "oap.oc";
+    internal const string AppTreeClaimKind = "oap.ok";
 }

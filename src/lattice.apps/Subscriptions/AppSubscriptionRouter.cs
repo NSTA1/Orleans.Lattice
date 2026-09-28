@@ -14,7 +14,8 @@ namespace Orleans.Lattice.Apps;
 /// <see cref="AppSubscriptionCompiler"/>, and resolving handlers - happens only when the registry
 /// snapshot changes, on a coalesced background rebuild. It produces an immutable table from effective
 /// tree id to routes. An install whose activation fails (unpinned ceiling, unresolvable manifest, an
-/// uncovered cross-app scope, or a missing handler) contributes no routes at all and its reasons are
+/// uncovered cross-app scope, a cross-app target whose owning app is not installed, or a missing
+/// handler) contributes no routes at all and its reasons are
 /// logged and recorded.
 /// </para>
 /// <para>
@@ -34,6 +35,7 @@ internal sealed class AppSubscriptionRouter : IMutationObserver
 {
     private readonly IAppRegistryProjection _projection;
     private readonly IAppSource _source;
+    private readonly AppTreeOwnershipLedger _ownership;
     private readonly AppSubscriptionHandlerCatalog _handlers;
     private readonly ILogger<AppSubscriptionRouter> _logger;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
@@ -48,21 +50,25 @@ internal sealed class AppSubscriptionRouter : IMutationObserver
     /// <param name="projection">The warm app-registry projection.</param>
     /// <param name="source">The source enabled apps' manifests are resolved from.</param>
     /// <param name="handlers">The host-registered subscription handlers.</param>
+    /// <param name="ownership">The tree ownership ledger naming the installed owners of cross-app subscription targets.</param>
     /// <param name="logger">The logger for activation and handler failures.</param>
     /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
     public AppSubscriptionRouter(
         IAppRegistryProjection projection,
         IAppSource source,
         AppSubscriptionHandlerCatalog handlers,
+        AppTreeOwnershipLedger ownership,
         ILogger<AppSubscriptionRouter> logger)
     {
         ArgumentNullException.ThrowIfNull(projection);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(handlers);
+        ArgumentNullException.ThrowIfNull(ownership);
         ArgumentNullException.ThrowIfNull(logger);
         _projection = projection;
         _source = source;
         _handlers = handlers;
+        _ownership = ownership;
         _logger = logger;
     }
 
@@ -279,7 +285,8 @@ internal sealed class AppSubscriptionRouter : IMutationObserver
                     ? [$"App '{record.Slug}' version '{record.Version}' could not be resolved ({resolution.Status})."]
                     : resolution.Errors.Select(static e => e.Message).ToArray();
 
-            var compilation = AppSubscriptionCompiler.Compile(manifest, record.Tenant, record.Ceiling);
+            var owners = await _ownership.ResolveCrossAppOwnersAsync(manifest, record.Tenant, cancellationToken).ConfigureAwait(false);
+            var compilation = AppSubscriptionCompiler.Compile(manifest, record.Tenant, record.Ceiling, owners);
             if (!compilation.Succeeded)
                 return compilation.Denials.Select(static d => d.Message).ToArray();
 
