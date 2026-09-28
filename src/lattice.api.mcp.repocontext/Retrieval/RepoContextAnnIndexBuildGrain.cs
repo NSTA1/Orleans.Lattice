@@ -485,9 +485,9 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// later one.</b> <see cref="ScanPageStalledException"/> derives from
     /// <see cref="TimeoutException"/>, so testing the timeout arm first would
     /// silently swallow every leaf-chain stall into
-    /// <see cref="RepoContextAnnBuildFaultCause.DependencyUnavailable"/> - and those
+    /// <see cref="RepoContextAnnBuildFaultCause.ResponseTimeout"/> - and those
     /// have opposite remedies, one being a tree whose leaf cannot be materialised in
-    /// a single grain call and the other a cluster that has not settled.
+    /// a single grain call and the other a response deadline with no proven cause.
     /// <see cref="LeafProjectionStaleException"/> and
     /// <see cref="EmbeddingSpaceMismatchException"/> both derive from
     /// <see cref="InvalidOperationException"/>, which is why no arm matches that base
@@ -557,7 +557,12 @@ internal sealed class RepoContextAnnIndexBuildGrain(
                 return RepoContextAnnBuildFaultCause.PlaneRejected;
             }
 
-            if (e is TimeoutException or System.IO.IOException)
+            if (e is TimeoutException)
+            {
+                return RepoContextAnnBuildFaultCause.ResponseTimeout;
+            }
+
+            if (e is System.IO.IOException)
             {
                 return RepoContextAnnBuildFaultCause.DependencyUnavailable;
             }

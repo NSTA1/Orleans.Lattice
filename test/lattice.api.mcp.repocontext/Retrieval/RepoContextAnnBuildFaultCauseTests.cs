@@ -177,6 +177,9 @@ public sealed class RepoContextAnnBuildFaultCauseTests
                 "every fault the counter records must name a cause. A faulted arm that rises "
                 + "without one is exactly the reading run 12 produced: it says an investigation "
                 + "is needed and nothing about where to point it");
+            Assert.That(faulted.Select(m => m.Cause), Does.Contain("response-timeout"));
+            Assert.That(faulted.Select(m => m.Cause), Does.Contain("dependency-unavailable"));
+            Assert.That(faulted.Select(m => m.Cause), Is.Unique);
             Assert.That(faulted, Has.None.Matches<SliceMeasurement>(m => string.IsNullOrEmpty(m.Cause)),
                 "and none of them may carry an empty cause, which would scrape as a present "
                 + "series with a blank label - the one shape that looks answered and is not");
@@ -297,7 +300,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
             Assert.That(causes, Is.Not.Empty,
                 "positive control: the reflection must find members, or every assertion below "
                 + "passes over an empty set");
-            Assert.That(causes, Has.Length.EqualTo(6),
+            Assert.That(causes, Has.Length.EqualTo(7),
                 "a member added without a tag of its own would fall onto 'unexpected' and be "
                 + "silently merged with it, which is the one arm whose whole job is to be rare; "
                 + "add the tag and update this count together");
@@ -377,17 +380,20 @@ public sealed class RepoContextAnnBuildFaultCauseTests
         reporter.RecordFaulted(
             RepoContextAnnBuildFaultCause.Saturated, Repo, TestSpace, RepoContextAnnBuildStepPhase.Opening);
         reporter.RecordFaulted(
+            RepoContextAnnBuildFaultCause.ResponseTimeout, Repo, TestSpace, RepoContextAnnBuildStepPhase.Opening);
+        reporter.RecordFaulted(
             (RepoContextAnnBuildFaultCause)9999, Repo, TestSpace, RepoContextAnnBuildStepPhase.Reconciling);
 
         var slices = reporter.Read();
 
         Assert.Multiple(() =>
         {
-            Assert.That(slices.Faulted, Is.EqualTo(7),
+            Assert.That(slices.Faulted, Is.EqualTo(8),
                 "positive control: every recorded fault must reach the undifferentiated total, "
                 + "so the per-cause split below is a partition of a number that is itself right");
             Assert.That(slices.FaultedByCause.ScanPageStalled, Is.EqualTo(2));
             Assert.That(slices.FaultedByCause.DependencyUnavailable, Is.EqualTo(1));
+            Assert.That(slices.FaultedByCause.ResponseTimeout, Is.EqualTo(1));
             Assert.That(slices.FaultedByCause.ProjectionStale, Is.EqualTo(1));
             Assert.That(slices.FaultedByCause.PlaneRejected, Is.EqualTo(1));
             Assert.That(slices.FaultedByCause.Saturated, Is.EqualTo(1),
@@ -401,7 +407,7 @@ public sealed class RepoContextAnnBuildFaultCauseTests
                 + "not sum to the total is the shape that makes a dashboard ratio quietly wrong");
             Assert.That(slices.FaultedByPhase.Ingesting, Is.EqualTo(2));
             Assert.That(slices.FaultedByPhase.Persisting, Is.EqualTo(1));
-            Assert.That(slices.FaultedByPhase.Opening, Is.EqualTo(2));
+            Assert.That(slices.FaultedByPhase.Opening, Is.EqualTo(3));
             Assert.That(slices.FaultedByPhase.Training, Is.EqualTo(1));
             Assert.That(slices.FaultedByPhase.Reconciling, Is.EqualTo(1));
             Assert.That(slices.FaultedByPhase.Coordinating, Is.EqualTo(0));
@@ -419,9 +425,9 @@ public sealed class RepoContextAnnBuildFaultCauseTests
     /// <b>Two of these arms are subtypes of a later one and the ordering is
     /// load-bearing.</b> <c>ScanPageStalledException</c> derives from
     /// <see cref="TimeoutException"/>, so a classifier testing the timeout arm first
-    /// would swallow every leaf-chain stall into <c>dependency-unavailable</c> -
+    /// would swallow every leaf-chain stall into <c>response-timeout</c> -
     /// and a tree whose leaf cannot be paged in one grain call needs a different
-    /// remedy from a cluster that has not settled. The two cases are adjacent in
+    /// remedy from an unexplained response deadline. The two cases are adjacent in
     /// this table for that reason.
     /// </para>
     /// </summary>
@@ -446,8 +452,14 @@ public sealed class RepoContextAnnBuildFaultCauseTests
             new TimeoutException(
                 "Response did not arrive on time for Request to shardroot/repo-context-vector-index/7 "
                 + "IBPlusLeafGrain.GetEntriesAsync"),
-            RepoContextAnnBuildSliceReporter.CauseDependencyUnavailableTag)
-            .SetName("A_plain_grain_call_timeout_is_dependency_unavailable");
+            "response-timeout")
+            .SetName("A_plain_grain_call_timeout_does_not_claim_unreachability");
+
+        yield return new TestCaseData(
+            new InvalidOperationException("build step failed",
+                new TimeoutException("IRemindable.ReceiveReminder did not answer")),
+            "response-timeout")
+            .SetName("A_wrapped_reminder_timeout_does_not_claim_unreachability");
 
         yield return new TestCaseData(
             new LeafProjectionStaleException("checkpoint has fallen off the log"),
