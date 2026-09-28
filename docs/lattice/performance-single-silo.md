@@ -70,16 +70,6 @@ p50. The marker block immediately below records the host SKU, .NET version,
 BDN fidelity, cohort-N, and measurement date; subsequent refreshes are
 mechanical and the prose around the marker is hand-editable.
 
-**Regenerating these tables is currently broken.** At the current revision
-`benchmark/performance-report.ps1` still reads a `$NamePrefix` variable that
-its parameter list no longer declares, and it runs under
-`Set-StrictMode -Version Latest`, so any Layer 1 or Layer 2 run of it -
-`-Layer1`, `-Layer2`, or the default run of both - throws while it resolves
-its name prefix, before it provisions a VM or runs a cohort. `-DryRun`,
-which re-renders these tables from the last `state.json`, is unaffected. The
-tables in this guide were measured on 2026-08-24, when the parameter still
-existed, so their numbers are not affected by the fault.
-
 <!-- perf-table:layer1:start
   schema=v1
   bdnFidelity=quick

@@ -145,6 +145,34 @@ public class LatticeSnapshotProviderTests
     }
 
     [Test]
+    public async Task ExportAsync_carries_the_expiry_of_a_committed_ttl_entry()
+    {
+        // Regression: the committed-projection pass used to emit every row
+        // with ExpiresAtTicks = 0, so a bootstrap or anti-entropy fallback
+        // seeded from this export installed a TTL key as durable on the peer.
+        const string tree = "snap-ttl";
+        var lattice = _cluster.Client.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("ttl", new byte[] { 1 }, TimeSpan.FromHours(1));
+        await lattice.SetAsync("durable", new byte[] { 2 });
+        var stored = await lattice.GetWithVersionAsync("ttl");
+
+        var entries = await DrainAsync(await _provider.ExportAsync(tree, HybridLogicalClock.Zero));
+
+        var ttl = entries.Single(e => e.Key == "ttl");
+        var durable = entries.Single(e => e.Key == "durable");
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored.ExpiresAtTicks, Is.GreaterThan(0),
+                "precondition: the source row carries an absolute expiry");
+            Assert.That(ttl.IsPrepared, Is.False);
+            Assert.That(ttl.ExpiresAtTicks, Is.EqualTo(stored.ExpiresAtTicks),
+                "the exported committed row must carry the source row's expiry");
+            Assert.That(durable.ExpiresAtTicks, Is.Zero,
+                "a durable row must stay durable");
+        });
+    }
+
+    [Test]
     public async Task ExportAsync_returns_non_null_causal_stable_frontier()
     {
         const string tree = "snap-frontier";

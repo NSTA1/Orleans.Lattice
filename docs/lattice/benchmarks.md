@@ -492,22 +492,17 @@ The same harness also has a multi-silo tier on Azure Container Apps:
 runs one cohort at a given silo count. It is normally driven end to end by
 `benchmark/performance-report.ps1 -Layer3`; see
 [Performance: multi-silo scaling guide](performance-multi-silo.md).
-At the current revision that end-to-end run fails: the script still reads a
-`$NamePrefix` variable that its parameter list no longer declares, and under
-its `Set-StrictMode -Version Latest` that read throws. A Layer 3 run gets
-past it only by reusing a rig. Provision one first, using a prefix of three
-to nine lowercase letters or digits (the form `-ReuseAca` normalises a
-prefix to), then point the report at it:
+A Layer 3 run can also sweep a rig you provisioned yourself. Provision one
+first, using a prefix of three to nine lowercase letters or digits (the form
+`-ReuseAca` normalises a prefix to), then point the report at it:
 
 ```powershell
 pwsh benchmark/azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>
 pwsh benchmark/performance-report.ps1 -Layer3 -ReuseAca <prefix>
 ```
 
-The script's Layer 1 and Layer 2 runs hit the same failure whatever their
-arguments.
-Only `-DryRun`, which re-renders the published tables from the last
-`state.json` without touching Azure, is unaffected. For a Layer 3 replay,
+`-DryRun` re-renders the published tables from the last `state.json`
+without touching Azure. For a Layer 3 replay,
 pass the switch form, `-DryRun -Layer3`: the dry run checks that switch
 rather than the resolved layer, so `-Layer 3 -DryRun` replays the
 single-silo tables instead of the multi-silo ones.

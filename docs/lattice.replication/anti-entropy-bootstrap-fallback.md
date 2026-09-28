@@ -15,7 +15,7 @@ The snapshot is bounded to the `[StartKey, EndKey)` covering ranges the [Merkle 
 
 - `ISnapshotProvider.ExportAsync(treeName, ranges, asOfHlc, ct)` yields only entries whose key falls inside at least one range, using the same ordinal half-open `[StartKey, EndKey)` membership (`LeafReReplayRange.Contains`) the re-replay selection uses, so the two stages localise on byte-identical boundaries.
 
-The fallback ships **committed projection rows only**: prepared (not-yet-decided) saga rows and tombstoned keys are skipped, since the committed projection already reflects every decided value. Each row becomes a `Set` stamped with the local cluster id, capped per pass and always shipping at least one entry. The `Set` carries the exported row's `ExpiresAtTicks` verbatim, and the default provider's committed-projection rows leave it at `0` (the same gap [whole-tree bootstrap](snapshot-bootstrap.md#semantics) has), so a key that has a TTL on the source is re-shipped without it: where the re-shipped row wins on the peer, the key is installed there as a durable entry that does not expire.
+The fallback ships **committed projection rows only**: prepared (not-yet-decided) saga rows and tombstoned keys are skipped, since the committed projection already reflects every decided value. Each row becomes a `Set` stamped with the local cluster id, capped per pass and always shipping at least one entry. The `Set` carries the exported row's `ExpiresAtTicks` verbatim, and the default provider's committed-projection rows carry the source entry's absolute expiry (as for [whole-tree bootstrap](snapshot-bootstrap.md#semantics)), so a key that has a TTL on the source keeps it when it is re-shipped.
 
 ## Scope and limitations
 
