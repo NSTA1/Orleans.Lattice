@@ -83,7 +83,14 @@ public sealed class AppSerializationTests
         Subscriptions = [Subscription], McpTools = [Tool], Replication = [Replication], Schema = [Schema],
     };
 
-    private static IEnumerable<object> Samples()
+    private static IEnumerable<object> Samples() => PreEpicSamples().Concat(EpicSamples());
+
+    /// <summary>
+    /// The nineteen app DTO samples as they existed before epic #3807, in a fixed order.
+    /// <see cref="AppPreEpicWireCompatibilityTests"/> holds the bytes these produced on the
+    /// pre-epic types, so the order and content here must not change.
+    /// </summary>
+    internal static IEnumerable<object> PreEpicSamples()
     {
         yield return Binding;
         yield return Provenance;
@@ -116,8 +123,94 @@ public sealed class AppSerializationTests
         };
     }
 
+    internal static readonly AppIconDescriptor Icon = new() { Path = "icons/app.svg", Sha256 = new string('a', 64) };
+    internal static readonly AppPresentationDescriptor Presentation = new()
+    {
+        DisplayName = "Inventory", Summary = "Tracks stock", Description = "Line one\nLine two",
+        Icon = Icon, Categories = ["operations", "stock"], DocumentationUrl = "https://example.test/docs",
+        PublisherDisplayName = "Example Ltd",
+    };
+    internal static readonly AppUiScriptDescriptor Script = new() { Path = "app.js", Module = true };
+    internal static readonly AppUiAssetDescriptor Asset = new()
+    {
+        Path = "app.js", MediaType = "text/javascript", Sha256 = new string('b', 64),
+    };
+    internal static readonly AppUiDescriptor Ui = new()
+    {
+        Entry = "index.html", Styles = ["app.css"], Scripts = [Script], Assets = [Asset],
+        BundleDigest = new string('c', 64), BridgeOperations = ["data.read", "ui.notify"],
+        BridgeTrees = ["orders"], MinProtocol = 1,
+    };
+    private static readonly WorkspaceTreeDescriptor WorkspaceTree = new()
+    {
+        Name = "orders", Rebuildable = true, Adopted = true, ShardCount = 4, VirtualShardCount = 64,
+        MaxLeafKeys = 128, MaxInternalChildren = 16, WalPartitions = 8, SoftDeleteDuration = TimeSpan.FromDays(3),
+    };
+    private static readonly AvailableAppSummary Available = new()
+    {
+        SourceKey = "in-image", Slug = "inventory", NewestVersion = "1.3.0", AvailableVersions = ["1.3.0", "1.2.3"],
+        Presentation = Presentation, HasUi = true, InstalledVersion = "1.2.3", InstalledState = AppLifecycleState.Enabled,
+    };
+    private static readonly AppBridgeValue BridgeValue = new() { Key = "order-42", Value = new byte[] { 1, 2, 3 } };
+
+    private static IEnumerable<object> EpicSamples()
+    {
+        yield return Descriptor with { Presentation = Presentation, Ui = Ui, SourceKey = "in-image" };
+        yield return new AppInstallRequest
+        {
+            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, SourceKey = "in-image",
+        };
+        yield return new AppConsentUpdate
+        {
+            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, BridgeOperations = ["data.read"],
+        };
+        yield return new AppConsentReport
+        {
+            Slug = Summary.Slug, Version = Summary.Version, Ceiling = Ceiling, BridgeOperations = ["data.read"],
+        };
+        yield return new AppSourceSummary
+        {
+            Key = "feed", DisplayName = "Package feed", Kind = AppSourceSummaryKind.Dynamic,
+            Capabilities = AppSourceSummaryCapabilities.Enumerate | AppSourceSummaryCapabilities.Search
+                | AppSourceSummaryCapabilities.MultipleVersions | AppSourceSummaryCapabilities.RequiresAcquisition,
+        };
+        yield return Presentation;
+        yield return Icon;
+        yield return Ui;
+        yield return Script;
+        yield return Asset;
+        yield return new AppIconAsset { Bytes = new byte[] { 0x3c, 0x73, 0x76, 0x67 }, MediaType = "image/svg+xml", Sha256 = Icon.Sha256 };
+        yield return new AppUiAsset { Path = "app.js", Bytes = new byte[] { 0x2f, 0x2f }, MediaType = "text/javascript", Sha256 = Asset.Sha256 };
+        yield return new AvailableAppQuery
+        {
+            SourceKey = "in-image", Text = "stock", Filter = AvailableAppFilter.Updates, PageSize = 25, Continuation = "cursor",
+        };
+        yield return Available;
+        yield return new AvailableAppPage { Apps = [Available], Continuation = "next" };
+        yield return new WorkspaceAppSummary
+        {
+            Slug = "inventory", Version = "1.2.3", InstallRevision = 7, Presentation = Presentation, HasUi = true,
+            Roles = ["reader"],
+        };
+        yield return WorkspaceTree;
+        yield return new WorkspaceAppDescriptor
+        {
+            Slug = "inventory", Version = "1.2.3", InstallRevision = 7, SourceKey = "in-image",
+            State = AppLifecycleState.Enabled, Presentation = Presentation, Trees = [WorkspaceTree], Roles = [Role],
+            McpTools = [Tool], Subscriptions = [Subscription], Replication = [Replication], Ui = Ui,
+        };
+        yield return new AppBridgeTarget { AppSlug = "inventory", InstallRevision = 7, LogicalTree = "orders" };
+        yield return BridgeValue;
+        yield return new AppBridgePage { Entries = [BridgeValue], Continuation = "next" };
+        yield return new LatticeAppCatalogCapabilities
+        {
+            CanListSources = true, CanListAvailable = true, CanDescribeFromSource = true, CanGetIcon = true,
+        };
+    }
+
     private static IEnumerable<TestCaseData> RoundTripCases() => Samples()
-        .Select(sample => new TestCaseData(sample).SetName($"Round_trip_preserves_all_{sample.GetType().Name}_members"));
+        .Select((sample, index) => new TestCaseData(sample)
+            .SetName($"Round_trip_preserves_all_{sample.GetType().Name}_members_{index:00}"));
 
     [TestCaseSource(nameof(RoundTripCases))]
     public void Round_trip_preserves_populated_members(object original)
@@ -133,9 +226,11 @@ public sealed class AppSerializationTests
     {
         var dtoTypes = typeof(ILatticeAppsControl).Assembly.GetTypes()
             .Where(t => t.Namespace == typeof(ILatticeAppsControl).Namespace
-                && t.IsDefined(typeof(GenerateSerializerAttribute), false));
-        Assert.That(Samples().Select(s => s.GetType()), Is.EquivalentTo(dtoTypes));
-        Assert.That(Samples().Count(), Is.EqualTo(19));
+                && t.IsDefined(typeof(GenerateSerializerAttribute), false)
+                && !typeof(Exception).IsAssignableFrom(t));
+        Assert.That(Samples().Select(s => s.GetType()).Distinct(), Is.EquivalentTo(dtoTypes));
+        Assert.That(PreEpicSamples().Count(), Is.EqualTo(19));
+        Assert.That(Samples().Select(s => s.GetType()).Distinct().Count(), Is.EqualTo(37));
     }
 
     [TestCaseSource(nameof(LifecycleStates))]
