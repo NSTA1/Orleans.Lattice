@@ -69,6 +69,11 @@ public sealed class TenantMetricDimensionHygieneTests
         // aggregate in the reserved __grainindex/ namespace, so the pre-built
         // measurement tag array carries the platform sentinel.
         ("src/lattice.grainindex/Observability/GrainIndexBackfillProgressRegistry.cs", "sample.Tags", true),
+        // Registry CreateMetricTags caches per-plane labels on the handle. Repositories
+        // share the vector tree, so these are platform observations, not tenant traffic.
+        ("src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs", "handle.HeldVectorTags", true),
+        ("src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs", "handle.ExpectedVectorTags", true),
+        ("src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs", "entry.Value.PartitionTags", true),
         // Per-tenant snapshot measurements: the tenancy meter's own tenant tag.
         ("src/lattice.tenancy/TenantObservabilityGaugeSnapshot.cs", "tags", false),
     ];
