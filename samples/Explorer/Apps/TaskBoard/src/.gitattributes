@@ -1,0 +1,3 @@
+# manifest.json is embedded byte-for-byte; keep it (and this file) LF on every checkout.
+manifest.json text eol=lf
+.gitattributes text eol=lf
