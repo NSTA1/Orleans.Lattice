@@ -356,6 +356,7 @@ public sealed class LatticeBackupRestoreIntegrationTests
             // without inspecting the tree name.
             Assert.That(shadowEntry, Is.Not.Null);
             Assert.That(shadowEntry!.RestoreShadowOfTreeId, Is.EqualTo(target));
+            Assert.That(shadowEntry.DerivedFrom, Is.EqualTo(target));
         });
     }
 

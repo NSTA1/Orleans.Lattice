@@ -482,7 +482,11 @@ internal sealed class LatticeBackupRestoreService(
             // alias) from a first-class fact rather than its name.
             await registry.RegisterAsync(
                 shadowTreeId,
-                new TreeRegistryEntry { RestoreShadowOfTreeId = targetTreeId }).ConfigureAwait(false);
+                new TreeRegistryEntry
+                {
+                    RestoreShadowOfTreeId = targetTreeId,
+                    DerivedFrom = targetTreeId,
+                }).ConfigureAwait(false);
             shadowRouting = await grainFactory.GetGrain<ILattice>(shadowTreeId)
                 .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
         }

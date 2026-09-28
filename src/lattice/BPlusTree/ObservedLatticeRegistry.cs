@@ -256,6 +256,10 @@ internal static class ObservedLatticeRegistry
             Observe(Stopwatch.GetTimestamp(), Inner.SetAliasAsync(treeId, physicalTreeId), MethodTag(nameof(SetAliasAsync)));
 
         /// <inheritdoc />
+        public Task<IReadOnlyList<string>> GetAliasesTargetingAsync(string physicalTreeId) =>
+            Observe(Stopwatch.GetTimestamp(), Inner.GetAliasesTargetingAsync(physicalTreeId), MethodTag(nameof(GetAliasesTargetingAsync)));
+
+        /// <inheritdoc />
         public Task RemoveAliasAsync(string treeId) =>
             Observe(Stopwatch.GetTimestamp(), Inner.RemoveAliasAsync(treeId), MethodTag(nameof(RemoveAliasAsync)));
 

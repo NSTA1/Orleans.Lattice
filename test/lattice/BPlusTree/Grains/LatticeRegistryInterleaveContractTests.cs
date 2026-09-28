@@ -72,6 +72,7 @@ public sealed class LatticeRegistryInterleaveContractTests
     private static readonly string[] ScanMembers =
     [
         nameof(ILatticeRegistry.GetAllTreeIdsAsync),
+        nameof(ILatticeRegistry.GetAliasesTargetingAsync),
     ];
 
     /// <summary>
