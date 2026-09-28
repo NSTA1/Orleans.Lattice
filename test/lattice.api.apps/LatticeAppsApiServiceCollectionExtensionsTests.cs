@@ -34,6 +34,22 @@ public sealed class LatticeAppsApiServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeAppsApi_registers_the_catalog_and_workspace_facades_once()
+    {
+        var services = EngineServices();
+
+        services.AddLatticeAppsApi();
+        services.AddLatticeAppsApi();
+
+        Assert.That(services.Count(d => d.ServiceType == typeof(ILatticeAppCatalog)), Is.EqualTo(1));
+        Assert.That(services.Count(d => d.ServiceType == typeof(ILatticeAppWorkspace)), Is.EqualTo(1));
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeAppCatalog>(), Is.TypeOf<LatticeAppCatalog>());
+        Assert.That(provider.GetRequiredService<ILatticeAppWorkspace>(), Is.TypeOf<LatticeAppWorkspace>());
+        Assert.That(provider.GetRequiredService<AppRoleGrantEvaluator>().CanServe, Is.False, "no registry projection is registered here");
+    }
+
+    [Test]
     public void AddLatticeAppsApi_without_apps_add_on_throws()
     {
         var ex = Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddLatticeAppsApi());

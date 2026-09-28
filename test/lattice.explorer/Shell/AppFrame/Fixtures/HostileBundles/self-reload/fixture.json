@@ -1,0 +1,11 @@
+{
+  "name": "self-reload",
+  "description": "The app reloads its own document after the handshake.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"context.read"}],
+  "expect": {"failure":"Reloaded","toast":null}
+}

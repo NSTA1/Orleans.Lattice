@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.Shell.Design.Tokens;
 
 namespace Orleans.Lattice.Explorer.Shell.Design.Components;
 
@@ -21,12 +22,32 @@ namespace Orleans.Lattice.Explorer.Shell.Design.Components;
 /// keyboard. The current row - "you are here" - carries <c>aria-current</c>, the
 /// soft marker band, a marker bar and a heavier weight.
 /// </para>
+/// <para>
+/// Below the small breakpoint (the width band the Shell's layout cascades), the
+/// table becomes a list of two-line rows unless <see cref="Compact"/> is
+/// <see cref="LtTableCompact.ScrollFrame"/>. Line one is the row's identifier and
+/// line two a summary led by its state: supply them through
+/// <see cref="CompactRow"/> with an <see cref="LtCompactRow"/>, or accept the
+/// default, which takes the row-header column (or the first) as line one and the
+/// next three columns as line two. Each row is a button that opens a detail sheet
+/// - a full-height dialog that traps focus and returns it to the row - holding
+/// <see cref="Detail"/> (by default every column as a definition list) and
+/// <see cref="DetailActions"/>. Sorting is offered as a "Sort by" select, since a
+/// list has no headers.
+/// </para>
 /// </remarks>
 /// <typeparam name="TItem">The type of one row.</typeparam>
 public partial class LtTable<TItem>
 {
     private readonly string _id = LtIds.Next("lt-table");
+    private static readonly object NullRowKey = new();
+
     private readonly List<LtColumn<TItem>> _columns = [];
+    private readonly Dictionary<object, ElementReference> _rowButtons = [];
+    private TItem? _detailItem;
+    private bool _hasDetail;
+    private bool _detailOpen;
+    private ElementReference? _returnFocus;
     private IReadOnlyList<TItem>? _source;
     private List<TItem> _rows = [];
     private LtColumn<TItem>? _sortColumn;
@@ -59,9 +80,9 @@ public partial class LtTable<TItem>
     [Parameter]
     public bool Virtualize { get; set; }
 
-    /// <summary>The height of one row in CSS pixels, used by virtualisation. Defaults to 36.</summary>
+    /// <summary>The height of one row in CSS pixels, used by virtualisation. Defaults to 44, the comfortable row height.</summary>
     [Parameter]
-    public float RowHeight { get; set; } = 36f;
+    public float RowHeight { get; set; } = 44f;
 
     /// <summary>Identifies a row across renders, so sorting moves rows rather than rewriting them.</summary>
     [Parameter]
@@ -71,7 +92,89 @@ public partial class LtTable<TItem>
     [Parameter]
     public Func<TItem, bool>? IsCurrent { get; set; }
 
+    /// <summary>
+    /// How the table lays out below the small breakpoint. Defaults to
+    /// <see cref="LtTableCompact.List"/>; use <see cref="LtTableCompact.ScrollFrame"/>
+    /// only for matrix-shaped data.
+    /// </summary>
+    [Parameter]
+    public LtTableCompact Compact { get; set; } = LtTableCompact.List;
+
+    /// <summary>
+    /// A row's two lines below the small breakpoint, usually an
+    /// <see cref="LtCompactRow"/>. When absent, the row-header column (or the
+    /// first) is line one and the next three columns are line two.
+    /// </summary>
+    [Parameter]
+    public RenderFragment<TItem>? CompactRow { get; set; }
+
+    /// <summary>The height of one compact row in CSS pixels, used by virtualisation. Defaults to 64.</summary>
+    [Parameter]
+    public float CompactRowHeight { get; set; } = 64f;
+
+    /// <summary>
+    /// The body of a row's detail sheet below the small breakpoint. When absent,
+    /// every column is shown as a definition list.
+    /// </summary>
+    [Parameter]
+    public RenderFragment<TItem>? Detail { get; set; }
+
+    /// <summary>A row's actions, placed at the foot of its detail sheet.</summary>
+    [Parameter]
+    public RenderFragment<TItem>? DetailActions { get; set; }
+
+    /// <summary>
+    /// The title of a row's detail sheet. When absent, the text of the row-header
+    /// column (or the first) is used, and failing that the caption.
+    /// </summary>
+    [Parameter]
+    public Func<TItem, string>? DetailTitle { get; set; }
+
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
+    internal LtBreakpoint? Breakpoint { get; set; }
+
     private string CaptionId => _id + "-caption";
+
+    private bool IsCompactList => Breakpoint == LtBreakpoint.Compact && Compact == LtTableCompact.List;
+
+    private LtColumn<TItem>? PrimaryColumn => _columns.FirstOrDefault(column => column.RowHeader) ?? _columns.FirstOrDefault();
+
+    private IEnumerable<LtColumn<TItem>> SecondaryColumns
+    {
+        get
+        {
+            var primary = PrimaryColumn;
+            return _columns.Where(column => !ReferenceEquals(column, primary)).Take(3);
+        }
+    }
+
+    private string DetailTitleText =>
+        !_hasDetail
+            ? Caption
+            : DetailTitle?.Invoke(_detailItem!)
+                ?? PrimaryColumn?.Value?.Invoke(_detailItem!)?.ToString()
+                ?? Caption;
+
+    private IReadOnlyList<LtSelectOption> SortOptions
+    {
+        get
+        {
+            var options = new List<LtSelectOption> { new(string.Empty, "Natural order") };
+            for (var i = 0; i < _columns.Count; i++)
+            {
+                if (_columns[i].IsSortable)
+                {
+                    options.Add(new LtSelectOption(SortValueOf(i, LtSortDirection.Ascending), _columns[i].Title + ", ascending"));
+                    options.Add(new LtSelectOption(SortValueOf(i, LtSortDirection.Descending), _columns[i].Title + ", descending"));
+                }
+            }
+
+            return options;
+        }
+    }
+
+    private string SortValue =>
+        _sortColumn is null ? string.Empty : SortValueOf(_columns.IndexOf(_sortColumn), _sortDirection);
 
     /// <summary>The rows in their displayed order, after sorting.</summary>
     internal IReadOnlyList<TItem> DisplayedRows => _rows;
@@ -102,8 +205,49 @@ public partial class LtTable<TItem>
         if (!ReferenceEquals(_source, Items))
         {
             _source = Items;
+            _rowButtons.Clear();
             ApplySort();
         }
+
+        if (!IsCompactList)
+        {
+            _detailOpen = false;
+        }
+    }
+
+    private static string SortValueOf(int index, LtSortDirection direction) =>
+        index.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + (direction == LtSortDirection.Ascending ? ":ascending" : ":descending");
+
+    private void OpenDetail(TItem item, object key)
+    {
+        _detailItem = item;
+        _hasDetail = true;
+        _detailOpen = true;
+        _returnFocus = _rowButtons.TryGetValue(key, out var button) ? button : null;
+    }
+
+    private void OnDetailOpenChanged(bool open) => _detailOpen = open;
+
+    private Task SortFromValueAsync(string value)
+    {
+        var separator = value.IndexOf(':', StringComparison.Ordinal);
+        if (separator < 0
+            || !int.TryParse(value.AsSpan(0, separator), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var index)
+            || index < 0
+            || index >= _columns.Count
+            || !_columns[index].IsSortable)
+        {
+            _sortColumn = null;
+        }
+        else
+        {
+            _sortColumn = _columns[index];
+            _sortDirection = value.EndsWith(":descending", StringComparison.Ordinal) ? LtSortDirection.Descending : LtSortDirection.Ascending;
+        }
+
+        ApplySort();
+        return Task.CompletedTask;
     }
 
     private static string HeaderClass(LtColumn<TItem> column) =>

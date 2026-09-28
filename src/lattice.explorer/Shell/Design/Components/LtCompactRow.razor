@@ -1,0 +1,10 @@
+<span class="lt-compact-row">
+    <span class="@PrimaryClass">@Primary</span>
+    @if (Secondary is not null || State is not null)
+    {
+        <span class="lt-compact-row__secondary">
+            @State
+            @Secondary
+        </span>
+    }
+</span>

@@ -1,0 +1,11 @@
+{
+  "name": "flood",
+  "description": "The app sends 100 requests at once.",
+  "displayName": "Hostile",
+  "trees": ["orders"],
+  "entry": "index.html",
+  "styles": [],
+  "scripts": [{ "path": "app.js", "module": false }],
+  "bridge": [{"operation":"context.read"},{"operation":"ui.notify"}],
+  "expect": {"failure":null,"toastPrefix":"Hostile: flood ","rateLimitedAtLeast":76}
+}

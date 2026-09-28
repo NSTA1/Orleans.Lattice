@@ -1,0 +1,546 @@
+/*
+ * Orleans.Lattice Explorer - the navigation chrome.
+ *
+ * The frame every page renders inside: skip links, the header, the address
+ * line and its combobox, the directory spine, the main landmark, Home, and the
+ * shared page and toolbar classes the areas use. Drawn in the order-diagram
+ * world (DESIGN.md): hairline depth, one marker for "you are here" and
+ * "selected" (always with a weight, a ring or a bar), no cards, no shadows.
+ *
+ * No width query appears here. The layout measures its own root and marks it
+ * lt-shell--compact below the small breakpoint; the medium band's rail is a
+ * modifier class too. Every interactive element is at least 44px in the
+ * comfortable density (the --lt-op-control-height and --lt-op-row-height
+ * tokens) and never below 24px in the compact one.
+ *
+ * Plain ASCII only: the repository's hygiene gates scan this file.
+ */
+
+/* ==========================================================================
+   1. Frame
+   ========================================================================== */
+
+.lt-shell {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-sans);
+  font-size: var(--lt-text-md);
+}
+
+.lt-shell-skip {
+  position: absolute;
+  top: var(--lt-space-2);
+  inset-inline-start: var(--lt-space-2);
+  z-index: 1100;
+  display: flex;
+  gap: var(--lt-space-2);
+}
+
+.lt-shell-skip__link:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.lt-shell-skip__link:focus {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-3);
+  border: 1px solid var(--lt-ink);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+  text-decoration: none;
+}
+
+.lt-shell-skip__link:focus-visible,
+.lt-shell-brand:focus-visible,
+.lt-shell-address-line__edit:focus-visible,
+.lt-shell-address-line__more:focus-visible,
+.lt-shell-directory:focus-visible,
+.lt-shell-address:focus-visible,
+.lt-shell-content:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+/* ==========================================================================
+   2. Header
+   ========================================================================== */
+
+.lt-shell-header {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-4);
+  min-height: 3.5rem;
+  padding: var(--lt-space-2) var(--lt-space-5);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-shell--compact .lt-shell-header {
+  gap: var(--lt-space-2);
+  padding-inline: var(--lt-space-3);
+}
+
+.lt-shell-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  min-height: var(--lt-op-control-height);
+  min-width: 0;
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-heading);
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.lt-shell-brand__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-shell-brand__prefix {
+  color: var(--lt-ink-3);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-shell-header__end {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  margin-inline-start: auto;
+}
+
+.lt-shell-header__control {
+  flex-shrink: 0;
+}
+
+.lt-shell-menu-host {
+  position: relative;
+}
+
+/* The appearance menu floats on a hairline, not a shadow. */
+.lt-shell-menu {
+  position: absolute;
+  top: calc(100% + var(--lt-space-2));
+  inset-inline-end: 0;
+  z-index: 900;
+  width: max-content;
+  max-width: 22rem;
+  padding: var(--lt-space-4);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+}
+
+.lt-shell-appearance {
+  display: grid;
+  gap: var(--lt-space-4);
+}
+
+.lt-shell-appearance__group {
+  display: grid;
+  gap: var(--lt-space-2);
+}
+
+.lt-shell-appearance__label {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-shell-appearance__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+}
+
+/* The header's folded overflow menu, below the small breakpoint: the session
+   slots then the appearance choices, stacked at full width. */
+.lt-shell-overflow {
+  display: grid;
+  gap: var(--lt-space-5);
+}
+
+/* ==========================================================================
+   3. Address line
+   ========================================================================== */
+
+.lt-shell-address {
+  position: relative;
+  padding: var(--lt-space-1) var(--lt-space-5);
+  border-bottom: 1px solid var(--lt-rule);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-shell--compact .lt-shell-address {
+  padding-inline: var(--lt-space-3);
+}
+
+.lt-shell-address-line {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-4);
+  min-height: var(--lt-op-control-height);
+  min-width: 0;
+}
+
+.lt-shell-address-line .lt-chain-nav {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.lt-shell-address-line__edit {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--lt-space-2);
+  min-width: var(--lt-op-control-height);
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--lt-radius-md);
+  background: transparent;
+  color: var(--lt-ink-3);
+  font: inherit;
+  font-size: var(--lt-text-sm);
+  text-align: end;
+  cursor: text;
+}
+
+.lt-shell-address-line__edit:hover {
+  border-color: var(--lt-rule);
+  color: var(--lt-ink-2);
+}
+
+.lt-shell-address-line__hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lt-shell-address-line__more {
+  min-width: var(--lt-op-control-height);
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-2);
+  border: 0;
+  border-radius: var(--lt-radius-sm);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* The full chain, opened from the "..." node below the small breakpoint: the
+   same nodes as a vertical spine. */
+.lt-shell-address-line__full {
+  padding: var(--lt-space-2) 0 var(--lt-space-3);
+}
+
+.lt-shell-address-line--editing {
+  display: block;
+}
+
+.lt-shell-address-line--sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  padding: var(--lt-space-3);
+  overflow: auto;
+  background: var(--lt-surface);
+}
+
+.lt-shell-combobox {
+  position: relative;
+  min-width: 0;
+}
+
+.lt-shell-combobox__input {
+  min-height: var(--lt-op-control-height);
+}
+
+.lt-shell-combobox__popup {
+  position: absolute;
+  top: calc(100% + var(--lt-space-1));
+  inset-inline: 0;
+  z-index: 950;
+  max-height: min(28rem, 70vh);
+  overflow: auto;
+  padding: var(--lt-space-2) 0;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+}
+
+.lt-shell-address-line--sheet .lt-shell-combobox__popup {
+  position: static;
+  max-height: none;
+  margin-top: var(--lt-space-2);
+  border-inline: 0;
+  border-radius: 0;
+}
+
+.lt-shell-combobox__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-shell-combobox__group + .lt-shell-combobox__group {
+  margin-top: var(--lt-space-2);
+  padding-top: var(--lt-space-2);
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-shell-combobox__group-name {
+  display: block;
+  padding: var(--lt-space-1) var(--lt-space-3);
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-strong);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lt-shell-combobox__option {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  padding: 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+  cursor: pointer;
+}
+
+.lt-shell-combobox__option:hover {
+  background: var(--lt-op-row-hover);
+  color: var(--lt-ink);
+}
+
+.lt-shell-combobox__option[aria-selected="true"] {
+  background: var(--lt-op-row-current);
+  box-shadow: inset 3px 0 0 var(--lt-ink);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-shell-combobox__label {
+  min-width: 0;
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
+.lt-shell-combobox__detail {
+  margin-inline-start: auto;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-body);
+  text-align: end;
+}
+
+.lt-shell-combobox__note {
+  margin: var(--lt-space-2) 0 0;
+  padding: var(--lt-space-2) var(--lt-space-3) 0;
+  border-top: 1px solid var(--lt-rule);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-xs);
+}
+
+/* ==========================================================================
+   4. Body, directory spine and main landmark
+   ========================================================================== */
+
+.lt-shell-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.lt-shell--compact .lt-shell-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lt-shell-directory {
+  box-sizing: border-box;
+  width: 15rem;
+  padding: var(--lt-space-5) var(--lt-space-3) var(--lt-space-5) var(--lt-space-4);
+  border-inline-end: 1px solid var(--lt-rule);
+  overflow: auto;
+}
+
+.lt-shell-directory--rail {
+  width: 11.5rem;
+  padding-inline: var(--lt-space-2);
+}
+
+.lt-shell-directory__nav {
+  min-width: 0;
+}
+
+.lt-shell-directory__heading {
+  margin: 0 0 var(--lt-space-3) var(--lt-space-2);
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-strong);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lt-shell-directory__link {
+  gap: var(--lt-space-3);
+}
+
+.lt-shell-directory__nav--rail .lt-shell-directory__link {
+  font-size: var(--lt-text-sm);
+}
+
+.lt-shell-directory__link--unavailable {
+  color: var(--lt-ink-3);
+}
+
+.lt-shell-directory__reason {
+  display: block;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-body);
+}
+
+.lt-shell-directory__badge {
+  margin-inline-start: auto;
+  color: var(--lt-ink-3);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-body);
+  white-space: nowrap;
+}
+
+.lt-shell-content {
+  min-width: 0;
+  padding: var(--lt-space-5) var(--lt-space-6);
+}
+
+.lt-shell--compact .lt-shell-content {
+  padding: var(--lt-space-4) var(--lt-space-3);
+}
+
+/* ==========================================================================
+   5. Pages - the shared page head, mono data text, Home and not found
+   ========================================================================== */
+
+.lt-shell-page-title {
+  margin: 0 0 var(--lt-space-2);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-2xl);
+  font-weight: var(--lt-weight-display);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.lt-shell--compact .lt-shell-page-title {
+  font-size: var(--lt-text-xl);
+}
+
+.lt-shell-page-lede {
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-5);
+  color: var(--lt-ink-2);
+}
+
+.lt-shell-mono {
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
+.lt-shell-estate {
+  max-width: 42rem;
+}
+
+.lt-shell-estate__stop + .lt-shell-estate__stop {
+  margin-top: var(--lt-space-1);
+}
+
+.lt-shell-estate__link {
+  align-items: flex-start;
+  padding-block: var(--lt-space-2);
+}
+
+.lt-shell-estate__link .lt-node {
+  margin-top: 0.45em;
+}
+
+.lt-shell-estate__text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.lt-shell-estate__name {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-shell-estate__status {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-shell-estate__status--unavailable {
+  color: var(--lt-ink-3);
+}
+
+.lt-shell-not-found__ancestor {
+  margin: 0;
+  color: var(--lt-ink-2);
+}
+
+/* ==========================================================================
+   6. Toolbar - an area's filters, selectors and search
+   ========================================================================== */
+
+.lt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-3);
+  margin: var(--lt-space-4) 0 var(--lt-space-3);
+}
+
+.lt-shell--compact .lt-toolbar {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* ==========================================================================
+   7. Forced colours - the platform's palette replaces ours; keep every cue
+   ========================================================================== */
+
+@media (forced-colors: active) {
+  .lt-shell-combobox__option[aria-selected="true"] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .lt-shell-menu,
+  .lt-shell-combobox__popup {
+    border-color: CanvasText;
+  }
+}

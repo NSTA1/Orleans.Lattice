@@ -1,0 +1,149 @@
+@*
+    The address line: the current address as a chain of Cascadia Mono nodes,
+    ancestors as links and the current node as the marker; and, on "/", Ctrl+K
+    or a click, the same line as a combobox that completes from every visible
+    area in parallel. ">" turns it into the command palette, "t/" completes a
+    tenant and "a/" an app. Enter goes, Escape restores.
+*@
+
+@if (!_editing)
+{
+    var chain = Chain;
+    <div class="lt-shell-address-line">
+        @if (IsCompact && chain.Count > 2)
+        {
+            <nav class="lt-chain-nav" aria-label="Address">
+                <ol class="lt-chain lt-chain--mono">
+                    <li class="lt-chain__link">
+                        <LtNode Kind="LtNodeKind.Filled" />
+                        <button type="button"
+                                class="lt-chain__text lt-shell-address-line__more"
+                                aria-label="Show the full address"
+                                aria-expanded="@(_chainOpen ? "true" : "false")"
+                                aria-controls="@_chainId"
+                                @onclick="ToggleChain">...</button>
+                    </li>
+                    @for (var i = chain.Count - 2; i < chain.Count; i++)
+                    {
+                        var link = chain[i];
+                        var current = i == chain.Count - 1;
+                        <li class="lt-chain__link">
+                            <LtNode Kind="@(current ? LtNodeKind.Join : LtNodeKind.Filled)" />
+                            @if (current)
+                            {
+                                <span class="lt-chain__text lt-chain__text--current" aria-current="page">@link.Text</span>
+                            }
+                            else
+                            {
+                                <a class="lt-chain__text" href="@link.Href">@link.Text</a>
+                            }
+                        </li>
+                    }
+                </ol>
+            </nav>
+        }
+        else
+        {
+            <LtChain Label="Address" Links="@chain" Mono="true" />
+        }
+        <button type="button"
+                class="lt-shell-address-line__edit"
+                aria-keyshortcuts="/ Control+K"
+                @onclick="OpenFromClickAsync"
+                @ref="_trigger">
+            <span class="lt-shell-address-line__hint">@(IsCompact ? "Go to or search" : "Go to an address, search, or type > for a command")</span>
+            @if (!IsCompact)
+            {
+                <kbd class="lt-kbd" aria-hidden="true">/</kbd>
+                <kbd class="lt-kbd" aria-hidden="true">Ctrl K</kbd>
+            }
+        </button>
+    </div>
+    @if (IsCompact && _chainOpen && chain.Count > 2)
+    {
+        <div id="@_chainId" class="lt-shell-address-line__full">
+            <ol class="lt-spine" aria-label="Full address">
+                @for (var i = 0; i < chain.Count; i++)
+                {
+                    var link = chain[i];
+                    var current = i == chain.Count - 1;
+                    <li class="lt-spine__stop">
+                        <a class="lt-spine__link" href="@link.Href" aria-current="@(current ? "page" : null)" @onclick="CloseChain">
+                            <LtNode Kind="@(current ? LtNodeKind.Join : LtNodeKind.Hollow)" />
+                            <span class="lt-spine__text lt-shell-mono">@link.Text</span>
+                        </a>
+                    </li>
+                }
+            </ol>
+        </div>
+    }
+}
+else
+{
+    <div class="@EditingClass" role="search" aria-label="Address">
+        <div class="lt-shell-combobox">
+            <label class="lt-visually-hidden" for="@_inputId">Address, search or command</label>
+            <input id="@_inputId"
+                   class="lt-input lt-input--mono lt-shell-combobox__input"
+                   type="text"
+                   role="combobox"
+                   aria-autocomplete="list"
+                   aria-expanded="@(IsListOpen ? "true" : "false")"
+                   aria-controls="@_listboxId"
+                   aria-activedescendant="@_activeId"
+                   aria-describedby="@_hintId"
+                   value="@_text"
+                   spellcheck="false"
+                   autocomplete="off"
+                   autocapitalize="off"
+                   @oninput="OnInputAsync"
+                   @onkeydown="OnKeyDownAsync"
+                   @onblur="OnBlur"
+                   @ref="_input" />
+            <p id="@_hintId" class="lt-visually-hidden">
+                Type an address such as /data/a/crm/orders, t/ for a tenant, a/ for an app, &gt; for a command, or anything else to search. Enter goes to the highlighted suggestion; Escape cancels.
+            </p>
+            @if (IsListOpen || _notes.Count > 0)
+            {
+                <div class="lt-shell-combobox__popup">
+                    @if (IsListOpen)
+                    {
+                        <ul id="@_listboxId" class="lt-shell-combobox__list" role="listbox" aria-label="Suggestions">
+                            @foreach (var group in _groups)
+                            {
+                                <li class="lt-shell-combobox__group" role="presentation" @key="group.Key">
+                                    <span id="@GroupElementId(group.Key)" class="lt-shell-combobox__group-name" role="presentation">@group.Name</span>
+                                    <ul class="lt-shell-combobox__list" role="group" aria-labelledby="@GroupElementId(group.Key)">
+                                        @foreach (var option in group.Options)
+                                        {
+                                            var active = option.ElementId == _activeId;
+                                            <li id="@option.ElementId"
+                                                class="lt-shell-combobox__option"
+                                                role="option"
+                                                aria-selected="@(active ? "true" : "false")"
+                                                @key="option.ElementId"
+                                                @onmousedown:preventDefault
+                                                @onclick="@(() => ChooseAsync(option))">
+                                                <LtNode Kind="@(option.Command is null ? LtNodeKind.Hollow : LtNodeKind.Filled)" />
+                                                <span class="lt-shell-combobox__label">@option.Label</span>
+                                                @if (option.Detail is not null)
+                                                {
+                                                    <span class="lt-shell-combobox__detail">@option.Detail</span>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                </li>
+                            }
+                        </ul>
+                    }
+                    @if (_notes.Count > 0)
+                    {
+                        <p class="lt-shell-combobox__note">@string.Join(" ", _notes)</p>
+                    }
+                </div>
+            }
+            <p class="lt-visually-hidden" role="status" aria-live="polite">@_status</p>
+        </div>
+    </div>
+}

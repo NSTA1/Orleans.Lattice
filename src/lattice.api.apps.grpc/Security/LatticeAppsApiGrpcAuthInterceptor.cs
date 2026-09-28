@@ -94,7 +94,9 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
     }
 
     private static bool IsAppsMethod(string method)
-        => method.StartsWith(LatticeAppsGrpcMethods.ServicePrefix, StringComparison.Ordinal);
+        => method.StartsWith(LatticeAppsGrpcMethods.ServicePrefix, StringComparison.Ordinal)
+            || method.StartsWith(LatticeAppCatalogGrpcMethods.ServicePrefix, StringComparison.Ordinal)
+            || method.StartsWith(LatticeAppWorkspaceGrpcMethods.ServicePrefix, StringComparison.Ordinal);
 
     internal static (LatticeAppsApiOperation Operation, string? Slug) DescribeCall<TRequest>(string method, TRequest request)
     {
@@ -110,6 +112,15 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
             (LatticeAppsGrpcMethods.ServicePrefix + "GetConsent", AppsSlugRequest r) => (LatticeAppsApiOperation.GetConsent, r.Slug),
             (LatticeAppsGrpcMethods.ServicePrefix + "UpdateConsent", AppConsentUpdate r) => (LatticeAppsApiOperation.UpdateConsent, r.Slug),
             (LatticeAppsGrpcMethods.ServicePrefix + "GetCapabilities", AppsEmptyRequest) => (LatticeAppsApiOperation.GetCapabilities, null),
+            (LatticeAppCatalogGrpcMethods.ServicePrefix + "ListSources", AppsEmptyRequest) => (LatticeAppsApiOperation.ListSources, null),
+            (LatticeAppCatalogGrpcMethods.ServicePrefix + "ListAvailable", AvailableAppQuery) => (LatticeAppsApiOperation.ListAvailable, null),
+            (LatticeAppCatalogGrpcMethods.ServicePrefix + "DescribeFromSource", AppsSourceAppRequest r) => (LatticeAppsApiOperation.DescribeFromSource, r.Slug),
+            (LatticeAppCatalogGrpcMethods.ServicePrefix + "GetIcon", AppsSourceAppRequest r) => (LatticeAppsApiOperation.GetSourceIcon, r.Slug),
+            (LatticeAppCatalogGrpcMethods.ServicePrefix + "GetCapabilities", AppsEmptyRequest) => (LatticeAppsApiOperation.GetCatalogCapabilities, null),
+            (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "ListMyApps", AppsEmptyRequest) => (LatticeAppsApiOperation.ListMyApps, null),
+            (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "DescribeMyApp", AppsSlugRequest r) => (LatticeAppsApiOperation.DescribeMyApp, r.Slug),
+            (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "GetIcon", AppsSlugRequest r) => (LatticeAppsApiOperation.GetMyAppIcon, r.Slug),
+            (LatticeAppWorkspaceGrpcMethods.ServicePrefix + "GetUiAsset", AppsUiAssetRequest r) => (LatticeAppsApiOperation.GetUiAsset, r.Slug),
             _ => (LatticeAppsApiOperation.Unknown, null),
         };
     }

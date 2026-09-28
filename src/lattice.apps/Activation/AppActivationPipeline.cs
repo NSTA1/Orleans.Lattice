@@ -81,7 +81,7 @@ internal sealed class AppActivationPipeline : IAppActivationPipeline
                 continue;
             }
 
-            var resolved = await _source.ResolveAsync(record.Slug, record.Version, cancellationToken).ConfigureAwait(false);
+            var resolved = await _source.ResolveInstalledAsync(record, cancellationToken).ConfigureAwait(false);
             if (resolved.Manifest is not { } manifest || DependsOn(manifest, owner))
             {
                 (dependants ??= []).Add(record.Slug);
