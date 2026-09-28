@@ -38,6 +38,12 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     /// <summary>Grain-storage operations that failed on a SQLite lock.</summary>
     public const string LockFailuresCounterName = "lattice_repocontext_grain_storage_lock_failures_total";
 
+    /// <summary>
+    /// Pin-state writes and clears re-issued after a SQLite lock failure, by how the
+    /// re-issue ended.
+    /// </summary>
+    public const string LockRetriesCounterName = "lattice_repocontext_grain_storage_lock_retries_total";
+
     /// <summary>Writes and clears in flight at the moment a lock failure surfaced.</summary>
     public const string LockConvoyWidthHistogramName = "lattice_repocontext_grain_storage_lock_convoy_width";
 
@@ -65,6 +71,21 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     /// </summary>
     public const string WaitEarly = "early";
 
+    /// <summary>The tag naming how a re-issued operation ended.</summary>
+    public const string OutcomeTag = "outcome";
+
+    /// <summary>
+    /// <see cref="OutcomeTag"/> value for an operation that failed on a lock and then
+    /// succeeded on a re-issue.
+    /// </summary>
+    public const string OutcomeRecovered = "recovered";
+
+    /// <summary>
+    /// <see cref="OutcomeTag"/> value for an operation that failed on a lock on every
+    /// attempt the retry policy allowed, so the lock failure reached the grain.
+    /// </summary>
+    public const string OutcomeGaveUp = "gave_up";
+
     // Declared above the instruments it constructs, and every instrument is built
     // from this field, so reordering throws at initialisation rather than
     // publishing an instrument against a null meter. See the metrics conventions in
@@ -72,6 +93,7 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
     private readonly Meter _meter;
 
     private readonly Counter<long> _lockFailures;
+    private readonly Counter<long> _lockRetries;
     private readonly Histogram<long> _lockConvoyWidth;
 
     /// <summary>Creates the meter and publishes every instrument.</summary>
@@ -95,6 +117,17 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
                 + "absent series means this meter was not constructed or the collector refused it, never "
                 + "that no lock failure occurred. Each failure also writes one GrainStorageLockContention "
                 + "log line naming the grain.");
+        _lockRetries = _meter.CreateCounter<long>(
+            LockRetriesCounterName,
+            unit: "{operation}",
+            description:
+                "Grain-storage writes and clears that failed on a SQLite lock and were re-issued under "
+                + "the retry policy (by default only the WAL materialiser pin store, issue #3761), by "
+                + "operation and by outcome: recovered when a re-issue succeeded, gave_up when every "
+                + "allowed attempt failed and the lock failure reached the grain. Counted once per "
+                + "operation, not per attempt; every failed attempt is also counted on "
+                + LockFailuresCounterName
+                + ". The write and clear arms are published at zero from process start.");
         _lockConvoyWidth = _meter.CreateHistogram<long>(
             LockConvoyWidthHistogramName,
             unit: "{write}",
@@ -129,6 +162,11 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
         {
             _lockFailures.Add(0, OperationPair(operation), WaitPair(exhausted: true));
             _lockFailures.Add(0, OperationPair(operation), WaitPair(exhausted: false));
+            if (operation != RepoContextGrainStorageOperation.Read)
+            {
+                _lockRetries.Add(0, OperationPair(operation), OutcomePair(recovered: true));
+                _lockRetries.Add(0, OperationPair(operation), OutcomePair(recovered: false));
+            }
         }
     }
 
@@ -160,6 +198,12 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
         _lockConvoyWidth.Record(writesInFlight);
     }
 
+    /// <summary>Records how one re-issued operation ended.</summary>
+    /// <param name="operation">The operation that was re-issued.</param>
+    /// <param name="recovered">Whether a re-issue succeeded.</param>
+    public void RecordLockRetry(RepoContextGrainStorageOperation operation, bool recovered)
+        => _lockRetries.Add(1, OperationPair(operation), OutcomePair(recovered));
+
     /// <inheritdoc />
     public void Dispose() => _meter.Dispose();
 
@@ -168,4 +212,7 @@ public sealed class RepoContextGrainStorageLockMeter : IDisposable
 
     private static KeyValuePair<string, object?> WaitPair(bool exhausted)
         => new(WaitTag, exhausted ? WaitExhausted : WaitEarly);
+
+    private static KeyValuePair<string, object?> OutcomePair(bool recovered)
+        => new(OutcomeTag, recovered ? OutcomeRecovered : OutcomeGaveUp);
 }

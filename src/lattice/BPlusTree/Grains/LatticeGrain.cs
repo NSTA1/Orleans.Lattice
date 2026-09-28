@@ -2604,6 +2604,7 @@ internal sealed partial class LatticeGrain(
                         // write-path retry filter leaves it alone rather than
                         // re-fanning the whole batch into a tree that is already
                         // failing to settle.
+                        LatticeMetrics.RecordSaturationRefusal(TreeId, LatticeSaturationSource.SetManyFanOut);
                         throw new LatticeSaturatedException(
                             $"Batch write to tree '{TreeId}' refused: the per-shard fan-out across "
                             + $"{shardBuckets.Count} shards did not settle within the configured "

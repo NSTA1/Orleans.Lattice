@@ -62,13 +62,16 @@ namespace Orleans.Lattice;
 ///   is the point: an activation admitted to a queue it cannot reach the
 ///   head of burns its whole request deadline and then enqueues a
 ///   replacement, so refusing immediately is the cheaper failure as well
-///   as the more honest one. Background starvation drives also use this source
-///   when no shared permit is immediately available or the process-wide GC
-///   share is occupied; they never join the replay queue (issue #3480). A drive
-///   a leaf's own coverage-lag timer requested is also refused rather than take
-///   the last free slot of that share, which is kept for WAL GC sweep drives,
-///   or, where the share is a single slot, while a refused sweep drive is
-///   waiting for it (issue #3575).</description></item>
+///   as the more honest one. Background starvation drives are refused under
+///   this source too, when no shared permit is immediately available or the
+///   process-wide GC share is occupied; they never join the replay queue
+///   (issue #3480). A drive a leaf's own coverage-lag timer requested is also
+///   refused rather than take the last free slot of that share, which is kept
+///   for WAL GC sweep drives, or, where the share is a single slot, while a
+///   refused sweep drive is waiting for it (issue #3575). A drive's refusal is
+///   <b>not</b> raised as this exception: it is returned as the
+///   <c>AdmissionRefused</c> starvation-drive verdict and counted, because it
+///   is the routine answer to a bounded background drive (issue #3761).</description></item>
 ///   <item><description>The transaction-registry capacity refusal from
 ///   <c>TxRegistryGrain.EnsureSagaAdmissionAsync</c>, raised when a new
 ///   atomic-write saga would grow the persisted row of the registry its
@@ -114,6 +117,13 @@ namespace Orleans.Lattice;
 /// Carries the originating <see cref="TreeId"/> so caller-side
 /// diagnostics can attribute the back-pressure to the specific tree
 /// without parsing the exception message.
+/// </para>
+/// <para>
+/// Every raise is counted on <c>orleans.lattice.saturation.refusals</c>,
+/// tagged <c>tree</c> and <c>source</c>, at the seam that raises it, so a
+/// refusal rate can be attributed to a seam without reading logs (issue
+/// #3761). A saga refusal that wraps an inner refusal counts both, each
+/// under its own source.
 /// </para>
 /// </summary>
 [GenerateSerializer]

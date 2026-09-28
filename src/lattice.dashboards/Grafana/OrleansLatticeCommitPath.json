@@ -1256,6 +1256,24 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_deactivation_barrier_elided_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} elided/s" }
       ]
+    },
+    {
+      "id": 3761,
+      "title": "LatticeSaturatedException refusals by source (ops/s) - issue #3761",
+      "description": "Rate of orleans.lattice.saturation.refusals by tree and source - issue #3761. One increment per LatticeSaturatedException raised, recorded at the seam that raises it and tagged with the same LatticeSaturationSource the exception carries, so a refusal rate can be attributed to a seam without reading logs: wal_admission (the WAL writer's admission gate stayed saturated past WalAdmissionSaturationWaitBudget; the per-partition split is the admission_saturation_refusals counter on the WAL writer panel), atomic_write_saga (an atomic write refused to dispatch into a still-saturated tree), snapshot_cursor_open (a snapshot cursor open shed under ShedSnapshotOpensWhenSaturated), replay_permit_admission (a leaf's silo refused a WAL replay permit), set_many_fan_out (a SetManyAsync fan-out did not settle within SetManyFanOutBudget) and tx_registry_capacity (a new saga would grow its transaction registry row past its budget). replay_permit_admission ALSO COUNTS BACKGROUND STARVATION DRIVES THAT WERE REFUSED, which are not raised as exceptions: they return the drove_admission_refused verdict charted on the Replication dashboard, so a replay_permit_admission rate with no caller-visible exceptions is that routine background refusal, not a client-facing fault. A saga refusal that wraps an inner refusal counts under both sources. ABSENT means no refusal was raised in the window.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 426 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "spanNulls": false }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, source) (rate(orleans_lattice_saturation_refusals_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{source}}" }
+      ]
     }
   ]
 }

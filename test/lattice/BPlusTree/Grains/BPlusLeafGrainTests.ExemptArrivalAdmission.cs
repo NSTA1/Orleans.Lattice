@@ -108,11 +108,10 @@ public partial class BPlusLeafGrainTests
                 // nothing about exempt callers.
                 if (origin == BPlusLeafGrain.StarvationDriveOrigin.WalGcSweep)
                 {
-                    var refusal = Assert.ThrowsAsync<LatticeSaturatedException>(
-                        async () => await drive.WaitAsync(ExemptArrivalSettle),
+                    Assert.That(await ((Task<Orleans.Lattice.BPlusTree.LeafStarvationDriveOutcome>)drive).WaitAsync(ExemptArrivalSettle),
+                        Is.EqualTo(Orleans.Lattice.BPlusTree.LeafStarvationDriveOutcome.AdmissionRefused),
                         "input check: the sweep drive must have reached the full gate and been turned away "
                         + "without queueing.");
-                    Assert.That(refusal!.SaturationSource, Is.EqualTo(LatticeSaturationSource.ReplayPermitAdmission));
                 }
                 else
                 {

@@ -28,11 +28,21 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// unmeasured.
 /// </para>
 /// <para>
-/// <b>It observes and changes nothing.</b> Every call is forwarded unchanged, the
-/// original exception is rethrown with its stack intact, and a failure that is not
-/// a lock failure passes through with no log line and no count. It changes no
-/// timeout and no retry, because the issue is explicit that a remedy chosen before
-/// attribution is a guess.
+/// <b>It observes, and re-issues only what its retry policy names.</b> Every call is
+/// forwarded unchanged, the original exception is rethrown with its stack intact,
+/// and a failure that is not a lock failure passes through with no log line, no
+/// count and no retry. It changes no timeout. Issue #2431 deliberately shipped
+/// attribution before any remedy; with that attribution in hand, issue #3761 item 6
+/// found the remaining lock failures on the WAL materialiser pin store, whose failed
+/// write leaves the published pin stale. So a lock failure on a write or clear that
+/// <see cref="RepoContextGrainStorageLockRetryPolicy"/> admits - by default the pin
+/// store's alone - is re-issued after a jittered backoff, a bounded number of times,
+/// and each re-issued operation's outcome is counted with
+/// <see cref="RepoContextGrainStorageLockMeter.RecordLockRetry"/>. Every failed
+/// attempt is still attributed and counted as a lock failure, so a recovered write is
+/// never mistaken for an uncontended one. With
+/// <see cref="RepoContextGrainStorageLockRetryPolicy.None"/> the decorator only
+/// observes.
 /// </para>
 /// <para>
 /// It forwards <see cref="ILifecycleParticipant{TLifecycleObservable}"/> to the
@@ -51,6 +61,7 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
     private readonly ILogger _logger;
     private readonly TimeSpan _busyWindow;
     private readonly TimeProvider _time;
+    private readonly RepoContextGrainStorageLockRetryPolicy _retry;
 
     /// <summary>Creates the decorator.</summary>
     /// <param name="inner">The grain storage provider to forward to.</param>
@@ -62,13 +73,18 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
     /// connection retries without bound, so no failure is classified exhausted.
     /// </param>
     /// <param name="timeProvider">The clock; the system clock when omitted.</param>
+    /// <param name="retryPolicy">
+    /// Which lock failures to re-issue; <see cref="RepoContextGrainStorageLockRetryPolicy.None"/>
+    /// when omitted, so a decorator constructed without one only observes.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="inner"/>, <paramref name="meter"/> or <paramref name="logger"/> is null.</exception>
     public RepoContextLockAttributingGrainStorage(
         IGrainStorage inner,
         RepoContextGrainStorageLockMeter meter,
         ILogger<RepoContextLockAttributingGrainStorage> logger,
         TimeSpan busyWindow,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        RepoContextGrainStorageLockRetryPolicy? retryPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(meter);
@@ -79,6 +95,7 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
         _logger = logger;
         _busyWindow = busyWindow;
         _time = timeProvider ?? TimeProvider.System;
+        _retry = retryPolicy ?? RepoContextGrainStorageLockRetryPolicy.None;
     }
 
     /// <summary>The wrapped provider.</summary>
@@ -86,6 +103,9 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
 
     /// <summary>The busy window a failure is classified against.</summary>
     public TimeSpan BusyWindow => _busyWindow;
+
+    /// <summary>The policy deciding which lock failures are re-issued.</summary>
+    public RepoContextGrainStorageLockRetryPolicy RetryPolicy => _retry;
 
     /// <inheritdoc />
     public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
@@ -134,14 +154,42 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
         var width = convoy.Enter(operation);
         var writesAtEntry = operation == RepoContextGrainStorageOperation.Read ? convoy.WritesInFlight : width;
         var started = _time.GetTimestamp();
+        var retries = 0;
         try
         {
-            await call(_inner, stateName, grainId, grainState).ConfigureAwait(false);
-        }
-        catch (Exception failure) when (SqliteLockClassifier.TryFind(failure, out var lockFailure))
-        {
-            Attribute(operation, stateName, grainId, writesAtEntry, started, lockFailure!);
-            throw;
+            while (true)
+            {
+                try
+                {
+                    await call(_inner, stateName, grainId, grainState).ConfigureAwait(false);
+                    if (retries > 0)
+                    {
+                        _meter.RecordLockRetry(operation, recovered: true);
+                    }
+
+                    return;
+                }
+                catch (Exception failure) when (SqliteLockClassifier.TryFind(failure, out var lockFailure))
+                {
+                    var retrying = retries < _retry.MaxRetries && _retry.Applies(operation, stateName);
+                    Attribute(operation, stateName, grainId, writesAtEntry, started, lockFailure!, retries + 1, retrying);
+                    if (!retrying)
+                    {
+                        if (retries > 0)
+                        {
+                            _meter.RecordLockRetry(operation, recovered: false);
+                        }
+
+                        throw;
+                    }
+                }
+
+                // The failed attempt was one autocommit statement rolled back whole, so the
+                // row and the grain state's ETag are as they were; see the retry policy.
+                retries++;
+                await Task.Delay(_retry.DelayFor(retries, Random.Shared.NextDouble()), _time).ConfigureAwait(false);
+                started = _time.GetTimestamp();
+            }
         }
         finally
         {
@@ -155,7 +203,9 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
         GrainId grainId,
         long writesAtEntry,
         long started,
-        Microsoft.Data.Sqlite.SqliteException lockFailure)
+        Microsoft.Data.Sqlite.SqliteException lockFailure,
+        int attempt,
+        bool retrying)
     {
         var elapsed = _time.GetElapsedTime(started);
         var exhausted = _busyWindow > TimeSpan.Zero && elapsed >= _busyWindow;
@@ -171,7 +221,7 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
             + "SQLite lock (error {SqliteErrorCode}, extended {SqliteExtendedErrorCode}) after {ElapsedMs} ms "
             + "against a {BusyWindowMs} ms busy window ({Wait}). Writes in flight: {WritesAtEntry} when it "
             + "started, {WritesAtFailure} when it failed, {PeakWrites} peak since start; reads in flight "
-            + "{ReadsAtFailure}.",
+            + "{ReadsAtFailure}. Attempt {Attempt}; retrying: {Retrying}.",
             RepoContextGrainStorageLockMeter.OperationValue(operation),
             grainId.Type.ToString(),
             grainId.ToString(),
@@ -184,6 +234,8 @@ public sealed class RepoContextLockAttributingGrainStorage : IGrainStorage, ILif
             writesAtEntry,
             writesAtFailure,
             convoy.PeakWritesInFlight,
-            convoy.ReadsInFlight);
+            convoy.ReadsInFlight,
+            attempt,
+            retrying);
     }
 }

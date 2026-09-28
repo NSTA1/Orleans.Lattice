@@ -108,7 +108,8 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   its own usage, its own retrieval readiness, which plane its retrieval
     ///   was served from, and which arm of an indexing pass faulted, all of which
     ///   are properties of the operator-facing host process rather than of any
-    ///   tenant's traffic.</item>
+    ///   tenant's traffic. The MCP host's own rate of client-error tool calls is
+    ///   the same kind of self-metering.</item>
     ///   <item><b>Grain-call observation</b> - the outstanding-call depth and
     ///   call duration recorded per target grain type describe contention on a
     ///   shared activation and on this silo's scheduler. The quantity is the
@@ -198,6 +199,7 @@ public sealed class TenantMetricDimensionHygieneTests
         "SnapshotRebuilds",
         "SweepDurationHistogram",
         "SweepsCounter",
+        "ToolClientErrors",
         "TreesMismatchedCounter",
         "TreesProbedCounter",
         // orleans.lattice.wal.gc.scheduler.* - the six liveness instruments on the
