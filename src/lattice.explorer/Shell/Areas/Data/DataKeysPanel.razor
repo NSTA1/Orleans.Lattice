@@ -1,0 +1,130 @@
+@*
+    The key and prefix browser. The toolbar holds the prefix (?prefix=), an
+    optional tag filter, the scan mode, the page size and the live-updates
+    switch; the table pages through the tree with the cached pager, the key
+    in ?key= is the current row, and its entry opens below. A live cursor the
+    server has released is reported with a way to restart from the first page.
+*@
+
+@if (Workspace is not null)
+{
+    <div class="lt-toolbar">
+        <div class="lt-data-toolbar__grow">
+            <LtSearchInput Label="Key prefix"
+                           Placeholder="@(ActiveTagFilter is null ? "Keys starting with" : "Clear the tag filter to use a prefix")"
+                           Value="@_prefixInput"
+                           ValueChanged="value => _prefixInput = value"
+                           OnSubmit="ApplyPrefix"
+                           Disabled="@(ActiveTagFilter is not null)" />
+        </div>
+        @if (_indexes.Count > 0)
+        {
+            <LtSelect Label="Tag index" Options="@IndexOptions" Value="@(_index ?? string.Empty)" ValueChanged="SetIndex" />
+            @if (_index is not null)
+            {
+                <LtSelect Label="Tag" Options="@TagOptions" Value="@(_tag ?? string.Empty)" ValueChanged="SetTag" />
+            }
+        }
+        <LtSelect Label="Scan" Options="@ModeOptions" Value="@_mode.ToString()" ValueChanged="SetModeAsync" />
+        <LtSelect Label="Page size" Options="@PageSizeOptions" Value="@_pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture)" ValueChanged="SetPageSizeAsync" />
+        @if (_followAvailable)
+        {
+            <LtSwitch Label="Live updates"
+                      Checked="@_live"
+                      CheckedChanged="SetLive"
+                      Disabled="@(_mode != EntryScanMode.Live)"
+                      Hint="@(_mode != EntryScanMode.Live ? "A snapshot never changes, so live updates follow live scans only." : null)" />
+        }
+        <span class="lt-data-toolbar__status" role="status">@RangeText</span>
+    </div>
+
+    @if (_liveNote is not null)
+    {
+        <div class="lt-data-note" role="status">
+            <span>@_liveNote</span>
+            @if (_liveRestartable)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="RestartLive">Restart live updates</LtButton>
+            }
+        </div>
+    }
+
+    @if (_stale)
+    {
+        <div class="lt-data-note" role="status">
+            <span>Keys under this prefix have changed since this page loaded.</span>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="ResetAsync">Reload from the first page</LtButton>
+        </div>
+    }
+
+    @if (_cursorExpired)
+    {
+        <LtEmptyState Title="This scan's cursor has expired" HeadingLevel="2">
+            <ChildContent>The cluster released the cursor this page continued from. Start the scan again from the first page.</ChildContent>
+            <Actions><LtButton OnClick="ResetAsync">Restart from the first page</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_error is not null)
+    {
+        <LtEmptyState Title="The keys did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="ResetAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_pager is null || (_loading && _pager.Current.Entries.Count == 0))
+    {
+        <LtSkeleton Lines="6" Label="Loading keys" />
+    }
+    else
+    {
+        <LtTable TItem="DataEntry"
+                 Items="@_pager.Current.Entries"
+                 Caption="@TableCaption"
+                 CaptionHidden="true"
+                 RowKey="@(entry => entry.Key)"
+                 IsCurrent="@(entry => string.Equals(entry.Key, Workspace.Key, StringComparison.Ordinal))"
+                 DetailTitle="@(entry => entry.Key)">
+            <ChildContent>
+                <LtColumn TItem="DataEntry" Context="entry" Title="Key" RowHeader="true" Mono="true">
+                    <a class="lt-data-key" href="@Workspace.Href(Workspace.With(ExplorerAddress.KeyQuery, entry.Key))" title="@entry.Key">@Clip(entry.Key)</a>
+                </LtColumn>
+                <LtColumn TItem="DataEntry" Context="entry" Title="Value" Mono="true">
+                    <span class="lt-data-inline">@Inline(entry)</span>
+                </LtColumn>
+                <LtColumn TItem="DataEntry" Title="Type" Value="@(entry => TypeText(entry))" />
+                <LtColumn TItem="DataEntry" Title="Updated" Align="LtColumnAlign.End" Value="@(entry => DataFormat.Time(entry.Hlc))" />
+            </ChildContent>
+            <CompactRow Context="entry">
+                <LtCompactRow Mono="true">
+                    <Primary>@Clip(entry.Key)</Primary>
+                    <Secondary>@Inline(entry)</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <Detail Context="entry">
+                <LtDefinitionList>
+                    <LtDefinition Term="Key" Mono="true">@entry.Key</LtDefinition>
+                    <LtDefinition Term="Value" Mono="true">@Inline(entry)</LtDefinition>
+                    <LtDefinition Term="Type">@TypeText(entry)</LtDefinition>
+                    <LtDefinition Term="Updated">@DataFormat.Time(entry.Hlc)</LtDefinition>
+                </LtDefinitionList>
+            </Detail>
+            <DetailActions Context="entry">
+                <a class="lt-btn" href="@Workspace.Href(Workspace.With(ExplorerAddress.KeyQuery, entry.Key))">Open entry</a>
+            </DetailActions>
+            <EmptyContent>
+                <span>@EmptyText</span>
+            </EmptyContent>
+        </LtTable>
+
+        <nav class="lt-data-pager" aria-label="Pages of keys">
+            <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(!_pager.CanGoPrevious || _loading)" OnClick="PreviousPage">Previous page</LtButton>
+            <span class="lt-data-pager__position">Page @(_pager.PageIndex + 1)</span>
+            <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(!_pager.CanGoNext || _loading)" OnClick="NextPageAsync">Next page</LtButton>
+        </nav>
+    }
+
+    @if (Workspace.Key is { } key)
+    {
+        <DataEntryView Key="@key" Version="@_entryVersion" />
+    }
+}

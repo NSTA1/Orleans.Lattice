@@ -1,0 +1,71 @@
+@*
+    One entry: its key (clipped with an explicit expansion when very long), its
+    metadata, and its value in a mono block drawn with the renderer the user
+    picks - automatic, UTF-8 text, JSON, hex, or the CRDT members the state
+    API decoded. A long value is clipped too, with an explicit expansion. The
+    value is always text: nothing in it is ever interpreted as markup.
+*@
+
+<section class="lt-data-entry" aria-labelledby="@_headingId">
+    <h2 class="lt-data-section-title" id="@_headingId">Entry</h2>
+    @if (_loading && _entry is null)
+    {
+        <LtSkeleton Lines="4" Label="Loading the entry" />
+    }
+    else if (_error is not null)
+    {
+        <LtEmptyState Title="The entry did not load" HeadingLevel="3">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_entry is null)
+    {
+        <LtEmptyState Title="No entry at this key" HeadingLevel="3">
+            <span class="lt-shell-mono">@DataKeysPanel.Clip(Key)</span> is not in this tree.
+        </LtEmptyState>
+    }
+    else
+    {
+        <p class="lt-data-entry__key lt-shell-mono">@(_keyExpanded ? Key : DataKeysPanel.Clip(Key))</p>
+        @if (Key.Length > DataKeysPanel.KeyClip)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _keyExpanded = !_keyExpanded">
+                @(_keyExpanded ? "Show less of the key" : $"Show the whole key ({DataFormat.Count(Key.Length)} characters)")
+            </LtButton>
+        }
+
+        <LtDefinitionList>
+            <LtDefinition Term="Size">@DataValueRendering.Size(_entry.ValueLength)</LtDefinition>
+            <LtDefinition Term="Type">@DataKeysPanel.TypeText(_entry)</LtDefinition>
+            <LtDefinition Term="Updated">@DataFormat.Time(_entry.Hlc)</LtDefinition>
+            @if (_entry.ExpiresAtTicks > 0 && _entry.ExpiresAtTicks <= DateTimeOffset.MaxValue.UtcTicks)
+            {
+                <LtDefinition Term="Expires">@DataFormat.Time(new DateTimeOffset(_entry.ExpiresAtTicks, TimeSpan.Zero))</LtDefinition>
+            }
+        </LtDefinitionList>
+
+        <div class="lt-toolbar">
+            <LtSelect Label="Show value as" Options="@RendererOptions" Value="@_renderer.ToString()" ValueChanged="SetRenderer" />
+            @if (Workspace is not null)
+            {
+                <a class="lt-btn" href="@Workspace.Href(Workspace.ForTab(DataTabs.History))">History of this key</a>
+            }
+        </div>
+
+        @if (_rendered is not null)
+        {
+            @if (_rendered.Note is { } note)
+            {
+                <p class="lt-data-note">@note</p>
+            }
+            <pre class="lt-data-value" tabindex="0" aria-label="@($"Value, as {_rendered.FormatText}")">@Shown</pre>
+            @if (_rendered.Content.Length > DataValueRendering.DisplayLimit)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _valueExpanded = !_valueExpanded">
+                    @(_valueExpanded ? "Show less of the value" : $"Show all {DataFormat.Count(_rendered.Content.Length)} characters")
+                </LtButton>
+            }
+        }
+    }
+</section>

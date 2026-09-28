@@ -1,0 +1,161 @@
+@*
+    Tag indexes over this tree: each index with its reconcile state, then the
+    selected index's covered trees (by logical id), its tags, and the members of
+    the selected tag, each member linking to its key. Reconcile - which removes
+    membership rows for keys that no longer carry their tag - is drawn only when
+    the caller holds administrative authority over the index, and runs only after
+    the destructive-action confirmation.
+*@
+
+@if (Workspace is not null)
+{
+    @if (_error is not null)
+    {
+        <LtEmptyState Title="The tag indexes did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_indexes is null)
+    {
+        <LtSkeleton Lines="4" Label="Loading the tag indexes" />
+    }
+    else if (_indexes.Count == 0)
+    {
+        <LtEmptyState Title="No tag indexes" HeadingLevel="2">
+            No tag index covers this tree.
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtTable TItem="TagIndexRef"
+                 Items="@_indexes"
+                 Caption="Tag indexes over this tree"
+                 CaptionHidden="true"
+                 RowKey="@(index => index.IndexName)"
+                 IsCurrent="@(index => index.IndexName == _selected)"
+                 DetailTitle="@(index => index.IndexName)">
+            <ChildContent>
+                <LtColumn TItem="TagIndexRef" Context="index" Title="Index" RowHeader="true" Mono="true">
+                    <a href="@Workspace.Href(IndexAddress(index.IndexName))">@index.IndexName</a>
+                </LtColumn>
+                <LtColumn TItem="TagIndexRef" Context="index" Title="Reconcile">
+                    <LtStatusPill State="@ReconcileRole(index)" Text="@ReconcileText(index)" />
+                </LtColumn>
+                <LtColumn TItem="TagIndexRef" Title="Covered trees" Align="LtColumnAlign.End" Value="@(index => CoveredCount(index))" />
+            </ChildContent>
+            <CompactRow Context="index">
+                <LtCompactRow Mono="true">
+                    <Primary>@index.IndexName</Primary>
+                    <Secondary>@CoveredCount(index) covered trees</Secondary>
+                    <State><LtStatusPill State="@ReconcileRole(index)" Text="@ReconcileText(index)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions Context="index">
+                <a class="lt-btn" href="@Workspace.Href(IndexAddress(index.IndexName))">Open @index.IndexName</a>
+            </DetailActions>
+        </LtTable>
+
+        @if (SelectedIndex is { } selected)
+        {
+            <section class="lt-data-entry" aria-labelledby="@_headingId">
+                <div class="lt-data-heading">
+                    <h2 class="lt-data-section-title" id="@_headingId">Tag index <span class="lt-shell-mono">@selected.IndexName</span></h2>
+                    @if (_canReconcile)
+                    {
+                        <LtButton Variant="LtButtonVariant.Destructive" Disabled="@_reconciling" OnClick="() => _confirming = true">@(_reconciling ? "Reconciling" : "Reconcile")</LtButton>
+                    }
+                </div>
+
+                <h3 class="lt-data-subtitle">Covered trees</h3>
+                @if (_covered is null)
+                {
+                    <LtSkeleton Lines="2" Label="Loading the covered trees" />
+                }
+                else
+                {
+                    <ul class="lt-data-list">
+                        @foreach (var tree in _covered)
+                        {
+                            <li><a class="lt-shell-mono" href="@Workspace.Href(tree.Address)">@tree.DisplayName</a></li>
+                        }
+                    </ul>
+                    @if (_hiddenCovered > 0)
+                    {
+                        <p class="lt-data-note">It also covers @DataArea.Plural(_hiddenCovered, "tree") you cannot see.</p>
+                    }
+                }
+
+                <h3 class="lt-data-subtitle">Tags</h3>
+                @if (_tags is null)
+                {
+                    <LtSkeleton Lines="2" Label="Loading the tags" />
+                }
+                else if (_tags.Count == 0)
+                {
+                    <p class="lt-data-note">This index holds no tags yet.</p>
+                }
+                else
+                {
+                    <ul class="lt-data-tags">
+                        @foreach (var tag in _tags)
+                        {
+                            <li>
+                                <a class="lt-data-tag lt-shell-mono"
+                                   href="@Workspace.Href(IndexAddress(selected.IndexName).WithQuery(DataTabs.TagQuery, tag))"
+                                   aria-current="@(tag == _tag ? "true" : null)">@tag</a>
+                            </li>
+                        }
+                    </ul>
+                }
+
+                @if (_tag is not null)
+                {
+                    <h3 class="lt-data-subtitle">Keys tagged <span class="lt-shell-mono">@_tag</span></h3>
+                    @if (_membersError is not null)
+                    {
+                        <p class="lt-data-note" role="alert">@_membersError</p>
+                    }
+                    <LtTable TItem="DataTagMember" Items="@_members" Caption="@($"Keys tagged {_tag}")" CaptionHidden="true" RowKey="@(member => member.RowKey)">
+                        <ChildContent>
+                            <LtColumn TItem="DataTagMember" Context="member" Title="Tree" Mono="true">
+                                @if (member.Tree is { } tree)
+                                {
+                                    <a href="@Workspace.Href(tree.Address)">@tree.DisplayName</a>
+                                }
+                                else
+                                {
+                                    <span>A tree you cannot see</span>
+                                }
+                            </LtColumn>
+                            <LtColumn TItem="DataTagMember" Context="member" Title="Key" RowHeader="true" Mono="true">
+                                @if (member.Tree is { } tree)
+                                {
+                                    <a href="@Workspace.Href(tree.Address.WithQuery(ExplorerAddress.KeyQuery, member.Key))">@DataKeysPanel.Clip(member.Key)</a>
+                                }
+                                else
+                                {
+                                    @DataKeysPanel.Clip(member.Key)
+                                }
+                            </LtColumn>
+                        </ChildContent>
+                        <EmptyContent><span>No key carries this tag.</span></EmptyContent>
+                    </LtTable>
+                    @if (_membersContinuation is not null)
+                    {
+                        <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_loadingMembers" OnClick="LoadMembersAsync">Load more keys</LtButton>
+                    }
+                }
+            </section>
+
+            <LtConfirmDestructive @bind-Open="_confirming"
+                                  Title="Reconcile this tag index?"
+                                  ObjectKind="tag index"
+                                  ObjectName="@selected.IndexName"
+                                  ConfirmText="Reconcile"
+                                  OnConfirm="ReconcileAsync">
+                Reconciling rescans every covered tree and removes membership rows for keys that no longer carry their tag. It runs online and is safe to repeat, but it reads every covered key.
+            </LtConfirmDestructive>
+        }
+    }
+}
