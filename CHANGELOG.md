@@ -227,7 +227,17 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Tests - Replay banking resumes from the banked prefix.** The replay-apply-failure fixture now asserts that the next attempt resumes from the banked checkpoint, not only that the checkpoint was banked. ([#3092](https://github.com/NSTA1/Orleans.Lattice/issues/3092)) (`repository-wide`)
 
+- **Replication - Bootstrap dropped the TTL of committed rows.** The default snapshot export left every committed row's expiry at 0, so whole-tree bootstrap and the anti-entropy fallback installed TTL keys on the peer as durable. Committed rows now carry the source entry's absolute expiry. ([#3802](https://github.com/NSTA1/Orleans.Lattice/issues/3802)) (`Orleans.Lattice.Replication`)
+
+- **Core - Conditional batch writes skipped the write bounds.** `SetManyWherePredicateAsync` now enforces `MaxKeyLength`, `MaxValueSizeBytes` and the `MaxLiveKeys` / `MaxEstimatedBytes` admission caps like `SetManyAsync`, so adding a predicate no longer bypasses them. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803)) (`Orleans.Lattice`)
+
+- **Performance - `performance-report.ps1` threw at startup.** Its `-NamePrefix` parameter is declared again, so Layer 1, Layer 2 and self-provisioning Layer 3 sweeps no longer fail under StrictMode, and a gate checks that every documented script parameter is declared. ([#3804](https://github.com/NSTA1/Orleans.Lattice/issues/3804)) (`repository-wide`)
+
 ### Security
+
+- **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
+
+- **Security - Replication peers could act under another cluster's origin.** `Push` and `GetPeerHighWaterMark` trusted the body-declared origin, so any mesh-secret holder could advance or read a third cluster's high-water mark. Both now bind it to the stamped caller, as the manifest exchange did. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Replication.Grpc`)
 
 - **Security - A view row decoder trusted a peer-supplied count.** Under `ShipView` a view tree is replication-enrolled, so its aggregation rows reach the decoder from a peer. It pre-sized a map from a wire `Int32` and read past a truncated row; counts and reads are now bounded. ([#3784](https://github.com/NSTA1/Orleans.Lattice/pull/3784)) (`Orleans.Lattice`)
 

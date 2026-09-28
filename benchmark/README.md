@@ -645,14 +645,12 @@ the marker blocks are mechanically managed, and a CI hygiene test
 (`PerformanceReportMarkerHygieneTests`) fails the build if the marker contract
 drifts. Prose around the markers stays hand-editable.
 
-**As committed, only the `-DryRun` lines below run.** #3597 removed the script's
-`-NamePrefix` parameter but left two reads of `$NamePrefix` in place, and under the
-script's `Set-StrictMode -Version Latest` each read throws. The full sweep, `-Layer1`,
-`-Layer2`, `-Layer 2 -Workloads ...`, `-KeepVm -ReuseVm ...` and `-CaptureCounters`
-invocations therefore all stop at startup, before anything is provisioned, and a
-Layer 3 sweep that would provision its own rig stops the same way. A Layer 3 sweep
-runs only as `-Layer 3 -ReuseAca <prefix>` against a rig provisioned first with
-`azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>` (see
+`-NamePrefix <prefix>` forces the run prefix every resource name derives from (at most
+nine characters once lower-cased and stripped of hyphens); without it the script reuses
+`-ReuseVm`'s (or, for Layer 3, `-ReuseAca`'s) prefix or mints a fresh one. A Layer 3
+sweep can also run against a rig provisioned first with
+`azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>`, as
+`-Layer 3 -ReuseAca <prefix>` (see
 [`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps)).
 
 ```powershell

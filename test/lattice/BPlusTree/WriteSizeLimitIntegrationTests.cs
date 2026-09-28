@@ -108,4 +108,62 @@ public class WriteSizeLimitIntegrationTests
             async () => await tree.SetManyAsync(entries),
             Throws.InstanceOf<ArgumentException>());
     }
+
+    private sealed record Scored(int Score);
+
+    private static LatticePredicateNode AnyScore() =>
+        LatticePredicatePushdown.Compile<Scored>(
+            s => s.Score >= 0, JsonLatticeSerializer<Scored>.Default);
+
+    private static byte[] ScoredJson(int score) => Encoding.UTF8.GetBytes($"{{\"Score\":{score}}}");
+
+    // Regression: the conditional batch skipped the write-size bounds that
+    // SetManyAsync enforces, so adding a predicate bypassed them. The keys are
+    // seeded with a matching value first, so without the bound check the
+    // oversized write would be admitted by the predicate and land.
+    [Test]
+    public async Task SetManyWherePredicateAsync_rejects_oversized_value()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("wsl-where-value");
+        await tree.SetAsync("ok", ScoredJson(1));
+        await tree.SetAsync("bad", ScoredJson(1));
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new("ok", ScoredJson(2)),
+            new("bad", OversizedValue()),
+        };
+
+        Assert.That(
+            async () => await tree.SetManyWherePredicateAsync(entries, AnyScore()),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(await tree.GetAsync("bad"), Is.EqualTo(ScoredJson(1)),
+            "the rejected batch must not have written the oversized value");
+    }
+
+    [Test]
+    public void SetManyWherePredicateAsync_rejects_oversized_key()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("wsl-where-key");
+        var entries = new List<KeyValuePair<string, byte[]>>
+        {
+            new(OverlongKey(), ScoredJson(2)),
+        };
+
+        Assert.That(
+            async () => await tree.SetManyWherePredicateAsync(entries, AnyScore()),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task SetManyWherePredicateAsync_accepts_within_bound_write()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("wsl-where-ok");
+        await tree.SetAsync("k", ScoredJson(1));
+
+        var written = await tree.SetManyWherePredicateAsync(
+            new List<KeyValuePair<string, byte[]>> { new("k", ScoredJson(2)) }, AnyScore());
+
+        Assert.That(written, Is.EqualTo(new[] { "k" }));
+        Assert.That(await tree.GetAsync("k"), Is.EqualTo(ScoredJson(2)));
+    }
 }

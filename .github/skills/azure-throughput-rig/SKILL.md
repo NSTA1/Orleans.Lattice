@@ -47,23 +47,19 @@ parameters file. The folder also holds two dot-sourced helper modules (`_run-coh
 `Test-ProducerBoundReport.ps1`). The Layer 3 sweep itself is driven by
 `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 
-**`performance-report.ps1` currently runs in only two shapes.** #3597 removed its `-NamePrefix`
-parameter but left two reads of it in place, and under the script's `Set-StrictMode -Version Latest`
-each read throws `The variable '$NamePrefix' cannot be retrieved because it has not been set`. Every
-Layer 1 or Layer 2 run (with or without `-ReuseVm`), and every Layer 3 run that would provision its
-own rig, therefore stops at startup before anything is provisioned; passing `-NamePrefix` fails
-parameter binding, although the script's comment-based help still has a `.PARAMETER NamePrefix`
-entry. What works:
+**`performance-report.ps1` run prefix.** `-NamePrefix <prefix>` forces the prefix every resource
+name derives from; without it a Layer 1 or Layer 2 run takes `-ReuseVm`'s prefix or mints a fresh
+one, and a Layer 3 run takes `-ReuseAca`'s rig or provisions one under a fresh prefix. The report
+lower-cases the prefix it is given, strips its hyphens and refuses more than nine characters, so use
+three to nine lowercase letters and digits (`deploy-aca.ps1` also refuses fewer than three
+alphanumerics). Two further shapes:
 
-- **Layer 3 on a rig you provisioned.** Run `./scripts/deploy-aca.ps1 -NamePrefix <prefix>` with a
-  prefix of three to nine lowercase letters and digits (`deploy-aca.ps1` refuses a prefix with fewer
-  than three alphanumerics, and the report lower-cases the prefix it is given, strips its hyphens and
-  refuses more than nine characters, so any other form can name a different rig or be refused), then
+- **Layer 3 on a rig you provisioned.** Run `./scripts/deploy-aca.ps1 -NamePrefix <prefix>`, then
   `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
   finishes and leaves `rg-<prefix>` standing for you to delete.
-- **`-DryRun`**, which reaches neither read and re-renders a document from the most recently written
-  `state.json`. Replay the multi-silo document with the `-Layer3` switch: `-Layer 3 -DryRun` falls
-  through to the single-silo replay instead.
+- **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
+  multi-silo document with the `-Layer3` switch: `-Layer 3 -DryRun` falls through to the single-silo
+  replay instead.
 
 ---
 

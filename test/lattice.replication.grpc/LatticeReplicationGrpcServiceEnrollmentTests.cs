@@ -88,6 +88,12 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
     private static LatticeReplicationGrpcService CreateService(
         IGrainFactory grainFactory,
         ILatticeReplicationContext? replicationContext)
+        => CreateService(grainFactory, replicationContext, Substitute.For<IReplicationApplier>());
+
+    private static LatticeReplicationGrpcService CreateService(
+        IGrainFactory grainFactory,
+        ILatticeReplicationContext? replicationContext,
+        IReplicationApplier applier)
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var method = new LatticeReplicationGrpcMethod(
@@ -107,7 +113,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
 
         return new LatticeReplicationGrpcService(
             method,
-            Substitute.For<IReplicationApplier>(),
+            applier,
             new InMemoryWalCursorRegistry(),
             NoOpReceiverFlowControlPolicy.Instance,
             grainFactory,
@@ -321,5 +327,123 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
         var response = await svc.ExchangeContentManifest(box, NoHeaders());
 
         Assert.That(response.Value.ExchangeSupported, Is.True);
+    }
+
+    [Test]
+    public void Push_refuses_an_origin_that_disagrees_with_the_stamped_header()
+    {
+        // Push advances the same durable per-origin high-water mark that
+        // ExchangeContentManifest does, but was the one verb of the family that
+        // never bound its body-declared origin to the caller. A peer could push a
+        // batch under a third cluster's origin and drive that stream's recorded
+        // clock forward, which suppresses anti-entropy repair for it: the poisoned
+        // value is served back as the re-replay cursor, so a maxed cursor makes
+        // every WAL entry ineligible for re-replay.
+        var svc = CreateService(Substitute.For<IGrainFactory>(), EnrolledOnly());
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = EnrolledTree,
+                OriginClusterId = "victim-site",
+                Entries = [],
+            },
+        };
+
+        AssertPermissionDenied(async () => await svc.Push(box, WithOriginHeader("attacker-site")));
+    }
+
+    [Test]
+    public void Push_refusal_happens_before_the_batch_is_applied()
+    {
+        // The gate has to precede the applier, not merely accompany it: an apply
+        // that has already run cannot be un-run by a later refusal.
+        var applier = Substitute.For<IReplicationApplier>();
+        var svc = CreateService(Substitute.For<IGrainFactory>(), EnrolledOnly(), applier);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = EnrolledTree,
+                OriginClusterId = "victim-site",
+                Entries = [],
+            },
+        };
+
+        AssertPermissionDenied(async () => await svc.Push(box, WithOriginHeader("attacker-site")));
+
+        applier.DidNotReceive().ApplyBatchAsync(
+            Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void GetPeerHighWaterMark_refuses_an_origin_that_disagrees_with_the_stamped_header()
+    {
+        // The cursor is per-origin state; reading it back for an origin other than
+        // the caller's own discloses a third cluster's replication position.
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
+        var svc = CreateService(factory, EnrolledOnly());
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest
+            {
+                TreeName = EnrolledTree,
+                OriginClusterId = "victim-site",
+            },
+        };
+
+        AssertPermissionDenied(
+            async () => await svc.GetPeerHighWaterMark(box, WithOriginHeader("attacker-site")));
+        hwmGrain.DidNotReceive().GetAsync("victim-site", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetPeerHighWaterMark_accepts_an_origin_that_matches_the_stamped_header()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(HybridLogicalClock.Zero));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
+        var svc = CreateService(factory, EnrolledOnly());
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest
+            {
+                TreeName = EnrolledTree,
+                OriginClusterId = "site-a",
+            },
+        };
+
+        var response = await svc.GetPeerHighWaterMark(box, WithOriginHeader("site-a"));
+
+        Assert.That(response.Value.Clock, Is.EqualTo(HybridLogicalClock.Zero));
+    }
+
+    [Test]
+    public async Task GetPeerHighWaterMark_accepts_a_call_with_no_stamped_origin_header()
+    {
+        // Same absent-tolerant posture as the manifest exchange, so an older or
+        // custom binding that does not stamp the header keeps working.
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(HybridLogicalClock.Zero));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
+        var svc = CreateService(factory, EnrolledOnly());
+        var box = new PeerHighWaterMarkRequestBox
+        {
+            Value = new PeerHighWaterMarkRequest
+            {
+                TreeName = EnrolledTree,
+                OriginClusterId = "site-a",
+            },
+        };
+
+        var response = await svc.GetPeerHighWaterMark(box, NoHeaders());
+
+        Assert.That(response.Value.Clock, Is.EqualTo(HybridLogicalClock.Zero));
     }
 }

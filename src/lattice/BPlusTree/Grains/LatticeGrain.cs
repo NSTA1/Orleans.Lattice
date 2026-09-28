@@ -282,6 +282,26 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <summary>
+    /// Applies <see cref="ValidateWriteSize"/> to every entry of a batched
+    /// write. No-op (and no enumeration) when both bounds are unset. A
+    /// <c>null</c> key is left to the downstream argument validation.
+    /// </summary>
+    private void ValidateEntriesWriteSize(List<KeyValuePair<string, byte[]>> entries)
+    {
+        var options = Options;
+        if (options.MaxKeyLength is null && options.MaxValueSizeBytes is null)
+        {
+            return;
+        }
+
+        foreach (var entry in entries)
+        {
+            if (entry.Key is not null)
+                ValidateWriteSize(entry.Key, entry.Value);
+        }
+    }
+
     // --- Per-tree admission control (opt-in, fail-open) --------------------
     //
     // Activation-cached snapshot of this tree's aggregate live-key count and
@@ -2376,17 +2396,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
-        {
-            var sizeOptions = Options;
-            if (sizeOptions.MaxKeyLength is not null || sizeOptions.MaxValueSizeBytes is not null)
-            {
-                foreach (var entry in entries)
-                {
-                    if (entry.Key is not null)
-                        ValidateWriteSize(entry.Key, entry.Value);
-                }
-            }
-        }
+        ValidateEntriesWriteSize(entries);
         EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
@@ -2703,6 +2713,11 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
+        // The conditional batch is a locally-authored write like SetManyAsync,
+        // so it takes the same write-size bounds and admission caps; skipping
+        // them let a caller bypass both by adding a predicate.
+        ValidateEntriesWriteSize(entries);
+        EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
