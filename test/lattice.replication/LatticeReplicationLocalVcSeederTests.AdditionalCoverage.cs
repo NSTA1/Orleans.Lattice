@@ -70,8 +70,8 @@ public partial class LatticeReplicationLocalVcSeederTests
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(1));
+        shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<string>>([$"{Tree}/0"]));
 
         var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
         hwmGrain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
@@ -154,8 +154,8 @@ public partial class LatticeReplicationLocalVcSeederTests
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(1));
+        shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<string>>([$"{Tree}/0"]));
 
         var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
         hwmGrain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
@@ -258,14 +258,14 @@ public partial class LatticeReplicationLocalVcSeederTests
     public void SeedFromTreeAsync_propagates_shard_count_provider_failure()
     {
         var (seeder, factory, _, shardCounts, hwmGrain) = CreateSeeder();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("registry unreachable"));
 
         Assert.That(
             async () => await seeder.SeedFromTreeAsync(Tree),
             Throws.InstanceOf<InvalidOperationException>().With.Message.EqualTo("registry unreachable"));
 
-        // Nothing downstream of the shard-count lookup must have run.
+        // Nothing downstream of the shard lookup must have run.
         factory.DidNotReceive().GetGrain<IShardRootGrain>(Arg.Any<string>());
         hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());

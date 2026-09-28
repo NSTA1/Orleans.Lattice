@@ -74,6 +74,21 @@ internal sealed class SagaWriteFenceGrain(
             : DefaultFenceWindowSeconds;
         var deadline = DateTime.UtcNow.AddSeconds(windowSeconds).Ticks;
 
+        // Resolved before any state is touched, so a routing read that fails
+        // leaves this activation exactly as it was. The set is persisted below so
+        // every lift - the local flip, the deadline self-lift, the
+        // global-completion or terminal lift - releases exactly the shards this
+        // engage fenced, even after the cutover's alias swap has moved the
+        // tree's routing onto the new physical copy.
+        var resolved = await ResolveFencedShardKeysAsync(request.Trees);
+
+        // A re-engage of a still-active fence keeps the shards it already fenced:
+        // if routing moved in between, the earlier set must still be lifted.
+        var stillFenced = string.Equals(state.State.SagaId, sagaId, StringComparison.Ordinal)
+            && state.State.Phase is not (SagaWriteFencePhase.None or SagaWriteFencePhase.Lifted)
+                ? state.State.FencedShardKeys
+                : null;
+
         state.State.SagaId = sagaId;
         state.State.Trees = [.. request.Trees];
         state.State.Phase = SagaWriteFencePhase.Engaged;
@@ -82,6 +97,9 @@ internal sealed class SagaWriteFenceGrain(
         state.State.WritesUnblocked = false;
         state.State.ShippingResumed = false;
         state.State.EngagedAtTicks = DateTime.UtcNow.Ticks;
+        state.State.FencedShardKeys = stillFenced is { Count: > 0 }
+            ? [.. stillFenced.Union(resolved, StringComparer.Ordinal)]
+            : resolved;
         await state.WriteStateAsync();
 
         await EngageWriteFenceAsync(sagaId, deadline);
@@ -171,6 +189,7 @@ internal sealed class SagaWriteFenceGrain(
         state.State.WritesUnblocked = false;
         state.State.ShippingResumed = false;
         state.State.EngagedAtTicks = 0;
+        state.State.FencedShardKeys = [];
         await state.WriteStateAsync();
     }
 
@@ -290,28 +309,28 @@ internal sealed class SagaWriteFenceGrain(
     // each wave preserves exactly, not by the order they were asked in.
 
     /// <summary>
-    /// Resolves the <c>{tree}/{shard}</c> key of every shard root the fence
-    /// spans, reading the per-tree shard counts with bounded overlap rather than
-    /// one strictly sequential lookup per tree.
+    /// Resolves the shard-root grain key of every shard the fence spans, reading
+    /// each tree's live routing with bounded overlap rather than one strictly
+    /// sequential lookup per tree.
+    /// <para>
+    /// The keys come from the routing map, not <c>{tree}/0..ShardCount-1</c>: an
+    /// adaptive split moves slots to a physical shard above the pinned count, and
+    /// a resize or an earlier restore leaves the tree behind an alias whose
+    /// physical id differs from the logical one. The pinned range left the split
+    /// target unfenced and fenced a retired copy, so post-cut writers raced the
+    /// cutover on exactly the shards that were serving them.
+    /// </para>
     /// </summary>
-    private async Task<List<string>> ResolveFencedShardKeysAsync()
+    private async Task<List<string>> ResolveFencedShardKeysAsync(IReadOnlyList<string> trees)
     {
-        var trees = state.State.Trees;
         var shardKeys = new List<string>(trees.Count);
 
-        // ReadAheadAsync yields strictly in input order, so the counts line up
-        // with their trees by position without any correlation bookkeeping.
-        var treeIndex = 0;
-        await foreach (var shardCount in BoundedFanOut.ReadAheadAsync(
+        await foreach (var treeKeys in BoundedFanOut.ReadAheadAsync(
             trees,
             BoundedFanOut.DefaultWidth,
-            tree => shardCounts.GetShardCountAsync(tree)))
+            tree => shardCounts.GetShardRootKeysAsync(tree)))
         {
-            var tree = trees[treeIndex++];
-            for (var i = 0; i < shardCount; i++)
-            {
-                shardKeys.Add($"{tree}/{i}");
-            }
+            shardKeys.AddRange(treeKeys);
         }
 
         return shardKeys;
@@ -337,18 +356,19 @@ internal sealed class SagaWriteFenceGrain(
         return shipperKeys;
     }
 
-    private async Task EngageWriteFenceAsync(string sagaId, long deadline)
-    {
-        var shardKeys = await ResolveFencedShardKeysAsync();
-        await BoundedFanOut.ForEachAsync(
-            shardKeys,
+    private Task EngageWriteFenceAsync(string sagaId, long deadline) =>
+        BoundedFanOut.ForEachAsync(
+            state.State.FencedShardKeys,
             BoundedFanOut.DefaultWidth,
             key => grainFactory.GetGrain<IShardRootGrain>(key).EngageWriteFenceAsync(sagaId, deadline));
-    }
 
     private async Task LiftWriteFenceAsync(string sagaId)
     {
-        var shardKeys = await ResolveFencedShardKeysAsync();
+        // State persisted before the engaged shard set was recorded carries an
+        // empty list; fall back to the tree's current routing for it.
+        var shardKeys = state.State.FencedShardKeys.Count > 0
+            ? state.State.FencedShardKeys
+            : await ResolveFencedShardKeysAsync(state.State.Trees);
         await BoundedFanOut.ForEachAsync(
             shardKeys,
             BoundedFanOut.DefaultWidth,
