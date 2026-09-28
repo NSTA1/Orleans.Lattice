@@ -1,0 +1,62 @@
+/*
+  App frame host layout (issue #3817). Linked by the AppFrame component itself, so
+  it loads only where a frame is hosted.
+
+  The class names deliberately sit outside the lt- namespace: the Shell's design-rule
+  gate reserves lt- for classes the design system's own stylesheets define, and this
+  file belongs to the frame host, not the design system.
+
+  Responsive contract (epic #3807, point 8): the frame fills the content region at
+  every width down to 360px with no width query (it is a flex fill that can shrink to
+  zero), the "Leave app" controls stay reachable (the top one sticks) and are at least
+  44px tall and wide in comfortable density and never below 24px in compact density,
+  and failure text wraps rather than overflowing. No colour literal and no width query.
+*/
+
+.appframe {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lt-space-2);
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: 100%;
+  min-block-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.appframe__bar {
+  display: flex;
+  justify-content: flex-start;
+  min-inline-size: 0;
+}
+
+.appframe__bar:first-child {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background: var(--lt-surface);
+}
+
+.appframe__bar > .lt-btn {
+  min-block-size: 2.75rem;
+  min-inline-size: 2.75rem;
+}
+
+[data-lt-density="compact"] .appframe__bar > .lt-btn {
+  min-block-size: 1.75rem;
+  min-inline-size: 1.75rem;
+}
+
+.appframe__viewport {
+  display: flex;
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  min-block-size: 20rem;
+}
+
+.appframe__viewport > iframe {
+  flex: 1 1 auto;
+  inline-size: 100%;
+  min-inline-size: 0;
+  border: 0;
+}
