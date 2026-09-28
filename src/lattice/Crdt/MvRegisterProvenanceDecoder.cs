@@ -151,17 +151,18 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
             };
         }
 
-        var ordered = new List<MvRegisterEntry>(entries);
-        ordered.Sort(static (a, b) =>
+        // Project first and sort the projection, rather than copying the entries
+        // into a second list to sort and then projecting that. The projection is
+        // one-to-one and carries both ordering keys (replica id and counter)
+        // through unchanged, so the two orders agree on every well-formed
+        // register - a dot is unique per (replica, counter), so there are no
+        // ties for an unstable sort to order differently. Doing it this way
+        // drops a whole intermediate List<MvRegisterEntry> (its header and its
+        // backing array) and the copy that filled it, per multi-value decode.
+        var result = new List<CrdtMemberValue>(entries.Count);
+        for (var i = 0; i < entries.Count; i++)
         {
-            var byReplica = string.CompareOrdinal(a.ReplicaId, b.ReplicaId);
-            return byReplica != 0 ? byReplica : a.Counter.CompareTo(b.Counter);
-        });
-
-        var result = new List<CrdtMemberValue>(ordered.Count);
-        for (var i = 0; i < ordered.Count; i++)
-        {
-            var e = ordered[i];
+            var e = entries[i];
             result.Add(new CrdtMemberValue
             {
                 // Copy: the projection is handed to an external caller, and
@@ -173,6 +174,12 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
                 Ordinal = e.Counter,
             });
         }
+
+        result.Sort(static (a, b) =>
+        {
+            var byReplica = string.CompareOrdinal(a.ReplicaId, b.ReplicaId);
+            return byReplica != 0 ? byReplica : a.Ordinal.CompareTo(b.Ordinal);
+        });
 
         return result;
     }

@@ -372,6 +372,18 @@ internal static class AggregationRowCodec
     /// </summary>
     private ref struct RowWriter(Span<byte> buffer)
     {
+        /// <summary>
+        /// Longest UTF-16 length whose UTF-8 encoding is provably under the
+        /// one-byte 7-bit prefix bound. A UTF-16 code unit encodes to at most
+        /// three UTF-8 bytes, and a surrogate pair is two code units for four
+        /// bytes, so three times the length is an upper bound on the encoded
+        /// size for every string. Written as a constant rather than asked of
+        /// <see cref="Encoding.GetMaxByteCount(int)"/>, which is a virtual call
+        /// on <see cref="Encoding"/> and was being paid once per string purely
+        /// to recompute this same product.
+        /// </summary>
+        private const int MaxSingleBytePrefixChars = 0x7F / 3;
+
         private readonly Span<byte> _buffer = buffer;
         private int _pos;
 
@@ -401,8 +413,38 @@ internal static class AggregationRowCodec
             _pos += value.Length;
         }
 
+        /// <summary>
+        /// Writes a 7-bit-encoded UTF-8 byte count followed by the UTF-8 bytes,
+        /// exactly as <see cref="BinaryWriter.Write(string)"/> does.
+        /// <para>
+        /// A string whose <i>worst case</i> UTF-8 length is already below
+        /// <c>0x80</c> must encode to fewer than <c>0x80</c> bytes, so its
+        /// 7-bit prefix is provably exactly one byte wide. That is the only
+        /// thing the count pass was needed for, so the body is encoded straight
+        /// past the reserved prefix slot and the prefix is back-filled from the
+        /// encoder's own written count - which is by definition the number the
+        /// count pass would have returned. That removes a full UTF-8 scan of
+        /// every string on the row-encode path, which runs once per source key
+        /// on every aggregation fold and re-encode.
+        /// </para>
+        /// <para>
+        /// A longer string keeps the two-pass shape, because its prefix width is
+        /// not known before the count and the body cannot be placed without it.
+        /// The sizing pass that allocated this buffer measured the same string
+        /// with <c>Utf8Size</c>, so the fast path's one-byte prefix and the
+        /// space reserved for it agree by construction.
+        /// </para>
+        /// </summary>
         public void WriteString(string value)
         {
+            if (value.Length <= MaxSingleBytePrefixChars)
+            {
+                var written = Encoding.UTF8.GetBytes(value, _buffer[(_pos + 1)..]);
+                _buffer[_pos] = (byte)written;
+                _pos += written + 1;
+                return;
+            }
+
             var byteCount = Encoding.UTF8.GetByteCount(value);
             Write7BitEncodedInt(byteCount);
             Encoding.UTF8.GetBytes(value, _buffer[_pos..]);
