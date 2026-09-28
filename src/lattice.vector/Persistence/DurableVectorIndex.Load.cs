@@ -5,6 +5,8 @@ namespace Orleans.Lattice.Vector.Persistence;
 
 public sealed partial class DurableVectorIndex
 {
+    private VectorIndexLoadDiscardReason _loadRejection;
+
     /// <summary>
     /// Adopts durable state if every part of it can be verified, and discards it
     /// otherwise. There is no middle path on purpose: a partially trusted index
@@ -14,6 +16,7 @@ public sealed partial class DurableVectorIndex
     /// </summary>
     private async Task LoadAsync(CancellationToken keyWalkToken, CancellationToken cancellationToken)
     {
+        _loadRejection = VectorIndexLoadDiscardReason.UnloadableRecord;
         // THE KEY WALK IS TAKEN ONCE PER LOAD ATTEMPT SEQUENCE, NOT ONCE PER
         // ATTEMPT, and this flag is what makes bounding the open safe.
         //
@@ -74,6 +77,8 @@ public sealed partial class DurableVectorIndex
 
                 return;
             }
+
+            _loadRejection = VectorIndexLoadDiscardReason.CountMismatch;
         }
 
         if (manifestRecord is null && _keys.Count == 0 && TryAdoptUncommittedBuild(buildRecord))
@@ -97,10 +102,18 @@ public sealed partial class DurableVectorIndex
         }
 
         await DiscardAsync(cancellationToken).ConfigureAwait(false);
+        LoadDiscardReason = _loadRejection;
     }
 
     private async Task<bool> TryRestoreAsync(VectorIndexManifest manifest, CancellationToken cancellationToken)
     {
+        if (manifest.Header.Dimensions != _options.Index.Dimensions
+            || manifest.Header.Metric != _options.Index.Metric)
+        {
+            _loadRejection = VectorIndexLoadDiscardReason.EmbeddingSpaceChange;
+            return false;
+        }
+
         VectorIndex restored;
         try
         {
@@ -154,6 +167,7 @@ public sealed partial class DurableVectorIndex
 
                 if (restored.Count != manifest.IndexedCount)
                 {
+                    _loadRejection = VectorIndexLoadDiscardReason.CountMismatch;
                     return false;
                 }
             }
