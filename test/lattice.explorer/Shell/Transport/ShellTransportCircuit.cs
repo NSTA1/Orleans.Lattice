@@ -44,6 +44,7 @@ internal sealed class ShellTransportCircuit : IDisposable
         services.AddScoped(_ => Auth);
         services.AddSingleton<IShellGrpcChannelFactory>(ChannelFactory);
         services.AddSingleton(SharedSerializer);
+        services.AddShellTransportTestHead();
         configure?.Invoke(services);
         services.AddLatticeExplorerShell();
 
