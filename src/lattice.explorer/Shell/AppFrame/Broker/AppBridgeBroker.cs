@@ -366,6 +366,13 @@ internal sealed partial class AppBridgeBroker(
             writer.WriteString("density", context.appearance.Density);
             writer.WriteBoolean("reducedMotion", context.appearance.ReducedMotion);
             writer.WriteString("tenant", string.IsNullOrWhiteSpace(context.tenant) ? null : context.tenant);
+            writer.WriteStartArray("roles");
+            foreach (var role in context.launch.Roles)
+            {
+                writer.WriteStringValue(role);
+            }
+
+            writer.WriteEndArray();
         }));
     }
 
