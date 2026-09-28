@@ -19,9 +19,11 @@ public sealed partial class MutationObserverIntegrationTests
         MutationObserverClusterFixture.Drain();
         var contextKey = LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey;
         var previous = RequestContext.Get(contextKey);
+        var previousPhysical = RequestContext.Get("ol.rpt");
         try
         {
             RequestContext.Set(contextKey, "inherited-unrelated-tree");
+            RequestContext.Set("ol.rpt", "inherited-unrelated-physical");
             await Task.WhenAll(
                 _fixture.Cluster.Client.GetGrain<ILattice>(first).SetAsync("first", [1]),
                 _fixture.Cluster.Client.GetGrain<ILattice>(second).SetAsync("second", [2]));
@@ -31,12 +33,58 @@ public sealed partial class MutationObserverIntegrationTests
         {
             if (previous is null) RequestContext.Remove(contextKey);
             else RequestContext.Set(contextKey, previous);
+            if (previousPhysical is null) RequestContext.Remove("ol.rpt");
+            else RequestContext.Set("ol.rpt", previousPhysical);
         }
 
         var mutations = MutationObserverClusterFixture.Drain().ToDictionary(m => m.Key);
         Assert.That(mutations["first"].TreeId, Is.EqualTo(first));
         Assert.That(mutations["second"].TreeId, Is.EqualTo(second));
         Assert.That(mutations["direct"].TreeId, Is.EqualTo(physical));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Direct_shard_writes_ignore_unrelated_or_stale_alias_context(bool afterResize)
+    {
+        var logical = $"observer-pair-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(logical);
+        await tree.SetAsync("zz-seed", [0]);
+        var physical = logical;
+        if (afterResize)
+        {
+            var resize = _fixture.Cluster.Client.GetGrain<ITreeResizeGrain>(logical);
+            await resize.ResizeAsync(64, 64);
+            await resize.RunResizePassAsync();
+            physical = await _fixture.Cluster.Client.GetLatticeRegistry().ResolveAsync(logical);
+            Assert.That(physical, Is.Not.EqualTo(logical));
+        }
+
+        var shard = _fixture.Cluster.Client.GetGrain<IShardRootGrain>($"{physical}/0");
+        var logicalKey = LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey;
+        var previousLogical = RequestContext.Get(logicalKey);
+        var previousPhysical = RequestContext.Get("ol.rpt");
+        MutationObserverClusterFixture.Drain();
+        try
+        {
+            RequestContext.Set(logicalKey, afterResize ? logical : "unrelated-logical");
+            RequestContext.Set("ol.rpt", afterResize ? logical : "unrelated-physical");
+            await shard.SetAsync("direct", [1]);
+            await shard.DeleteAsync("direct");
+            await shard.DeleteRangeAsync("a", "z");
+        }
+        finally
+        {
+            if (previousLogical is null) RequestContext.Remove(logicalKey);
+            else RequestContext.Set(logicalKey, previousLogical);
+            if (previousPhysical is null) RequestContext.Remove("ol.rpt");
+            else RequestContext.Set("ol.rpt", previousPhysical);
+        }
+
+        var mutations = MutationObserverClusterFixture.Drain();
+        Assert.That(mutations.Select(m => m.Kind),
+            Is.EqualTo(new[] { MutationKind.Set, MutationKind.Delete, MutationKind.DeleteRange }));
+        Assert.That(mutations.Select(m => m.TreeId), Is.All.EqualTo(physical));
     }
 
     [Test]
@@ -85,39 +133,55 @@ public sealed partial class MutationObserverIntegrationTests
         MutationObserverClusterFixture.Drain();
         var apply = _fixture.Cluster.Client.GetGrain<IReplicationApplyGrain>(treeId);
         var hlc = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks };
-        switch (path)
+        var logicalKey = LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey;
+        var physicalKey = LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey;
+        var previousLogical = RequestContext.Get(logicalKey);
+        var previousPhysical = RequestContext.Get(physicalKey);
+        try
         {
-            case "set":
-                await tree.SetAsync("after", [2]);
-                break;
-            case "delete":
-                await tree.DeleteAsync("before");
-                break;
-            case "range":
-                await tree.DeleteRangeAsync("a", "z");
-                break;
-            case "crdt":
-                await tree.PnCounter("after").IncrementAsync("local");
-                break;
-            case "many":
-                await tree.SetManyAsync([new("after", [2]), new("after2", [3])]);
-                break;
-            case "atomic":
-                await tree.SetManyAtomicAsync([new("after", [2]), new("after2", [3])]);
-                break;
-            case "replication-set":
-                await apply.ApplySetAsync("after", [2], hlc, "peer", null, 0);
-                break;
-            case "replication-many":
-                await apply.ApplyMergeManyAsync([
-                    new ApplyMergeItem { Key = "after", Value = [2], SourceHlc = hlc, OriginClusterId = "peer" },
+            RequestContext.Set(logicalKey, "forged-logical-tree");
+            RequestContext.Set(physicalKey, await registry.ResolveAsync(treeId));
+            switch (path)
+            {
+                case "set":
+                    await tree.SetAsync("after", [2]);
+                    break;
+                case "delete":
+                    await tree.DeleteAsync("before");
+                    break;
+                case "range":
+                    await tree.DeleteRangeAsync("a", "z");
+                    break;
+                case "crdt":
+                    await tree.PnCounter("after").IncrementAsync("local");
+                    break;
+                case "many":
+                    await tree.SetManyAsync([new("after", [2]), new("after2", [3])]);
+                    break;
+                case "atomic":
+                    await tree.SetManyAtomicAsync([new("after", [2]), new("after2", [3])]);
+                    break;
+                case "replication-set":
+                    await apply.ApplySetAsync("after", [2], hlc, "peer", null, 0);
+                    break;
+                case "replication-many":
+                    await apply.ApplyMergeManyAsync([
+                        new ApplyMergeItem { Key = "after", Value = [2], SourceHlc = hlc, OriginClusterId = "peer" },
                     new ApplyMergeItem { Key = "after2", Value = [3], SourceHlc = hlc, OriginClusterId = "peer" }]);
-                break;
-            case "replication-range":
-                await apply.ApplyDeleteRangeAsync("a", "z", hlc, "peer", null);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(path));
+                    break;
+                case "replication-range":
+                    await apply.ApplyDeleteRangeAsync("a", "z", hlc, "peer", null);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(path));
+            }
+        }
+        finally
+        {
+            if (previousLogical is null) RequestContext.Remove(logicalKey);
+            else RequestContext.Set(logicalKey, previousLogical);
+            if (previousPhysical is null) RequestContext.Remove(physicalKey);
+            else RequestContext.Set(physicalKey, previousPhysical);
         }
 
         var mutations = MutationObserverClusterFixture.Drain();

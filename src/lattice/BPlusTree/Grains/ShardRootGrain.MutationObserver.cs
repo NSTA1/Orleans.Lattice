@@ -43,7 +43,10 @@ internal sealed partial class ShardRootGrain
         // the historical "range deletes carry HLC.Zero" contract.
         var mutation = new LatticeMutation
         {
-            TreeId = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string ?? TreeId,
+            TreeId = RequestContext.Get(LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey) is string routedPhysical
+                && string.Equals(routedPhysical, TreeId, StringComparison.Ordinal)
+                ? RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string ?? TreeId
+                : TreeId,
             Kind = MutationKind.DeleteRange,
             Key = startInclusive,
             EndExclusiveKey = endExclusive,

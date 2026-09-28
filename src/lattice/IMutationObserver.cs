@@ -20,7 +20,10 @@ namespace Orleans.Lattice;
 /// physical backing created by a resize, shadow restore, or schema remediation.
 /// Subscriptions and enrollment filters therefore keep matching after an
 /// alias swap. Writes made directly to physical grains without a logical
-/// routing context identify that physical tree instead.
+/// routing context identify that physical tree instead. The routed logical
+/// identity is honoured only when its paired physical target matches the
+/// publishing grain; unrelated or stale inherited context falls back to the
+/// physical identity.
 /// </para>
 /// <para><b>Threading and latency.</b> <see cref="OnMutationAsync"/> runs
 /// on the originating grain's single-threaded scheduler and is awaited

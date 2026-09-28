@@ -22,7 +22,7 @@ public readonly record struct LatticeMutation
     /// <summary>
     /// The logical tree id used to route the observed write, stable across
     /// resize, shadow restore, and schema-remediation alias swaps.
-    /// Direct physical-grain writes without logical routing retain their
+    /// Direct physical-grain writes without a matching physical routing target retain their
     /// physical tree id. Durable WAL records retain their physical identity;
     /// converting those records does not resolve or rewrite their tree id.
     /// </summary>
