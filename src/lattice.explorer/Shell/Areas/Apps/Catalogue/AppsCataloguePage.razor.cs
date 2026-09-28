@@ -32,6 +32,7 @@ public partial class AppsCataloguePage : IDisposable
     private readonly Dictionary<string, string?> _icons = new(StringComparer.Ordinal);
     private readonly List<AvailableAppSummary> _rows = [];
     private IReadOnlyList<AvailableAppSummary> _items = [];
+    private Dictionary<string, int> _offeredBy = new(StringComparer.Ordinal);
     private CancellationTokenSource _load = new();
     private AppsAccessSnapshot? _snapshot;
     private ImmutableArray<AvailableAppSummary> _index = [];
@@ -152,6 +153,7 @@ public partial class AppsCataloguePage : IDisposable
     {
         _rows.Clear();
         _items = [];
+        CountOfferingSources();
         _continuation = null;
         await LoadPageAsync();
     }
@@ -174,6 +176,7 @@ public partial class AppsCataloguePage : IDisposable
             var page = await catalog.ListAvailableAsync(_view.ToQuery(TextEnabled, _continuation), token);
             _rows.AddRange(page.Apps);
             _items = [.. _rows];
+            CountOfferingSources();
             _continuation = page.Continuation;
         }
         catch (OperationCanceledException)
@@ -236,6 +239,7 @@ public partial class AppsCataloguePage : IDisposable
     {
         _snapshot = await Access.GetAsync(_load.Token);
         _index = await Access.GetCompletionIndexAsync(_load.Token);
+        CountOfferingSources();
         await ReloadAsync();
     });
 
@@ -267,12 +271,15 @@ public partial class AppsCataloguePage : IDisposable
 
     private static string IconKey(AvailableAppSummary app) => $"{app.SourceKey}/{app.Slug}@{app.NewestVersion}";
 
-    private int OfferedBy(string slug) =>
-        _rows.Concat(_index)
-            .Where(app => string.Equals(app.Slug, slug, StringComparison.Ordinal))
-            .Select(app => app.SourceKey)
-            .Distinct(StringComparer.Ordinal)
-            .Count();
+    private int OfferedBy(string slug) => _offeredBy.GetValueOrDefault(slug);
+
+    // Counted once per loaded page, not per rendered cell, so a long catalogue stays linear.
+    private void CountOfferingSources() =>
+        _offeredBy = _rows.Concat(_index)
+            .Select(app => (app.Slug, app.SourceKey))
+            .Distinct()
+            .GroupBy(pair => pair.Slug, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
     private bool CanOpen(AvailableAppSummary app) =>
         app.InstalledState == AppLifecycleState.Enabled
