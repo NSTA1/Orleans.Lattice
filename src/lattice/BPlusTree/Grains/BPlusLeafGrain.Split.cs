@@ -617,14 +617,19 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Records that a division could not pivot from the snapshot frame and is
-    /// about to materialise the whole leaf, tagged with the refusal reason and
-    /// the cache surface that had already released the frame.
+    /// about to fall back to the ordered view, tagged with the refusal reason
+    /// and the cache surface that had already released the frame.
     /// <para>
-    /// This is the only seam at which the forfeiture is observable. The split
-    /// path cannot distinguish a leaf that never attached a frame from one whose
-    /// frame an unrelated whole-leaf operation consumed - both present as a bare
-    /// refusal - yet the first costs nothing and the second costs the whole leaf,
-    /// resident and unsheddable for the life of the activation.
+    /// The reason decides what the fallback costs (issue #2856).
+    /// <see cref="LeafBisectRefusalReason.NoSnapshotAttached"/> means no frame
+    /// is attached and every row is already resident, so the fallback
+    /// materialises nothing; its seam is <c>none</c> for a leaf that never
+    /// attached a frame and otherwise names the earlier surface that already
+    /// paid for the whole leaf. A refusal taken with a frame still attached
+    /// (<see cref="LeafBisectRefusalReason.FrameKeyUnreadable"/>,
+    /// <see cref="LeafBisectRefusalReason.NoKeySortsBelowPivot"/>) is the
+    /// expensive one: the fallback itself materialises the whole remainder of
+    /// the leaf, resident and unsheddable for the life of the activation.
     /// </para>
     /// </summary>
     private void RecordBisectRefusal(LeafBisectRefusalReason reason, LeafSnapshotDetachSeam seam)
@@ -814,23 +819,27 @@ internal sealed partial class BPlusLeafGrain
         // Take the pivot from the frame's ordinal index instead, which decodes
         // one key and no payload.
         //
-        // The fallback is the old path. Its cost is NOT uniform, and the
-        // difference is invisible from here (issue #2787). When no frame was
-        // ever attached - a leaf replayed from the WAL, say - the leaf is
-        // already resident and the ordered view costs nothing extra. But the
-        // same refusal arrives when a frame WAS attached and some unrelated
-        // whole-leaf operation consumed it, and there the fallback materialises
-        // the entire leaf, unsheddable for the life of the activation, on
-        // precisely the oversized leaf that can least afford it. The refusal is
-        // a function of activation history, not of leaf size, so this seam
-        // cannot tell the benign case from the harmful one. That is why the
-        // refusal is metered with the detaching seam rather than merely taken.
+        // The fallback is the old path. Its cost is NOT uniform, and it is
+        // decided by whether a frame is still attached (issue #2856). When the
+        // refusal is NoSnapshotAttached no frame is attached, so every row is
+        // already resident and the ordered view materialises nothing - whether
+        // no frame was ever attached (a leaf replayed from the WAL) or an
+        // earlier whole-leaf operation already consumed it. In the second case
+        // the cost was paid by that earlier operation, which the detach seam
+        // names; this seam merely observes it. The expensive refusals are the
+        // ones taken with a frame STILL attached (FrameKeyUnreadable,
+        // NoKeySortsBelowPivot): there Keys below materialises the whole
+        // remainder of the leaf and detaches the frame, unsheddable for the
+        // life of the activation, on precisely the oversized leaf that can
+        // least afford it. That is why the refusal is metered with its reason
+        // and the detaching seam rather than merely taken.
         if (!Cache.TryGetBisectingKeyWithoutHydrating(out var splitKey, out var refusalReason))
         {
-            // Recorded before the fallback runs, because the fallback detaches
-            // the frame and overwrites LastDetachSeam with its own surface. Read
-            // afterwards it would always report the division itself and never
-            // the operation that actually forfeited the fast path.
+            // Recorded before the fallback runs, because on a frame-attached
+            // refusal the fallback detaches the frame and overwrites
+            // LastDetachSeam with its own surface. Read afterwards it would
+            // report the division itself rather than the frame's true state at
+            // the refusal.
             RecordBisectRefusal(refusalReason, Cache.LastDetachSeam);
 
             var keys = Cache.Keys;

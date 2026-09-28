@@ -87,7 +87,8 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
             long maxLeafBytes = 64L * 1024,
             long residentBudgetBytes = 16L * 1024,
             int maxLeafKeys = 1_000_000,
-            LeafSnapshotRow[]? snapshotRows = null)
+            LeafSnapshotRow[]? snapshotRows = null,
+            string treeId = "tree-bounded-split")
     {
         var recorder = new TransferRecorder();
 
@@ -118,7 +119,7 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
         context.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString("N")));
 
         var state = new FakePersistentState<LeafNodeState>();
-        state.State.TreeId = "tree-bounded-split";
+        state.State.TreeId = treeId;
 
         // Deliberately NOT seeding state.State.ProjectionHash. A leaf that
         // rehydrates from a snapshot always has a null hash, because
@@ -172,10 +173,11 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
         RehydratedDividableLeafAsync(
             int rowCount,
             long maxLeafBytes = 64L * 1024,
-            long residentBudgetBytes = 16L * 1024)
+            long residentBudgetBytes = 16L * 1024,
+            string treeId = "tree-bounded-split")
     {
         var created = CreateDividableLeaf(
-            maxLeafBytes, residentBudgetBytes, snapshotRows: Rows(rowCount));
+            maxLeafBytes, residentBudgetBytes, snapshotRows: Rows(rowCount), treeId: treeId);
 
         Assert.That(
             await created.Grain.TryRehydrateFromSnapshotAsync(CancellationToken.None),
