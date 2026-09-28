@@ -47,6 +47,7 @@
 .lt-table-frame:focus-visible,
 .lt-table__sort:focus-visible,
 .lt-mono-cell__copy:focus-visible,
+.lt-table-list__open:focus-visible,
 .lt-dialog:focus-visible {
   outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
   outline-offset: var(--lt-op-focus-ring-offset);
@@ -873,6 +874,92 @@ a.lt-chain__text:hover {
   }
 }
 
+/* The table's compact form, below the small breakpoint: a list of two-line
+   rows between the booktabs rules, each a full-width button that opens the
+   row's detail sheet. Every row is at least a 44px touch target. */
+.lt-table-list {
+  min-width: 0;
+}
+
+.lt-table-list__sort {
+  margin-block-end: var(--lt-space-3);
+}
+
+.lt-table-list__rows {
+  margin: 0;
+  padding: 0;
+  border-top: 1.5px solid var(--lt-ink);
+  border-bottom: 1.5px solid var(--lt-ink);
+  list-style: none;
+}
+
+.lt-table-list__row + .lt-table-list__row {
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-table-list__open {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--lt-space-2) var(--lt-space-3);
+  border: 0;
+  background: transparent;
+  color: var(--lt-ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.lt-table-list__row[aria-current] .lt-table-list__open {
+  background: var(--lt-op-row-current);
+  box-shadow: inset 3px 0 0 var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-table-list__empty {
+  padding: var(--lt-space-4) var(--lt-space-3);
+  color: var(--lt-ink-2);
+}
+
+.lt-compact-row {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.lt-compact-row__primary {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-label);
+  overflow-wrap: anywhere;
+}
+
+.lt-compact-row__primary--mono {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+}
+
+.lt-compact-row__secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-1) var(--lt-space-3);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-body);
+}
+
+.lt-compact-row__field {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-compact-row__term {
+  color: var(--lt-ink-3);
+}
+
 /* ==========================================================================
    7. Tabs
    ========================================================================== */
@@ -992,6 +1079,31 @@ a.lt-chain__text:hover {
   justify-content: flex-end;
   gap: var(--lt-space-3);
   margin-top: var(--lt-space-5);
+}
+
+/* A sheet: the same dialog, full height on one inline edge. It takes the full
+   width of a narrow screen, and keeps the dialog's focus trap and return. */
+.lt-dialog-layer--sheet {
+  place-items: stretch;
+  padding: 0;
+}
+
+.lt-dialog--sheet {
+  width: min(30rem, 100%);
+  height: 100%;
+  max-height: none;
+  border-block: 0;
+  border-radius: 0;
+}
+
+.lt-dialog--start {
+  justify-self: start;
+  border-inline-start: 0;
+}
+
+.lt-dialog--end {
+  justify-self: end;
+  border-inline-end: 0;
 }
 
 .lt-confirm {

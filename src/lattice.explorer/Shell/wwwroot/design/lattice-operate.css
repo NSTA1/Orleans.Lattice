@@ -5,7 +5,8 @@
  * diagram") and loads the site's own tokens.css, linked at build time. This
  * file adds only what an operator console needs and a reading site does not:
  *
- *   - density: row and control heights, comfortable and compact;
+ *   - density: row and control heights, comfortable (44px, a touch target)
+ *     and compact (28px, never below the 24px WCAG 2.2 minimum);
  *   - the focus ring;
  *   - the current-row band and the control boundary colour;
  *   - the lifecycle and health state roles, each a colour AND a glyph, so no
@@ -29,9 +30,9 @@
 :root,
 [data-bs-theme="light"] {
   /* --- Density ------------------------------------------------------- */
-  --lt-op-row-height-comfortable: 2.25rem;   /* 36px */
+  --lt-op-row-height-comfortable: 2.75rem;   /* 44px: the touch-target floor */
   --lt-op-row-height-compact: 1.75rem;       /* 28px, above the 24px WCAG 2.2 target minimum */
-  --lt-op-control-height-comfortable: 2.25rem;
+  --lt-op-control-height-comfortable: 2.75rem;
   --lt-op-control-height-compact: 1.75rem;
   --lt-op-cell-padding-x-comfortable: 0.75rem;
   --lt-op-cell-padding-x-compact: 0.5rem;
