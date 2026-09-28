@@ -76,7 +76,7 @@ internal sealed partial class TreeDeletionGrain(
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
-        if (state.State.IsDeleted) return;
+        if (state.State.IsDeleted && (!state.State.Delegated || state.State.PurgeComplete)) return;
 
         // Mark all shards as deleted first - including every shard an
         // adaptive split allocated above the pinned ShardCount, which the
@@ -89,6 +89,11 @@ internal sealed partial class TreeDeletionGrain(
             tasks[i] = shard.MarkDeletedAsync();
         }
         await Task.WhenAll(tasks);
+
+        // A failed delegated recovery may already have unmarked some shards
+        // while its durable deletion flag remains set. Reapply those marks,
+        // without changing the original deletion time or emitting another event.
+        if (state.State.IsDeleted) return;
 
         // Snapshot mutated fields BEFORE any in-memory change so a failing
         // WriteStateAsync below can revert the activation to the state every

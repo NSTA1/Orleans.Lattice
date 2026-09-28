@@ -1,11 +1,39 @@
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public partial class TreeResizeGrainTests
 {
+    [Test]
+    public async Task Timer_pass_reserves_legacy_in_flight_work_before_driving_the_snapshot()
+    {
+        var (grain, state, _, factory, _) = CreateGrain();
+        state.State.InProgress = true;
+        state.State.Phase = ResizePhase.Snapshot;
+        state.State.OldPhysicalTreeId = TreeId;
+        var deletion = factory.GetGrain<ITreeDeletionGrain>(TreeId);
+        deletion.BeginAliasChangeAsync(Arg.Any<string>())
+            .ThrowsAsync(new IOException("reservation unavailable"));
+        var snapshot = factory.GetGrain<ITreeSnapshotGrain>(TreeId);
+
+        await grain.ProcessNextPhaseAsync();
+
+        var reservationId = state.State.AliasReservationId;
+        Assert.That(reservationId, Is.Not.Null);
+        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Snapshot));
+        await snapshot.DidNotReceive().RunSnapshotPassAsync();
+        deletion.BeginAliasChangeAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
+
+        await grain.ProcessNextPhaseAsync();
+
+        await deletion.Received(2).BeginAliasChangeAsync(reservationId!);
+        await snapshot.Received(1).RunSnapshotPassAsync();
+        Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
+    }
+
     [Test]
     public void External_idle_pass_cannot_release_a_control_plane_reservation()
     {

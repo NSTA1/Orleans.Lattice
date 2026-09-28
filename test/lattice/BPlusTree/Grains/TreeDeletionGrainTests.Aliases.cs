@@ -122,7 +122,7 @@ public partial class TreeDeletionGrainTests
         {
             Assert.That(state.State.LogicalPhysicalTreeId, Is.EqualTo(PhysicalTarget));
             Assert.That(state.WriteCount, Is.GreaterThan(0));
-            throw new InvalidOperationException("physical mark failed");
+            return Task.FromException(new InvalidOperationException("physical mark failed"));
         });
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteTreeAsync());
@@ -208,7 +208,7 @@ public partial class TreeDeletionGrainTests
         shard.MarkDeletedAsync().Returns(_ =>
         {
             Assert.That(state.State.LocalDeleteTargetPinned, Is.True);
-            throw new InvalidOperationException("mark failed");
+            return Task.FromException(new InvalidOperationException("mark failed"));
         });
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteTreeAsync());
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.EnsureAliasWritableAsync());

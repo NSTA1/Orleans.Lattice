@@ -490,6 +490,7 @@ internal sealed class TreeResizeGrain(
 
         try
         {
+            await ReserveAliasAsync();
             switch (state.State.Phase)
             {
                 case ResizePhase.Snapshot:

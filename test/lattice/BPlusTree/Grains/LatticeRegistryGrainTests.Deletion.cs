@@ -15,6 +15,7 @@ public partial class LatticeRegistryGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var tree = Substitute.For<ISystemLattice>();
+        tree.GetAsync(Arg.Any<string>()).Returns((byte[]?)null);
         factory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId).Returns(tree);
         var deleted = Substitute.For<ITreeDeletionGrain>();
         deleted.EnsureAliasWritableAsync().ThrowsAsync(new InvalidOperationException("deleted"));

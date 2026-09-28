@@ -154,6 +154,24 @@ public partial class TreeDeletionGrainTests
     }
 
     [Test]
+    public async Task Delegated_delete_reapplies_marks_after_a_partially_failed_recovery()
+    {
+        var (grain, state, _, factory, _) = CreateGrain();
+        await grain.DeleteDelegatedAsync();
+        var deletedAt = state.State.DeletedAtUtc;
+        factory.GetGrain<IShardRootGrain>($"{TreeId}/1").UnmarkDeletedAsync()
+            .ThrowsAsync(new IOException("unmark response lost"));
+        Assert.ThrowsAsync<IOException>(() => grain.RecoverPhysicalAsync());
+
+        await grain.DeleteDelegatedAsync();
+
+        for (var i = 0; i < ShardCount; i++)
+            await factory.GetGrain<IShardRootGrain>($"{TreeId}/{i}").Received(2).MarkDeletedAsync();
+        Assert.That(state.State.DeletedAtUtc, Is.EqualTo(deletedAt));
+        Assert.That(await grain.IsPhysicalDeletedAsync(), Is.True);
+    }
+
+    [Test]
     public async Task Failed_target_recovery_preserves_the_logical_deletion_for_retry()
     {
         var (grain, state, _, factory, _) = CreateGrain();
