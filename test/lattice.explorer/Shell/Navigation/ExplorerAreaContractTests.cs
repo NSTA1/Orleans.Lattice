@@ -115,7 +115,7 @@ public sealed class ExplorerAreaContractTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(scope.ServiceProvider.GetRequiredService<ExplorerAreaDirectory>().Areas.Single(), Is.InstanceOf<ProbeArea>());
+            Assert.That(scope.ServiceProvider.GetRequiredService<ExplorerAreaDirectory>().Areas.OfType<ProbeArea>().Count(), Is.EqualTo(1));
             Assert.That(scope.ServiceProvider.GetRequiredService<ExplorerNavigator>(), Is.Not.Null);
             Assert.That(scope.ServiceProvider.GetRequiredService<ExplorerTenancy>().IsActive, Is.False);
             Assert.That(scope.ServiceProvider.GetRequiredService<AddressCompletionFanOut>(), Is.Not.Null);

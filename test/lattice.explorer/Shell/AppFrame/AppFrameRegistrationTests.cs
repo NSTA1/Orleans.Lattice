@@ -1,12 +1,18 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Shell;
 using Orleans.Lattice.Explorer.Shell.Design.Components;
 using Orleans.Lattice.Explorer.Shell.Framing;
 using Orleans.Lattice.Explorer.Shell.Framing.Broker;
+using Orleans.Lattice.Explorer.Shell.Transport;
 using Orleans.Lattice.Explorer.Tests.Shell.Design;
+using Orleans.Lattice.Explorer.Tests.Shell.Session;
+using Orleans.Lattice.Explorer.Tests.Shell.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.Shell.Framing;
 
@@ -37,7 +43,7 @@ public sealed class AppFrameRegistrationTests
     [Test]
     public void Each_circuit_gets_its_own_broker_and_loader()
     {
-        using var provider = new ServiceCollection().AddLogging().AddLatticeExplorerShell().BuildServiceProvider(validateScopes: true);
+        using var provider = CircuitServices().BuildServiceProvider(validateScopes: true);
         using var first = provider.CreateScope();
         using var second = provider.CreateScope();
 
@@ -59,12 +65,31 @@ public sealed class AppFrameRegistrationTests
     [Test]
     public async Task Without_a_transport_every_launch_is_refused()
     {
-        using var provider = new ServiceCollection().AddLogging().AddLatticeExplorerShell().BuildServiceProvider(validateScopes: true);
+        // The Shell's transport always registers a workspace, so model a host that
+        // serves none by removing it: the loader then receives no workspace at all.
+        var services = CircuitServices();
+        services.RemoveAll<ILatticeAppWorkspace>();
+        using var provider = services.BuildServiceProvider(validateScopes: true);
         using var scope = provider.CreateScope();
 
         var result = await scope.ServiceProvider.GetRequiredService<AppFrameBundleLoader>().AuthorizeAsync(AppFrameTestData.Slug);
 
         Assert.That(result.Failure, Is.EqualTo(AppFrameFailure.NoGrant));
+    }
+
+    [Test]
+    public async Task A_transport_with_no_configured_endpoint_refuses_every_launch()
+    {
+        using var provider = CircuitServices().BuildServiceProvider(validateScopes: true);
+        using var scope = provider.CreateScope();
+
+        var result = await scope.ServiceProvider.GetRequiredService<AppFrameBundleLoader>().AuthorizeAsync(AppFrameTestData.Slug);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.ServiceProvider.GetRequiredService<ILatticeAppWorkspace>(), Is.InstanceOf<ShellAppWorkspaceTransport>());
+            Assert.That(result.Failure, Is.EqualTo(AppFrameFailure.Unavailable));
+        });
     }
 
     [Test]
@@ -170,4 +195,16 @@ public sealed class AppFrameRegistrationTests
 
     private static string Value(string body, string property) =>
         Regex.Match(body, property + @"\s*:\s*([^;]+);").Groups[1].Value.Trim();
+
+    /// <summary>
+    /// A circuit's container as the web head builds it: the Core session and auth session the
+    /// Shell's transport reads (unconfigured and signed out), then the Shell.
+    /// </summary>
+    private static IServiceCollection CircuitServices() =>
+        new ServiceCollection()
+            .AddLogging()
+            .AddScoped<IExplorerSession>(_ => new FakeExplorerSession(new FakeStateConnection()))
+            .AddScoped<IExplorerAuthSession, FakeAuthSession>()
+            .AddShellTransportTestHead()
+            .AddLatticeExplorerShell();
 }
