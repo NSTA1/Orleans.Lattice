@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 191 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 194 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -29,7 +29,12 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnPartitioningReporter.cs#
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextCoverageProbeReporter.cs#_probes	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextMemoryMarkerScanReporter.cs#_markerScans	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_annSearches	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactBudget	unresolved	reason=dimension outcome: no declaration found for outcome
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactDuration	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactGatherFaults	unresolved	reason=dimension fault: no declaration found for fault
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactGathers	unresolved	reason=dimension outcome: no declaration found for boundedOutcome
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactPages	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalGuardReporter.cs#_exactVectors	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_duration	unresolved	reason=dimension tool: no declaration found for tool
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalLatencyReporter.cs#_stageDuration	unresolved	reason=dimension stage: no declaration found for stage
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextRetrievalReadinessState.cs#_readySeconds	unresolved	reason=dimension phase: no declaration found for phaseTag

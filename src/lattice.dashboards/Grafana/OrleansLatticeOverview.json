@@ -1727,6 +1727,44 @@
       ]
     },
     {
+      "id": 79,
+      "title": "Exact KNN gather work",
+      "description": "Returned logical metadata pages and visited metadata records per second, including filtered spaces and missing payloads. Excludes warm cache hits, lookahead rows and failed partial pages. Pages are not internal shard fills or RPCs. Correlate these rates with ANN build progress to quantify exact gather work during a build, not CPU share. Platform aggregate; deliberately no tree filter. All counters are zero-primed: absent means not reporting, not idle.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1056 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(repocontext_retrieval_exact_scan_vectors_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "metadata vectors/s" },
+        { "refId": "B", "expr": "sum(rate(repocontext_retrieval_exact_scan_pages_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "logical pages/s" }
+      ]
+    },
+    {
+      "id": 80,
+      "title": "Exact KNN gather wall time",
+      "description": "Cumulative gather wall seconds per second, including failed and caller-cancelled gathers. Includes waits for metadata and payloads, excludes cache hits and ranking. This is not CPU utilization; overlapping gathers can exceed one second per second. Recorded on exit, so a currently blocked gather has not contributed its duration yet. No tree filter or fabricated zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1056 },
+      "fieldConfig": { "defaults": { "unit": "none", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(repocontext_retrieval_exact_scan_duration_seconds_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "gather wall seconds/s" }
+      ]
+    },
+    {
+      "id": 81,
+      "title": "Exact KNN budget and gather outcomes",
+      "description": "Budget evaluations and terminal gather outcomes per second. exceeded is a predicted budget exhaustion that prevents a gather, not a timed-out scan. corpus_unknown fails open; unbounded disables the prediction. ANN answers and breaker skips never evaluate the budget; explicit exact mode bypasses it. Cache hits may evaluate the fallback budget but do not gather. Fault causes remain on repocontext.retrieval.exact_gather.faults. Every outcome is zero-primed; absent is not zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 1063 },
+      "fieldConfig": { "defaults": { "unit": "ops", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(repocontext_retrieval_exact_scan_budget_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "budget {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (outcome) (rate(repocontext_retrieval_exact_scan_gathers_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "gather {{outcome}}/s" }
+      ]
+    },
+    {
       "id": 74,
       "title": "Deployed build (version / commit)",
       "description": "Silo count per distinct running build identity (orleans_lattice_build_info). This is the only instrument in the estate that answers 'is the build under test the build that is actually running'. Every other metric here reports something a feature did, so each is silent until that feature is exercised, which makes a missing series ambiguous between 'the image did not deploy' and 'the code deployed but that path was never reached'. This series is emitted unconditionally from process start with a constant value of 1, so its absence means the process is not running or not exporting, and means nothing else. More than one row means the estate is running mixed builds, which invalidates any comparison drawn across silos. Deliberately carries no tree matcher: build identity is process-scoped, so filtering by $tree would drop the series entirely.",
