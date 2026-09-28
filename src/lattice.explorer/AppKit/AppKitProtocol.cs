@@ -267,6 +267,12 @@ public static class AppKitProtocol
         /// <summary>The longest scan continuation token.</summary>
         public const int MaxContinuationLength = 4096;
 
+        /// <summary>The most role names a <c>context.read</c> result carries (the manifest's section bound).</summary>
+        public const int MaxRoles = 256;
+
+        /// <summary>The longest role name in a <c>context.read</c> result (the manifest's name bound).</summary>
+        public const int MaxRoleNameLength = 128;
+
         /// <summary>The kit's default request timeout, in milliseconds.</summary>
         public const int DefaultTimeoutMilliseconds = 30_000;
 

@@ -19,7 +19,8 @@ internal sealed class AppFrameLaunch
     internal AppFrameLaunch(
         AppFrameBundleLoader issuer,
         WorkspaceAppDescriptor descriptor,
-        AppUiDescriptor ui)
+        AppUiDescriptor ui,
+        ImmutableArray<string> roles)
     {
         Issuer = issuer;
         Slug = descriptor.Slug;
@@ -34,6 +35,7 @@ internal sealed class AppFrameLaunch
             ? FrozenSet<string>.Empty
             : descriptor.Trees.Select(tree => tree.Name).Where(name => name is not null).ToFrozenSet(StringComparer.Ordinal);
         Grants = ui.Bridge.IsDefault ? [] : ui.Bridge;
+        Roles = SanitiseRoles(roles);
     }
 
     /// <summary>The loader, and therefore the circuit, that authorised this launch.</summary>
@@ -59,6 +61,14 @@ internal sealed class AppFrameLaunch
 
     /// <summary>The app's declared logical tree names, compared ordinally.</summary>
     public FrozenSet<string> Trees { get; }
+
+    /// <summary>
+    /// The caller's app role names in this app, as the workspace listed them when the launch
+    /// was authorised: well-formed names only, de-duplicated, in workspace order, at most
+    /// <see cref="AppFrameProtocol.MaxRoles"/>. A snapshot for the launch's lifetime; a
+    /// re-launch (including one after revocation) authorises afresh and so refreshes it.
+    /// </summary>
+    public ImmutableArray<string> Roles { get; }
 
     /// <summary>The consented bridge grants of the installed version.</summary>
     public ImmutableArray<AppUiBridgeGrantDescriptor> Grants { get; }
@@ -92,5 +102,30 @@ internal sealed class AppFrameLaunch
         }
 
         return false;
+    }
+
+    private static ImmutableArray<string> SanitiseRoles(ImmutableArray<string> roles)
+    {
+        if (roles.IsDefaultOrEmpty)
+        {
+            return [];
+        }
+
+        var kept = ImmutableArray.CreateBuilder<string>(Math.Min(roles.Length, AppFrameProtocol.MaxRoles));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var role in roles)
+        {
+            if (kept.Count == AppFrameProtocol.MaxRoles)
+            {
+                break;
+            }
+
+            if (role is not null && AppFrameProtocol.IsRoleName(role) && seen.Add(role))
+            {
+                kept.Add(role);
+            }
+        }
+
+        return kept.ToImmutable();
     }
 }

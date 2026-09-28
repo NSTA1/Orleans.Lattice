@@ -19,6 +19,14 @@
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
 
+  <!-- Apps/ holds sample apps as their own projects; keep this host's default globs out of them. -->
+  <ItemGroup>
+    <Compile Remove="Apps/**" />
+    <Content Remove="Apps/**" />
+    <None Remove="Apps/**" />
+    <EmbeddedResource Remove="Apps/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
   </ItemGroup>
