@@ -21,6 +21,8 @@ src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildCorpusReporter.cs#_terminalDenials	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_inFlightSeconds	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildSliceReporter.cs#_slices	anchored	dimension=cause; total=faulted; assertedBy=The_tally_the_reporter_reads_back_agrees_with_the_causes_recorded
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildStageReporter.cs#_sliceItems	primed	
+src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnBuildStageReporter.cs#_stageDuration	unresolved	reason=dimension stage: no declaration found for stage
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexLoadReporter.cs#_loads	primed	
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs#_partitions	unresolved	reason=dimension (unread-observable-callback:ObservePartitions): callback measurements use cached tag arrays whose domains are not resolved; runtime coverage: Gauges_follow_banked_and_restored_progress_and_retire_with_registry
 src/lattice.api.mcp.repocontext/Retrieval/RepoContextAnnIndexRegistry.cs#_vectors	unresolved	reason=dimension (unread-observable-callback:ObserveVectors): callback measurements use cached tag arrays whose domains are not resolved; runtime coverage: Gauges_follow_banked_and_restored_progress_and_retire_with_registry
