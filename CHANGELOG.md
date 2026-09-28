@@ -42,6 +42,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Leaf scan and projection digest.** A bounded range scan retires its lower bound once met instead of retesting every row; the digest transcodes each string field once rather than twice; and a single-replica vector clock is fed straight through instead of rented and sorted per row. ([#3760](https://github.com/NSTA1/Orleans.Lattice/pull/3760)) (`Orleans.Lattice`)
+
 - **Performance - GetMany strict-pass retry capture.** The single-shard `GetManyAsync` strict-pass retry closure no longer allocates a nested parent capture, removing 24 bytes from every call. ([#3678](https://github.com/NSTA1/Orleans.Lattice/issues/3678)) (`Orleans.Lattice`)
 
 - **Docs - Unresolved-prepare ledger risk.** The ledger's metric description, runtime warning and docs now say Azure Table's row cap bounds its growth while SQLite's larger limit can exhaust activation reads, and recommend the beyond-cap alert on every profile. ([#2830](https://github.com/NSTA1/Orleans.Lattice/issues/2830)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
