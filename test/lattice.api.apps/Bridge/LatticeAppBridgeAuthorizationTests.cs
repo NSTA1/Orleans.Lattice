@@ -269,6 +269,44 @@ public sealed class LatticeAppBridgeAuthorizationTests
     }
 
     [Test]
+    public async Task A_role_that_may_read_keys_but_not_ranges_is_denied_a_scan()
+    {
+        // The data path enforces RangeRead for a scan, so the bridge must not treat Read as enough: a scan the
+        // data plane would silently filter to nothing is refused as a denial instead.
+        var manifest = BridgeHarness.DefaultManifest() with
+        {
+            Roles =
+            [
+                new AppRoleDeclaration { Name = "viewer", Operations = LatticeOperation.Read, Scopes = [new AppScopeTemplate { Tree = "notes" }] },
+            ],
+        };
+        var harness = new BridgeHarness(manifest).Installed("victor", BridgeHarness.Viewers);
+        var bridge = harness.Bridge;
+
+        Assert.That(await bridge.GetAsync(BridgeHarness.Target(), "k"), Is.Null);
+        var dialled = harness.Dialled.Count;
+        BridgeAssert.Fails(AppBridgeFailure.Denied, () => bridge.ScanAsync(BridgeHarness.Target(), string.Empty, 10));
+        Assert.That(harness.Dialled, Has.Count.EqualTo(dialled));
+    }
+
+    [Test]
+    public async Task A_ceiling_without_range_read_denies_a_scan_but_not_a_read()
+    {
+        var harness = new BridgeHarness().As("alice", BridgeHarness.Editors);
+        harness.Publish(harness.Record(ceiling: new AppCapabilityCeiling
+        {
+            AllowedOperations = LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete,
+            ApprovedExceptionScopes = [LatticeScope.Tree(BridgeHarness.AdoptedTree)],
+        }));
+        var bridge = harness.Bridge;
+
+        Assert.That(await bridge.GetAsync(BridgeHarness.Target(), "k"), Is.Null);
+        var dialled = harness.Dialled.Count;
+        BridgeAssert.Fails(AppBridgeFailure.Denied, () => bridge.ScanAsync(BridgeHarness.Target(), string.Empty, 10));
+        Assert.That(harness.Dialled, Has.Count.EqualTo(dialled));
+    }
+
+    [Test]
     public void A_caller_holding_no_role_of_the_app_is_denied_even_a_read() =>
         AssertEveryVerbDeniedUntouched(new BridgeHarness().Installed("mallory", "g-somebody-else"));
 

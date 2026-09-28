@@ -63,8 +63,8 @@ internal sealed class AppBridgeClusterFixture(TenantId? tenant)
               "identity": { "slug": "{{Slug}}", "version": "{{Version}}" },
               "trees": [{ "name": "notes" }],
               "roles": [
-                { "name": "viewer", "operations": ["Read"], "scopes": [{ "tree": "notes" }] },
-                { "name": "editor", "operations": ["Read", "Write", "Delete"], "scopes": [{ "tree": "notes" }] }
+                { "name": "viewer", "operations": ["Read", "RangeRead"], "scopes": [{ "tree": "notes" }] },
+                { "name": "editor", "operations": ["Read", "RangeRead", "Write", "Delete"], "scopes": [{ "tree": "notes" }] }
               ],
               "subscriptions": [],
               "mcpTools": [],
@@ -143,7 +143,7 @@ internal sealed class AppBridgeClusterFixture(TenantId? tenant)
                 ],
                 Ceiling = new AppCapabilityCeilingDescriptor
                 {
-                    AllowedOperations = LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete,
+                    AllowedOperations = LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write | LatticeOperation.Delete,
                 },
             });
             Assert.That(installed.State, Is.EqualTo(AppLifecycleState.Installed));
@@ -159,7 +159,7 @@ internal sealed class AppBridgeClusterFixture(TenantId? tenant)
                 "operator-everything",
                 LatticeSubjectSelector.User(Operator),
                 LatticeScope.Tree(NotesTree),
-                LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete,
+                LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write | LatticeOperation.Delete,
                 LatticeEffect.Allow));
         }
 
@@ -193,19 +193,19 @@ internal sealed class AppBridgeClusterFixture(TenantId? tenant)
             timeout: TimeSpan.FromSeconds(60));
     }
 
-    /// <summary>Reads a key of an effective tree directly as the bootstrap administrator, bypassing the bridge.</summary>
+    /// <summary>Reads a key of an effective tree directly as the bootstrap administrator in the fixture's tenant, bypassing the bridge.</summary>
     public async Task<byte[]?> ReadRawAsync(string treeId, string key)
     {
-        using (LatticeCredentialContext.Use(BootstrapAdmin, scheme: BridgeTestCredentialAuthenticator.Scheme))
+        using (As(BootstrapAdmin))
         {
             return await Cluster.Client.GetGrain<ILattice>(treeId).GetAsync(key);
         }
     }
 
-    /// <summary>Writes a key of an effective tree directly as the bootstrap administrator, bypassing the bridge.</summary>
+    /// <summary>Writes a key of an effective tree directly as the bootstrap administrator in the fixture's tenant, bypassing the bridge.</summary>
     public async Task WriteRawAsync(string treeId, string key, byte[] value)
     {
-        using (LatticeCredentialContext.Use(BootstrapAdmin, scheme: BridgeTestCredentialAuthenticator.Scheme))
+        using (As(BootstrapAdmin))
         {
             await Cluster.Client.GetGrain<ILattice>(treeId).SetAsync(key, value);
         }

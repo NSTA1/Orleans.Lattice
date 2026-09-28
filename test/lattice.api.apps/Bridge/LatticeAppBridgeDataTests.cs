@@ -174,6 +174,55 @@ public sealed class LatticeAppBridgeDataTests
         BridgeAssert.Fails(AppBridgeFailure.TooLarge, () => harness.Bridge.ScanAsync(BridgeHarness.Target(), string.Empty, 10));
     }
 
+    // Step 5 - the caller's tenant on the data path.
+
+    [Test]
+    public async Task The_callers_resolved_tenant_is_the_ambient_active_tenant_on_every_data_path_call()
+    {
+        var harness = new BridgeHarness().As("alice", BridgeHarness.Editors);
+        harness.Publish(harness.Record(tenant: AppsControlHarness.Acme));
+        harness.Tenants.Tenant = AppsControlHarness.Acme;
+        var bridge = harness.Bridge;
+        var target = BridgeHarness.Target();
+
+        await bridge.SetAsync(target, "k", Bytes("v"));
+        await bridge.GetAsync(target, "k");
+        await bridge.ScanAsync(target, string.Empty, 10);
+        await bridge.DeleteAsync(target, "k");
+
+        Assert.That(harness.ObservedTenants, Has.Count.EqualTo(4));
+        Assert.That(harness.ObservedTenants, Is.All.EqualTo(AppsControlHarness.Acme));
+        Assert.That(LatticeActiveTenantContext.Current, Is.Null, "the stamp is scoped to the data-path call");
+    }
+
+    [Test]
+    public async Task No_tenant_is_stamped_for_the_default_tenant()
+    {
+        var harness = Editor();
+        var bridge = harness.Bridge;
+
+        await bridge.SetAsync(BridgeHarness.Target(), "k", Bytes("v"));
+        await bridge.ScanAsync(BridgeHarness.Target(), string.Empty, 10);
+
+        Assert.That(harness.ObservedTenants, Is.All.Null);
+    }
+
+    [Test]
+    public async Task An_already_asserted_tenant_is_left_in_place()
+    {
+        var harness = new BridgeHarness().As("alice", BridgeHarness.Editors);
+        harness.Publish(harness.Record(tenant: AppsControlHarness.Acme));
+        harness.Tenants.Tenant = AppsControlHarness.Acme;
+
+        using (LatticeActiveTenantContext.With(AppsControlHarness.Acme))
+        {
+            await harness.Bridge.GetAsync(BridgeHarness.Target(), "k");
+            Assert.That(LatticeActiveTenantContext.Current, Is.EqualTo(AppsControlHarness.Acme));
+        }
+
+        Assert.That(harness.ObservedTenants, Is.EqualTo(new TenantId?[] { AppsControlHarness.Acme }));
+    }
+
     // Step 5 - the caller's own rights, and sanitised faults.
 
     [Test]

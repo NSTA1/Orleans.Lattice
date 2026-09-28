@@ -15,8 +15,8 @@ namespace Orleans.Lattice.Api.Apps.Tests.Bridge;
 /// <remarks>
 /// The installed manifest declares a structural tree <c>notes</c>, an adopted tree <c>legacy</c>
 /// (<c>legacy-notes</c>) and a structural tree <c>archive</c> no role reaches. Its roles are <c>viewer</c>
-/// (read on notes and legacy), <c>editor</c> (read, write and delete on notes) and <c>drafter</c> (read and
-/// write under the prefix <c>drafts/</c> and on the key <c>pinned</c> of notes), bound to <c>g-viewers</c>,
+/// (read and range read on notes and legacy), <c>editor</c> (read, range read, write and delete on notes)
+/// and <c>drafter</c> (read, range read and write under the prefix <c>drafts/</c> and on the key <c>pinned</c> of notes), bound to <c>g-viewers</c>,
 /// <c>g-editors</c> and <c>g-drafters</c>.
 /// </remarks>
 internal sealed class BridgeHarness
@@ -64,6 +64,9 @@ internal sealed class BridgeHarness
     /// <summary>The in-memory data behind each effective tree id.</summary>
     public Dictionary<string, SortedDictionary<string, byte[]>> Data { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>The ambient active tenant observed by each data-path call, in order.</summary>
+    public List<TenantId?> ObservedTenants { get; } = [];
+
     /// <summary>A fault the data path throws on every call, or null.</summary>
     public Exception? DataFault { get; set; }
 
@@ -101,19 +104,19 @@ internal sealed class BridgeHarness
                 new AppRoleDeclaration
                 {
                     Name = "viewer",
-                    Operations = LatticeOperation.Read,
+                    Operations = LatticeOperation.Read | LatticeOperation.RangeRead,
                     Scopes = [new AppScopeTemplate { Tree = "notes" }, new AppScopeTemplate { Tree = "legacy" }],
                 },
                 new AppRoleDeclaration
                 {
                     Name = "editor",
-                    Operations = LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete,
+                    Operations = LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write | LatticeOperation.Delete,
                     Scopes = [new AppScopeTemplate { Tree = "notes" }],
                 },
                 new AppRoleDeclaration
                 {
                     Name = "drafter",
-                    Operations = LatticeOperation.Read | LatticeOperation.Write,
+                    Operations = LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write,
                     Scopes =
                     [
                         new AppScopeTemplate { Tree = "notes", Kind = LatticeScopeKind.Prefix, KeyOrPrefix = "drafts/" },
@@ -135,7 +138,7 @@ internal sealed class BridgeHarness
 
     public static AppCapabilityCeiling DefaultCeiling(params LatticeScope[] exceptions) => new()
     {
-        AllowedOperations = LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete,
+        AllowedOperations = LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write | LatticeOperation.Delete,
         ApprovedExceptionScopes = exceptions.Length > 0 ? exceptions : [LatticeScope.Tree(AdoptedTree)],
     };
 
@@ -208,12 +211,13 @@ internal sealed class BridgeHarness
         var store = Store(treeId);
         var tree = Substitute.For<ILattice>();
         tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(call => DataFault is { } fault
+            .Returns(call => Observe() && DataFault is { } fault
                 ? Task.FromException<byte[]?>(fault)
                 : Task.FromResult<byte[]?>(store.TryGetValue(call.ArgAt<string>(0), out var value) ? value : null));
         tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
+                Observe();
                 if (DataFault is { } fault)
                 {
                     return Task.FromException(fault);
@@ -223,7 +227,7 @@ internal sealed class BridgeHarness
                 return Task.CompletedTask;
             });
         tree.DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(call => DataFault is { } fault
+            .Returns(call => Observe() && DataFault is { } fault
                 ? Task.FromException<bool>(fault)
                 : Task.FromResult(store.Remove(call.ArgAt<string>(0))));
         tree.EntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
@@ -237,6 +241,7 @@ internal sealed class BridgeHarness
         string? end,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        Observe();
         if (DataFault is { } fault)
         {
             throw fault;
@@ -252,6 +257,12 @@ internal sealed class BridgeHarness
                 yield return entry;
             }
         }
+    }
+
+    private bool Observe()
+    {
+        ObservedTenants.Add(LatticeActiveTenantContext.Current);
+        return true;
     }
 
     /// <summary>A membership context resolving a settable subject.</summary>

@@ -34,14 +34,16 @@ namespace Orleans.Lattice.Api.Apps;
 /// </description></item>
 /// <item><description>
 /// The caller must match an app-owned grant of this install - a role binding's group, holding the concrete
-/// operation over a scope that covers the concrete key or prefix, with the ceiling re-checked. The caller's
+/// operation (<see cref="LatticeOperation.Read"/> for a read, <see cref="LatticeOperation.RangeRead"/> for a scan,
+/// <see cref="LatticeOperation.Write"/> for a write, <see cref="LatticeOperation.Delete"/> for a delete - the operation
+/// the data path itself enforces) over a scope that covers the concrete key or prefix, with the ceiling re-checked. The caller's
 /// other rules are deliberately not consulted: this is what stops a caller's broad operator rights flowing
 /// into an app's UI. Otherwise <see cref="AppBridgeFailure.Denied"/>.
 /// </description></item>
 /// <item><description>
 /// The operation executes on the core data path under the caller's own ambient identity, so the ordinary
-/// data-plane authorization applies as well. The effective right is steps 1-4 intersected with the caller's
-/// own rights.
+/// data-plane authorization applies as well, with the caller's resolved tenant as the ambient active tenant.
+/// The effective right is steps 1-4 intersected with the caller's own rights.
 /// </description></item>
 /// </list>
 /// <para>
@@ -95,9 +97,14 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
         try
         {
             ValidateKey(key);
-            var tree = await AuthorizeAsync(target, AppUiBridgeOperations.DataRead, LatticeOperation.Read, key, string.Empty, cancellationToken)
+            var access = await AuthorizeAsync(target, AppUiBridgeOperations.DataRead, LatticeOperation.Read, key, string.Empty, cancellationToken)
                 .ConfigureAwait(false);
-            var value = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            byte[]? value;
+            using (EnterTenant(access.Tenant))
+            {
+                value = await access.Tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            }
+
             if (value is null)
             {
                 return null;
@@ -156,13 +163,15 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
                 }
             }
 
-            var tree = await AuthorizeAsync(target, AppUiBridgeOperations.DataRead, LatticeOperation.Read, key: null, prefix, cancellationToken)
+            // A scan is a range read on the data path, so the app-owned grant must hold RangeRead, not merely Read.
+            var access = await AuthorizeAsync(target, AppUiBridgeOperations.DataRead, LatticeOperation.RangeRead, key: null, prefix, cancellationToken)
                 .ConfigureAwait(false);
+            using var tenantScope = EnterTenant(access.Tenant);
             var end = LatticeKeyRange.PrefixUpperBound(prefix);
             var entries = ImmutableArray.CreateBuilder<AppBridgeValue>(size);
             var budget = (long)AppBridgeLimits.MaxResponseBytes - AppBridgeLimits.PageOverheadBytes;
             string? next = null;
-            await foreach (var entry in tree
+            await foreach (var entry in access.Tree
                 .ScanEntriesAsync(start.Length == 0 ? null : start, end, cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -223,7 +232,7 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
                 throw Fail(AppBridgeFailure.TooLarge);
             }
 
-            var tree = await AuthorizeAsync(target, AppUiBridgeOperations.DataWrite, LatticeOperation.Write, key, string.Empty, cancellationToken)
+            var access = await AuthorizeAsync(target, AppUiBridgeOperations.DataWrite, LatticeOperation.Write, key, string.Empty, cancellationToken)
                 .ConfigureAwait(false);
 
             // The grain surface takes a byte[]; an exactly-sized backing array (what a transport deserializes)
@@ -234,7 +243,10 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
                 && segment.Count == array.Length
                     ? array
                     : value.ToArray();
-            await tree.SetAsync(key, bytes, cancellationToken).ConfigureAwait(false);
+            using (EnterTenant(access.Tenant))
+            {
+                await access.Tree.SetAsync(key, bytes, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not AppBridgeException && !IsCallerCancellation(ex, cancellationToken))
         {
@@ -248,9 +260,12 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
         try
         {
             ValidateKey(key);
-            var tree = await AuthorizeAsync(target, AppUiBridgeOperations.DataDelete, LatticeOperation.Delete, key, string.Empty, cancellationToken)
+            var access = await AuthorizeAsync(target, AppUiBridgeOperations.DataDelete, LatticeOperation.Delete, key, string.Empty, cancellationToken)
                 .ConfigureAwait(false);
-            return await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            using (EnterTenant(access.Tenant))
+            {
+                return await access.Tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not AppBridgeException && !IsCallerCancellation(ex, cancellationToken))
         {
@@ -259,10 +274,10 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
     }
 
     /// <summary>
-    /// Runs authorization steps 1 to 4 and returns the effective tree, dialled on the data path. Throws an
-    /// <see cref="AppBridgeException"/> at the first step that refuses.
+    /// Runs authorization steps 1 to 4 and returns the effective tree, dialled on the data path, with the
+    /// caller's resolved tenant. Throws an <see cref="AppBridgeException"/> at the first step that refuses.
     /// </summary>
-    private async ValueTask<ILattice> AuthorizeAsync(
+    private async ValueTask<Access> AuthorizeAsync(
         AppBridgeTarget? target,
         string bridgeOperation,
         LatticeOperation operation,
@@ -343,8 +358,18 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
         }
 
         // Step 5 is the caller's own call on the data path, gated there under the caller's ambient identity.
-        return _grains.GetGrain<ILattice>(tree.EffectiveTreeId);
+        return new Access(_grains.GetGrain<ILattice>(tree.EffectiveTreeId), tenant);
     }
+
+    /// <summary>
+    /// Stamps the caller's resolved tenant as the ambient active tenant for the data-path call, unless it is the
+    /// default tenant or already stamped. The data plane admits a user-origin call to a tenant-composed
+    /// <c>t/{tenant}/...</c> id only when that tenant is the ambient active tenant; the tenant here is the one the
+    /// validating resolver returned for this caller, so stamping it widens nothing, and without it a caller whose
+    /// tenant was resolved without an explicit assertion would be refused its own app's trees.
+    /// </summary>
+    private static IDisposable? EnterTenant(TenantId tenant) =>
+        tenant.IsDefault || LatticeActiveTenantContext.Current == tenant ? null : LatticeActiveTenantContext.With(tenant);
 
     private static void ValidateKey(string key)
     {
@@ -358,6 +383,8 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
             throw Fail(AppBridgeFailure.TooLarge);
         }
     }
+
+    private readonly record struct Access(ILattice Tree, TenantId Tenant);
 
     private static bool IsCallerCancellation(Exception ex, CancellationToken cancellationToken) =>
         ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
