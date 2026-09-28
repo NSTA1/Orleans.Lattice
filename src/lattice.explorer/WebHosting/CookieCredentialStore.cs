@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
@@ -24,14 +26,39 @@ namespace Orleans.Lattice.Explorer.Web;
 /// <c>/auth/login</c> and <c>/auth/logout</c> endpoints; the encrypted cookie is the
 /// per-browser at-rest store each circuit's scoped auth session reads its own
 /// credential from, so no circuit inherits another operator's sign-in.
+/// <para>
+/// A clear that cannot write headers is <b>not</b> a clear that did nothing. Skipping
+/// only the header write would leave a security decision resting on a best-effort
+/// side effect: the auth session clears the credential when the console is repointed
+/// at a different endpoint precisely so the next launch cannot replay it there, and a
+/// silent no-op would let the surviving cookie hand that endpoint's password to
+/// whoever now answers at the new address. So <see cref="ClearAsync"/> always revokes
+/// the presented cookie value in-process, and <see cref="GetAsync"/> refuses a revoked
+/// value, whether or not the delete header could be sent.
+/// </para>
 /// </remarks>
 public sealed class CookieCredentialStore : ICredentialStore
 {
     private const string CookieName = "lattice-explorer-cred";
     private const string Purpose = "Orleans.Lattice.Explorer.Credential.v1";
 
+    /// <summary>
+    /// How many revoked cookie values are remembered. The set is bounded so a caller
+    /// cannot grow it without limit by driving sign-outs; eviction is oldest-first and
+    /// only reaches values revoked more than this many revocations ago, by which point
+    /// the browser holding one has long since been re-challenged.
+    /// </summary>
+    private const int MaxRevocations = 1024;
+
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IDataProtector _protector;
+
+    // Cookie values whose credential has been revoked by ClearAsync. Keyed by a
+    // SHA-256 digest of the value rather than the value itself, so the revocation
+    // ledger never retains the protected payload. Guarded by _revocationGate.
+    private readonly HashSet<string> _revoked = new(StringComparer.Ordinal);
+    private readonly Queue<string> _revocationOrder = new();
+    private readonly Lock _revocationGate = new();
 
     /// <summary>Creates the cookie store.</summary>
     /// <param name="httpContextAccessor">Accessor for the current request context.</param>
@@ -52,6 +79,14 @@ public sealed class CookieCredentialStore : ICredentialStore
         var context = _httpContextAccessor.HttpContext;
         var cookie = context?.Request.Cookies[CookieName];
         if (string.IsNullOrEmpty(cookie))
+        {
+            return Task.FromResult<StoredCredential?>(null);
+        }
+
+        // A revoked value is treated as absent. ClearAsync cannot always delete the
+        // cookie header, so the browser can keep presenting a value whose credential
+        // was signed out; honouring it here is what would replay it.
+        if (IsRevoked(cookie))
         {
             return Task.FromResult<StoredCredential?>(null);
         }
@@ -102,18 +137,64 @@ public sealed class CookieCredentialStore : ICredentialStore
     public Task ClearAsync(CancellationToken cancellationToken = default)
     {
         var context = _httpContextAccessor.HttpContext;
+        if (context is null)
+        {
+            return Task.CompletedTask;
+        }
 
-        // Guard on HasStarted: on a Blazor circuit the accessor returns the
-        // long-lived SignalR request whose response headers are already sent (this
-        // is the path the Entra auto-sign-in handler clears a stale credential
-        // from), and deleting the cookie there throws "Headers are read-only,
-        // response has already started". The credential is best-effort at-rest
-        // state, so skip the write when the response cannot carry it.
-        if (context is not null && !context.Response.HasStarted)
+        // Revoke first, and unconditionally. The delete below is the best-effort half
+        // of a sign-out; this is the half that has to hold, because on a Blazor circuit
+        // the accessor returns the long-lived SignalR request whose response headers
+        // are already sent and no delete can be written at all.
+        var presented = context.Request.Cookies[CookieName];
+        if (!string.IsNullOrEmpty(presented))
+        {
+            Revoke(presented);
+        }
+
+        // Guard on HasStarted: deleting the cookie once the response has started throws
+        // "Headers are read-only, response has already started". The header write is
+        // skipped there; the revocation above is what makes the sign-out effective.
+        if (!context.Response.HasStarted)
         {
             context.Response.Cookies.Delete(CookieName);
         }
 
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Records <paramref name="cookieValue"/> as revoked, evicting the oldest entry
+    /// once the bounded ledger is full.
+    /// </summary>
+    private void Revoke(string cookieValue)
+    {
+        var digest = Digest(cookieValue);
+        lock (_revocationGate)
+        {
+            if (!_revoked.Add(digest))
+            {
+                return;
+            }
+
+            _revocationOrder.Enqueue(digest);
+            if (_revocationOrder.Count > MaxRevocations)
+            {
+                _revoked.Remove(_revocationOrder.Dequeue());
+            }
+        }
+    }
+
+    /// <summary>Reports whether <paramref name="cookieValue"/> has been revoked.</summary>
+    private bool IsRevoked(string cookieValue)
+    {
+        var digest = Digest(cookieValue);
+        lock (_revocationGate)
+        {
+            return _revoked.Contains(digest);
+        }
+    }
+
+    private static string Digest(string cookieValue) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cookieValue)));
 }
