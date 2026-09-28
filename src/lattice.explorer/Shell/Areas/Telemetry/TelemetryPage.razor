@@ -1,0 +1,221 @@
+@page "/telemetry"
+@page "/telemetry/{p1}"
+@page "/t/{tenant}/telemetry"
+@page "/t/{tenant}/telemetry/{p1}"
+@inherits ExplorerPage
+@implements IDisposable
+
+@*
+    The Telemetry area: the boards of the cluster's metric catalogue at
+    /telemetry, and one board at /telemetry/{board}. While tenancy is on the
+    area is rooted at the active tenant, so /t/{tenant}/telemetry is that
+    tenant's telemetry; a platform operator can widen it to every tenant with
+    ?scope=all, and the facade decides whether it will.
+
+    Everything that shapes a board - range, step, tree, scope and view - is in
+    the address, so every chart state is a link.
+*@
+
+<PageTitle>@TitleText</PageTitle>
+
+@if (_board is null)
+{
+    <h1 class="lt-shell-page-title">Telemetry</h1>
+    <p class="lt-shell-page-lede">
+        The cluster's metrics, drawn as boards from its telemetry catalogue.
+        @if (TenantText is { } tenant)
+        {
+            <span> For tenant <span class="lt-shell-mono">@tenant</span>.</span>
+        }
+    </p>
+
+    <div class="lt-toolbar">
+        <LtButton OnClick="RefreshAsync" Disabled="@_loading" data-lt-command="@TelemetryArea.RefreshCommandId">Refresh</LtButton>
+    </div>
+
+    @if (_loading)
+    {
+        <LtSkeleton Lines="4" Label="Reading the metric catalogue" />
+    }
+    else if (_failure is not null)
+    {
+        <LtEmptyState Title="Telemetry did not answer" HeadingLevel="2">
+            <ChildContent>@_failure</ChildContent>
+            <Actions><LtButton OnClick="RefreshAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_catalog is null || _catalog.Count == 0)
+    {
+        <LtEmptyState Title="No metrics to show" HeadingLevel="2">
+            The cluster offers you no telemetry queries. Either no metrics backend is configured,
+            or your grants and the metric allow-list admit none of them.
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtTable TItem="TelemetryBoardPlan"
+                 Items="ListedBoards"
+                 Caption="Boards"
+                 CaptionHidden="true"
+                 RowKey="plan => plan.Board.Key">
+            <ChildContent>
+                <LtColumn TItem="TelemetryBoardPlan" Title="Board" RowHeader="true" Value="plan => plan.Board.Title">
+                    <a class="lt-telemetry-link" href="@BoardHref(context)">@context.Board.Title</a>
+                </LtColumn>
+                <LtColumn TItem="TelemetryBoardPlan" Title="Charts" Align="LtColumnAlign.End" Value="plan => ChartCount(plan)" />
+                <LtColumn TItem="TelemetryBoardPlan" Title="Shows" Value="plan => plan.Board.Summary" />
+            </ChildContent>
+            <CompactRow>
+                <LtCompactRow>
+                    <Primary>@context.Board.Title</Primary>
+                    <Secondary>@ChartCount(context) - @context.Board.Summary</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions>
+                <a class="lt-btn lt-telemetry-action" href="@BoardHref(context)">Open the @context.Board.Title board</a>
+            </DetailActions>
+        </LtTable>
+
+        @if (OmittedText is { } omitted)
+        {
+            <p class="lt-telemetry-note" role="status">@omitted</p>
+        }
+    }
+}
+else
+{
+    <h1 class="lt-shell-page-title">@_board.Board.Title</h1>
+    <p class="lt-shell-page-lede">
+        @_board.Board.Summary
+        @if (ScopeText is { } scope)
+        {
+            <span> @scope</span>
+        }
+    </p>
+
+    @if (ListedBoards.Count > 1)
+    {
+        @if (IsCompact)
+        {
+            <div class="lt-telemetry-boards-select">
+                <LtSelect Label="Board" Options="BoardOptions" Value="@_board.Board.Key" ValueChanged="GoToBoard" />
+            </div>
+        }
+        else
+        {
+            <nav class="lt-telemetry-boards" aria-label="Boards">
+                @foreach (var plan in ListedBoards)
+                {
+                    <a class="lt-telemetry-boards__link"
+                       href="@BoardHref(plan)"
+                       aria-current="@(ReferenceEquals(plan, _board) ? "page" : null)"
+                       @key="plan.Board.Key">@plan.Board.Title</a>
+                }
+            </nav>
+        }
+    }
+
+    <div class="lt-toolbar">
+        @if (_board.Charts.Any(chart => chart.Accepts(TelemetryQueryParameters.TimeRange)))
+        {
+            @if (IsCompact)
+            {
+                <LtSelect Label="Range" Options="RangeOptions" Value="@RangeValue" ValueChanged="GoToRange" />
+            }
+            else
+            {
+                <div class="lt-telemetry-choice" role="group" aria-label="Time range">
+                    <span class="lt-telemetry-choice__label" aria-hidden="true">Range</span>
+                    @foreach (var option in RangeOptions.Where(option => option.Value != PinnedValue))
+                    {
+                        <a class="lt-telemetry-choice__option"
+                           href="@RangeHref(option.Value)"
+                           aria-current="@(option.Value == RangeValue ? "true" : null)"
+                           @key="option.Value">@option.Text</a>
+                    }
+                </div>
+            }
+
+            @if (!_window.IsDefault && _board.Charts.Any(chart => chart.Accepts(TelemetryQueryParameters.Step)))
+            {
+                <LtSelect Label="Step" Options="StepOptions" Value="@StepValue" ValueChanged="GoToStep" />
+            }
+
+            @if (_window.Range is not null)
+            {
+                <a class="lt-telemetry-link lt-telemetry-action" href="@PinHref">Pin this window</a>
+            }
+        }
+
+        <div class="lt-telemetry-choice" role="group" aria-label="View">
+            <a class="lt-telemetry-choice__option" href="@ViewHref(false)" aria-current="@(_window.ShowTable ? null : "true")">Charts</a>
+            <a class="lt-telemetry-choice__option" href="@ViewHref(true)" aria-current="@(_window.ShowTable ? "true" : null)">Tables</a>
+        </div>
+
+        @if (ShowScopeChoice)
+        {
+            <div class="lt-telemetry-choice" role="group" aria-label="Tenant scope">
+                <a class="lt-telemetry-choice__option" href="@ScopeHref(false)" aria-current="@(_window.AllTenants ? null : "true")">This tenant</a>
+                <a class="lt-telemetry-choice__option" href="@ScopeHref(true)" aria-current="@(_window.AllTenants ? "true" : null)">All tenants</a>
+            </div>
+        }
+
+        <LtButton OnClick="RefreshAsync" data-lt-command="@TelemetryArea.RefreshCommandId">Refresh</LtButton>
+    </div>
+
+    @if (_window.IsAbsolute)
+    {
+        <p class="lt-telemetry-filter">
+            From <span class="lt-shell-mono">@TelemetryFormat.Time(_window.From!.Value, withDate: true)</span>
+            to <span class="lt-shell-mono">@TelemetryFormat.Time(_window.To!.Value, withDate: true)</span> UTC.
+            <a class="lt-telemetry-link" href="@RangeHref(string.Empty)">Back to each chart's default window</a>
+        </p>
+    }
+
+    @if (_window.Tree is { } tree)
+    {
+        <p class="lt-telemetry-filter">
+            Narrowed to tree <span class="lt-shell-mono">@tree</span>.
+            <a class="lt-telemetry-link" href="@ClearTreeHref">Show every tree</a>
+            <a class="lt-telemetry-link" href="@DataHref(tree)">Open @tree in Data</a>
+        </p>
+    }
+
+    @if (Notes.Count > 0)
+    {
+        <div class="lt-telemetry-notes" role="status">
+            @foreach (var note in Notes)
+            {
+                <p class="lt-telemetry-note">@note</p>
+            }
+        </div>
+    }
+
+    @if (VisibleCharts.Count == 0)
+    {
+        <LtEmptyState Title="Nothing on this board is available to you" HeadingLevel="2">
+            Your grants or the cluster's metric allow-list admit none of this board's charts.
+        </LtEmptyState>
+    }
+    else
+    {
+        <div class="lt-telemetry-board">
+            @foreach (var chart in VisibleCharts)
+            {
+                var ask = TelemetryChartRequest.For(chart, _window, _now, Tenancy.IsActive);
+                <TelemetryChart @key="chart.QueryId"
+                                Descriptor="chart"
+                                Request="ask.Request"
+                                Problem="@ask.Problem"
+                                Note="@ask.Note"
+                                ShowTable="_window.ShowTable"
+                                Generation="_generation"
+                                TableHref="@ViewHref(true)"
+                                TreeHref="TreeHref"
+                                DataHref="DataHref"
+                                OnDenied="OnDenied"
+                                OnScope="OnScope" />
+            }
+        </div>
+    }
+}

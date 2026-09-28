@@ -1,0 +1,377 @@
+/* ==========================================================================
+   Orleans.Lattice Explorer - Telemetry area (epic #3807, A9)
+
+   Charts drawn in the order-diagram world: hairline axes on paper or slate,
+   series in ink and link blue (chalk and chalk blue on Board), more than two
+   told apart by dash pattern and a direct label, never by a further hue. The
+   marker paints only the point a reader is pointing at or has selected, and
+   the current board and choice - each also carried by weight and a ring.
+
+   No width query lives here: the compact band is read from the layout's
+   lt-shell--compact class. Nothing animates, so reduced motion is honoured by
+   construction.
+   ========================================================================== */
+
+/* 1. Series tokens - measured by TelemetryChartContrastTests in both materials */
+
+.lt-telemetry-chart {
+  --lt-telemetry-series-ink: var(--lt-ink);
+  --lt-telemetry-series-blue: var(--lt-diagram-concurrent);
+  --lt-telemetry-axis: var(--lt-rule-strong);
+  --lt-telemetry-grid: var(--lt-rule);
+  --lt-telemetry-cursor: var(--lt-ink-3);
+
+  margin: 0 0 var(--lt-space-6);
+  padding-top: var(--lt-space-4);
+  border-top: 1px solid var(--lt-rule);
+}
+
+/* 2. Board navigation and the toolbar's choices */
+
+.lt-telemetry-boards {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--lt-space-5);
+  margin: var(--lt-space-4) 0 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-telemetry-boards__link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-1);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lt-telemetry-boards__link:hover {
+  color: var(--lt-ink);
+}
+
+.lt-telemetry-boards__link[aria-current="page"] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-telemetry-boards__link[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 3px;
+  background: var(--lt-marker);
+}
+
+.lt-telemetry-boards-select {
+  margin: var(--lt-space-4) 0 0;
+}
+
+.lt-telemetry-choice {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-1);
+}
+
+.lt-telemetry-choice__label {
+  margin-right: var(--lt-space-1);
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-telemetry-choice__option {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-3);
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lt-telemetry-choice__option:hover {
+  background: var(--lt-marker-soft);
+}
+
+.lt-telemetry-choice__option[aria-current="true"] {
+  border-color: var(--lt-ink);
+  background: var(--lt-marker);
+  color: var(--lt-marker-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-telemetry-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+}
+
+.lt-telemetry-link {
+  color: var(--lt-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.lt-telemetry-link:hover {
+  background: var(--lt-marker-soft);
+  color: var(--lt-link-hover);
+}
+
+.lt-telemetry-boards__link:focus-visible,
+.lt-telemetry-choice__option:focus-visible,
+.lt-telemetry-link:focus-visible,
+.lt-telemetry-plot:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+/* 3. Notes and filters */
+
+.lt-telemetry-notes {
+  margin: 0 0 var(--lt-space-4);
+}
+
+.lt-telemetry-note,
+.lt-telemetry-filter {
+  max-width: var(--lt-measure);
+  margin: 0 0 var(--lt-space-2);
+  color: var(--lt-ink-2);
+}
+
+.lt-telemetry-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--lt-space-2);
+}
+
+.lt-telemetry-note {
+  padding-left: var(--lt-space-3);
+  border-left: 2px solid var(--lt-rule-strong);
+}
+
+/* 4. The board and its charts */
+
+.lt-telemetry-board {
+  margin-top: var(--lt-space-5);
+}
+
+.lt-telemetry-chart__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--lt-space-3);
+}
+
+.lt-telemetry-chart__title {
+  margin: 0;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-telemetry-chart__unit {
+  color: var(--lt-ink-3);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-telemetry-chart__description {
+  max-width: var(--lt-measure);
+  margin: var(--lt-space-1) 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+}
+
+.lt-telemetry-chart__note,
+.lt-telemetry-chart__empty,
+.lt-telemetry-chart__problem {
+  max-width: var(--lt-measure);
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+}
+
+.lt-telemetry-chart__problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-3);
+  padding-left: var(--lt-space-3);
+  border-left: 2px solid var(--lt-danger);
+  color: var(--lt-ink);
+}
+
+.lt-telemetry-chart__problem-text {
+  margin: 0;
+}
+
+.lt-telemetry-figure {
+  margin: 0;
+}
+
+.lt-telemetry-plot {
+  border-radius: var(--lt-radius-sm);
+}
+
+.lt-telemetry-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.lt-telemetry-svg__grid {
+  stroke: var(--lt-telemetry-grid);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.lt-telemetry-svg__axis {
+  stroke: var(--lt-telemetry-axis);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.lt-telemetry-svg__tick,
+.lt-telemetry-svg__label {
+  fill: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-xs);
+}
+
+.lt-telemetry-svg__label {
+  fill: var(--lt-ink);
+}
+
+.lt-telemetry-svg__line,
+.lt-telemetry-svg__swatch {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.lt-telemetry-series--ink {
+  stroke: var(--lt-telemetry-series-ink);
+}
+
+.lt-telemetry-series--blue {
+  stroke: var(--lt-telemetry-series-blue);
+}
+
+.lt-telemetry-svg__cursor {
+  stroke: var(--lt-telemetry-cursor);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.lt-telemetry-svg__point[aria-current="true"] {
+  fill: var(--lt-marker);
+  stroke: var(--lt-ink);
+  stroke-width: 2;
+}
+
+.lt-telemetry-svg__band {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.lt-telemetry-readout {
+  margin: var(--lt-space-2) 0 0;
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-telemetry-figure__caption {
+  margin: var(--lt-space-1) 0 var(--lt-space-2);
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-telemetry-legend {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-telemetry-legend__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-telemetry-legend__swatch {
+  flex: none;
+  width: 1.75rem;
+  height: 0.5rem;
+}
+
+.lt-telemetry-legend__name {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-telemetry-legend__value {
+  margin-left: auto;
+  color: var(--lt-ink-2);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-telemetry-legend__data {
+  font-size: var(--lt-text-sm);
+}
+
+/* 5. Compact band - the layout marks its root lt-shell--compact */
+
+.lt-shell--compact .lt-telemetry-choice {
+  display: flex;
+}
+
+.lt-shell--compact .lt-telemetry-legend__value {
+  margin-left: 0;
+}
+
+/* 6. Forced colours - the platform's palette replaces ours; keep every cue */
+
+@media (forced-colors: active) {
+  .lt-telemetry-series--ink {
+    stroke: CanvasText;
+  }
+
+  .lt-telemetry-series--blue {
+    stroke: LinkText;
+  }
+
+  .lt-telemetry-svg__tick,
+  .lt-telemetry-svg__label {
+    fill: CanvasText;
+  }
+
+  .lt-telemetry-svg__point[aria-current="true"] {
+    fill: Highlight;
+    stroke: CanvasText;
+  }
+
+  .lt-telemetry-choice__option[aria-current="true"] {
+    border-color: Highlight;
+  }
+}
