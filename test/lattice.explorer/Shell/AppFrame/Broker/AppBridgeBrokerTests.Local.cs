@@ -24,7 +24,7 @@ public sealed partial class AppBridgeBrokerTests
         {
             Assert.That(result.EnumerateObject().Select(property => property.Name), Is.EquivalentTo(new[]
             {
-                "slug", "version", "protocol", "theme", "contrast", "density", "reducedMotion", "tenant",
+                "slug", "version", "protocol", "theme", "contrast", "density", "reducedMotion", "tenant", "roles",
             }));
             Assert.That(result.GetProperty("slug").GetString(), Is.EqualTo(Slug));
             Assert.That(result.GetProperty("version").GetString(), Is.EqualTo(AppFrameTestData.Version));

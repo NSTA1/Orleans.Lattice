@@ -104,7 +104,7 @@ and carries no `type` member. `code` is one of `denied`, `not_found`,
 
 | `op` | `args` | `result` |
 |------|--------|----------|
-| `context.read` | `{}` | `{ slug, version, protocol, theme, contrast, density, reducedMotion, tenant }` - `tenant` is a display name, never an id, or null |
+| `context.read` | `{}` | `{ slug, version, protocol, theme, contrast, density, reducedMotion, tenant, roles? }` - `tenant` is a display name, never an id, or null; `roles` is the caller's app role names in this app (authorization metadata, refreshed on each launch; absent from an older host) |
 | `context.user` | `{}` | `{ displayName }` - the display name only |
 | `data.read` | `{ action: "get", tree, key }` | `{ found, value }` |
 | `data.read` | `{ action: "scan", tree, prefix, pageSize?, continuation? }` | `{ entries: [{ key, value }], continuation }` |
