@@ -51,7 +51,10 @@ installing a new app never adds a new service, credential bridge or interceptor.
   inner exception is forwarded: cancellation is `Cancelled`, an authorization or tenant
   denial `PermissionDenied`, an `ArgumentException` `InvalidArgument`, a
   `KeyNotFoundException` `NotFound`, an `InvalidOperationException`
-  `FailedPrecondition`, and anything else `Internal`.
+  `FailedPrecondition`, and anything else `Internal`. A failed activation or a
+  [tree ownership](../lattice.apps/README.md#tree-ownership) conflict on install, upgrade
+  or enable is therefore `FailedPrecondition`; `Describe` returns each tree's
+  `OwnershipConflict`, so a client can see which trees conflict before it installs.
 
 ## Service and RPCs
 

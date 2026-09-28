@@ -173,7 +173,12 @@ meter; on a cluster without it they evaluate cleanly and return no series. Every
 `Range` entry accepts a time range, a step, and a tree filter;
 `tree.storage.bytes`, `tree.admission.utilization`, and
 `tree.wal.saturation_state` accept a tree filter; the `tenant.*` entries take no
-parameters. Each entry also declares `TelemetryQueryBounds`: a requested step is
+parameters. The tree filter matches the metrics' `tree` dimension, which is the
+logical tree id and stays the same across a resize, a shadow-cutover restore or a
+schema remediation (see [The `tree` dimension across
+aliasing](../lattice/metrics.md#the-tree-dimension-across-aliasing)), so a query
+filtered on a tree keeps returning that tree's series after its data moves to a
+new physical copy. Each entry also declares `TelemetryQueryBounds`: a requested step is
 clamped into the entry's step budget, but a window outside the entry's bounds -
 or outside the deployment-wide `MaxRange` / `MaxStep` guardrails - is refused
 with `TelemetryQueryBoundsException` rather than silently narrowed.
