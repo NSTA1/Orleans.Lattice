@@ -30,7 +30,8 @@ internal sealed class LatticeRegistryGrain(
     ITreePlacementResolver? placementResolver = null,
     TreeAliasObserverDispatcher? aliasObservers = null,
     ILatticeAccessGate? accessGate = null,
-    ILatticeMembershipContext? membership = null) : ILatticeRegistry
+    ILatticeMembershipContext? membership = null,
+    ITreeOwnershipGuard? ownershipGuard = null) : ILatticeRegistry
 {
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
@@ -502,6 +503,14 @@ internal sealed class LatticeRegistryGrain(
             throw new InvalidOperationException(
                 $"Cannot set alias: target tree '{physicalTreeId}' is itself aliased to '{targetEntry.PhysicalTreeId}'. " +
                 "Only a single level of indirection is supported.");
+
+        // Ownership is independent of caller authorization: maintenance must
+        // not bypass it merely because it carries system origin.
+        var ownership = await (ownershipGuard ?? NullTreeOwnershipGuard.Instance)
+            .AuthorizeAliasAsync(treeId, physicalTreeId, targetEntry?.DerivedFrom);
+        if (!ownership.Allowed)
+            throw new LatticeTreeOwnershipDeniedException(
+                ownership.Reason ?? "The ownership provider did not allow this alias.");
 
         var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PhysicalTreeId = physicalTreeId };

@@ -284,6 +284,7 @@ public static class LatticeServiceCollectionExtensions
         // package replaces it with the resolver that pins a tenant's trees to the
         // dedicated WAL provider named on the tenant's placement binding.
         builder.Services.TryAddSingleton<ITreePlacementResolver, NullTreePlacementResolver>();
+        builder.Services.TryAddSingleton<ITreeOwnershipGuard>(NullTreeOwnershipGuard.Instance);
         // CRDT shape registry: every closed-shape mode (the twelve merge
         // modes other than OrMap, see the CrdtShapeRegistry constructor) is
         // pre-populated on construction so no host registration is required

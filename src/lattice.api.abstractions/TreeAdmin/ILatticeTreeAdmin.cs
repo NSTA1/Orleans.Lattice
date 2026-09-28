@@ -205,6 +205,7 @@ public interface ILatticeTreeAdmin
     /// <returns>The resulting alias state.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="physicalTreeId"/> is <c>null</c>, empty, or equal to <paramref name="treeId"/>.</exception>
     /// <exception cref="InvalidOperationException">The physical target is itself aliased (multi-level indirection).</exception>
+    /// <exception cref="LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
     Task<TreeAliasResolution> SetTreeAliasAsync(
         string treeId, string physicalTreeId, CancellationToken cancellationToken = default);
