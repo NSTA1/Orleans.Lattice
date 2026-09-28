@@ -91,11 +91,18 @@ internal static class ShellStylesheets
 
     private static readonly Dictionary<string, IReadOnlyList<CssRule>> Cache = new(StringComparer.Ordinal);
 
-    /// <summary>Every stylesheet the Shell ships under <see cref="DesignRoot"/>.</summary>
+    /// <summary>The Shell's whole static web asset root: the design system and every owner's own folder.</summary>
+    public const string WebRoot = "src/lattice.explorer/Shell/wwwroot";
+
+    /// <summary>
+    /// Every stylesheet the Shell ships under <see cref="WebRoot"/> - the design
+    /// system's and each chrome or area owner's own - so a class an owner defines
+    /// in its folder counts as defined, and its rules obey the same design gates.
+    /// </summary>
     public static IReadOnlyList<string> ShellStylesheetPaths()
     {
-        var root = Absolute(DesignRoot);
-        Assert.That(Directory.Exists(root), Is.True, DesignRoot + " must exist");
+        var root = Absolute(WebRoot);
+        Assert.That(Directory.Exists(Absolute(DesignRoot)), Is.True, DesignRoot + " must exist");
         var paths = HygieneRepository.EnumerateFiles(root, "*.css").OrderBy(path => path, StringComparer.Ordinal).ToArray();
 
         // The enumeration is git-tracked files only; without this every gate

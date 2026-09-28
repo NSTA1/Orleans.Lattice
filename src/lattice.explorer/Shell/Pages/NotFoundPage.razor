@@ -1,0 +1,23 @@
+@page "/not-found"
+@inherits ExplorerPage
+
+@*
+    Not found: says plainly that nothing lives at this address, shows the
+    address in mono, and names the nearest ancestor that does exist for this
+    caller. The head passes this page to the router as its not-found page; the
+    layout also renders it for an area the caller may not see.
+*@
+
+<PageTitle>Not found - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Nothing lives at this address</h1>
+<p class="lt-shell-page-lede">
+    No page answers <code class="lt-shell-mono">@RequestedText</code>.
+</p>
+@if (_ancestor is not null)
+{
+    <p class="lt-shell-not-found__ancestor">
+        The nearest address that does is
+        <a class="lt-shell-mono" href="@_ancestor.ToHref()">@_ancestor.Format()</a>.
+    </p>
+}

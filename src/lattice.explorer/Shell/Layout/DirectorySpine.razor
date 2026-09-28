@@ -1,0 +1,56 @@
+@*
+    The directory spine: one stop per shown area, in directory order, drawn in
+    DESIGN.md's sidebar grammar - hollow nodes on a hairline spine, the current
+    stop the ringed marker node with a heavier ink label and aria-current, never
+    the marker alone. Home heads the spine, so every destination belongs to
+    exactly one stop and nothing depends on the palette. As a rail (the medium
+    band) it keeps every label but drops the badges and reasons.
+*@
+
+<nav class="@NavClass" aria-labelledby="@_headingId">
+    <h2 id="@_headingId" class="lt-shell-directory__heading">Estate</h2>
+    <ul class="lt-spine">
+        <li class="lt-spine__stop">
+            <a class="lt-spine__link lt-shell-directory__link"
+               href="@HomeAddress.ToHref()"
+               aria-current="@(IsHomeCurrent ? "page" : null)"
+               data-lt-command="@ChromeCommands.GoHomeId"
+               @onclick="OnNavigate">
+                <LtNode Kind="@(IsHomeCurrent ? LtNodeKind.Join : LtNodeKind.Hollow)" />
+                <span class="lt-spine__text">Home</span>
+            </a>
+        </li>
+        @foreach (var entry in CurrentLocation.Entries)
+        {
+            var current = IsCurrent(entry);
+            <li class="lt-spine__stop" @key="entry.Area.Key">
+                <a class="@(entry.IsVisible ? "lt-spine__link lt-shell-directory__link" : "lt-spine__link lt-shell-directory__link lt-shell-directory__link--unavailable")"
+                   href="@AreaAddress(entry).ToHref()"
+                   aria-current="@(current ? "page" : null)"
+                   data-lt-command="@ChromeCommands.GoToAreaId(entry.Area.Key)"
+                   @onclick="OnNavigate">
+                    <LtNode Kind="@(current ? LtNodeKind.Join : LtNodeKind.Hollow)" />
+                    <span class="lt-spine__text">
+                        @entry.Area.DisplayName
+                        @if (!entry.IsVisible && !Rail)
+                        {
+                            <span class="lt-shell-directory__reason">@entry.Availability.Reason</span>
+                        }
+                        else if (!entry.IsVisible)
+                        {
+                            <span class="lt-visually-hidden">, unavailable</span>
+                        }
+                    </span>
+                    @if (entry.Badge is not null && !Rail)
+                    {
+                        <span class="lt-shell-directory__badge">@entry.Badge</span>
+                    }
+                </a>
+            </li>
+        }
+    </ul>
+    @if (!CurrentLocation.EntriesLoaded && CurrentLocation.Entries.Count == 0)
+    {
+        <LtSkeleton Lines="4" Label="Loading the directory" />
+    }
+</nav>
