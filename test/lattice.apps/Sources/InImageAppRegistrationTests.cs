@@ -57,4 +57,30 @@ public class InImageAppRegistrationTests
         Assert.Throws<ArgumentNullException>(() => options.Register(Slug, null!, "a.json"));
         Assert.That(options.Registrations, Is.Empty);
     }
+
+    [TestCase("Contoso.Notes.AppManifest.json", "Contoso.Notes.ui.")]
+    [TestCase("app.manifest.json", "app.ui.")]
+    [TestCase("Root.app-manifest.json", "Root.ui.")]
+    [TestCase("manifest.json", "ui.")]
+    [TestCase("manifest", "ui.")]
+    [TestCase(".json", "ui.")]
+    [TestCase("", "ui.")]
+    public void AssetResourcePrefix_defaults_to_the_manifest_namespace_ui_folder(string manifestResourceName, string expected)
+    {
+        var registration = new InImageAppRegistration(Slug, typeof(InImageAppRegistrationTests).Assembly, manifestResourceName);
+
+        Assert.That(registration.AssetResourcePrefix, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void AssetResourcePrefix_can_be_overridden_but_not_nulled()
+    {
+        var registration = new InImageAppRegistration(Slug, typeof(InImageAppRegistrationTests).Assembly, "A.B.app.json");
+
+        var overridden = registration with { AssetResourcePrefix = "Bundle." };
+
+        Assert.That(overridden.AssetResourcePrefix, Is.EqualTo("Bundle."));
+        Assert.That(overridden, Is.Not.EqualTo(registration));
+        Assert.Throws<ArgumentNullException>(() => _ = registration with { AssetResourcePrefix = null! });
+    }
 }

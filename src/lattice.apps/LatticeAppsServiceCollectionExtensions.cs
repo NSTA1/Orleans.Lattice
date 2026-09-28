@@ -34,8 +34,10 @@ public static partial class LatticeAppsServiceCollectionExtensions
     /// <summary>
     /// Adds the <c>Orleans.Lattice.Apps</c> add-on: the <see cref="IAppRegistry"/> over the
     /// reserved <c>sys-app-registry</c> tree, the compiled <see cref="IAppRegistryProjection"/>
-    /// (refreshed off the change feed), the <see cref="IAppSource"/> seam defaulting to
-    /// <see cref="InImageAppSource"/>, the <see cref="IAppActivationPipeline"/>, and a background
+    /// (refreshed off the change feed), the <see cref="IAppSource"/> seam served by an
+    /// <see cref="Sources.AppSourceSet"/> composing <see cref="InImageAppSource"/> with any source added through
+    /// <see cref="AddLatticeAppSource(IServiceCollection, Sources.IAppCatalogSource)"/>, the
+    /// <see cref="IAppActivationPipeline"/>, and a background
     /// reconcile of every enabled app at silo start.
     /// </summary>
     /// <remarks>
@@ -108,9 +110,11 @@ public static partial class LatticeAppsServiceCollectionExtensions
         services.AddSingleton<IMutationObserver>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
         services.TryAddSingleton<IAppRegistryProjection>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
 
-        // App source seam, defaulting to the apps registered in the image.
+        // App source seam: the in-image source, composed with any host-registered catalogue sources
+        // into the AppSourceSet that serves as the single IAppSource.
         services.AddOptions<InImageAppSourceOptions>();
-        services.TryAddSingleton<IAppSource, InImageAppSource>();
+        services.TryAddSingleton<InImageAppSource>();
+        AddSourcesCore(services);
 
         // Activation pipeline.
         services.TryAddSingleton<IAppActivationStatusStore, LatticeAppActivationStatusStore>();
@@ -156,6 +160,10 @@ public static partial class LatticeAppsServiceCollectionExtensions
     /// at configuration time; it does not install, enable, or enrol its trees for replication.
     /// Replication intent is applied per install on activation when the runtime replication
     /// authority is registered. A manifest that fails to load or validate fails only that app's activation.
+    /// The app's UI bundle assets are read from embedded resources named
+    /// <c>{manifestResourceNamespace}.ui.{path}</c>, with every <c>/</c> in the path mapped to <c>.</c>; see
+    /// <see cref="InImageAppRegistration.AssetResourcePrefix"/>, and use
+    /// <see cref="AddLatticeApp(IServiceCollection, string, Assembly, string, string)"/> for any other scheme.
     /// </summary>
     /// <param name="services">The silo service collection.</param>
     /// <param name="slug">The app slug the manifest must declare.</param>
@@ -180,6 +188,12 @@ public static partial class LatticeAppsServiceCollectionExtensions
     /// Called once, from the structural wiring of <see cref="AddLatticeApps(IServiceCollection, Action{LatticeAppsOptions})"/>.
     /// </summary>
     static partial void AddSubscriptionsCore(IServiceCollection services);
+
+    /// <summary>
+    /// The app source wiring hook, implemented by the sources partial of this class. Called once, from the
+    /// structural wiring of <see cref="AddLatticeApps(IServiceCollection, Action{LatticeAppsOptions})"/>.
+    /// </summary>
+    static partial void AddSourcesCore(IServiceCollection services);
 
     /// <summary>Marks that the structural wiring of <c>AddLatticeApps</c> has run.</summary>
     private sealed class AppsRegistrationMarker;
