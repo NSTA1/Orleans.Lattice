@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Apps;
 
 namespace Orleans.Lattice.Api.Apps;
@@ -56,6 +57,29 @@ public static class LatticeAppsApiServiceCollectionExtensions
             sp.GetRequiredService<ILatticeAccessGate>(),
             sp.GetRequiredService<ITenantContextResolver>(),
             sp.GetService<ILatticeMembershipContext>()));
+        services.TryAddSingleton<ILatticeAppCatalog>(sp => new LatticeAppCatalog(
+            LatticeAppCatalog.ToSourceSet(sp.GetRequiredService<IAppSource>()),
+            sp.GetRequiredService<IAppRegistry>(),
+            sp.GetRequiredService<IAppActivationPipeline>(),
+            sp.GetRequiredService<ILatticeAccessGate>(),
+            sp.GetRequiredService<ITenantContextResolver>(),
+            sp.GetService<ILatticeMembershipContext>(),
+            sp.GetService<ILogger<LatticeAppCatalog>>()));
+        services.TryAddSingleton(sp => new AppRoleGrantEvaluator(
+            sp.GetService<IAppRegistryProjection>(),
+            sp.GetService<IAppSource>(),
+            sp.GetService<ILatticeAccessGate>()));
+        services.TryAddSingleton<ILatticeAppWorkspace>(sp =>
+        {
+            var source = sp.GetService<IAppSource>();
+            return new LatticeAppWorkspace(
+                sp.GetRequiredService<AppRoleGrantEvaluator>(),
+                source is null ? null : LatticeAppCatalog.ToSourceSet(source),
+                sp.GetService<ITenantContextResolver>(),
+                sp.GetService<ILatticeMembershipContext>(),
+                sp.GetService<IAppActivationPipeline>(),
+                sp.GetService<ILogger<LatticeAppWorkspace>>());
+        });
         return services;
     }
 }

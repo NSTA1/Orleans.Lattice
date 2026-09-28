@@ -1,0 +1,38 @@
+{
+  "identity": {
+    "slug": "appkit-example",
+    "version": "1.0.0",
+    "provenance": { "reference": "embedded:appkit-example.manifest.json" }
+  },
+  "presentation": {
+    "displayName": "AppKit example",
+    "summary": "A minimal app UI: one fragment, one stylesheet and one module."
+  },
+  "trees": [{ "name": "notes" }],
+  "roles": [{
+    "name": "reader",
+    "operations": ["Read", "RangeRead"],
+    "scopes": [{ "tree": "notes" }]
+  }],
+  "replication": [],
+  "schema": [],
+  "subscriptions": [],
+  "mcpTools": [],
+  "ui": {
+    "entry": "index.html",
+    "styles": ["app.css"],
+    "scripts": [{ "path": "app.mjs", "module": true }],
+    "assets": [
+      { "path": "index.html", "mediaType": "text/html", "digest": "85f9305c5aea4f7c3dfb1c47edf591994ebdcd3b48987a5647f7f5ee48f7cb4e" },
+      { "path": "app.css", "mediaType": "text/css", "digest": "a235fc83291f79e351d24c7a1fbef74e2aee7d74f1712f9433bcc86561ea4df5" },
+      { "path": "app.mjs", "mediaType": "text/javascript", "digest": "acdd10314c4b6d98ed77a5e41cd9a435bca99051ce2d260377f4ea988e7b6b15" }
+    ],
+    "bundleDigest": "6ef851bf8aa971642eccb2d3a849def05c46deeb94dcafa63985b929e711b10c",
+    "bridge": [
+      { "operation": "context.read" },
+      { "operation": "data.read", "trees": ["notes"] },
+      { "operation": "ui.notify" }
+    ],
+    "minProtocol": 1
+  }
+}

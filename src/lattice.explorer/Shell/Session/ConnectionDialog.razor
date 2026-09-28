@@ -1,0 +1,48 @@
+<LtDialog Open="true"
+          OpenChanged="HandleOpenChangedAsync"
+          Title="Connect to a cluster"
+          Description="Enter the address of the Lattice API endpoint this Explorer connects to."
+          ShowClose="AllowCancel"
+          DismissOnEscape="AllowCancel"
+          AutoFocus="false">
+    <form class="lt-confirm" @onsubmit="SaveAsync">
+        <LtTextInput @ref="_endpointInput"
+                     Label="Endpoint"
+                     Mono="true"
+                     Placeholder="https://host:443"
+                     Hint="Every Lattice API this Explorer uses - state, data and administration - is reached at this address."
+                     Error="@_error"
+                     Value="@_endpoint"
+                     ValueChanged="_endpointChanged" />
+        <LtCheckbox Label="Insecure loopback development mode"
+                    Hint="Anonymous and unencrypted. Allowed only for a localhost endpoint."
+                    Checked="_insecureLoopbackDev"
+                    CheckedChanged="_insecureChanged" />
+        <LtCheckbox Label="Allow unencrypted HTTP/2 (h2c)"
+                    Hint="For a plain http:// endpoint in local development. Ignored for https://."
+                    Checked="_allowUnencryptedHttp2"
+                    CheckedChanged="_h2cChanged" />
+        <div role="status">
+            @if (_testResult is { } result)
+            {
+                <LtStatusPill State="result.Role" Text="@result.Text" />
+                @if (result.Message is { Length: > 0 } message)
+                {
+                    <p class="lt-field__hint">@message</p>
+                }
+            }
+            else if (_testing)
+            {
+                <span>Testing the connection</span>
+            }
+        </div>
+        <div class="lt-dialog__actions">
+            @if (AllowCancel)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" Disabled="IsBusy" OnClick="CancelAsync">Cancel</LtButton>
+            }
+            <LtButton Disabled="IsBusy" OnClick="TestAsync">Test connection</LtButton>
+            <LtButton Type="LtButtonType.Submit" Disabled="IsBusy">@(_saving ? "Connecting" : "Save and connect")</LtButton>
+        </div>
+    </form>
+</LtDialog>

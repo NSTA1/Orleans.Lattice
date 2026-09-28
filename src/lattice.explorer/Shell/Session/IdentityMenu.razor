@@ -1,0 +1,71 @@
+@implements IDisposable
+
+@if (!Auth.IsAuthenticated)
+{
+    <LtButton OnClick="OpenSignIn">Sign in</LtButton>
+}
+else if (Folded)
+{
+    <section aria-label="Your session">
+        @SessionDetails
+        <div class="lt-dialog__actions">@SessionActions</div>
+    </section>
+}
+else
+{
+    <LtButton Variant="LtButtonVariant.Quiet"
+              aria-haspopup="dialog"
+              aria-expanded="@(_open ? "true" : "false")"
+              aria-label="@($"Your session: {Auth.Username}")"
+              OnClick="Open">@Auth.Username</LtButton>
+    <LtDialog Open="_open"
+              OpenChanged="_openChanged"
+              Title="Your session">
+        <ChildContent>@SessionDetails</ChildContent>
+        <Actions>@SessionActions</Actions>
+    </LtDialog>
+}
+
+@code {
+    private RenderFragment SessionDetails => __builder =>
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="Signed in as">@Auth.Username</LtDefinition>
+            @if (Auth.CurrentScheme is { Length: > 0 } scheme)
+            {
+                <LtDefinition Term="Sign-in method" Mono="true">@scheme</LtDefinition>
+            }
+            @if (TenantView is { IsActive: true } view)
+            {
+                @if (view.ActiveTenant is { } tenant)
+                {
+                    <LtDefinition Term="Tenant" Mono="true">@tenant.Value</LtDefinition>
+                }
+                else
+                {
+                    <LtDefinition Term="Tenant">None established - you see no tenant's trees until one is.</LtDefinition>
+                }
+            }
+            @if (Explorer.Current?.Endpoint is { Length: > 0 } endpoint)
+            {
+                <LtDefinition Term="Cluster" Mono="true">@endpoint</LtDefinition>
+            }
+        </LtDefinitionList>
+    };
+
+    private RenderFragment SessionActions => __builder =>
+    {
+        <a class="lt-btn lt-btn--quiet" href="@ResetPage.Href">Reset view</a>
+        @if (_signOut.UseServerFormPost)
+        {
+            <form method="post" action="@_signOut.FormAction" data-enhance="false">
+                <AntiforgeryToken />
+                <LtButton Type="LtButtonType.Submit">Sign out</LtButton>
+            </form>
+        }
+        else
+        {
+            <LtButton Disabled="_busy" OnClick="SignOutAsync">@(_busy ? "Signing out" : "Sign out")</LtButton>
+        }
+    };
+}

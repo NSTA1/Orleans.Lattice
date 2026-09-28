@@ -23,4 +23,38 @@
     frame protocol ships beside the old one as appkit/v2/, never over it.
   -->
 
+  <!--
+    The documentation site's design tokens, fonts and licences, served from the
+    kit path (epic #3807, E10; issue #3814), because a frame's opaque origin can
+    reach only the kit path and fonts load with CORS. docs-site/template/public/
+    stays the one source of truth. The Shell already LINKS these files, and the
+    static web assets SDK rejects one file being an asset of two projects that
+    meet in one consumer (DiscoverPrecompressedAssets keys assets by source
+    path), so the kit stages a byte-identical copy of each into obj/ at build
+    time and serves that. Nothing is hand-maintained: AppKitStylesheetTests
+    fails the build if a served file's bytes differ from the docs-site file, or
+    if a copy appears under wwwroot/.
+  -->
+  <PropertyGroup>
+    <LatticeDocsSitePublic>$(MSBuildThisFileDirectory)..\..\..\docs-site\template\public\</LatticeDocsSitePublic>
+    <LatticeAppKitStagedDesign>$(MSBuildThisFileDirectory)obj\appkit-design\</LatticeAppKitStagedDesign>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <LatticeAppKitDesignSource Include="$(LatticeDocsSitePublic)tokens.css" StagedPath="tokens.css" />
+    <LatticeAppKitDesignSource Include="$(LatticeDocsSitePublic)fonts\recursive-sans-linear.woff2" StagedPath="fonts\recursive-sans-linear.woff2" />
+    <LatticeAppKitDesignSource Include="$(LatticeDocsSitePublic)fonts\cascadia-mono.woff2" StagedPath="fonts\cascadia-mono.woff2" />
+    <LatticeAppKitDesignSource Include="$(LatticeDocsSitePublic)fonts\OFL-Recursive.txt" StagedPath="fonts\OFL-Recursive.txt" />
+    <LatticeAppKitDesignSource Include="$(LatticeDocsSitePublic)fonts\OFL-CascadiaMono.txt" StagedPath="fonts\OFL-CascadiaMono.txt" />
+    <Content Include="$(LatticeAppKitStagedDesign)tokens.css" Link="wwwroot\appkit\v1\tokens.css" />
+    <Content Include="$(LatticeAppKitStagedDesign)fonts\recursive-sans-linear.woff2" Link="wwwroot\appkit\v1\fonts\recursive-sans-linear.woff2" />
+    <Content Include="$(LatticeAppKitStagedDesign)fonts\cascadia-mono.woff2" Link="wwwroot\appkit\v1\fonts\cascadia-mono.woff2" />
+    <Content Include="$(LatticeAppKitStagedDesign)fonts\OFL-Recursive.txt" Link="wwwroot\appkit\v1\fonts\OFL-Recursive.txt" />
+    <Content Include="$(LatticeAppKitStagedDesign)fonts\OFL-CascadiaMono.txt" Link="wwwroot\appkit\v1\fonts\OFL-CascadiaMono.txt" />
+  </ItemGroup>
+
+  <Target Name="LatticeAppKitStageDesignAssets" BeforeTargets="BeforeBuild;ResolveStaticWebAssetsConfiguration;ResolveProjectStaticWebAssets">
+    <Copy SourceFiles="@(LatticeAppKitDesignSource)" DestinationFiles="@(LatticeAppKitDesignSource->'$(LatticeAppKitStagedDesign)%(StagedPath)')" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>
