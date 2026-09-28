@@ -24,7 +24,7 @@ public sealed class AppActivationPipelineTests
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IAppActivationGrain>(Key, null).Returns(grain);
         var status = new InMemoryActivationStatusStore();
-        return (new AppActivationPipeline(factory, status), grain, status, factory);
+        return (new AppActivationPipeline(factory, status, AppRegistryTestData.CreateRegistry(new InMemoryAppRegistryStore()), NullAppSource.Instance), grain, status, factory);
     }
 
     [TestCase(AppActivationOperation.Enable)]
@@ -76,9 +76,68 @@ public sealed class AppActivationPipelineTests
     }
 
     [Test]
+    public async Task UninstallAsync_reconciles_only_the_enabled_dependants_of_the_uninstalled_app()
+    {
+        var store = new InMemoryAppRegistryStore();
+        var source = new ActivationAppSource();
+        var factory = Substitute.For<IGrainFactory>();
+        var grains = new Dictionary<string, IAppActivationGrain>(StringComparer.Ordinal);
+        factory.GetGrain<IAppActivationGrain>(Arg.Any<string>(), null).Returns(call =>
+        {
+            var key = call.ArgAt<string>(0);
+            if (!grains.TryGetValue(key, out var grain))
+            {
+                grain = Substitute.For<IAppActivationGrain>();
+                grain.ExecuteAsync(default, default, default, default).ReturnsForAnyArgs(c => Task.FromResult(new AppActivationOutcome
+                {
+                    Tenant = c.ArgAt<TenantId>(1),
+                    Slug = c.ArgAt<AppSlug>(2),
+                    Operation = c.ArgAt<AppActivationOperation>(0),
+                }));
+                grains[key] = grain;
+            }
+
+            return grain;
+        });
+
+        void Seed(string slug, AppRegistryLifecycleState state, bool dependsOnNotes, bool publish = true)
+        {
+            var app = AppSlug.Parse(slug);
+            store.Seed(AppRegistryTreeNames.ComposeKey(TenantId.Default, app), AppRegistryTestData.Record(state, slug: app));
+            if (publish)
+            {
+                source.Publish(ActivationHarness.Manifest(slug: app) with
+                {
+                    Subscriptions = dependsOnNotes
+                        ? [new AppSubscriptionDeclaration { Name = "feed", Tree = "records", App = ActivationHarness.Slug }]
+                        : [],
+                });
+            }
+        }
+
+        Seed("crm", AppRegistryLifecycleState.Enabled, dependsOnNotes: true);
+        Seed("hr", AppRegistryLifecycleState.Enabled, dependsOnNotes: false);
+        Seed("old", AppRegistryLifecycleState.Disabled, dependsOnNotes: true);
+        Seed("lost", AppRegistryLifecycleState.Enabled, dependsOnNotes: false, publish: false);
+        var pipeline = new AppActivationPipeline(factory, new InMemoryActivationStatusStore(), AppRegistryTestData.CreateRegistry(store), source);
+
+        var outcome = await pipeline.UninstallAsync(TenantId.Default, ActivationHarness.Slug);
+
+        Assert.That(outcome.Succeeded, Is.True);
+        var reconciled = grains
+            .Where(pair => pair.Value.ReceivedCalls().Any(c => (AppActivationOperation)c.GetArguments()[0]! == AppActivationOperation.Reconcile))
+            .Select(pair => pair.Key)
+            .ToArray();
+        Assert.That(reconciled, Is.EquivalentTo(new[] { "default/crm", "default/lost" }),
+            "an enabled dependant, and one whose manifest cannot be resolved, are reconciled; others are not");
+    }
+
+    [Test]
     public void Constructor_rejects_null_dependencies()
     {
-        Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(null!, new InMemoryActivationStatusStore()));
-        Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(Substitute.For<IGrainFactory>(), null!));
+        Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(null!, new InMemoryActivationStatusStore(), AppRegistryTestData.CreateRegistry(new InMemoryAppRegistryStore()), NullAppSource.Instance));
+        Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(Substitute.For<IGrainFactory>(), null!, AppRegistryTestData.CreateRegistry(new InMemoryAppRegistryStore()), NullAppSource.Instance));
+        Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(Substitute.For<IGrainFactory>(), new InMemoryActivationStatusStore(), null!, NullAppSource.Instance));
+        Assert.Throws<ArgumentNullException>(() => new AppActivationPipeline(Substitute.For<IGrainFactory>(), new InMemoryActivationStatusStore(), AppRegistryTestData.CreateRegistry(new InMemoryAppRegistryStore()), null!));
     }
 }

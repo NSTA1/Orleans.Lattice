@@ -6,6 +6,36 @@ namespace Orleans.Lattice.Apps.Tests;
 [TestFixture]
 public sealed class AppSubscriptionCompilerTests
 {
+    private static readonly AppTreeOwnerSnapshot BillingOwnsInvoices =
+        AppTreeOwnerSnapshot.Create([new("a/billing/invoices", Billing)]);
+
+    [Test]
+    public void Compile_covered_cross_app_subscription_is_denied_when_the_observed_app_is_not_an_installed_owner()
+    {
+        var manifest = Manifest(Subscription("invoices", "invoices", Billing));
+
+        var withoutSnapshot = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(TreeException("a/billing/invoices")));
+        var wrongOwner = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(TreeException("a/billing/invoices")),
+            AppTreeOwnerSnapshot.Create([new("a/billing/invoices", Notes)]));
+
+        Assert.That(withoutSnapshot.Succeeded, Is.False);
+        Assert.That(withoutSnapshot.Subscriptions, Is.Empty);
+        var denial = withoutSnapshot.Denials.Single();
+        Assert.That(denial.ObservedApp, Is.EqualTo(Billing));
+        Assert.That(denial.Message, Does.Contain("not installed as the owner"));
+        Assert.That(wrongOwner.Succeeded, Is.False);
+    }
+
+    [Test]
+    public void Compile_own_and_adopted_subscriptions_ignore_the_owner_snapshot()
+    {
+        var manifest = Manifest(Subscription("docs-feed", "docs"));
+
+        var result = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(), AppTreeOwnerSnapshot.None);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
     [Test]
     public void Compile_own_tree_subscription_needs_no_exception_entry()
     {
@@ -39,7 +69,7 @@ public sealed class AppSubscriptionCompilerTests
     {
         var manifest = Manifest(Subscription("invoices", "invoices", Billing));
 
-        var result = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(TreeException("a/billing/invoices")));
+        var result = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(TreeException("a/billing/invoices")), BillingOwnsInvoices);
 
         Assert.That(result.Succeeded, Is.True);
         var subscription = result.Subscriptions.Single();
@@ -91,7 +121,7 @@ public sealed class AppSubscriptionCompilerTests
         var manifest = Manifest(Subscription("invoices", "invoices", Billing, subscriptionPrefix));
         var exception = new LatticeScope(exceptionKind, "a/billing/invoices", exceptionKey);
 
-        var result = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(exception));
+        var result = AppSubscriptionCompiler.Compile(manifest, TenantId.Default, Ceiling(exception), BillingOwnsInvoices);
 
         Assert.That(result.Succeeded, Is.EqualTo(covered));
         if (!covered)
@@ -114,7 +144,8 @@ public sealed class AppSubscriptionCompilerTests
     {
         var manifest = Manifest(Subscription("docs-feed", "docs"), Subscription("invoices", "invoices", Billing));
 
-        var result = AppSubscriptionCompiler.Compile(manifest, Acme, Ceiling(TreeException("a/billing/invoices")));
+        var result = AppSubscriptionCompiler.Compile(manifest, Acme, Ceiling(TreeException("a/billing/invoices")),
+            AppTreeOwnerSnapshot.Create([new("t/acme/a/billing/invoices", Billing)]));
 
         Assert.That(result.Succeeded, Is.True);
         Assert.That(result.Subscriptions.Select(s => s.TreeId), Is.EqualTo(new[] { "t/acme/a/notes/docs", "t/acme/a/billing/invoices" }));

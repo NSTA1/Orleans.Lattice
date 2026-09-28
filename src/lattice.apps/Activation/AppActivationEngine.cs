@@ -27,6 +27,7 @@ internal sealed class AppActivationEngine
     private readonly IAppSource _source;
     private readonly IAppActivationStatusStore _statusStore;
     private readonly IAppTreeProvisioner _trees;
+    private readonly AppTreeOwnershipLedger _ownership;
     private readonly ILogger<AppActivationEngine> _logger;
     private readonly ILatticeAuthorizationPolicyStore? _policyStore;
     private readonly ILatticeMembershipContext? _membership;
@@ -38,6 +39,7 @@ internal sealed class AppActivationEngine
         IAppSource source,
         IAppActivationStatusStore statusStore,
         IAppTreeProvisioner trees,
+        AppTreeOwnershipLedger ownership,
         ILogger<AppActivationEngine> logger,
         ILatticeAuthorizationPolicyStore? policyStore = null,
         ILatticeMembershipContext? membership = null,
@@ -48,11 +50,13 @@ internal sealed class AppActivationEngine
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(statusStore);
         ArgumentNullException.ThrowIfNull(trees);
+        ArgumentNullException.ThrowIfNull(ownership);
         ArgumentNullException.ThrowIfNull(logger);
         _registry = registry;
         _source = source;
         _statusStore = statusStore;
         _trees = trees;
+        _ownership = ownership;
         _logger = logger;
         _policyStore = policyStore;
         _membership = membership;
@@ -157,6 +161,7 @@ internal sealed class AppActivationEngine
         AppRegistryTransitionError.NotInstalled => AppActivationFailure.NotInstalled,
         AppRegistryTransitionError.CeilingNotPinned => AppActivationFailure.CeilingNotPinned,
         AppRegistryTransitionError.ConcurrencyConflict => AppActivationFailure.RegistryConflict,
+        AppRegistryTransitionError.TreeOwnershipConflict => AppActivationFailure.TreeOwnershipConflict,
         _ => AppActivationFailure.InvalidTransition,
     };
 
@@ -487,13 +492,28 @@ internal sealed class AppActivationEngine
                 return Step.Fail(record, AppActivationFailure.InvalidManifest, validation.Errors, applied);
             }
 
-            var compilation = AppRoleCompiler.Compile(manifest, tenant, record.RoleBindings, record.Ceiling);
+            // Cross-app scopes compile only against the installed owners of their targets.
+            var owners = await engine._ownership.ResolveCrossAppOwnersAsync(manifest, tenant, cancellationToken).ConfigureAwait(false);
+            var compilation = AppRoleCompiler.Compile(manifest, tenant, record.RoleBindings, record.Ceiling, owners);
             if (!compilation.Succeeded)
             {
                 var failure = compilation.Excesses.Count > 0
                     ? AppActivationFailure.CeilingExceeded
                     : AppActivationFailure.UnknownRoleBinding;
                 return Step.Fail(record, failure, DescribeCompilation(compilation), applied);
+            }
+
+            // Activation is authoritative for tree ownership: every claim is re-verified (and a
+            // missing one taken) before anything is enrolled, provisioned or granted, so a conflict
+            // introduced after install fails closed here.
+            var claims = AppTreeOwnershipLedger.Plan(manifest, tenant);
+            var conflict = await engine._ownership
+                .ClaimAsync(AppTreeOwner.Of(record), record.Revision, claims, acquired: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (conflict is not null)
+            {
+                return Step.Fail(record, AppActivationFailure.TreeOwnershipConflict, "tree-ownership",
+                    $"$.trees[{conflict.TreeName}]", conflict.Message, applied);
             }
 
             var replication = await ApplyReplicationAsync(manifest, previous, cancellationToken).ConfigureAwait(false);

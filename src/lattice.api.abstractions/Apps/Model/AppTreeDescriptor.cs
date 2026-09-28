@@ -25,4 +25,11 @@ public sealed record AppTreeDescriptor
     [Id(7)] public int? WalPartitions { get; init; }
     /// <summary>The requested soft-delete retention, or null for host defaults.</summary>
     [Id(8)] public TimeSpan? SoftDeleteDuration { get; init; }
+    /// <summary>
+    /// Why an install of this app in the caller's tenant could not own the tree (another app owns
+    /// it, it is a pre-existing unowned tree, a derived copy, or another tree's alias target), or
+    /// null when it could. Reported before install so the conflict is visible when reviewing consent;
+    /// an install or upgrade with any conflict is refused.
+    /// </summary>
+    [Id(9)] public string? OwnershipConflict { get; init; }
 }

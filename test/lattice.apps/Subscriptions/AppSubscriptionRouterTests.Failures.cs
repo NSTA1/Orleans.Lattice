@@ -128,10 +128,12 @@ public sealed partial class AppSubscriptionRouterTests
     {
         var catalog = new AppSubscriptionHandlerCatalog(Substitute.For<IServiceProvider>(), []);
         var logger = NullLogger<AppSubscriptionRouter>.Instance;
+        var ledger = AppRegistryTestData.CreateLedger(new InMemoryAppRegistryStore());
 
-        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(null!, _source, catalog, logger));
-        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, null!, catalog, logger));
-        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, _source, null!, logger));
-        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, _source, catalog, null!));
+        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(null!, _source, catalog, ledger, logger));
+        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, null!, catalog, ledger, logger));
+        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, _source, null!, ledger, logger));
+        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, _source, catalog, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new AppSubscriptionRouter(_projection, _source, catalog, ledger, null!));
     }
 }

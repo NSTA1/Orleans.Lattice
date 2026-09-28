@@ -63,4 +63,11 @@ public enum AppActivationFailure
 
     /// <summary>Reading or writing the runtime replication enrolment failed.</summary>
     ReplicationEnrolmentFailed = 17,
+
+    /// <summary>
+    /// Re-verifying the install's tree ownership claims found a tree it cannot own: another install
+    /// owns it, it is a pre-existing unowned structural tree, a derived copy, or another tree's alias
+    /// target. Nothing is provisioned and any rules left from an earlier activation are withdrawn.
+    /// </summary>
+    TreeOwnershipConflict = 18,
 }

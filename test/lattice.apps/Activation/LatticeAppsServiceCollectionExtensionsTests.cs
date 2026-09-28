@@ -94,6 +94,24 @@ public sealed class LatticeAppsServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeApps_replaces_the_core_allow_all_ownership_guard_with_the_ledger_backed_one()
+    {
+        var services = CoreServices();
+        var coreGuard = Substitute.For<ITreeOwnershipGuard>();
+        services.AddSingleton(coreGuard);
+
+        services.AddLatticeApps();
+        services.AddLatticeApps();
+
+        var guards = services.Where(d => d.ServiceType == typeof(ITreeOwnershipGuard)).ToArray();
+        Assert.That(guards, Has.Length.EqualTo(1));
+        Assert.That(guards[0].ImplementationType, Is.EqualTo(typeof(AppTreeOwnershipGuard)));
+        Assert.That(Count<AppTreeOwnershipLedger>(services), Is.EqualTo(1));
+        Assert.That(Count<IAppTreeLedgerStore>(services), Is.EqualTo(1));
+        Assert.That(Count<IAppTreeFacts>(services), Is.EqualTo(1));
+    }
+
+    [Test]
     public void Invalid_options_are_rejected_on_resolution()
     {
         var services = CoreServices();

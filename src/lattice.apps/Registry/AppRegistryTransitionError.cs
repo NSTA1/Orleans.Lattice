@@ -27,4 +27,12 @@ public enum AppRegistryTransitionError
     /// retry budget was exhausted. Retrying later is safe.
     /// </summary>
     ConcurrencyConflict = 5,
+
+    /// <summary>
+    /// A tree the app's manifest declares (structural or adopted) cannot be owned by this install:
+    /// another install owns it, it is a pre-existing unowned structural tree, a derived copy, or
+    /// another tree's alias target. The message names the tree by its app-local name and, when one
+    /// exists, the owning app. Nothing is recorded.
+    /// </summary>
+    TreeOwnershipConflict = 6,
 }

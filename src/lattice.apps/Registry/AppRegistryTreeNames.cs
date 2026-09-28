@@ -14,6 +14,13 @@ internal static class AppRegistryTreeNames
     /// <summary>The tree holding one <see cref="AppRegistryRecord"/> per install.</summary>
     internal const string RegistryTree = LatticeConstants.AppRegistryTreePrefix + "registry";
 
+    /// <summary>
+    /// The tree ownership ledger: one <see cref="AppTreeClaim"/> per app-owned tree, keyed by the
+    /// tree's tenant-composed id. Under the same <c>sys-app-</c> prefix as the registry, so it is
+    /// control-plane read isolated, catalog-hidden and system-origin-write only.
+    /// </summary>
+    internal const string TreeLedgerTree = LatticeConstants.AppRegistryTreePrefix + "trees";
+
     /// <summary>The separator between the tenant and slug key segments.</summary>
     internal const char KeySeparator = '/';
 

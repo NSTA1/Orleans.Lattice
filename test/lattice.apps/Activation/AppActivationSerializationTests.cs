@@ -120,7 +120,8 @@ public sealed class AppActivationSerializationTests
         Assert.That((int)AppActivationFailure.ReplicationModeChangeRejected, Is.EqualTo(15));
         Assert.That((int)AppActivationFailure.ReplicationPreconditionFailed, Is.EqualTo(16));
         Assert.That((int)AppActivationFailure.ReplicationEnrolmentFailed, Is.EqualTo(17));
-        Assert.That(Enum.GetValues<AppActivationFailure>(), Has.Length.EqualTo(18));
+        Assert.That((int)AppActivationFailure.TreeOwnershipConflict, Is.EqualTo(18));
+        Assert.That(Enum.GetValues<AppActivationFailure>(), Has.Length.EqualTo(19));
     }
 
     [Test]
