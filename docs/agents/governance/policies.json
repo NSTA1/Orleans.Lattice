@@ -3,6 +3,7 @@
   "role_permission_catalogue": {
     "operations": [
       "Admin",
+      "AppInstall",
       "AtomicWrite",
       "Backup",
       "BulkLoad",
@@ -35,6 +36,53 @@
     "source": "src/lattice/LatticeOperation.cs"
   },
   "policy_definitions": [
+    {
+      "id": "app-capability-ceiling",
+      "fields": [
+        "allowed_operations",
+        "approved_exception_scopes"
+      ],
+      "definition": "An app install stores a version-pinned ceiling; compiled app rules may use only operations inside the ceiling and exception scopes outside the app's structural namespace that the ceiling covers.",
+      "source": "src/lattice.apps/Install/AppCapabilityCeiling.cs"
+    },
+    {
+      "id": "app-install-capability",
+      "fields": [
+        "operation",
+        "scope"
+      ],
+      "definition": "AppInstall is a scopeless cluster-wide capability granted over LatticeScope.ClusterWide(); it is excluded from the all data-plane operation aggregate and must be granted explicitly.",
+      "source": "src/lattice/LatticeOperation.cs"
+    },
+    {
+      "id": "app-owned-authorization-rules",
+      "fields": [
+        "rule_id_prefix",
+        "owning_app",
+        "compiled_rules"
+      ],
+      "definition": "Rules whose id starts with app: are owned by an installed app and may be written or deleted only by system-origin reconciliation; operators must author separate rules outside that prefix.",
+      "source": "src/lattice.auth/LatticeAppRuleIds.cs"
+    },
+    {
+      "id": "app-role-bindings",
+      "fields": [
+        "role_name",
+        "group_id"
+      ],
+      "definition": "An app role binding maps one manifest role to one membership group; compiled rules always use a group subject selector, never a user selector.",
+      "source": "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+    },
+    {
+      "id": "backup-restore-capability",
+      "fields": [
+        "operation",
+        "authorized_scope",
+        "fallback_scope"
+      ],
+      "definition": "Restore authorizes authoring a backup into the resolved target scope; when no restore target can be resolved, the control facade authorizes Restore on the reserved backup catalog tree rather than skipping the gate.",
+      "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+    },
     {
       "id": "cross-tenant-grant",
       "fields": [
@@ -139,6 +187,60 @@
       "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcOptions.cs"
     },
     {
+      "id": "apps-api-grpc-options",
+      "type": "LatticeAppsApiGrpcOptions",
+      "properties": [
+        {
+          "name": "ActiveTenantHeaderName",
+          "type": "string",
+          "default": "lattice-active-tenant"
+        },
+        {
+          "name": "AdvertisedAuthSchemes",
+          "type": "IList<AuthSchemeDescriptor>",
+          "default": "empty"
+        },
+        {
+          "name": "CredentialHeaderName",
+          "type": "string",
+          "default": "authorization"
+        },
+        {
+          "name": "CredentialScheme",
+          "type": "string",
+          "default": "Bearer"
+        },
+        {
+          "name": "RequireAuthorization",
+          "type": "bool",
+          "default": true
+        }
+      ],
+      "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcOptions.cs"
+    },
+    {
+      "id": "apps-options",
+      "type": "LatticeAppsOptions",
+      "properties": [
+        {
+          "name": "ReconcileOnStartup",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "StartupRetryDelay",
+          "type": "TimeSpan",
+          "default": "00:00:00.2500000"
+        },
+        {
+          "name": "StartupRetryMaxDelay",
+          "type": "TimeSpan",
+          "default": "00:00:30"
+        }
+      ],
+      "source": "src/lattice.apps/LatticeAppsOptions.cs"
+    },
+    {
       "id": "auth-options",
       "type": "LatticeAuthOptions",
       "properties": [
@@ -156,6 +258,11 @@
           "name": "AuditSamplingRatio",
           "type": "double",
           "default": 1.0
+        },
+        {
+          "name": "AuditTrailTimeToLive",
+          "type": "TimeSpan?",
+          "default": null
         },
         {
           "name": "AuditVerbosity",
@@ -181,6 +288,26 @@
           "name": "EnableDurableAuditTrail",
           "type": "bool",
           "default": false
+        },
+        {
+          "name": "EnableDurableHistoryView",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "HistoryRetentionMode",
+          "type": "HistoryRetentionMode",
+          "default": "MetadataOnly"
+        },
+        {
+          "name": "HistoryRetentionWindow",
+          "type": "TimeSpan?",
+          "default": null
+        },
+        {
+          "name": "StrictConsistencyTrees",
+          "type": "ISet<string>?",
+          "default": null
         },
         {
           "name": "UserRuleBeatsGroupRuleAtEqualScope",
@@ -351,9 +478,41 @@
         }
       ],
       "source": "src/lattice.tenancy/LatticeTenancyOptions.cs"
+    },
+    {
+      "id": "tenant-usage-accounting-options",
+      "type": "TenantUsageAccountingOptions",
+      "properties": [
+        {
+          "name": "DefaultEnforcementScope",
+          "type": "TenantEnforcementScope",
+          "default": "GlobalConverged"
+        },
+        {
+          "name": "MeterInterval",
+          "type": "TimeSpan",
+          "default": "00:00:30"
+        },
+        {
+          "name": "PublishMinAbsoluteDelta",
+          "type": "long",
+          "default": 65536
+        },
+        {
+          "name": "PublishMinRelativeDelta",
+          "type": "double",
+          "default": 0.05
+        }
+      ],
+      "source": "src/lattice.tenancy/TenantUsageAccountingOptions.cs"
     }
   ],
   "allow_lists": [
+    {
+      "id": "app-owned-rule-prefix",
+      "definition": "Authorization rule ids starting with app: are reserved for app compiler output and direct non-system writes or deletes are rejected.",
+      "source": "src/lattice.auth/LatticeAppRuleIds.cs"
+    },
     {
       "id": "bootstrap-administrators",
       "definition": "Subject ids listed here are treated as Admin on every tree and operation.",

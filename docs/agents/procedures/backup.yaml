@@ -76,6 +76,8 @@ rollback:
 concurrency:
   - rule: "Online snapshot keeps the source serving reads and writes while live mutations shadow-forward."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
+  - rule: "A completed online snapshot releases shadow-forward before reporting complete; the internal snapshot used by ResizeAsync leaves release to the resize coordinator."
+    source: "docs/lattice/snapshots.md"
   - rule: "Backup set capture can use one causal fence so a cross-tree atomic write is not torn across the set boundary."
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
 sources:

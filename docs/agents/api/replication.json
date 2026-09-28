@@ -4,15 +4,35 @@
   "packages": [
     "Orleans.Lattice.Api.Replication",
     "Orleans.Lattice.Api.Replication.Grpc",
-    "Orleans.Lattice.Replication"
+    "Orleans.Lattice.Replication",
+    "Orleans.Lattice.Replication.Grpc"
   ],
   "sources": [
     "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
     "src/lattice.api.replication/LatticeReplicationControl.cs#LatticeReplicationControl",
+    "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+    "src/lattice.replication.grpc/GrpcRemoteSnapshotTransport.cs#GrpcRemoteSnapshotTransport",
+    "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel",
+    "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcMethods.cs#LatticeRemoteSnapshotGrpcMethods",
+    "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcService.cs#LatticeRemoteSnapshotGrpcService",
+    "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+    "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+    "src/lattice.replication.grpc/LatticeSagaGrpcMethods.cs#LatticeSagaGrpcMethods",
+    "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService",
+    "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
+    "src/lattice.replication.grpc/Security/GrpcChannelHardening.cs#GrpcChannelHardening",
+    "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor",
+    "src/lattice.replication/DefaultShardCountProvider.cs#GetShardRootKeysAsync",
     "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin",
-    "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#ILatticeReplicationConfigAuthority"
+    "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#ILatticeReplicationConfigAuthority",
+    "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler",
+    "src/lattice.replication/IRemoteSnapshotTransport.cs#IRemoteSnapshotTransport",
+    "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
+    "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync",
+    "src/lattice.replication/LatticeRemoteSnapshotService.cs#LatticeRemoteSnapshotService",
+    "src/lattice.replication/LatticeReplicationLocalVcSeeder.cs#LatticeReplicationLocalVcSeeder"
   ],
   "in_process": {
     "interface": "ILatticeReplicationControl",
@@ -20,9 +40,9 @@
     "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#AddLatticeReplicationApi"
   },
   "grpc": {
-    "service": "orleans.lattice.api.replication",
-    "methods_source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
-    "marshalling": "LatticeReplicationGrpcMarshallers.Create delegates to the Orleans serializer.",
+    "service": "orleans.lattice.api.replication; orleans.lattice.replication.LatticeReplication; orleans.lattice.replication.LatticeRemoteSnapshot; orleans.lattice.replication.LatticeSaga",
+    "methods_source": "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+    "marshalling": "API facade methods use LatticeReplicationGrpcMarshallers; peer replication methods use Orleans serializer-backed code-first marshallers and the replication batch encoder for WAL envelopes.",
     "metadata": [
       {
         "name": "authorization",
@@ -33,16 +53,42 @@
         "name": "active tenant header",
         "purpose": "Configured active tenant assertion header; the assertion is re-validated downstream and grants no access by itself.",
         "source": "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcOptions.cs#ActiveTenantHeaderName"
+      },
+      {
+        "name": "x-lattice-replication-secret",
+        "purpose": "Shared-secret credential attached to every peer replication gRPC call and validated by the receiver interceptor.",
+        "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs#SecretHeader"
+      },
+      {
+        "name": "x-lattice-replication-origin",
+        "purpose": "Local cluster id stamped on peer calls for diagnostics, peer attribution, saga authorization fallback, and origin/body consistency checks.",
+        "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs#OriginClusterIdHeader"
       }
     ],
     "auth": {
-      "interceptor": "LatticeReplicationApiGrpcAuthInterceptor",
-      "authorizer": "ILatticeReplicationApiAuthorizer",
-      "decision": "Default deny when RequireAuthorization is true; GetAuthScheme is exempt.",
-      "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
+      "interceptor": "LatticeReplicationGrpcAuthInterceptor and facade-specific LatticeReplicationApiGrpcAuthInterceptor",
+      "authorizer": "IReplicationSecretProvider for peer transports; ILatticeReplicationApiAuthorizer for the facade; ISagaPeerAuthorizer for saga control after shared-secret auth.",
+      "decision": "Peer replication methods require the shared-secret header when RequireAuthentication is true; missing credentials are Unauthenticated and bad credentials are PermissionDenied. Saga control additionally denies origins outside the configured peer map before state mutation.",
+      "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
     }
   },
   "types": {
+    "AdvertisedCompressionDictionary": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "Id",
+          "type": "uint",
+          "required": true
+        },
+        {
+          "name": "Fingerprint",
+          "type": "ulong",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/SharedDictionaryNegotiation.cs#AdvertisedCompressionDictionary"
+    },
     "AuthSchemeAdvertisement": {
       "kind": "record",
       "fields": [
@@ -80,6 +126,148 @@
       ],
       "source": "src/lattice.api.replication.grpc/Model/AuthSchemeDescriptor.cs#AuthSchemeDescriptor"
     },
+    "CompressionDictionaryPullRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "DictionaryId",
+          "type": "uint",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/CompressionDictionaryPullRequest.cs#CompressionDictionaryPullRequest"
+    },
+    "CompressionDictionaryPullResponse": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ExchangeSupported",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "DictionaryId",
+          "type": "uint",
+          "required": true
+        },
+        {
+          "name": "Fingerprint",
+          "type": "ulong",
+          "required": true
+        },
+        {
+          "name": "Dictionary",
+          "type": "ReadOnlyMemory<byte>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/CompressionDictionaryPullResponse.cs#CompressionDictionaryPullResponse"
+    },
+    "ContentManifestEntry": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "EntryIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ContentHash",
+          "type": "ulong",
+          "required": true
+        },
+        {
+          "name": "Hlc",
+          "type": "HybridLogicalClock",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/ContentManifestEntry.cs#ContentManifestEntry"
+    },
+    "ContentManifestRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OriginClusterId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<ContentManifestEntry>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/ContentManifestRequest.cs#ContentManifestRequest"
+    },
+    "ContentManifestResponse": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ExchangeSupported",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "MissingEntryIndices",
+          "type": "IReadOnlyList<int>",
+          "required": false
+        },
+        {
+          "name": "AdvancedHlc",
+          "type": "HybridLogicalClock",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/ContentManifestResponse.cs#ContentManifestResponse"
+    },
+    "DigestProbeRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/DigestProbeRequest.cs#DigestProbeRequest"
+    },
+    "DigestProbeResponse": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "DigestAvailable",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Digest",
+          "type": "LeafProjectionDigest",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/DigestProbeResponse.cs#DigestProbeResponse"
+    },
     "LatticeMergeMode": {
       "kind": "enum",
       "values": [
@@ -99,6 +287,53 @@
         "MinRegister"
       ],
       "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
+    },
+    "MerkleWalkProbeRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ShardIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "RangeStartKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "RangeEndKey",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Depth",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/MerkleWalkProbeRequest.cs#MerkleWalkProbeRequest"
+    },
+    "MerkleWalkProbeResponse": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Available",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Digest",
+          "type": "LeafProjectionDigest",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/MerkleWalkProbeResponse.cs#MerkleWalkProbeResponse"
     },
     "OperatorReseedDecision": {
       "kind": "record struct",
@@ -120,6 +355,163 @@
         }
       ],
       "source": "src/lattice.replication/OperatorReseedDecision.cs#OperatorReseedDecision"
+    },
+    "PeerHighWaterMarkRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OriginClusterId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/PeerHighWaterMarkRequest.cs#PeerHighWaterMarkRequest"
+    },
+    "PeerHighWaterMarkResponse": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Clock",
+          "type": "HybridLogicalClock",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/PeerHighWaterMarkResponse.cs#PeerHighWaterMarkResponse"
+    },
+    "RemoteSnapshotMetadata": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SourceClusterId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "AsOfHlc",
+          "type": "HybridLogicalClock",
+          "required": true
+        },
+        {
+          "name": "CausalStableFrontier",
+          "type": "VersionVector",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/RemoteSnapshotMetadata.cs#RemoteSnapshotMetadata"
+    },
+    "RemoteSnapshotMetadataRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SourceClusterId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "FromAsOfHlc",
+          "type": "HybridLogicalClock",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/RemoteSnapshotMetadataRequest.cs#RemoteSnapshotMetadataRequest"
+    },
+    "RemoteSnapshotStreamItem": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Entry",
+          "type": "SnapshotEntry",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/RemoteSnapshotStreamItem.cs#RemoteSnapshotStreamItem"
+    },
+    "ReplicationAck": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Accepted",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "HighestAppliedHlc",
+          "type": "HybridLogicalClock",
+          "required": true
+        },
+        {
+          "name": "BlockedAtHlc",
+          "type": "HybridLogicalClock?",
+          "required": false
+        },
+        {
+          "name": "SuggestedBatchSize",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "PauseForMs",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "SupportedWireVersion",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "AdvertisedDictionaryIds",
+          "type": "uint[]?",
+          "required": false
+        },
+        {
+          "name": "AdvertisedDictionaries",
+          "type": "AdvertisedCompressionDictionary[]?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/ReplicationAck.cs#ReplicationAck"
+    },
+    "ReplicationBatchEnvelope": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "WireVersion",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "TreeName",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OriginClusterId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<WalRecord>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/ReplicationBatchEnvelope.cs#ReplicationBatchEnvelope"
     },
     "ReplicationConfigResponse": {
       "kind": "record",
@@ -255,6 +647,148 @@
         }
       ],
       "source": "src/lattice.api.replication.grpc/Model/ReplicationTreeConfigMessage.cs#ReplicationTreeConfigMessage"
+    },
+    "SagaControlRequest": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "SagaId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "TargetTree",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "ManifestId",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "CoordinatorClusterId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "SetId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/SagaControlRequest.cs#SagaControlRequest"
+    },
+    "SagaControlResponse": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "SagaId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Phase",
+          "type": "SagaPhase",
+          "required": true
+        },
+        {
+          "name": "Vote",
+          "type": "SagaVote",
+          "required": true
+        },
+        {
+          "name": "Detail",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/SagaControlResponse.cs#SagaControlResponse"
+    },
+    "SagaPhase": {
+      "kind": "enum",
+      "values": [
+        "None",
+        "Prepared",
+        "Committed",
+        "Aborted"
+      ],
+      "source": "src/lattice.replication/SagaPhase.cs#SagaPhase"
+    },
+    "SagaVote": {
+      "kind": "enum",
+      "values": [
+        "None",
+        "Commit",
+        "Abort"
+      ],
+      "source": "src/lattice.replication/SagaVote.cs#SagaVote"
+    },
+    "SnapshotEntry": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Key",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Value",
+          "type": "byte[]",
+          "required": true
+        },
+        {
+          "name": "Timestamp",
+          "type": "HybridLogicalClock",
+          "required": true
+        },
+        {
+          "name": "IsPrepared",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "IsTombstone",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "TransactionId",
+          "type": "Guid",
+          "required": true
+        },
+        {
+          "name": "SourceShardIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "AtomicBatchSize",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "AtomicBatchIndex",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "ExpiresAtTicks",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Delta",
+          "type": "byte[]?",
+          "required": false
+        },
+        {
+          "name": "Mode",
+          "type": "LatticeMergeMode",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/SnapshotEntry.cs#SnapshotEntry"
     }
   },
   "operations": [
@@ -341,6 +875,60 @@
       ]
     },
     {
+      "id": "exchange-content-manifest",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeReplication/ExchangeContentManifest",
+      "transport_scope": "grpc_only",
+      "request": "ContentManifestRequest",
+      "response": "ContentManifestResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName or OriginClusterId is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The tree is not enrolled locally or OriginClusterId does not match the origin stamped on the call."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the target cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unimplemented or unavailable peers return NotSupported; otherwise re-running the same manifest repeats a strict high-water-mark advance at most once.",
+        "source": "src/lattice.replication.grpc/GrpcPushTransport.cs#ExchangeContentManifestAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The only mutation is TryAdvanceAsync of the per-origin high-water mark to a candidate HLC; re-running the same exchange is a strict-greater-only no-op after the first advance.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#ExchangeContentManifest"
+      },
+      "concurrency": {
+        "rule": "The receiver binds body OriginClusterId to the stamped origin header before advancing the durable high-water mark, so a peer may only advance its own stream.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+        "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
       "id": "force-request-snapshot",
       "in_process": "ILatticeReplicationAdmin.ForceRequestSnapshotAsync",
       "grpc_method": null,
@@ -363,8 +951,8 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "A failed call leaves the rate-limit state unchanged; reissue once the coordinator fault clears.",
-        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ForceRequestSnapshotAsync"
+        "policy": "Transient bootstrap drain retries and crash resumes re-open the full snapshot with no upper HLC bound; per-key LWW reconciliation makes re-applying overlap a no-op. Rate-limited RequestSnapshot returns Triggered false with RetryAfter and starts no bootstrap.",
+        "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync"
       },
       "idempotency": {
         "idempotent": "conditional",
@@ -372,11 +960,14 @@
         "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
       },
       "concurrency": {
-        "rule": "The bootstrap coordinator is idempotent under concurrent invocations for one tree: a second request with the same source cluster id is absorbed as a no-op and a request with a different source cluster id is rejected. The per-(tree, sourceClusterId) rate limit is held in process memory, is reset by a silo restart, and is a fairness mechanism rather than a correctness one.",
-        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
+        "rule": "The bootstrap coordinator remains per-tree idempotent for the same source cluster id; local vector-clock seeding enumerates live shard-root keys from routing rather than pinned shard count so resized, restored, and split shards are included.",
+        "source": "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync"
       },
       "sources": [
-        "src/lattice.replication/ILatticeReplicationAdmin.cs#ForceRequestSnapshotAsync"
+        "src/lattice.replication/ILatticeReplicationAdmin.cs#ForceRequestSnapshotAsync",
+        "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync",
+        "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync",
+        "src/lattice.replication/LatticeReplicationLocalVcSeeder.cs#LatticeReplicationLocalVcSeeder"
       ]
     },
     {
@@ -404,6 +995,60 @@
       "sources": [
         "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#GetAuthSchemeMethodName",
         "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#GetAuthScheme"
+      ]
+    },
+    {
+      "id": "get-peer-high-water-mark",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeReplication/GetPeerHighWaterMark",
+      "transport_scope": "grpc_only",
+      "request": "PeerHighWaterMarkRequest",
+      "response": "PeerHighWaterMarkResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName or OriginClusterId is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The tree is not enrolled for replication on this cluster or no enrollment source is wired."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the target cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unimplemented or unavailable peers fall back to HybridLogicalClock.Zero; otherwise retrying only re-reads the durable watermark.",
+        "source": "src/lattice.replication.grpc/GrpcPushTransport.cs#GetPeerHighWaterMarkAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The request is strictly read-only and answering it must never mutate data or replication cursors.",
+        "source": "src/lattice.replication/PeerHighWaterMarkRequest.cs#PeerHighWaterMarkRequest"
+      },
+      "concurrency": {
+        "rule": "The peer returns the durable per-origin high-water mark; an unseen origin returns HybridLogicalClock.Zero so re-replay conservatively re-ships all in-range retained entries.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#GetPeerHighWaterMark"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+        "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
       ]
     },
     {
@@ -440,6 +1085,350 @@
       ]
     },
     {
+      "id": "probe-digest",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeReplication/ProbeDigest",
+      "transport_scope": "grpc_only",
+      "request": "DigestProbeRequest",
+      "response": "DigestProbeResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The tree is not enrolled for replication on this cluster or no enrollment source is wired."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the target cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only digest probe; retrying only re-reads the peer digest.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#ProbeDigest"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only and never mutates data or replication cursors.",
+        "source": "src/lattice.replication/DigestProbeRequest.cs#DigestProbeRequest"
+      },
+      "concurrency": {
+        "rule": "The service re-resolves the peer-supplied tree against local replication enrollment before reading under system origin.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureTreeEnrolledForPeerRead"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+        "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "probe-merkle-walk",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeReplication/ProbeMerkleWalk",
+      "transport_scope": "grpc_only",
+      "request": "MerkleWalkProbeRequest",
+      "response": "MerkleWalkProbeResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The tree is not enrolled for replication on this cluster or no enrollment source is wired."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the target cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unimplemented or unavailable peers return Unavailable; otherwise retrying only re-reads a range digest.",
+        "source": "src/lattice.replication.grpc/GrpcPushTransport.cs#ProbeMerkleWalkAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The request is strictly read-only and answering it must never mutate data or replication cursors.",
+        "source": "src/lattice.replication/MerkleWalkProbeRequest.cs#MerkleWalkProbeRequest"
+      },
+      "concurrency": {
+        "rule": "The receiver checks local enrollment before reading the peer-selected key range under system origin.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#ProbeMerkleWalk"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+        "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "pull-compression-dictionary",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeReplication/PullCompressionDictionary",
+      "transport_scope": "grpc_only",
+      "request": "CompressionDictionaryPullRequest",
+      "response": "CompressionDictionaryPullResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the target cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unimplemented or unavailable peers return NotSupported; otherwise retrying only re-reads dictionary availability.",
+        "source": "src/lattice.replication.grpc/GrpcPushTransport.cs#PullCompressionDictionaryAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#PullCompressionDictionary"
+      },
+      "concurrency": {
+        "rule": "Dictionary id 0 and unknown ids return a supported-but-not-held response rather than mutating receiver state.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#PullCompressionDictionary"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+        "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "push-replication-batch",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeReplication/Push",
+      "transport_scope": "grpc_only",
+      "request": "ReplicationBatchEnvelope",
+      "response": "ReplicationAck",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName or OriginClusterId is empty."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Receiver-side apply failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the target cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Retry after transport failure is safe for the sender when its cursor advances only after an accepted ack; a deferred ack keeps Accepted false so the same batch is re-shipped after backoff.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#Push"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Receiver-side apply and per-origin high-water marks deduplicate replicated WAL entries by origin and HLC; rejected/deferred acks do not advance the sender cursor.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#Push"
+      },
+      "concurrency": {
+        "rule": "Unary HTTP/2 calls are multiplexed per peer channel; receiver returns Accepted false when a durable inbound receive fence defers the batch, leaving sender cursor progress blocked.",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#Push"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeReplicationGrpcMethod.cs#LatticeReplicationGrpcMethod",
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#LatticeReplicationGrpcService",
+        "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "remote-snapshot-get-metadata",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeRemoteSnapshot/GetMetadata",
+      "transport_scope": "grpc_only",
+      "request": "RemoteSnapshotMetadataRequest",
+      "response": "RemoteSnapshotMetadata",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName or SourceClusterId is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The sender-side enrollment gate refuses export because the tree is not enrolled locally or no enrollment source is wired."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Snapshot metadata capture failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the source cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only metadata capture; retrying after a transient transport failure is safe, but HybridLogicalClock.Zero may capture a later cut point.",
+        "source": "src/lattice.replication/IRemoteSnapshotTransport.cs#GetMetadataAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "A request with a fixed non-zero FromAsOfHlc pins the same upper bound; a zero request lets the sender choose its current cut point and may observe a later AsOfHlc on retry.",
+        "source": "src/lattice.replication/RemoteSnapshotMetadataRequest.cs#RemoteSnapshotMetadataRequest"
+      },
+      "concurrency": {
+        "rule": "Sender-side handler re-resolves the peer-supplied tree against local replication enrollment before any tree is read.",
+        "source": "src/lattice.replication/LatticeRemoteSnapshotService.cs#EnsureTreeEnrolledForExport"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcMethods.cs#LatticeRemoteSnapshotGrpcMethods",
+        "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcService.cs#LatticeRemoteSnapshotGrpcService",
+        "src/lattice.replication.grpc/GrpcRemoteSnapshotTransport.cs#GrpcRemoteSnapshotTransport",
+        "src/lattice.replication/LatticeRemoteSnapshotService.cs#LatticeRemoteSnapshotService",
+        "src/lattice.replication/IRemoteSnapshotTransport.cs#IRemoteSnapshotTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "remote-snapshot-request-snapshot",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeRemoteSnapshot/RequestSnapshot",
+      "transport_scope": "grpc_only",
+      "request": "RemoteSnapshotMetadataRequest",
+      "response": "stream RemoteSnapshotStreamItem",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "TreeName or SourceClusterId is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The sender-side enrollment gate refuses export because the tree is not enrolled locally or no enrollment source is wired."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Snapshot stream failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the source cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Receivers must call GetMetadata first and pin the cut point; retries/resumes in the bootstrap coordinator re-open the full stream and rely on per-key LWW reconciliation for overlap.",
+        "source": "src/lattice.replication/IRemoteSnapshotTransport.cs#RequestSnapshotAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Streaming the same upper-bound snapshot is read-only; applying a retried drain is idempotent on the receiver through per-key LWW reconciliation.",
+        "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync"
+      },
+      "concurrency": {
+        "rule": "The stream emits entries at or below the supplied cut point; sender-side export is gated by local enrollment and concurrent calls for the same pair are serialized by the receiver-side coordinator.",
+        "source": "src/lattice.replication/IRemoteSnapshotTransport.cs#RequestSnapshotAsync"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcMethods.cs#LatticeRemoteSnapshotGrpcMethods",
+        "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcService.cs#LatticeRemoteSnapshotGrpcService",
+        "src/lattice.replication.grpc/GrpcRemoteSnapshotTransport.cs#GrpcRemoteSnapshotTransport",
+        "src/lattice.replication/LatticeRemoteSnapshotService.cs#LatticeRemoteSnapshotService",
+        "src/lattice.replication/IRemoteSnapshotTransport.cs#IRemoteSnapshotTransport",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
       "id": "request-snapshot",
       "in_process": "ILatticeReplicationAdmin.RequestSnapshotAsync",
       "grpc_method": null,
@@ -462,8 +1451,8 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "A rate-limited request returns Triggered false with RetryAfter and starts no bootstrap; retry after RetryAfter. A thrown coordinator exception leaves the next request honourable.",
-        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
+        "policy": "Transient bootstrap drain retries and crash resumes re-open the full snapshot with no upper HLC bound; per-key LWW reconciliation makes re-applying overlap a no-op. Rate-limited RequestSnapshot returns Triggered false with RetryAfter and starts no bootstrap.",
+        "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync"
       },
       "idempotency": {
         "idempotent": "conditional",
@@ -471,11 +1460,278 @@
         "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
       },
       "concurrency": {
-        "rule": "The bootstrap coordinator is idempotent under concurrent invocations for one tree: a second request with the same source cluster id is absorbed as a no-op and a request with a different source cluster id is rejected. The per-(tree, sourceClusterId) rate limit is held in process memory, is reset by a silo restart, and is a fairness mechanism rather than a correctness one.",
-        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
+        "rule": "The bootstrap coordinator remains per-tree idempotent for the same source cluster id; local vector-clock seeding enumerates live shard-root keys from routing rather than pinned shard count so resized, restored, and split shards are included.",
+        "source": "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync"
       },
       "sources": [
-        "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
+        "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync",
+        "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync",
+        "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync",
+        "src/lattice.replication/LatticeReplicationLocalVcSeeder.cs#LatticeReplicationLocalVcSeeder"
+      ]
+    },
+    {
+      "id": "saga-abort",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeSaga/Abort",
+      "transport_scope": "grpc_only",
+      "request": "SagaControlRequest",
+      "response": "SagaControlResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "SagaId or TargetTree is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The origin cluster is not an authorized replication peer."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Saga control 'Abort' failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the participant cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Retry the same SagaId request after a transport failure; the durable participant grain re-attaches duplicate prepare, commit, and abort calls to the recorded phase.",
+        "source": "src/lattice.replication/ILatticeSagaControlHandler.cs#AbortAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "CrossClusterSagaParticipantGrain returns the recorded phase/vote on duplicate prepare, treats duplicate commit as a no-op, and treats duplicate abort as a no-op.",
+        "source": "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain"
+      },
+      "concurrency": {
+        "rule": "Peer authorization runs before delegation; imperative calls mutate participant state only after the origin is authorized, while status reports the durable phase without changing state.",
+        "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#HandleAsync"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeSagaGrpcMethods.cs#LatticeSagaGrpcMethods",
+        "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService",
+        "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel",
+        "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
+        "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler",
+        "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
+        "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "saga-commit",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeSaga/Commit",
+      "transport_scope": "grpc_only",
+      "request": "SagaControlRequest",
+      "response": "SagaControlResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "SagaId or TargetTree is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The origin cluster is not an authorized replication peer."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Saga control 'Commit' failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the participant cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Retry the same SagaId request after a transport failure; the durable participant grain re-attaches duplicate prepare, commit, and abort calls to the recorded phase.",
+        "source": "src/lattice.replication/ILatticeSagaControlHandler.cs#CommitAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "CrossClusterSagaParticipantGrain returns the recorded phase/vote on duplicate prepare, treats duplicate commit as a no-op, and treats duplicate abort as a no-op.",
+        "source": "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain"
+      },
+      "concurrency": {
+        "rule": "Peer authorization runs before delegation; imperative calls mutate participant state only after the origin is authorized, while status reports the durable phase without changing state.",
+        "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#HandleAsync"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeSagaGrpcMethods.cs#LatticeSagaGrpcMethods",
+        "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService",
+        "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel",
+        "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
+        "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler",
+        "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
+        "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "saga-get-status",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeSaga/GetStatus",
+      "transport_scope": "grpc_only",
+      "request": "SagaControlRequest",
+      "response": "SagaControlResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "SagaId or TargetTree is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The origin cluster is not an authorized replication peer."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Saga control 'GetStatus' failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the participant cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status read.",
+        "source": "src/lattice.replication/ILatticeSagaControlHandler.cs#GetStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only.",
+        "source": "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain"
+      },
+      "concurrency": {
+        "rule": "Peer authorization runs before delegation; GetStatus reports the durable participant phase without changing state.",
+        "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#HandleAsync"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeSagaGrpcMethods.cs#LatticeSagaGrpcMethods",
+        "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService",
+        "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel",
+        "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
+        "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler",
+        "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
+        "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
+      "id": "saga-prepare",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeSaga/Prepare",
+      "transport_scope": "grpc_only",
+      "request": "SagaControlRequest",
+      "response": "SagaControlResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "SagaId or TargetTree is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The origin cluster is not an authorized replication peer."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Saga control 'Prepare' failed; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the participant cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Retry the same SagaId request after a transport failure; the durable participant grain re-attaches duplicate prepare, commit, and abort calls to the recorded phase.",
+        "source": "src/lattice.replication/ILatticeSagaControlHandler.cs#PrepareAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "CrossClusterSagaParticipantGrain returns the recorded phase/vote on duplicate prepare, treats duplicate commit as a no-op, and treats duplicate abort as a no-op.",
+        "source": "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain"
+      },
+      "concurrency": {
+        "rule": "Peer authorization runs before delegation; imperative calls mutate participant state only after the origin is authorized, while status reports the durable phase without changing state.",
+        "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#HandleAsync"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeSagaGrpcMethods.cs#LatticeSagaGrpcMethods",
+        "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService",
+        "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel",
+        "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
+        "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler",
+        "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
+        "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
       ]
     }
   ],
@@ -501,7 +1757,7 @@
       "type": "Exception",
       "grpc_status": "Internal",
       "retryable": false,
-      "meaning": "Unhandled server failure.",
+      "meaning": "Unhandled server failure; peer gRPC services log the underlying exception and return Internal where they catch it.",
       "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
     },
     {
@@ -517,16 +1773,40 @@
       "type": "InvalidOperationException",
       "grpc_status": null,
       "retryable": false,
-      "meaning": "The bootstrap coordinator rejected the re-seed, for example because a bootstrap is already in flight from a different source cluster; propagated verbatim.",
+      "meaning": "Client-side transport configuration is missing or invalid, or the bootstrap coordinator rejected the re-seed.",
       "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
     },
     {
       "id": "permission-denied",
-      "type": "LatticeAuthorizationDeniedException or LatticeTenantAccessDeniedException",
+      "type": "LatticeAuthorizationDeniedException, LatticeTenantAccessDeniedException, UnauthorizedAccessException, or RpcException",
       "grpc_status": "PermissionDenied",
       "retryable": false,
-      "meaning": "The caller is not authorized or cannot act as the asserted tenant.",
-      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+      "meaning": "Caller is not authorized, peer shared-secret authentication failed, a tree is not locally enrolled for peer replication, the origin header/body check failed, or a saga origin is not an authorized peer.",
+      "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+    },
+    {
+      "id": "unauthenticated",
+      "type": "RpcException",
+      "grpc_status": "Unauthenticated",
+      "retryable": false,
+      "meaning": "A peer replication call is missing the shared-secret credential while authentication is required.",
+      "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+    },
+    {
+      "id": "unavailable",
+      "type": "RpcException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "The peer endpoint is temporarily unreachable. Some optional anti-entropy exchanges translate this to a conservative fallback response.",
+      "source": "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport"
+    },
+    {
+      "id": "unimplemented",
+      "type": "RpcException",
+      "grpc_status": "Unimplemented",
+      "retryable": false,
+      "meaning": "The peer has not bound an optional rolling-upgrade RPC; supported clients translate this to a conservative fallback response.",
+      "source": "src/lattice.replication.grpc/GrpcPushTransport.cs#GrpcPushTransport"
     }
   ]
 }

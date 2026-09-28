@@ -334,6 +334,14 @@
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantReport.cs"
     },
+    "TenantQuotaEnforcementScope": {
+      "kind": "enum",
+      "values": [
+        "GlobalConverged",
+        "PerCluster"
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaEnforcementScope.cs#TenantQuotaEnforcementScope"
+    },
     "TenantQuotaUsageReport": {
       "kind": "record",
       "fields": [
@@ -520,7 +528,7 @@
   "operations": [
     {
       "id": "add-tenant-admin-subject",
-      "in_process": "AddAdminSubjectAsync",
+      "in_process": "ILatticeTenantAccessAdmin.AddAdminSubjectAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/AddTenantAdminSubject",
       "transport_scope": "both",
       "request": "TenantAdminSubjectRequest",
@@ -565,7 +573,7 @@
     },
     {
       "id": "approve-cross-tenant-grant",
-      "in_process": "ApproveGrantAsync",
+      "in_process": "ILatticeTenantGrantAdmin.ApproveGrantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/ApproveCrossTenantGrant",
       "transport_scope": "both",
       "request": "TenantAdminGrantRequest",
@@ -610,7 +618,7 @@
     },
     {
       "id": "authorize-allowed-regions",
-      "in_process": "AuthorizeAllowedRegionsAsync",
+      "in_process": "ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/AuthorizeAllowedRegions",
       "transport_scope": "both",
       "request": "TenantAdminRegionSetRequest",
@@ -651,7 +659,7 @@
     },
     {
       "id": "create-tenant",
-      "in_process": "CreateTenantAsync",
+      "in_process": "ILatticeTenantAdmin.CreateTenantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/CreateTenant",
       "transport_scope": "both",
       "request": "TenantAdminCreateRequest",
@@ -692,7 +700,7 @@
     },
     {
       "id": "delete-tenant",
-      "in_process": "DeleteTenantAsync",
+      "in_process": "ILatticeTenantAdmin.DeleteTenantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/DeleteTenant",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -733,9 +741,9 @@
     },
     {
       "id": "get-auth-scheme",
-      "in_process": "GetAuthSchemeAsync",
+      "in_process": null,
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetAuthScheme",
-      "transport_scope": "both",
+      "transport_scope": "grpc_only",
       "request": "AuthSchemeAdvertisementRequest",
       "response": "AuthSchemeAdvertisement",
       "errors": [],
@@ -756,11 +764,12 @@
       "sources": [
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
-      ]
+      ],
+      "transport_scope_source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs#GetAuthScheme"
     },
     {
       "id": "get-current-tenant",
-      "in_process": "GetCurrentTenantAsync",
+      "in_process": "ILatticeTenantSelfService.GetCurrentTenantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetCurrentTenant",
       "transport_scope": "both",
       "request": "TenantSelfCurrentRequest",
@@ -793,7 +802,7 @@
     },
     {
       "id": "get-tenant",
-      "in_process": "GetTenantAsync",
+      "in_process": "ILatticeTenantSelfService.GetTenantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenant",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -826,7 +835,7 @@
     },
     {
       "id": "get-tenant-quota-usage",
-      "in_process": "GetQuotaUsageAsync",
+      "in_process": "ILatticeTenantQuotaUsage.GetQuotaUsageAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantQuotaUsage",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -863,7 +872,7 @@
     },
     {
       "id": "get-tenant-region-status",
-      "in_process": "GetTenantRegionStatusAsync",
+      "in_process": "ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/GetTenantRegionStatus",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -904,7 +913,7 @@
     },
     {
       "id": "list-accessible-tenants",
-      "in_process": "ListAccessibleTenantsAsync",
+      "in_process": "ILatticeTenantSelfService.ListAccessibleTenantsAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/ListAccessibleTenants",
       "transport_scope": "both",
       "request": "TenantSelfListRequest",
@@ -937,7 +946,7 @@
     },
     {
       "id": "list-cross-tenant-grants",
-      "in_process": "ListGrantsAsync",
+      "in_process": "ILatticeTenantGrantAdmin.ListGrantsAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/ListCrossTenantGrants",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -978,7 +987,7 @@
     },
     {
       "id": "list-tenant-admin-subjects",
-      "in_process": "ListAdminSubjectsAsync",
+      "in_process": "ILatticeTenantAccessAdmin.ListAdminSubjectsAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantAdminSubjects",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -1019,7 +1028,7 @@
     },
     {
       "id": "offer-cross-tenant-grant",
-      "in_process": "OfferGrantAsync",
+      "in_process": "ILatticeTenantGrantAdmin.OfferGrantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/OfferCrossTenantGrant",
       "transport_scope": "both",
       "request": "TenantAdminGrantOfferRequest",
@@ -1060,7 +1069,7 @@
     },
     {
       "id": "reject-cross-tenant-grant",
-      "in_process": "RejectGrantAsync",
+      "in_process": "ILatticeTenantGrantAdmin.RejectGrantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/RejectCrossTenantGrant",
       "transport_scope": "both",
       "request": "TenantAdminGrantRequest",
@@ -1105,7 +1114,7 @@
     },
     {
       "id": "remove-tenant-admin-subject",
-      "in_process": "RemoveAdminSubjectAsync",
+      "in_process": "ILatticeTenantAccessAdmin.RemoveAdminSubjectAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/RemoveTenantAdminSubject",
       "transport_scope": "both",
       "request": "TenantAdminSubjectRequest",
@@ -1146,7 +1155,7 @@
     },
     {
       "id": "resume-tenant",
-      "in_process": "ResumeTenantAsync",
+      "in_process": "ILatticeTenantAdmin.ResumeTenantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/ResumeTenant",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",
@@ -1183,7 +1192,7 @@
     },
     {
       "id": "revoke-cross-tenant-grant",
-      "in_process": "RevokeGrantAsync",
+      "in_process": "ILatticeTenantGrantAdmin.RevokeGrantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/RevokeCrossTenantGrant",
       "transport_scope": "both",
       "request": "TenantAdminGrantRequest",
@@ -1228,7 +1237,7 @@
     },
     {
       "id": "set-tenant-quotas",
-      "in_process": "SetTenantQuotasAsync",
+      "in_process": "ILatticeTenantAdmin.SetTenantQuotasAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/SetTenantQuotas",
       "transport_scope": "both",
       "request": "TenantAdminSetQuotasRequest",
@@ -1273,7 +1282,7 @@
     },
     {
       "id": "set-tenant-residency",
-      "in_process": "SetResidencyAsync",
+      "in_process": "ILatticeTenantRegionAdmin.SetResidencyAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/SetTenantResidency",
       "transport_scope": "both",
       "request": "TenantAdminRegionSetRequest",
@@ -1314,7 +1323,7 @@
     },
     {
       "id": "suspend-tenant",
-      "in_process": "SuspendTenantAsync",
+      "in_process": "ILatticeTenantAdmin.SuspendTenantAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/SuspendTenant",
       "transport_scope": "both",
       "request": "TenantAdminTenantRequest",

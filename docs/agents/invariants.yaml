@@ -1,5 +1,194 @@
 schema: lattice.agents/invariants/v1
 invariants:
+  - id: app-ceiling-bounds-compiled-grants
+    name: "App ceiling bounds compiled grants"
+    description: "Every app-owned authorization rule is inside the install record's version-pinned ceiling; excess operations or uncovered exception scopes fail activation and emit no rules."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+      components:
+        - "AppRoleCompiler"
+        - "AppCapabilityCeiling"
+        - "AppActivationEngine"
+    violation_modes:
+      - "A role operation outside AllowedOperations is silently clamped or granted."
+      - "A cross-app or adopted-tree scope without an approved exception emits a rule."
+      - "A scopeless capability such as AppInstall or Telemetry is emitted by an app role."
+    detection_signals:
+      - type: test
+        name: "AppRoleCompilerTests.Ceiling"
+        source: "test/lattice.apps/Compiler/AppRoleCompilerTests.Ceiling.cs"
+      - type: test
+        name: "AppRoleCompilerTests.Security"
+        source: "test/lattice.apps/Compiler/AppRoleCompilerTests.Security.cs"
+      - type: exception
+        name: "AppActivationFailure.CeilingExceeded"
+        source: "src/lattice.apps/Activation/AppActivationFailure.cs#AppActivationFailure.CeilingExceeded"
+    remediation:
+      - step: "Re-read the installed manifest and consent report, then update the ceiling for the installed version or reduce the manifest request."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.UpdateConsentAsync"
+      - step: "Re-run enable or reconcile after consent changes so the compiler replaces the owned rule set."
+        source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.ReconcileAsync"
+    sources:
+      - "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+      - "test/lattice.apps/Compiler/AppRoleCompilerTests.Ceiling.cs"
+  - id: app-enable-reconciles-current-consent
+    name: "App enable uses current consent"
+    description: "An enable or consent update cannot leave grants compiled from superseded consent after a concurrent registry change."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+        - "Orleans.Lattice.Api.Apps"
+      components:
+        - "AppRegistry"
+        - "LatticeAppsControl"
+        - "AppActivationEngine"
+    violation_modes:
+      - "A consent update racing an upgrade rolls the app back to the version it read earlier."
+      - "Enable marks the record enabled while rules compiled from an older revision remain live."
+      - "A narrowed ceiling is recorded but stale grants remain after the facade returns failure."
+    detection_signals:
+      - type: test
+        name: "AppRegistryTests.ExpectedVersion"
+        source: "test/lattice.apps/Registry/AppRegistryTests.ExpectedVersion.cs"
+      - type: test
+        name: "LatticeAppsControlUpgradeRaceTests"
+        source: "test/lattice.api.apps/LatticeAppsControlUpgradeRaceTests.cs"
+      - type: exception
+        name: "AppRegistryTransitionError.ConcurrencyConflict"
+        source: "src/lattice.apps/Registry/AppRegistryTransitionError.cs#AppRegistryTransitionError.ConcurrencyConflict"
+    remediation:
+      - step: "Re-read the app record or consent report and retry with the current installed version."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.GetConsentAsync"
+      - step: "Run ReconcileAsync on an enabled app after direct registry upgrades or consent writes."
+        source: "src/lattice.apps/Registry/IAppRegistry.cs#IAppRegistry.UpgradeAsync"
+    sources:
+      - "src/lattice.apps/Registry/AppRegistry.cs"
+      - "src/lattice.api.apps/LatticeAppsControl.Install.cs"
+      - "test/lattice.api.apps/LatticeAppsControlUpgradeRaceTests.cs"
+  - id: app-lifecycle-retains-data
+    name: "App lifecycle retains data"
+    description: "Disable and uninstall remove app authority but do not physically purge app data; uninstall soft-deletes structural trees and skips adopted trees."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+        - "Orleans.Lattice.Api.Apps"
+      components:
+        - "AppActivationEngine"
+        - "IAppTreeProvisioner"
+        - "ILatticeAppsControl"
+    violation_modes:
+      - "Disable deletes or soft-deletes an app tree."
+      - "Uninstall purges a structural tree instead of soft-deleting it."
+      - "Uninstall soft-deletes an adopted tree."
+    detection_signals:
+      - type: test
+        name: "AppActivationEngineTests.Lifecycle"
+        source: "test/lattice.apps/Activation/AppActivationEngineTests.Lifecycle.cs"
+      - type: exception
+        name: "AppActivationFailure.TreeProvisioningFailed"
+        source: "src/lattice.apps/Activation/AppActivationFailure.cs#AppActivationFailure.TreeProvisioningFailed"
+    remediation:
+      - step: "Use DisableAsync to withdraw rules while preserving all trees and data."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.DisableAsync"
+      - step: "Use UninstallAsync only when soft-deleting structural app trees under their retention window is intended."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.UninstallAsync"
+    sources:
+      - "src/lattice.apps/Activation/AppActivationEngine.cs"
+      - "test/lattice.apps/Activation/AppActivationEngineTests.Lifecycle.cs"
+  - id: app-mcp-tools-paired-exactly
+    name: "App MCP tools paired exactly"
+    description: "An enabled app contributes MCP tools only when every manifest declaration has exactly one implementation and every implementation is declared."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Mcp.Apps"
+      components:
+        - "AppMcpToolActivation"
+        - "AppMcpToolSource"
+        - "IAppMcpToolProvider"
+    violation_modes:
+      - "A declared tool without an implementation is skipped while sibling tools are still advertised."
+      - "An undeclared implementation is advertised under the app namespace."
+      - "Duplicate local tool implementations are resolved by first-wins ordering."
+    detection_signals:
+      - type: test
+        name: "AppMcpToolActivationTests"
+        source: "test/lattice.api.mcp.apps/AppMcpToolActivationTests.cs"
+      - type: exception
+        name: "AppMcpToolActivation.Failure"
+        source: "src/lattice.api.mcp.apps/AppMcpToolActivation.cs#AppMcpToolActivation.Failure"
+    remediation:
+      - step: "Align manifest mcpTools with the provider's app-local tool names, then let the catalog rebuild on the next registry epoch."
+        source: "src/lattice.api.mcp.apps/AppMcpToolActivation.cs#AppMcpToolActivation.Pair"
+      - step: "Keep reserved slugs lattice and repocontext off the app MCP surface; use a non-reserved app slug."
+        source: "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.IsReservedSlug"
+    sources:
+      - "src/lattice.api.mcp.apps/AppMcpToolActivation.cs"
+      - "test/lattice.api.mcp.apps/AppMcpToolActivationTests.cs"
+  - id: app-owned-rules-system-origin-only
+    name: "App-owned rules are compiler-owned"
+    description: "Authorization rules whose ids are in the app-owned prefix can be written or deleted only by system-origin app activation, not by direct operator policy writes."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+        - "Orleans.Lattice.Auth"
+      components:
+        - "LatticeAuthorizationPolicyStore"
+        - "LatticeAppRuleIds"
+        - "AppActivationEngine"
+    violation_modes:
+      - "An operator PutRuleAsync writes an app: rule id directly."
+      - "An operator RemoveRuleAsync deletes an app: rule id directly."
+      - "The app compiler writes rules outside its owned prefix or deletes another app's rules."
+    detection_signals:
+      - type: test
+        name: "LatticeAuthorizationPolicyStoreAppOwnedRuleTests"
+        source: "test/lattice.auth/LatticeAuthorizationPolicyStoreAppOwnedRuleTests.cs"
+      - type: test
+        name: "AppRoleCompilerTests.Diff"
+        source: "test/lattice.apps/Compiler/AppRoleCompilerTests.Diff.cs"
+      - type: exception
+        name: "LatticeAppOwnedRuleException"
+        source: "src/lattice.auth/LatticeAppOwnedRuleException.cs#LatticeAppOwnedRuleException"
+    remediation:
+      - step: "Change app authority by updating role bindings, the manifest, or the app consent, then reconcile the app."
+        source: "docs/lattice.apps/README.md"
+      - step: "Author any operator override as a separate rule id outside the app-owned prefix."
+        source: "src/lattice.auth/LatticeAppRuleIds.cs#LatticeAppRuleIds.Prefix"
+    sources:
+      - "src/lattice.auth/ILatticeAuthorizationPolicyStore.cs"
+      - "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+      - "test/lattice.auth/LatticeAuthorizationPolicyStoreAppOwnedRuleTests.cs"
+  - id: app-physical-tree-ids-not-disclosed
+    name: "App control hides physical tree ids"
+    description: "App-control responses and sanitized exceptions expose app slugs and app-local tree names, not composed physical tree ids."
+    scope:
+      packages:
+        - "Orleans.Lattice.Api.Apps"
+      components:
+        - "LatticeAppsControl"
+        - "AppsControlExceptionSanitizer"
+        - "AppsControlMapping"
+    violation_modes:
+      - "Describe, list, or consent responses echo a composed a/{app}/{tree} or t/{tenant}/a/{app}/{tree} id."
+      - "A propagated exception message contains a composed app tree id."
+      - "A large inner exception graph is forwarded intact after a composed id appears below the inspection budget."
+    detection_signals:
+      - type: test
+        name: "LatticeAppsControlSanitizationTests"
+        source: "test/lattice.api.apps/LatticeAppsControlSanitizationTests.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "src/lattice.api.apps/AppsControlExceptionSanitizer.cs#AppsControlExceptionSanitizer.TryRewrite"
+    remediation:
+      - step: "Route facade exceptions through AppsControlExceptionSanitizer before crossing the app-control boundary."
+        source: "src/lattice.api.apps/AppsControlExceptionSanitizer.cs#AppsControlExceptionSanitizer.TryRewrite"
+      - step: "Return app-local tree names and AppExceptionScope logical shapes instead of composed physical ids."
+        source: "docs/lattice.api.apps/README.md"
+    sources:
+      - "src/lattice.api.apps/AppsControlExceptionSanitizer.cs"
+      - "src/lattice.api.apps/AppsControlMapping.cs"
+      - "test/lattice.api.apps/LatticeAppsControlSanitizationTests.cs"
   - id: atomic-action-compensation-terminal
     name: "Atomic action terminal outcome"
     description: "An atomic action reaches one terminal outcome and compensates prepared participants on failure without exposing a partial plan as successful."
@@ -47,6 +236,7 @@ invariants:
       - "A reader observes only some keys from an in-flight saga."
       - "A commit decision is recorded after a leaf terminal is applied."
       - "A transaction registry decision flips or is retired before all prepared buckets drain."
+      - "A reader serves a prepared or pre-saga value after the transaction registry failed to answer."
     detection_signals:
       - type: test
         name: "AtomicCommitInvariantCoyoteTests"
@@ -60,6 +250,9 @@ invariants:
       - type: exception
         name: "InvalidOperationException"
         source: "docs/lattice/atomic-writes.md"
+      - type: exception
+        name: "LatticeTransactionOutcomeUnavailableException"
+        source: "src/lattice/LatticeTransactionOutcomeUnavailableException.cs"
     remediation:
       - step: "Retry transport-level failures with the same operation id so the call re-attaches to the original saga."
         source: "docs/lattice/atomic-writes.md"
@@ -67,8 +260,11 @@ invariants:
         source: "spec/AtomicCommit.tla"
       - step: "Run the paired non-vacuous guard when changing a catalogued property."
         source: "docs/lattice/verified-atomic-commit.md"
+      - step: "When a read reaches prepared rows and the transaction registry cannot be reached, fail with LatticeTransactionOutcomeUnavailableException rather than guessing visibility."
+        source: "docs/lattice/atomic-writes.md"
     sources:
       - "docs/lattice/atomic-writes.md"
+      - "docs/lattice/api.md"
       - "docs/lattice/consistency.md"
       - "docs/lattice/verified-atomic-commit.md"
       - "spec/AtomicCommit.tla"
@@ -976,6 +1172,7 @@ invariants:
         - "TelemetryQueryAuthorizer"
     violation_modes:
       - "An unparseable or ambiguous __name__ matcher bypasses the allow-list."
+      - "A grouping label list scanner treats parentheses in comments or quoted strings as syntax and hides the aggregand selector."
       - "A query catalogue route omits the shared authorizer."
       - "Matcher parsing allocates per label on the steady path."
     detection_signals:
@@ -985,6 +1182,8 @@ invariants:
     remediation:
       - step: "Deny unparseable, ambiguous, or non-exact __name__ matchers."
         source: ".github/instructions/security.instructions.md"
+      - step: "Skip grouping label parentheses while honoring comments and quoted strings exactly as the main PromQL scan does."
+        source: "src/lattice.api.telemetry/PromQlMetricExtractor.cs#PromQlMetricExtractor"
       - step: "Authorize MCP telemetry tools and facade query catalogue entries through TelemetryQueryAuthorizer."
         source: ".github/instructions/security.instructions.md"
     sources:
@@ -1159,6 +1358,7 @@ invariants:
       - "A write during drain reaches only the old tree and is not captured later."
       - "The destination is bulk-loaded after shadow-forwarded writes populated it."
       - "The alias swap leaves callers observing StaleTreeRoutingException."
+      - "The first resize purges the logical tree registry entry that now carries the live alias and configuration."
       - "Resize and reshard run concurrently on one tree."
     detection_signals:
       - type: status-field
@@ -1177,6 +1377,8 @@ invariants:
         source: "docs/lattice/tree-sizing.md"
       - step: "Undo a resize before the old tree leaves the soft-delete window when rollback is required."
         source: "docs/lattice/tree-sizing.md"
+      - step: "When the retired physical tree id is the logical tree id, purge its shards while leaving the logical registry entry and compaction schedule in place."
+        source: "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#TreeResizeGrain"
     sources:
       - "docs/lattice/tree-sizing.md"
       - "docs/lattice/consistency.md"

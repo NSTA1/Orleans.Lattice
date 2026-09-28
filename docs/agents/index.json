@@ -50,6 +50,7 @@
   },
   "coverage": {
     "api_surfaces_covered": [
+      "apps",
       "auth",
       "backup",
       "data",
@@ -74,6 +75,13 @@
     ]
   },
   "artifacts": [
+    {
+      "path": "api/apps.json",
+      "kind": "api",
+      "format": "json",
+      "schema": "lattice.agents/api/v1",
+      "summary": "Installable-apps control facade (Orleans.Lattice.Api.Apps, .Grpc): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+    },
     {
       "path": "api/auth.json",
       "kind": "api",
@@ -107,7 +115,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext): registration, authorization gate, every tool with parameters, results, errors, tool annotations and the facade operation it delegates to."
+      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext, .Apps): registration, authorization gate, every tool with parameters, results, errors, tool annotations and the facade operation it delegates to."
     },
     {
       "path": "api/replication.json",
@@ -206,6 +214,13 @@
       "format": "yaml",
       "schema": "lattice.agents/invariants/v1",
       "summary": "Operational invariants: scope, violation modes, detection signals and remediation."
+    },
+    {
+      "path": "procedures/app-lifecycle.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (app-lifecycle): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
     },
     {
       "path": "procedures/backup.yaml",

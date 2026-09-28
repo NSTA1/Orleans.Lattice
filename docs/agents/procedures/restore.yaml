@@ -19,8 +19,11 @@ preconditions:
     check: "A backup engine is registered for tree-admin restore verbs."
     source: "docs/lattice.api.treeadmin/README.md"
   - id: restore-authority
-    check: "Caller has Restore authority for each target scope."
-    source: "docs/lattice.api.treeadmin/README.md"
+    check: "Caller has Restore authority for each target scope, authorized before coordinated restore dispatch."
+    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService"
+  - id: restore-scope-total
+    check: "Backup-facade restore authorizes exactly one scope even when the backup id cannot resolve and no target tree is supplied."
+    source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl"
 steps:
   - n: 1
     action: "Describe the backup or set before restore."
@@ -61,6 +64,10 @@ failure_modes:
     signal: "Restore verb is rejected when no backup engine is registered."
     effect: "No restore is started."
     response: "Register AddLatticeBackup before AddLatticeTreeAdminApi or Backup API."
+  - id: probe-admission-denied
+    signal: "Coordinated restore admission is infeasible on the coordinator cluster."
+    effect: "No fleet cutover occurs and the caller-facing error does not disclose byte length or shard count."
+    response: "Use operator logs to inspect the measured backup size and shard count, then add capacity or choose a smaller target."
   - id: unreachable-peer
     signal: "Coordinated restore of a replicated tree refuses to start unless every peer is reachable."
     effect: "No fleet cutover occurs."
@@ -79,6 +86,8 @@ rollback:
 concurrency:
   - rule: "Backup set restore applies as all-or-nothing over its member trees."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+  - rule: "RestoreSetAsync authorizes every member target before the coordinated saga dispatcher can fan work out to peers."
+    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.RestoreSetAsync"
   - rule: "Replicated tree restore is promoted to coordinated restore across current replication peers."
     source: "reference-architecture.md"
 sources:

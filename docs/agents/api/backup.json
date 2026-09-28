@@ -25,9 +25,14 @@
     "marshalling": "LatticeBackupGrpcMarshallers.Create uses Orleans Serializer<T> for gRPC payloads.",
     "metadata": [
       {
-        "name": "active-tenant",
-        "purpose": "Carries the asserted active tenant header into LatticeActiveTenantContext.",
-        "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#StampActiveTenant"
+        "name": "authorization",
+        "purpose": "Request metadata carrying the credential token by default; the bearer scheme is stripped when present and the token is stamped as a LatticeCredential.",
+        "source": "src/lattice.api.backup.grpc/HeaderLatticeBackupApiCredentialBridge.cs#Resolve"
+      },
+      {
+        "name": "lattice-active-tenant",
+        "purpose": "Request metadata carrying the asserted active tenant by default; the assertion is re-validated downstream and grants no access by itself.",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupApiGrpcOptions.cs#ActiveTenantHeaderName"
       }
     ],
     "auth": {
@@ -258,6 +263,17 @@
         }
       ],
       "source": "src/lattice.backup/BackupCatalogScrubReport.cs#BackupCatalogScrubReport"
+    },
+    "BackupCatalogScrubRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "pruneOrphans",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync"
     },
     "BackupChainResponse": {
       "kind": "record",
@@ -938,6 +954,11 @@
       ],
       "source": "src/lattice.backup/LatticeRestoreResult.cs#LatticeRestoreResult"
     },
+    "NoRequest": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ILatticeBackupControl"
+    },
     "RestoreRequestMessage": {
       "kind": "record",
       "fields": [
@@ -1024,22 +1045,6 @@
       "kind": "record",
       "fields": [],
       "source": "src/lattice.api.backup.grpc/Model/RevertRestoreResponse.cs#RevertRestoreResponse"
-    },
-    "NoRequest": {
-      "kind": "record",
-      "fields": [],
-      "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ILatticeBackupControl"
-    },
-    "BackupCatalogScrubRequest": {
-      "kind": "record",
-      "fields": [
-        {
-          "name": "pruneOrphans",
-          "type": "bool",
-          "required": false
-        }
-      ],
-      "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScrubCatalogAgainstSinkAsync"
     }
   },
   "operations": [
@@ -1163,6 +1168,14 @@
           "condition": "Authorization denied the caller."
         },
         {
+          "error_id": "tenant-access-denied",
+          "condition": "The active tenant assertion is absent or denied."
+        },
+        {
+          "error_id": "tenant-isolation",
+          "condition": "The tenant-scoped backup boundary refused a tree outside the caller namespace."
+        },
+        {
           "error_id": "restore-validation",
           "condition": "Restore pre-apply validation failed: missing manifest or artifact, digest mismatch, out-of-scope request, or an aborted coordinated saga."
         },
@@ -1190,12 +1203,13 @@
         "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync"
+        "rule": "The facade authorizes exactly one restore scope before reading or applying data: an explicit or sink-manifest target tree when available, otherwise the reserved backup catalog tree so an absent manifest cannot skip authorization.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#ResolveRestoreAuthorizationScope"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ColdRestoreAsync",
-        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods"
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#LatticeBackupGrpcMethods",
+        "src/lattice.api.backup/LatticeBackupControl.cs#ResolveRestoreAuthorizationScope"
       ]
     },
     {
@@ -1946,6 +1960,14 @@
           "condition": "Authorization denied the caller."
         },
         {
+          "error_id": "tenant-access-denied",
+          "condition": "The active tenant assertion is absent or denied."
+        },
+        {
+          "error_id": "tenant-isolation",
+          "condition": "The tenant-scoped backup boundary refused a tree outside the caller namespace."
+        },
+        {
           "error_id": "restore-validation",
           "condition": "Restore pre-apply validation failed: missing manifest or artifact, digest mismatch, out-of-scope request, or an aborted coordinated saga."
         },
@@ -1963,28 +1985,23 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; OperationId makes a retried restore a no-op, and a missing OperationId is deterministically derived from the request.",
+        "source": "src/lattice.backup/LatticeRestoreRequest.cs#OperationId"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync"
+        "idempotent": true,
+        "basis": "A restore carries an idempotency key, or derives one from BackupId, target tree, scope, and mode; re-running the same request converges to the same state.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#DeriveOperationId"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync"
+        "rule": "The backup facade authorizes a resolved target scope before the restore engine runs; the restore engine authorizes the target before coordinated dispatch and also requires Backup authority on every distinct captured source tree for cross-tree retargets.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AuthorizeCapturedSourcesAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RestoreBackupAsync",
-        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RestoreBackup"
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RestoreBackup",
+        "src/lattice.backup/LatticeBackupRestoreService.cs#AuthorizeCapturedSourcesAsync"
       ]
     },
     {
@@ -2002,6 +2019,18 @@
         {
           "error_id": "permission-denied",
           "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The active tenant assertion is absent or denied."
+        },
+        {
+          "error_id": "tenant-isolation",
+          "condition": "The tenant-scoped backup boundary refused a tree outside the caller namespace."
+        },
+        {
+          "error_id": "restore-validation",
+          "condition": "The supplied shadow-cutover result names a physical tree that is not server-proven to belong to the target tree."
         },
         {
           "error_id": "transient-reminder",
@@ -2027,12 +2056,13 @@
         "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
+        "rule": "Before alias commit or revert, each caller-supplied physical tree id is re-resolved against registry provenance and must be the target itself, a restore shadow of the target, or the target current physical tree.",
+        "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync",
-        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RevertRestore"
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RevertRestore",
+        "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       ]
     },
     {

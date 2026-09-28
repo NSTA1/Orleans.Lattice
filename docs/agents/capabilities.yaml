@@ -100,6 +100,113 @@ capabilities:
       - "docs/lattice.api.mcp.repocontext/backlog.md"
       - "docs/lattice.api.mcp.repocontext/tools.md"
       - "samples/AgentBacklog/template/backlog-protocol.md"
+  - id: app-change-feed-subscriptions
+    name: "App change-feed subscriptions"
+    packages:
+      - "Orleans.Lattice.Apps"
+    concepts:
+      - app-capability-ceiling
+      - app-change-feed-subscription
+      - mutation-observer
+    guarantees:
+      - statement: "Enabled app subscriptions are compiled into a routing table from effective tree id to handler routes."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.RefreshAsync"
+      - statement: "A subscription observing another app tree or adopted tree must be covered by an approved exception scope."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionCompiler.cs#AppSubscriptionCompiler.Compile"
+      - statement: "Handler failures are logged and skipped without failing the write."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.OnMutationAsync"
+    non_guarantees:
+      - statement: "A newly enabled app starts receiving subscription deliveries only after the routing-table rebuild lands."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.OnMutationAsync"
+      - statement: "Maintenance mutations are never delivered to app subscriptions."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.OnMutationAsync"
+    unsafe_sequences:
+      - sequence:
+          - "approve no exception for a cross-app subscription"
+          - "enable the app and expect the handler to receive that other app's tree mutations"
+        hazard: "The subscription activation fails for the app and contributes no routes."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionCompiler.cs#AppSubscriptionCompiler.Compile"
+    concurrency_rules:
+      - statement: "Routing table rebuilds are coalesced and serialized by the subscription router."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.RefreshAsync"
+      - statement: "A stale table re-checks candidate routes against the current registry snapshot before delivery."
+        source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.OnMutationAsync"
+    sources:
+      - "src/lattice.apps/Subscriptions/AppSubscriptionCompiler.cs"
+      - "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs"
+      - "docs/lattice.apps/README.md"
+  - id: app-control-api
+    name: "App control API"
+    packages:
+      - "Orleans.Lattice.Api.Apps"
+      - "Orleans.Lattice.Api.Apps.Grpc"
+    concepts:
+      - app-install-capability
+      - app-install-record
+      - app-manifest
+    guarantees:
+      - statement: "ILatticeAppsControl exposes one generic contract for install, enable, disable, uninstall, list, describe, consent read, consent update, and capability probe."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl"
+      - statement: "Every facade verb except the advisory capability probe authorizes AppInstall before registry, source, or activation metadata is read."
+        source: "src/lattice.api.apps/LatticeAppsControl.cs#LatticeAppsControl.AuthorizeAsync"
+      - statement: "The gRPC binding exposes one service, orleans.lattice.api.apps, with one unary RPC per facade operation plus GetAuthScheme."
+        source: "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs#LatticeAppsGrpcMethods.ServiceName"
+    non_guarantees:
+      - statement: "The capability probe is advisory and never grants authority; every actual verb authorizes independently."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.GetCapabilitiesAsync"
+      - statement: "The gRPC binding contains no control logic and forwards to ILatticeAppsControl."
+        source: "docs/lattice.api.apps.grpc/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "set RequireAuthorization to false on the gRPC endpoint"
+          - "expose the endpoint without an outer authentication boundary"
+        hazard: "Only the facade's AppInstall gate remains, so transport admission no longer rejects unauthenticated callers first."
+        source: "src/lattice.api.apps.grpc/LatticeAppsApiGrpcOptions.cs#LatticeAppsApiGrpcOptions.RequireAuthorization"
+    concurrency_rules:
+      - statement: "InstallAsync upgrades pass the installed version they read as ExpectedVersion so racing upgrades cannot overwrite each other silently."
+        source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.InstallAsync"
+      - statement: "UpdateConsentAsync re-applies an enabled app after replacing the ceiling so a reduced ceiling cannot leave stale authority."
+        source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.UpdateConsentAsync"
+    sources:
+      - "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs"
+      - "src/lattice.api.apps/LatticeAppsControl.cs"
+      - "src/lattice.api.apps.grpc/LatticeAppsGrpcMethods.cs"
+      - "docs/lattice.api.apps/README.md"
+  - id: app-mcp-tool-surface
+    name: "App MCP tool surface"
+    packages:
+      - "Orleans.Lattice.Api.Mcp.Apps"
+    concepts:
+      - app-mcp-tool
+      - app-role-compiler
+      - mcp-tool-group
+    guarantees:
+      - statement: "Enabled app tools are advertised on the single Lattice MCP endpoint under the {slug}_{tool} namespace."
+        source: "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.Compose"
+      - statement: "A tool is advertised only when the caller holds every operation of the tool's declared role on at least one resolved role scope."
+        source: "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate.IsHeldAsync"
+      - statement: "The invocation path re-runs the advertisement decision against the current registry snapshot."
+        source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
+    non_guarantees:
+      - statement: "App tools never appear in the lattice_capabilities report."
+        source: "docs/lattice.api.mcp.apps/README.md"
+      - statement: "An app slug equal to lattice or repocontext contributes no app MCP tools."
+        source: "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.IsReservedSlug"
+    unsafe_sequences:
+      - sequence:
+          - "register a provider tool the manifest does not declare"
+          - "expect the declared tools from that app to remain available"
+        hazard: "Exact pairing fails the whole app tool activation and contributes no tools."
+        source: "src/lattice.api.mcp.apps/AppMcpToolActivation.cs#AppMcpToolActivation.Pair"
+    concurrency_rules:
+      - statement: "The app tool catalog is rebuilt when the app registry projection epoch advances and cached per epoch."
+        source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.GetCatalogAsync"
+      - statement: "Disabling an app or revoking a grant can remove an app tool from invocation mid-session because invocation is checked again."
+        source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
+    sources:
+      - "src/lattice.api.mcp.apps/AppMcpToolActivation.cs"
+      - "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+      - "docs/lattice.api.mcp.apps/README.md"
   - id: atomic-action
     name: "Atomic action"
     packages:
@@ -170,6 +277,8 @@ capabilities:
         source: "docs/lattice/atomic-writes.md"
       - statement: "Cross-tree atomic writes layer one global decision over each participating tree saga."
         source: "docs/lattice/atomic-writes.md"
+      - statement: "A read whose result depends on a prepared saga throws LatticeTransactionOutcomeUnavailableException when the transaction registry stays unreachable."
+        source: "docs/lattice/atomic-writes.md"
     non_guarantees:
       - statement: "SetManyAsync is not atomic and can leave a partial batch applied."
         source: "docs/lattice/bulk-loading.md"
@@ -218,6 +327,8 @@ capabilities:
         source: "docs/lattice.scaling/README.md"
       - statement: "The signal can be exposed through HTTP and an ASP.NET Core health check."
         source: "docs/lattice.scaling/README.md"
+      - statement: "The reference autoscaler drives the silo from a KEDA Prometheus scale rule over the silo scale-value series."
+        source: "reference-architecture.md"
     non_guarantees:
       - statement: "The storage axis never contributes to ScaleValue."
         source: "docs/lattice.scaling/README.md"
@@ -230,6 +341,7 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice.scaling/README.md"
+      - "reference-architecture.md"
   - id: backup-and-restore
     name: "Backup & restore"
     packages:
@@ -285,6 +397,7 @@ capabilities:
     name: "Bulk loading"
     packages:
       - "Orleans.Lattice"
+      - "Orleans.Lattice.Api.TreeAdmin"
     concepts:
       - tree
     guarantees:
@@ -298,6 +411,8 @@ capabilities:
         source: "docs/lattice/bulk-loading.md"
       - statement: "BulkAppendChunkAsync can be safely re-driven for the same chunk with the same operation id."
         source: "docs/lattice/bulk-loading.md"
+      - statement: "BeginBulkLoadAsync fails closed with InvalidOperationException when any shard cannot be sampled by the emptiness probe."
+        source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
     non_guarantees:
       - statement: "SetManyAsync is not atomic."
         source: "docs/lattice/bulk-loading.md"
@@ -334,6 +449,7 @@ capabilities:
       - "FEATURES.md"
       - "docs/lattice/bulk-loading.md"
       - "docs/lattice/external-store-migration.md"
+      - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - id: change-history
     name: "Change history"
     packages:
@@ -601,6 +717,8 @@ capabilities:
       - statement: "ReleaseAsync is idempotent for stale tokens."
         source: "docs/lattice/distributed-lock.md"
       - statement: "The fencing counter is persisted so it never rewinds across crash or reactivation."
+        source: "docs/lattice/distributed-lock.md"
+      - statement: "AcquireAsync enqueues callers FIFO and faults with TimeoutException when MaxWait elapses before the grant."
         source: "docs/lattice/distributed-lock.md"
     non_guarantees:
       - statement: "The lock is not a cross-cluster lock."
@@ -947,6 +1065,8 @@ capabilities:
         source: "docs/lattice.api.data/README.md"
       - statement: "Every State API tree id is resolved to the same effective tenant-scoped id for authorization and read."
         source: "docs/lattice.api.state/README.md"
+      - statement: "GetTreeStructureAsync returns roots from the registry shard map, including adaptive-split shards above the pinned shard count."
+        source: "docs/lattice.api.state/surfaces.md"
     non_guarantees:
       - statement: "The State API exposes observation verbs only and has no mutation path."
         source: "docs/lattice.api.state/README.md"
@@ -969,6 +1089,7 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice.api.state/README.md"
+      - "docs/lattice.api.state/surfaces.md"
       - "docs/lattice.api.data/README.md"
   - id: fast-reads
     name: "Fast reads"
@@ -988,6 +1109,10 @@ capabilities:
       - statement: "Cached reads are bounded by CacheTtl plus one delta round-trip."
         source: "docs/lattice/caching.md"
       - statement: "Split and moved-away deltas prune entries the primary leaf no longer owns."
+        source: "docs/lattice/caching.md"
+      - statement: "Optimistic shard-root point reads interleave concurrent GetAsync calls and retry serially when routing or ownership validation fails."
+        source: "docs/lattice/configuration.md"
+      - statement: "Leaf-cache refresh re-reads the primary leaf's in-flight atomic key set before each delta so those keys delegate to the leaf."
         source: "docs/lattice/caching.md"
     non_guarantees:
       - statement: "GetWithVersionAsync bypasses the cache."
@@ -1021,6 +1146,7 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice/caching.md"
+      - "docs/lattice/configuration.md"
       - "docs/lattice/state-primitives.md"
   - id: fault-tolerant
     name: "Fault-tolerant"
@@ -1220,6 +1346,63 @@ capabilities:
       - "FEATURES.md"
       - "docs/lattice.membership/identity-directory-providers.md"
       - "docs/lattice.explorer/managing-access.md"
+  - id: installable-apps
+    name: "Installable apps"
+    packages:
+      - "Orleans.Lattice.Apps"
+      - "Orleans.Lattice.Api.Apps"
+      - "Orleans.Lattice.Api.Apps.Grpc"
+      - "Orleans.Lattice.Api.Mcp.Apps"
+    concepts:
+      - app-capability-ceiling
+      - app-install-capability
+      - app-install-record
+      - app-manifest
+      - app-owned-rule
+      - app-owned-tree
+      - app-role-binding
+      - app-role-compiler
+      - app-source
+    guarantees:
+      - statement: "A manifest can be inspected before installation without loading or running app code."
+        source: "src/lattice.apps/Sources/IAppSource.cs#IAppSource.ResolveAsync"
+      - statement: "Installing an app records group role bindings and a version-pinned ceiling but does not enable it."
+        source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.InstallAsync"
+      - statement: "Enabling an app validates the installed manifest, compiles roles against the pinned ceiling, provisions structural trees, persists owned rules, and marks the app enabled."
+        source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.EnableAsync"
+      - statement: "Disabling an app withdraws its owned rules and keeps its trees and data in place."
+        source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.DisableAsync"
+      - statement: "Uninstall withdraws owned rules, soft-deletes structural app trees, skips adopted trees, and never purges data."
+        source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline.UninstallAsync"
+    non_guarantees:
+      - statement: "The in-image source performs no runtime package acquisition, download, assembly loading, or NuGet protocol."
+        source: "src/lattice.apps/Sources/InImageAppSource.cs#InImageAppSource"
+      - statement: "App role compilation is not an enforcement engine; enforcement remains with the existing access gate."
+        source: "docs/lattice.apps/README.md"
+    unsafe_sequences:
+      - sequence:
+          - "install a new version over an enabled app through IAppRegistry.UpgradeAsync directly"
+          - "skip IAppActivationPipeline.ReconcileAsync"
+        hazard: "The registry version changes but the enabled app's trees and grants are not re-applied until a later reconcile."
+        source: "src/lattice.apps/Registry/IAppRegistry.cs#IAppRegistry.UpgradeAsync"
+      - sequence:
+          - "reduce an enabled app's ceiling"
+          - "do not reconcile the enabled app"
+        hazard: "Authority that current consent revoked can remain live until reconciliation withdraws it."
+        source: "src/lattice.api.apps/LatticeAppsControl.Install.cs#LatticeAppsControl.UpdateConsentAsync"
+    concurrency_rules:
+      - statement: "Registry transitions use a bounded optimistic read-decide-write loop and re-decide when a competing writer advances the record."
+        source: "src/lattice.apps/Registry/AppRegistry.cs#AppRegistry.TransitionAsync"
+      - statement: "ExpectedVersion rejects a consent update or upgrade that was decided against a stale installed version."
+        source: "src/lattice.apps/Registry/AppRegistry.cs#AppRegistry.TransitionAsync"
+      - statement: "Activation runs for one tenant app are serialized through the activation grain."
+        source: "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline"
+    sources:
+      - "FEATURES.md"
+      - "PACKAGES.md"
+      - "docs/lattice.apps/README.md"
+      - "docs/lattice.api.apps/README.md"
+      - "samples/InstallableApps/README.md"
   - id: materialised-views
     name: "Materialised views"
     packages:
@@ -1665,6 +1848,39 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice/ttl.md"
+  - id: per-tree-admission-control
+    name: "Per-tree admission control"
+    packages:
+      - "Orleans.Lattice"
+    concepts:
+      - tree-admission
+    guarantees:
+      - statement: "MaxLiveKeys and MaxEstimatedBytes are opt-in per-tree caps resolved from LatticeOptions."
+        source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
+      - statement: "A breached cap refuses a locally-authored write with LatticeQuotaExceededException naming the keys or bytes dimension."
+        source: "src/lattice/LatticeQuotaExceededException.cs"
+      - statement: "AdmissionAdvisoryLiveKeys and AdmissionAdvisoryBytes emit dry-run metrics without rejecting writes."
+        source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.AdmissionAdvisoryLiveKeys"
+    non_guarantees:
+      - statement: "Per-tree admission is best-effort and approximate because it reads a cached per-tree aggregate."
+        source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
+      - statement: "A freshly activated tree fails open until its first storage-usage sample lands."
+        source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
+      - statement: "Incoming replicated writes and atomic-write-saga apply paths are never refused by per-tree admission."
+        source: "src/lattice/LatticeQuotaExceededException.cs"
+    unsafe_sequences:
+      - sequence:
+          - "catch InvalidOperationException broadly around writes"
+          - "retry immediately without excluding ILatticeDomainFault"
+        hazard: "A LatticeQuotaExceededException can be absorbed and retried before the tree drops below its cap."
+        source: "src/lattice/LatticeQuotaExceededException.cs"
+    concurrency_rules:
+      - statement: "Concurrent cross-shard writes can overshoot a cap slightly before the cached aggregate refreshes."
+        source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
+    sources:
+      - "FEATURES.md"
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+      - "src/lattice/LatticeQuotaExceededException.cs"
   - id: performance
     name: "Performance"
     packages:
@@ -1815,12 +2031,12 @@ capabilities:
         source: "docs/lattice/queues.md"
       - statement: "When QueueCapacity is set and the bound is reached, enqueue evicts the oldest entry first."
         source: "docs/lattice/queues.md"
+      - statement: "Queue entry ids remain monotonic across restart, graceful deactivation, and silo crash."
+        source: "docs/lattice/queues.md"
     non_guarantees:
       - statement: "The queue is cluster-internal and is not a CRDT-replicated primitive."
         source: "docs/lattice/queues.md"
       - statement: "The queue never ships a LatticeMergeMode for cross-cluster FIFO."
-        source: "docs/lattice/queues.md"
-      - statement: "A drained queue can reuse ids after a crash if ids advanced since the last persisted head-cursor write."
         source: "docs/lattice/queues.md"
       - statement: "ListAsync materializes every parked entry and is intended for diagnostics or control-plane use rather than the hot path."
         source: "docs/lattice/queues.md"
@@ -1869,6 +2085,10 @@ capabilities:
       - statement: "The silo head has a nonzero minimum replica floor, while MCP, Explorer, and Grafana heads can scale to zero."
         source: "reference-architecture.md"
       - statement: "The deployment script is idempotent and re-running it converges the estate rather than duplicating resources."
+        source: "reference-architecture/README.md"
+      - statement: "The default public option exposes head services through Azure Container Apps external ingress and Azure Front Door global ingress."
+        source: "reference-architecture.md"
+      - statement: "The silo carries a KEDA Prometheus scale rule over the lattice.scaling scale-value series with a nonzero replica floor."
         source: "reference-architecture/README.md"
     non_guarantees:
       - statement: "Cross-region consistency in the active-active estate is eventual, not strongly consistent across regions."
@@ -1923,6 +2143,8 @@ capabilities:
         source: "docs/lattice.api.mcp.repocontext/retrieval-economics.md"
       - statement: "repocontext_reset_index drops the code index and vector planes while preserving durable agent memory."
         source: "docs/lattice.api.mcp.repocontext/tools.md"
+      - statement: "The container reports a live drain forecast and planned stops should be gated on lattice_repocontext_projected_drain_peak_seconds rather than the instant projection."
+        source: "docs/lattice.api.mcp.repocontext/container.md"
     non_guarantees:
       - statement: "Semantic nearest-neighbour retrieval is approximate by default unless exact retrieval is configured."
         source: "docs/lattice.api.mcp.repocontext/semantic-search.md"
@@ -1955,6 +2177,7 @@ capabilities:
     sources:
       - "FEATURES.md"
       - "docs/lattice.api.mcp.repocontext/README.md"
+      - "docs/lattice.api.mcp.repocontext/container.md"
       - "docs/lattice.api.mcp.repocontext/tools.md"
       - "docs/lattice.api.mcp.repocontext/semantic-search.md"
       - "docs/lattice.api.mcp.repocontext/retrieval-economics.md"
@@ -1972,7 +2195,9 @@ capabilities:
         source: "docs/lattice/tree-sizing.md"
       - statement: "Reads and writes remain available throughout an online resize."
         source: "docs/lattice/tree-sizing.md"
-      - statement: "The destination tree inherits the source ShardCount and a copy of its ShardMap."
+      - statement: "The destination tree is registered with the source ShardCount and receives copied entries for shard indices 0 through ShardCount - 1 rather than inheriting the source shard map."
+        source: "docs/lattice/tree-sizing.md"
+      - statement: "The alias swap carries the logical tree's configuration overrides onto the live resized copy."
         source: "docs/lattice/tree-sizing.md"
       - statement: "Live writes during resize are shadow-forwarded to the destination with their original LWW metadata."
         source: "docs/lattice/tree-sizing.md"
@@ -2890,6 +3115,8 @@ capabilities:
         source: "docs/lattice.vector/api.md"
       - statement: "FlushAsync persists only partitions whose version stamp moved."
         source: "docs/lattice.vector/architecture.md"
+      - statement: "A checkpoint after vector replacement or removal re-flushes only chunks whose content hash differs from the stored chunk."
+        source: "src/lattice.vector/Persistence/DurableVectorIndex.Flush.cs"
     sources:
       - "FEATURES.md"
       - "docs/lattice.vector/README.md"
@@ -2897,6 +3124,7 @@ capabilities:
       - "docs/lattice.vector/architecture.md"
       - "docs/lattice.vector/configuration.md"
       - "docs/lattice.vector/recall.md"
+      - "src/lattice.vector/Persistence/DurableVectorIndex.Flush.cs"
   - id: verified-atomic-action
     name: "Verified atomic action"
     packages:

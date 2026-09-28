@@ -614,6 +614,27 @@
       "fields": [],
       "source": "src/lattice.api.data.grpc/Security/ILatticeDataApiAuthorizer.cs#DenyAllDataApiAuthorizer"
     },
+    "LatticeApiDataOptions": {
+      "kind": "class",
+      "fields": [
+        {
+          "name": "DefaultRangePageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxRangePageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "RangeDeleteStepSize",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data/LatticeApiDataOptions.cs#LatticeApiDataOptions"
+    },
     "LatticeDataApiAuthorizationContext": {
       "kind": "struct",
       "fields": [

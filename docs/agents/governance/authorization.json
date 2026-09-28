@@ -2,6 +2,276 @@
   "schema": "lattice.agents/governance-authorization/v1",
   "decision_trees": [
     {
+      "id": "app-control-facade",
+      "nodes": [
+        {
+          "id": "parse-request",
+          "check": "The facade parses the app slug, version, bindings, and consent exception scopes, composing caller-supplied tree references under the active tenant before authorization.",
+          "on_true": "tenant",
+          "on_false": "deny-invalid",
+          "source": "src/lattice.api.apps/LatticeAppsControl.cs"
+        },
+        {
+          "id": "tenant",
+          "check": "ITenantContextResolver resolves an initialized active tenant.",
+          "on_true": "app-install",
+          "on_false": "deny-tenant",
+          "source": "src/lattice.api.apps/LatticeAppsControl.cs"
+        },
+        {
+          "id": "app-install",
+          "check": "LatticeAccessGateEnforcement authorizes LatticeOperation.AppInstall on LatticeScope.ClusterWideTreeId with no key filter.",
+          "on_true": "capability-probe",
+          "on_false": "deny-app-install",
+          "source": "src/lattice.api.apps/LatticeAppsControl.cs"
+        },
+        {
+          "id": "capability-probe",
+          "check": "The call is GetCapabilitiesAsync.",
+          "on_true": "allow-probe",
+          "on_false": "touch-control-plane",
+          "source": "src/lattice.api.apps/LatticeAppsControl.Reads.cs"
+        },
+        {
+          "id": "touch-control-plane",
+          "check": "Authorization succeeded before any registry, source, or activation status metadata is read or mutated.",
+          "on_true": "allow",
+          "on_false": "deny-app-install",
+          "source": "src/lattice.api.apps/LatticeAppsControl.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The facade reads or mutates the caller tenant's app registry, source metadata, consent, or activation pipeline."
+        },
+        {
+          "id": "allow-probe",
+          "outcome": "The advisory capability probe reports all app-control verbs granted; if authorization throws, it reports none."
+        },
+        {
+          "id": "deny-app-install",
+          "outcome": "The call is denied before app existence, consent, bindings, or activation state are disclosed."
+        },
+        {
+          "id": "deny-invalid",
+          "outcome": "The call fails as invalid input before any control-plane read or write."
+        },
+        {
+          "id": "deny-tenant",
+          "outcome": "The call fails closed because the active tenant cannot be resolved or validated."
+        }
+      ],
+      "fail_closed": "Every app-control verb gates on AppInstall before reading registry, source, consent, bindings, or activation status; GetCapabilities returns a default-deny probe rather than granting authority.",
+      "sources": [
+        "src/lattice.api.apps/LatticeAppsControl.cs",
+        "src/lattice.api.apps/LatticeAppsControl.Install.cs",
+        "src/lattice.api.apps/LatticeAppsControl.Reads.cs"
+      ]
+    },
+    {
+      "id": "app-owned-rule-protection",
+      "nodes": [
+        {
+          "id": "app-owned",
+          "check": "The rule id starts with LatticeAppRuleIds.Prefix (app:).",
+          "on_true": "system-origin",
+          "on_false": "allow",
+          "source": "src/lattice.auth/LatticeAuthorizationPolicyStore.cs"
+        },
+        {
+          "id": "system-origin",
+          "check": "LatticeAccessGateContext.IsSystemOrigin is true before the store enters its own system-origin scope.",
+          "on_true": "allow",
+          "on_false": "deny-app-owned",
+          "source": "src/lattice.auth/LatticeAuthorizationPolicyStore.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The policy store continues to ordinary rule authoring validation and persistence or deletion."
+        },
+        {
+          "id": "deny-app-owned",
+          "outcome": "PutRuleAsync or RemoveRuleAsync throws LatticeAppOwnedRuleException before any lookup, write, or delete."
+        }
+      ],
+      "fail_closed": "Direct operator edits of app-owned rule ids are rejected before persistence or existence checks; only system-origin app reconciliation may replace them.",
+      "sources": [
+        "src/lattice.auth/LatticeAppRuleIds.cs",
+        "src/lattice.auth/LatticeAppOwnedRuleException.cs",
+        "src/lattice.auth/LatticeAuthorizationPolicyStore.cs"
+      ]
+    },
+    {
+      "id": "app-role-compilation",
+      "nodes": [
+        {
+          "id": "role-operations",
+          "check": "Every role operation is inside the installed AppCapabilityCeiling.AllowedOperations after excluding scopeless Telemetry and AppInstall.",
+          "on_true": "role-scopes",
+          "on_false": "activation-fails",
+          "source": "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+        },
+        {
+          "id": "role-scopes",
+          "check": "Each role scope is structural for the app or covered by an approved exception scope; reserved, system, tenant-qualified, and cluster-wide sentinel scopes are not grantable exceptions.",
+          "on_true": "bindings",
+          "on_false": "activation-fails",
+          "source": "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+        },
+        {
+          "id": "bindings",
+          "check": "Every supplied binding names a declared role and maps it to a non-empty membership group id.",
+          "on_true": "emit-rules",
+          "on_false": "activation-fails",
+          "source": "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+        },
+        {
+          "id": "emit-rules",
+          "check": "The compiler emits deterministic Allow rules with group subjects and app:{slug}: rule ids, then activation replaces the app-owned stored set for that tenant.",
+          "on_true": "allow",
+          "on_false": "activation-fails",
+          "source": "src/lattice.apps/Activation/AppActivationEngine.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "activation-fails",
+          "outcome": "No compiled rules are emitted or stale grants are withdrawn by activation fail-closed handling, depending on failure kind."
+        },
+        {
+          "id": "allow",
+          "outcome": "The compiled group rules become ordinary authorization rules enforced by the shared access gate."
+        }
+      ],
+      "fail_closed": "A manifest, binding, or ceiling mismatch fails activation rather than clamping or partially granting; withdrawn rules are removed before new grants are written.",
+      "sources": [
+        "src/lattice.apps/Compiler/AppRoleCompiler.cs",
+        "src/lattice.apps/Activation/AppActivationEngine.cs",
+        "src/lattice.auth/LatticeAppRuleIds.cs"
+      ]
+    },
+    {
+      "id": "backup-restore-authorization",
+      "nodes": [
+        {
+          "id": "target-source",
+          "check": "A restore target tree is explicitly supplied, or can be derived from the catalog or sink manifest.",
+          "on_true": "compose-target",
+          "on_false": "catalog-fallback",
+          "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+        },
+        {
+          "id": "compose-target",
+          "check": "An explicit caller target is composed under the active tenant; a manifest-derived target is already effective and is not recomposed.",
+          "on_true": "authorize-target",
+          "on_false": "deny-tenant",
+          "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+        },
+        {
+          "id": "catalog-fallback",
+          "check": "No target can be resolved, so authorization falls back to the reserved backup catalog tree.",
+          "on_true": "authorize-target",
+          "on_false": "deny-restore",
+          "source": "src/lattice.api.backup/LatticeBackupControl.cs"
+        },
+        {
+          "id": "authorize-target",
+          "check": "BackupAccessAuthorizer authorizes LatticeOperation.Restore over the resolved target scope or catalog fallback before restore, cold restore, rebuild, scrub, or revert touches data.",
+          "on_true": "allow",
+          "on_false": "deny-restore",
+          "source": "src/lattice.backup/BackupAccessAuthorizer.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The restore, cold restore, catalog rebuild, catalog scrub, or revert operation proceeds."
+        },
+        {
+          "id": "deny-restore",
+          "outcome": "The operation is denied before the restore engine, sink, or catalog mutation path is reached."
+        },
+        {
+          "id": "deny-tenant",
+          "outcome": "The operation is denied by active-tenant composition or backup tenant isolation before data is touched."
+        }
+      ],
+      "fail_closed": "Restore authorization is total: absence of a manifest target falls back to Restore on the catalog tree instead of skipping the gate, and tenant isolation denials are non-disclosing probes.",
+      "sources": [
+        "src/lattice.api.backup/LatticeBackupControl.cs",
+        "src/lattice.backup/BackupAccessAuthorizer.cs",
+        "src/lattice.backup/ILatticeBackupTenantScope.cs"
+      ]
+    },
+    {
+      "id": "grpc-apps-api-interceptor",
+      "nodes": [
+        {
+          "id": "service-match",
+          "check": "Method starts with /orleans.lattice.api.apps/.",
+          "on_true": "auth-scheme",
+          "on_false": "allow-unrelated",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "auth-scheme",
+          "check": "Method is GetAuthScheme with the auth-scheme request shape.",
+          "on_true": "allow-discovery",
+          "on_false": "unary-known",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "unary-known",
+          "check": "The bound unary RPC and request type classify to a known LatticeAppsApiOperation on the server.",
+          "on_true": "require-option",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "require-option",
+          "check": "LatticeAppsApiGrpcOptions.RequireAuthorization is true.",
+          "on_true": "authorizer",
+          "on_false": "allow",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+        },
+        {
+          "id": "authorizer",
+          "check": "ILatticeAppsApiAuthorizer.IsAuthorizedAsync returns true for the server-classified operation and asserted slug.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow",
+          "outcome": "The gRPC request reaches the app-control service, which stamps credential and active tenant and then applies the facade AppInstall gate."
+        },
+        {
+          "id": "allow-discovery",
+          "outcome": "The unauthenticated GetAuthScheme discovery call returns only configured public scheme descriptors."
+        },
+        {
+          "id": "allow-unrelated",
+          "outcome": "The interceptor passes the call through unchanged because the method belongs to another service."
+        },
+        {
+          "id": "deny-permission-denied",
+          "outcome": "The call fails with gRPC status PermissionDenied before the facade is invoked."
+        }
+      ],
+      "fail_closed": "DenyAppsApiAuthorizer is the default, unknown or streaming app-service methods are rejected, and operation classification comes from the bound RPC and request shape rather than caller-supplied data.",
+      "sources": [
+        "src/lattice.api.apps.grpc/Security/DenyAppsApiAuthorizer.cs",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiAuthorizationContext.cs",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs",
+        "src/lattice.api.apps.grpc/Security/LatticeAppsApiOperation.cs"
+      ]
+    },
+    {
       "id": "grpc-auth-api-interceptor",
       "nodes": [
         {
@@ -687,6 +957,72 @@
       "sources": [
         "src/lattice.auth/LatticeAuthOptions.cs",
         "src/lattice.auth/PolicyEvaluator.cs"
+      ]
+    },
+    {
+      "id": "mcp-app-tool-authorization",
+      "nodes": [
+        {
+          "id": "source-ready",
+          "check": "The app MCP surface has providers plus registry projection, app source, and access gate collaborators.",
+          "on_true": "resolve-tenant",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+        },
+        {
+          "id": "resolve-tenant",
+          "check": "The caller's credential and asserted active tenant resolve to a tenant context.",
+          "on_true": "enabled-app",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+        },
+        {
+          "id": "enabled-app",
+          "check": "The registry snapshot has an enabled app install whose ceiling is pinned to its installed version.",
+          "on_true": "tool-activation",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+        },
+        {
+          "id": "tool-activation",
+          "check": "The manifest resolves and every declared tool pairs exactly with one provider implementation under a non-reserved slug.",
+          "on_true": "role-held",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp.apps/AppMcpToolActivation.cs"
+        },
+        {
+          "id": "role-held",
+          "check": "The access gate allows every operation of the tool's declared role on at least one resolved scope for the caller subject.",
+          "on_true": "coarse-authorizer",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp.apps/AppMcpRoleGate.cs"
+        },
+        {
+          "id": "coarse-authorizer",
+          "check": "The shared MCP coarse authorizer admits the namespaced tool name for this HTTP context.",
+          "on_true": "advertise-and-invoke",
+          "on_false": "not-advertised",
+          "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "advertise-and-invoke",
+          "outcome": "The namespaced app tool is advertised; invocation re-runs the same role decision against the current registry before calling the implementation under the caller credential."
+        },
+        {
+          "id": "not-advertised",
+          "outcome": "The app tool is absent from tools/list and therefore unreachable from tools/call; if a stale session invokes it, the namespaced tool throws an authorization McpException."
+        }
+      ],
+      "fail_closed": "A missing collaborator, unvalidated tenant, disabled app, unpinned ceiling, bad tool pairing, lost role grant, or MCP coarse-authorizer denial withholds the app tool and the invocation path re-checks current state.",
+      "sources": [
+        "src/lattice.api.mcp/Discovery/ILatticeApiMcpAppToolSource.cs",
+        "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
+        "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs",
+        "src/lattice.api.mcp.apps/AppMcpRoleGate.cs",
+        "src/lattice.api.mcp.apps/AppMcpToolActivation.cs",
+        "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
       ]
     },
     {

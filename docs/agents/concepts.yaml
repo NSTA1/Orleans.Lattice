@@ -209,6 +209,234 @@ concepts:
       limits: []
     sources:
       - "docs/lattice.api.treeadmin/README.md"
+  - id: app-capability-ceiling
+    name: "App capability ceiling"
+    category: apps
+    definition: "An app capability ceiling is the install-time operation mask and approved exception-scope list every compiled app grant must fit within."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "AllowedOperations is the maximum operation set available to compiled rules."
+          source: "src/lattice.apps/Install/AppCapabilityCeiling.cs#AppCapabilityCeiling.AllowedOperations"
+        - statement: "ApprovedExceptionScopes names tenant-local scopes outside the app's structural namespace."
+          source: "src/lattice.apps/Install/AppCapabilityCeiling.cs#AppCapabilityCeiling.ApprovedExceptionScopes"
+      out_of_scope:
+        - statement: "The ceiling records approval and does not itself authorize or compile rules."
+          source: "src/lattice.apps/Install/AppCapabilityCeiling.cs#AppCapabilityCeiling"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Install/AppCapabilityCeiling.cs"
+      - "docs/lattice.apps/README.md"
+  - id: app-change-feed-subscription
+    name: "App change-feed subscription"
+    category: apps
+    definition: "An app change-feed subscription observes committed mutations on an app tree through the mutation observer seam and dispatches them to a registered handler."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "Subscriptions to another app tree or adopted tree must be covered by an approved exception scope."
+          source: "src/lattice.apps/Subscriptions/AppSubscriptionCompiler.cs#AppSubscriptionCompiler.Compile"
+        - statement: "A handler exception is logged and does not fail the write that produced the mutation."
+          source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.OnMutationAsync"
+      out_of_scope:
+        - statement: "Subscriptions are not delivered for maintenance mutations."
+          source: "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs#AppSubscriptionRouter.OnMutationAsync"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Subscriptions/AppSubscriptionCompiler.cs"
+      - "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs"
+      - "docs/lattice.apps/README.md"
+  - id: app-install-capability
+    name: "AppInstall capability"
+    category: identity
+    definition: "AppInstall is the scopeless cluster-wide capability required for app lifecycle, consent, and app-control read verbs."
+    packages:
+      - "Orleans.Lattice.Apps"
+      - "Orleans.Lattice.Api.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "Every app lifecycle transition authorizes AppInstall over the cluster-wide scope before storage access."
+          source: "src/lattice.apps/Registry/AppInstallAuthorizer.cs#AppInstallAuthorizer.AuthorizeAsync"
+        - statement: "The app-control facade gates read verbs as well as lifecycle mutations before registry or source metadata is read."
+          source: "src/lattice.api.apps/LatticeAppsControl.cs#LatticeAppsControl.AuthorizeAsync"
+      out_of_scope:
+        - statement: "AppInstall is excluded from role compilation and cannot be granted by an app role."
+          source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler.Compile"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Registry/AppInstallAuthorizer.cs"
+      - "src/lattice.api.apps/LatticeAppsControl.cs"
+  - id: app-install-record
+    name: "App install record"
+    category: apps
+    definition: "An app install record is the durable per-tenant registry record for one app install, including version, ceiling, role bindings, and lifecycle state."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "The record is keyed by tenant id and app slug in the reserved sys-app-registry tree."
+          source: "src/lattice.apps/Registry/AppRegistryRecord.cs#AppRegistryRecord"
+        - statement: "CeilingVersion pins the consented ceiling to the installed app version."
+          source: "src/lattice.apps/Registry/AppRegistryRecord.cs#AppRegistryRecord.CeilingVersion"
+      out_of_scope:
+        - statement: "Uninstall retains the record in the Uninstalled state rather than deleting app data."
+          source: "src/lattice.apps/Registry/IAppRegistry.cs#IAppRegistry.UninstallAsync"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Registry/AppRegistryRecord.cs"
+      - "src/lattice.apps/Registry/IAppRegistry.cs"
+  - id: app-manifest
+    name: "App manifest"
+    category: apps
+    definition: "An app manifest is the embedded JSON declaration of an app's identity, trees, roles, replication intent, schema bindings, subscriptions, and MCP tools."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "The manifest contains inspectable declarations and no executable types, handlers, or assembly names to load."
+          source: "src/lattice.apps/Manifest/AppManifest.cs#AppManifest"
+        - statement: "Validation returns AppManifestError diagnostics for invalid declarations."
+          source: "src/lattice.apps/Manifest/AppManifestValidator.cs#AppManifestValidator.Validate"
+      out_of_scope:
+        - statement: "Runtime acquisition and signature verification are future IAppSource responsibilities, not manifest fields."
+          source: "src/lattice.apps/Sources/IAppSource.cs#IAppSource"
+    operational_envelope:
+      limits:
+        - statement: "Runtime manifest text or stream input larger than 1 MiB is refused before deserialization."
+          source: "src/lattice.apps/Manifest/AppManifestParser.cs#AppManifestParser.Parse"
+        - statement: "Each manifest section is bounded to 256 entries."
+          source: "src/lattice.apps/Manifest/AppManifestLimits.cs#AppManifestLimits.MaxSectionItems"
+    sources:
+      - "src/lattice.apps/Manifest/AppManifest.cs"
+      - "src/lattice.apps/Manifest/AppManifestValidator.cs"
+  - id: app-mcp-tool
+    name: "App MCP tool"
+    category: mcp
+    definition: "An app MCP tool is a manifest-declared app-local tool implementation advertised as a namespaced MCP tool only for enabled apps whose role gate the caller holds."
+    packages:
+      - "Orleans.Lattice.Api.Mcp.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "Tool names are composed as slug, underscore, and app-local tool name."
+          source: "src/lattice.api.mcp.apps/AppMcpToolName.cs#AppMcpToolName.Compose"
+        - statement: "Advertisement and invocation both re-check the caller against the declared role through the shared access gate."
+          source: "src/lattice.api.mcp.apps/AppMcpToolSource.cs#AppMcpToolSource.IsInvocationPermittedAsync"
+      out_of_scope:
+        - statement: "App MCP tools do not appear in the lattice_capabilities report."
+          source: "docs/lattice.api.mcp.apps/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.api.mcp.apps/AppMcpToolName.cs"
+      - "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
+      - "docs/lattice.api.mcp.apps/README.md"
+  - id: app-owned-rule
+    name: "App-owned authorization rule"
+    category: identity
+    definition: "An app-owned authorization rule is a compiled authorization rule whose id starts with app: and is replaced as part of the app's owned rule set."
+    packages:
+      - "Orleans.Lattice.Apps"
+      - "Orleans.Lattice.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "Every rule id emitted by the app role compiler starts with the app-owned prefix for its slug."
+          source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler.GetOwnedRuleIdPrefix"
+        - statement: "Operator writes and deletes of app-owned rule ids are rejected by the policy store outside system origin."
+          source: "src/lattice.auth/ILatticeAuthorizationPolicyStore.cs#ILatticeAuthorizationPolicyStore.PutRuleAsync"
+      out_of_scope:
+        - statement: "Operators can author separate rules outside the app-owned prefix."
+          source: "src/lattice.auth/LatticeAppRuleIds.cs#LatticeAppRuleIds.Prefix"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+      - "src/lattice.auth/ILatticeAuthorizationPolicyStore.cs"
+  - id: app-owned-tree
+    name: "App-owned tree"
+    category: apps
+    definition: "An app-owned tree is a manifest tree resolved to the structural a/{app}/{tree} namespace and then composed through tenancy as the outer axis."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "Structural app trees are composed as a/{slug}/{tree} before tenant composition."
+          source: "src/lattice.apps/Activation/AppActivationTreeNames.cs#AppActivationTreeNames.LocalStructuralTree"
+        - statement: "Uninstall soft-deletes structural app trees and never touches adopted trees."
+          source: "src/lattice.apps/Activation/AppActivationEngine.cs#AppActivationEngine.UninstallAsync"
+      out_of_scope:
+        - statement: "Physical purge is not part of uninstall and remains a separate TreeLifecycle operation."
+          source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.UninstallAsync"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Activation/AppActivationTreeNames.cs"
+      - "src/lattice.apps/Activation/AppActivationEngine.cs"
+  - id: app-role-binding
+    name: "App role binding"
+    category: identity
+    definition: "An app role binding maps one manifest role name to one membership group id at install or consent time."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "A registry install request rejects duplicate role bindings and empty group ids."
+          source: "src/lattice.apps/Registry/AppRegistry.cs#AppRegistry.ValidateRequest"
+        - statement: "The role compiler emits group subject selectors from bindings, never user subject selectors."
+          source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler.Compile"
+      out_of_scope:
+        - statement: "The manifest has no role inheritance construct; group nesting is a membership concern."
+          source: "docs/lattice.apps/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Registry/AppRegistry.cs"
+      - "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+  - id: app-role-compiler
+    name: "App role compiler"
+    category: apps
+    definition: "The app role compiler is the pure function that resolves manifest roles and bindings into ordinary authorization rules under the installed ceiling."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "Every role operation must be a subset of the installed ceiling; excess fails the whole compilation and emits no rules."
+          source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler.Compile"
+        - statement: "The compiler computes a diff that replaces only rules under the app's owned prefix."
+          source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler.ComputeDiff"
+      out_of_scope:
+        - statement: "Persisting compiled rules is the activation pipeline's responsibility."
+          source: "src/lattice.apps/Compiler/AppRoleCompiler.cs#AppRoleCompiler"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Compiler/AppRoleCompiler.cs"
+      - "docs/lattice.apps/README.md"
+  - id: app-source
+    name: "App source"
+    category: apps
+    definition: "An app source resolves an app slug and optional version to a manifest, provenance, and deferred activation handle without activating app code."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "ResolveAsync returns structured source results for unknown slugs, version mismatches, invalid manifests, and identity mismatches."
+          source: "src/lattice.apps/Sources/IAppSource.cs#IAppSource.ResolveAsync"
+        - statement: "The in-image source reads named embedded manifest resources lazily and caches each result."
+          source: "src/lattice.apps/Sources/InImageAppSource.cs#InImageAppSource.ResolveAsync"
+      out_of_scope:
+        - statement: "The in-image source performs no download, NuGet protocol, or assembly loading."
+          source: "src/lattice.apps/Sources/InImageAppSource.cs#InImageAppSource"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.apps/Sources/IAppSource.cs"
+      - "src/lattice.apps/Sources/InImageAppSource.cs"
   - id: atomic-action-saga
     name: "Atomic action saga"
     category: coordination
@@ -1072,6 +1300,26 @@ concepts:
     sources:
       - "docs/lattice.replication/README.md"
       - "PACKAGES.md"
+  - id: repo-context-app
+    name: "RepoContext app"
+    category: apps
+    definition: "The RepoContext app is the installable-app projection of repository context, with adopted existing repo-context trees and read-only app MCP tools."
+    packages:
+      - "Orleans.Lattice.Api.Mcp.RepoContext"
+    capability_boundary:
+      in_scope:
+        - statement: "The RepoContext app slug is repo-context so app tool names cannot collide with repocontext_* group tool names."
+          source: "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.Slug"
+        - statement: "Each repo-context tree declaration adopts an existing physical tree rather than moving data into the structural app namespace."
+          source: "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.GetBackupPlan"
+      out_of_scope:
+        - statement: "RepoContext app tools include only the always-on read-only group tools."
+          source: "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest.AppToolNames"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs"
+      - "src/lattice.api.mcp.repocontext/App/repo-context.app.json"
   - id: repocontext-store
     name: "RepoContext store"
     category: ai
@@ -1498,6 +1746,24 @@ concepts:
       - "docs/lattice/api.md"
       - "README.md"
       - "src/lattice/BPlusTree/LatticeConstants.cs"
+  - id: tree-admission
+    name: "Tree admission"
+    category: governance
+    definition: "Tree admission evaluates opt-in per-tree live-key and estimated-byte ceilings before local writes are admitted."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "Locally-authored writes can be refused with LatticeQuotaExceededException when MaxLiveKeys or MaxEstimatedBytes is breached."
+          source: "src/lattice/LatticeQuotaExceededException.cs"
+      out_of_scope:
+        - statement: "Replication and atomic-write-saga apply paths bypass per-tree admission control."
+          source: "src/lattice/LatticeQuotaExceededException.cs"
+    operational_envelope:
+      limits: []
+    sources:
+      - "src/lattice/BPlusTree/LatticeOptions.cs"
+      - "src/lattice/LatticeQuotaExceededException.cs"
   - id: tree-alias
     name: "Tree alias"
     category: core
@@ -1822,6 +2088,11 @@ relationships:
     to: api-facade
     sources:
       - "docs/lattice/security.md"
+  - from: access-gate
+    relation: guards
+    to: app-install-capability
+    sources:
+      - "src/lattice.api.apps/LatticeAppsControl.cs"
   - from: administration-seam
     relation: implements
     to: api-treeadmin-facade
@@ -1882,6 +2153,66 @@ relationships:
     to: api-facade
     sources:
       - "docs/lattice.api.treeadmin/README.md"
+  - from: app-capability-ceiling
+    relation: part-of
+    to: app-install-record
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-change-feed-subscription
+    relation: depends-on
+    to: mutation-observer
+    sources:
+      - "src/lattice.apps/Subscriptions/AppSubscriptionRouter.cs"
+  - from: app-install-record
+    relation: depends-on
+    to: app-manifest
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-mcp-tool
+    relation: part-of
+    to: app-manifest
+    sources:
+      - "docs/lattice.api.mcp.apps/README.md"
+  - from: app-owned-rule
+    relation: extends
+    to: auth-rule
+    sources:
+      - "src/lattice.auth/LatticeAppRuleIds.cs"
+  - from: app-owned-tree
+    relation: depends-on
+    to: tenant
+    sources:
+      - "src/lattice.apps/Activation/AppActivationTreeNames.cs"
+  - from: app-role-binding
+    relation: depends-on
+    to: auth-group
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-role-binding
+    relation: part-of
+    to: app-install-record
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-role-compiler
+    relation: consumes
+    to: app-capability-ceiling
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-role-compiler
+    relation: consumes
+    to: app-role-binding
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-role-compiler
+    relation: produces
+    to: app-owned-rule
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-source
+    relation: produces
+    to: app-manifest
+    sources:
+      - "docs/lattice.apps/README.md"
   - from: atomic-action-saga
     relation: extends
     to: atomic-batch
@@ -2082,6 +2413,11 @@ relationships:
     to: wal
     sources:
       - "PACKAGES.md"
+  - from: repo-context-app
+    relation: depends-on
+    to: app-manifest
+    sources:
+      - "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs"
   - from: repocontext-store
     relation: stores
     to: vector-index
@@ -2182,6 +2518,11 @@ relationships:
     to: bplus-tree
     sources:
       - "README.md"
+  - from: tree-admission
+    relation: guards
+    to: tree
+    sources:
+      - "src/lattice/LatticeQuotaExceededException.cs"
   - from: tree-alias
     relation: configures
     to: tree

@@ -529,13 +529,14 @@
         "source": "src/lattice.api.telemetry/LatticeTelemetry.cs#ResolveRange"
       },
       "concurrency": {
-        "rule": "Tenant scope is derived server-side; unvalidated widening requests degrade to the active tenant and are reported in the response scope.",
-        "source": "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#ResolveAsync"
+        "rule": "Deny-all metric access extracts metric names conservatively, including exact __name__ matchers, fails closed on unresolvable or unconstrained selectors, and skips grouping label lists with PromQL comment/string rules so a metric selector cannot be hidden after a quoted or commented parenthesis.",
+        "source": "src/lattice.api.telemetry/PromQlMetricExtractor.cs#SkipBalancedParens"
       },
       "sources": [
         "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#QueryAsync",
         "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#QueryMethodName",
-        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#Query"
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#Query",
+        "src/lattice.api.telemetry/PromQlMetricExtractor.cs#SkipBalancedParens"
       ]
     }
   ],

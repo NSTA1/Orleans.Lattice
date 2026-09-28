@@ -18,7 +18,7 @@
     "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#LatticeStateApiGrpcAuthInterceptor"
   ],
   "in_process": {
-    "interface": "ILatticeStateQuery",
+    "interface": "ILatticeStateQuery, ILatticeStateObserver, ILatticeStateMetricsObserver",
     "registration": "ISiloBuilder.AddLatticeStateApi",
     "source": "src/lattice.api.state/LatticeApiStateServiceCollectionExtensions.cs#AddLatticeStateApi"
   },
@@ -766,6 +766,77 @@
       ],
       "source": "src/lattice.api.abstractions/State/StateQueryResults.cs#EntryScanResult"
     },
+    "LatticeApiStateOptions": {
+      "kind": "class",
+      "fields": [
+        {
+          "name": "DefaultScanPageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxScanPageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "DefaultScanValuePreviewBytes",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxScanValuePreviewBytes",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "SingleEntryValuePreviewBytes",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "DefaultHistoryPageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxHistoryPageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "DefaultHistoryValuePreviewBytes",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MaxHistoryValuePreviewBytes",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "ChangeObservationPollInterval",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "ChangeObservationPageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "MetricsSampleInterval",
+          "type": "TimeSpan",
+          "required": false
+        },
+        {
+          "name": "ReadVisibility",
+          "type": "LatticeStateApiReadVisibility",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.state/LatticeApiStateOptions.cs#LatticeApiStateOptions"
+    },
     "LatticeStateApiAuthorizationContext": {
       "kind": "struct",
       "fields": [
@@ -842,6 +913,15 @@
         "ListDeadLetters"
       ],
       "source": "src/lattice.api.state.grpc/Security/LatticeStateApiAuthorizationContext.cs#LatticeStateApiOperation"
+    },
+    "LatticeStateApiReadVisibility": {
+      "kind": "enum",
+      "values": [
+        "Auto",
+        "Enforced",
+        "Disabled"
+      ],
+      "source": "src/lattice.api.state/LatticeApiStateOptions.cs#LatticeStateApiReadVisibility"
     },
     "NodeKind": {
       "kind": "enum",
