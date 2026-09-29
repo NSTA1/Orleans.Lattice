@@ -29,7 +29,7 @@
       "scopes": [{ "tree": "tasks" }]
     }
   ],
-  "replication": [],
+  "replication": [{ "tree": "tasks", "mergeMode": "LwwRegister" }],
   "schema": [],
   "subscriptions": [],
   "mcpTools": [],
