@@ -257,8 +257,21 @@ internal sealed class LeafSnapshotHydrationSource
     /// <param name="index">Zero-based row index.</param>
     /// <param name="row">Receives the decoded row on success.</param>
     internal bool TryReadRowAt(int index, out LeafSnapshotRow row)
+        => TryReadRowAt(index, out row, out _);
+
+    /// <summary>
+    /// As <see cref="TryReadRowAt(int, out LeafSnapshotRow)"/>, but also reports
+    /// the key's UTF-8 byte length so the caller can account the key's encoded
+    /// size without re-encoding the decoded string to rediscover a length the
+    /// frame already carried.
+    /// </summary>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
+    internal bool TryReadRowAt(int index, out LeafSnapshotRow row, out int keyUtf8Length)
     {
-        if (!LeafSnapshotCodec.TryReadRowAt(_frame, index, _rowCount, _indexOffset, out row, out var bytesConsumed))
+        if (!LeafSnapshotCodec.TryReadRowAt(
+                _frame, index, _rowCount, _indexOffset, out row, out var bytesConsumed, out keyUtf8Length))
         {
             return false;
         }

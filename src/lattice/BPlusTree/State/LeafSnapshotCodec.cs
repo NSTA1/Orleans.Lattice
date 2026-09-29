@@ -565,16 +565,40 @@ internal static class LeafSnapshotCodec
         int indexOffset,
         out LeafSnapshotRow row,
         out int bytesConsumed)
+        => TryReadRowAt(frame, index, rowCount, indexOffset, out row, out bytesConsumed, out _);
+
+    /// <summary>
+    /// As <see cref="TryReadRowAt(ReadOnlySpan{byte}, int, int, int, out LeafSnapshotRow, out int)"/>,
+    /// but also reports the key's UTF-8 byte length, which the parser already
+    /// knows from the frame and would otherwise have to be recovered by
+    /// re-encoding the decoded key string.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="bytesConsumed">Receives the row record's byte length on success.</param>
+    /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
+    internal static bool TryReadRowAt(
+        ReadOnlySpan<byte> frame,
+        int index,
+        int rowCount,
+        int indexOffset,
+        out LeafSnapshotRow row,
+        out int bytesConsumed,
+        out int keyUtf8Length)
     {
         row = default;
         bytesConsumed = 0;
+        keyUtf8Length = 0;
         if (!TryGetRowStart(frame, index, rowCount, indexOffset, out var start))
         {
             return false;
         }
 
         var position = start;
-        if (!TryReadRow(frame, indexOffset, ref position, out row))
+        if (!TryReadRow(frame, indexOffset, ref position, out row, out keyUtf8Length))
         {
             return false;
         }
@@ -710,12 +734,45 @@ internal static class LeafSnapshotCodec
     /// before comparing. Malformed UTF-8 on either side falls back to a raw
     /// byte compare so the result stays a total order instead of throwing.
     /// </para>
+    /// <para>
+    /// That divergence only exists above U+007F, and ordinal comparison is
+    /// decided entirely at the first position where the two keys differ. So
+    /// the comparison first locates that position with a vectorised
+    /// <see cref="MemoryExtensions.CommonPrefixLength{T}(ReadOnlySpan{T}, ReadOnlySpan{T})"/>
+    /// scan. If one key runs out first it is a proper prefix of the other and
+    /// sorts below it. Otherwise, when the first differing byte is ASCII on
+    /// <em>both</em> sides it necessarily starts a code point on both sides (a
+    /// continuation byte is never below 0x80), the identical bytes before it
+    /// decode identically on both sides, and both code points are their own
+    /// UTF-16 code unit - so that single byte comparison is exactly the answer
+    /// the rune walk would reach. This also holds when the shared prefix is
+    /// malformed: the walk would bail to a raw byte compare of two remainders
+    /// that share that same prefix, which is decided at the same byte.
+    /// </para>
+    /// <para>
+    /// Only a difference that falls on a non-ASCII byte reaches the walk. The
+    /// scan never reads past the deciding byte, so unlike a whole-key ASCII
+    /// validity gate it costs nothing on keys that diverge early, and keys in
+    /// this store are overwhelmingly ASCII while key comparison is the
+    /// dominant cost of a leaf seek.
+    /// </para>
     /// </summary>
     /// <param name="left">Left key, UTF-8 encoded.</param>
     /// <param name="right">Right key, UTF-8 encoded.</param>
     /// <returns>Negative, zero, or positive as <paramref name="left"/> sorts before, with, or after <paramref name="right"/>.</returns>
     internal static int CompareKeysUtf8(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
+        var common = left.CommonPrefixLength(right);
+        if (common == left.Length || common == right.Length)
+        {
+            return left.Length.CompareTo(right.Length);
+        }
+
+        if (left[common] < 0x80 && right[common] < 0x80)
+        {
+            return left[common].CompareTo(right[common]);
+        }
+
         var leftRemaining = left;
         var rightRemaining = right;
         while (!leftRemaining.IsEmpty && !rightRemaining.IsEmpty)
@@ -792,10 +849,29 @@ internal static class LeafSnapshotCodec
     /// <param name="pos">Row start on entry; the next row's start on success.</param>
     /// <param name="row">Receives the decoded row on success.</param>
     internal static bool TryReadRow(ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row)
-        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row);
+        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out _);
+
+    /// <summary>
+    /// As <see cref="TryReadRow(ReadOnlySpan{byte}, int, ref int, out LeafSnapshotRow)"/>, but
+    /// also reports the UTF-8 byte length of the key the parser just read.
+    /// <para>
+    /// The decoder already holds the key as a slice of the frame, so its byte
+    /// length is known exactly and for free. Handing it back lets a caller that
+    /// must account the key's encoded size skip re-encoding the decoded
+    /// <see cref="string"/> to measure something the frame already stated.
+    /// </para>
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="limit">Exclusive end of the row region (the index-table offset).</param>
+    /// <param name="pos">Row start on entry; the next row's start on success.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
+    internal static bool TryReadRow(
+        ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row, out int keyUtf8Length)
+        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out keyUtf8Length);
 
     private static bool TrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
-        => TryReadRowCore(frame, limit, ref pos, materialize: false, out _);
+        => TryReadRowCore(frame, limit, ref pos, materialize: false, out _, out _);
 
     // Single parser for both the materialising and the skipping walk so the
     // field order can never drift between them.
@@ -804,9 +880,11 @@ internal static class LeafSnapshotCodec
         int limit,
         ref int pos,
         bool materialize,
-        out LeafSnapshotRow row)
+        out LeafSnapshotRow row,
+        out int keyUtf8Length)
     {
         row = default;
+        keyUtf8Length = 0;
 
         if (!TryReadSpan(frame, limit, ref pos, out var keyUtf8)
             || !TryReadByte(frame, limit, ref pos, out var flags)
@@ -816,6 +894,8 @@ internal static class LeafSnapshotCodec
         {
             return false;
         }
+
+        keyUtf8Length = keyUtf8.Length;
 
         LatticeMergeMode? mergeMode = null;
         if ((flags & RowFlagHasMergeMode) != 0)
