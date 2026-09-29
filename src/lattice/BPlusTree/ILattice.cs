@@ -520,8 +520,13 @@ public interface ILattice : IGrainWithStringKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the number of live (non-tombstoned) keys in each shard as an ordered list.
-    /// The list index corresponds to the shard index (0-based).
+    /// Returns the number of live (non-tombstoned) keys in each physical shard as
+    /// an ordered list: one count per shard, in ascending physical shard-index
+    /// order - the order of <see cref="ShardMap.GetPhysicalShardIndices"/>. A list
+    /// position is a physical shard index only while those indices run
+    /// contiguously from <c>0</c>, which an adaptive split preserves but a shard
+    /// consolidation that folds a shard away does not; read the indices from
+    /// <see cref="GetRoutingAsync(CancellationToken)"/> to address a shard.
     /// Useful for diagnostics and load-balancing analysis.
     /// </summary>
     Task<IReadOnlyList<int>> CountPerShardAsync(CancellationToken cancellationToken = default);
@@ -928,14 +933,18 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="IsReshardCompleteAsync"/>.
     /// <para>
     /// <b>Grow-only on a populated tree.</b> <paramref name="newShardCount"/>
-    /// must be at least <c>2</c> and at most the default virtual-slot space
-    /// (<c>4096</c>); a value outside that range throws
+    /// must be at least <c>2</c> and at most the smaller of
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
+    /// (4096) and the number of virtual slots in the tree's
+    /// <see cref="ShardMap"/> (fewer on a tree an installed app created with a
+    /// declared virtual shard count); a value outside that range throws
     /// <see cref="ArgumentOutOfRangeException"/>. A request for the count the
     /// tree already has is a no-op, and a smaller count than the current
     /// number of distinct physical shards throws
     /// <see cref="ArgumentOutOfRangeException"/> (shrinking is not supported).
     /// An observably empty tree is instead re-pinned directly to any count in
-    /// range, smaller or larger, without running a migration. Throws
+    /// range, smaller or larger, without running a migration; its shard map is
+    /// rebuilt over the same virtual slot count. Throws
     /// <see cref="InvalidOperationException"/> when a resize is in flight.
     /// </para>
     /// <para>

@@ -318,6 +318,7 @@ The causal cut a backup was taken as of.
 
 - Constructor: `BackupTopologySnapshot(int shardCount, int virtualShardCount, IReadOnlyList<string> shardRootDigests)`. Throws `ArgumentOutOfRangeException` when `shardCount` or `virtualShardCount` is not positive, `ArgumentNullException` when `shardRootDigests` is null.
 - Properties: `int ShardCount`, `int VirtualShardCount`, `IReadOnlyList<string> ShardRootDigests`.
+- What a capture records: all three come from the tree's routing map at the capture. `ShardCount` is the number of physical shards the map names, `VirtualShardCount` is the map's slot count (4096 unless the tree was created with a declared virtual shard count), and `ShardRootDigests` holds one digest per physical shard in ascending shard-index order - the digest of the captured range on that shard, or `nodigest-{index}` when the tree does not maintain projection digests. The indices need not be contiguous: a shard consolidation that folds a shard away leaves a gap.
 
 ### `BackupKeyDescriptor`
 

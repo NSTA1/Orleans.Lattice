@@ -117,11 +117,22 @@ internal sealed class TreeReshardGrain(
         }
 
         var resolved = await optionsResolver.ResolveAsync(TreeId);
-        if (newShardCount > LatticeConstants.DefaultVirtualShardCount)
+
+        // The ceiling is the tree's own virtual slot space, not the 4096 default:
+        // an installed app can pin a smaller one, and a split needs a source that
+        // owns at least two slots, so a target above the slot count can never be
+        // reached and would leave the coordinator in progress indefinitely. The
+        // 4096 cap still applies to a tree whose map declares more slots.
+        var registry = grainFactory.GetLatticeRegistry();
+        var currentMap = await registry.GetShardMapAsync(TreeId)
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+        var virtualShardCount = currentMap.VirtualShardCount;
+        var maxShardCount = Math.Min(virtualShardCount, LatticeConstants.DefaultVirtualShardCount);
+        if (newShardCount > maxShardCount)
         {
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_max"), tenantTag);
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
-                $"Target shard count ({newShardCount}) cannot exceed the virtual shard space ({LatticeConstants.DefaultVirtualShardCount}).");
+                $"Target shard count ({newShardCount}) cannot exceed {maxShardCount}: the tree's virtual shard space holds {virtualShardCount} slots, and no tree may exceed {LatticeConstants.DefaultVirtualShardCount} shards.");
         }
 
         if (state.State.InProgress)
@@ -133,9 +144,6 @@ internal sealed class TreeReshardGrain(
         }
 
         // Inspect the current map to validate grow-only semantics.
-        var registry = grainFactory.GetLatticeRegistry();
-        var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var currentCount = currentMap.GetPhysicalShardIndices().Count;
 
         // Empty-tree fast-path: if the tree has no live entries yet,
@@ -145,7 +153,7 @@ internal sealed class TreeReshardGrain(
         // can set any desired shard count on a freshly-created tree.
         if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap))
         {
-            await ApplyEmptyTreeResharAsync(registry, newShardCount, LatticeConstants.DefaultVirtualShardCount);
+            await ApplyEmptyTreeResharAsync(registry, newShardCount, virtualShardCount);
             return;
         }
 
@@ -635,8 +643,8 @@ internal sealed class TreeReshardGrain(
     /// live entries the reshard reduces to a single registry write that
     /// updates the <see cref="State.TreeRegistryEntry.ShardCount"/> pin and
     /// rebuilds the default identity <see cref="ShardMap"/> for the new
-    /// count. The grow-only restriction does not apply because no data has
-    /// to be migrated.
+    /// count over the tree's existing virtual slot count. The grow-only
+    /// restriction does not apply because no data has to be migrated.
     /// </summary>
     private async Task ApplyEmptyTreeResharAsync(ILatticeRegistry registry, int newShardCount, int virtualShardCount)
     {

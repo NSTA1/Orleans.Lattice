@@ -218,10 +218,10 @@ is idempotent, but it means a failed migration is resumed, not rolled back.
   set, they are checked on entry by `SetAsync` (both overloads),
   `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`,
   `SetManyWherePredicateAsync`, the single-tree `SetManyAtomicAsync` and
-  `SetManyAtomicWhereAsync` batches, `ApplyCrdtDeltaAsync` (both overloads)
-  and `ApplyCrdtDeltaManyAsync`, and on a cross-tree atomic batch only when
-  its saga writes the batch, where a violation rolls the whole batch back and
-  the call throws `InvalidOperationException`. No bulk-load path checks them,
+  `SetManyAtomicWhereAsync` batches, `ApplyCrdtDeltaAsync` (both overloads),
+  `ApplyCrdtDeltaManyAsync` and the cross-tree atomic batch, which checks
+  every participating tree's entries before any tree is staged. No bulk-load
+  path checks them,
   and neither does `MergeAsync`. A key or
   value you successfully bulk-load can therefore be rejected by a later
   `SetAsync` against the same tree. Check the bounds in the producer if you

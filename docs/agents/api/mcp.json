@@ -9085,7 +9085,7 @@
           "name": "targetShardCount",
           "type": "int",
           "required": true,
-          "notes": "Desired physical shard count. Targets below the current count are rejected; an equal target is a no-op; the target must be at least 2 and at most 4096 except an empty tree may be re-pinned."
+          "notes": "Desired physical shard count. Targets below the current count are rejected; an equal target is a no-op; the target must be at least 2 and at most the smaller of 4096 and the tree's virtual slot count except an empty tree may be re-pinned below the current count."
         },
         {
           "name": "region",

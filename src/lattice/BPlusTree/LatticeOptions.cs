@@ -50,8 +50,10 @@ public class LatticeOptions
     /// and its TTL overload, <see cref="ILattice.SetIfVersionAsync"/>,
     /// <see cref="ILattice.GetOrSetAsync"/>, <see cref="ILattice.SetManyAsync"/>,
     /// <see cref="ILattice.SetManyWherePredicateAsync"/>, the single-tree
-    /// atomic batch overloads, guarded atomic batches, and the CRDT
-    /// delta-apply path). When set, a write whose key is longer
+    /// atomic batch overloads, guarded atomic batches, the cross-tree
+    /// <see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>
+    /// extension (every participating tree against its own bound), and the
+    /// CRDT delta-apply path). When set, a write whose key is longer
     /// than this bound is rejected with an <see cref="ArgumentException"/>
     /// before any shard work, so a client cannot drive unbounded heap growth
     /// by writing pathologically large keys (memory-exhaustion DoS).
