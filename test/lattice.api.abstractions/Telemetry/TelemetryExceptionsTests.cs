@@ -78,4 +78,55 @@ public sealed class TelemetryExceptionsTests
             Assert.That(typeof(TelemetryQueryBoundsException).BaseType, Is.EqualTo(typeof(Exception)));
         });
     }
+
+    [Test]
+    public void Backend_message_ctor_captures_the_query_and_reports_the_message()
+    {
+        var ex = new TelemetryBackendException("tree.write.ops", "the backend returned 503");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.QueryId, Is.EqualTo("tree.write.ops"));
+            Assert.That(ex.Message, Is.EqualTo("the backend returned 503"));
+            Assert.That(ex.InnerException, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Backend_inner_ctor_preserves_the_underlying_transport_fault()
+    {
+        var inner = new HttpRequestException("connection refused");
+
+        var ex = new TelemetryBackendException("tree.write.ops", "the backend was unreachable", inner);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.QueryId, Is.EqualTo("tree.write.ops"));
+            Assert.That(ex.Message, Is.EqualTo("the backend was unreachable"));
+            Assert.That(
+                ex.InnerException,
+                Is.SameAs(inner),
+                "the transport fault must survive so an operator can diagnose the outage from the log");
+        });
+    }
+
+    [Test]
+    public void Backend_fault_is_a_distinct_type_from_the_two_caller_error_exceptions()
+    {
+        // A backend outage and a bad query are different outcomes and a binding
+        // has to map them differently, so that a client neither retries a
+        // genuinely bad query forever nor abandons a transient outage. Were this
+        // one type, that distinction would not exist to be mapped.
+        var backend = new TelemetryBackendException("tree.write.ops", "unreachable");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(backend, Is.Not.InstanceOf<TelemetryQueryNotFoundException>());
+            Assert.That(backend, Is.Not.InstanceOf<TelemetryQueryBoundsException>());
+            Assert.That(
+                typeof(TelemetryBackendException).BaseType,
+                Is.EqualTo(typeof(Exception)),
+                "it matches the sibling contract groups, so it stays safe to mark serializable later.");
+        });
+    }
 }
