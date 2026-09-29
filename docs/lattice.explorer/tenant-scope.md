@@ -46,6 +46,8 @@ The Explorer fails closed around it:
 
 An operator on `default` does see tenancy chrome, because the `default` root is the way they reach tenant-aware addresses and switch to other tenants. The cluster lists only the tenants a caller administers, which never includes `default`, so the Explorer adds `default` to a proven platform operator's reachable tenants. An operator can therefore always pick it and open `/t/default/...`, and an operator with no remembered tenant starts there.
 
+The reserved default tenant has no registry record, so it has no workspace root: `/t/default/tenancy` canonicalises to the tenant directory, `/tenancy`, which is what an operator scoped there administers. The rule depends only on the address, so it holds while an operator verdict is still settling.
+
 ## The Tenancy area
 
 The Tenancy area exists only when tenancy is active and the tenant self-service facade is available. It probes the caller's standing before it appears. A platform operator sees it. A tenant admin for their own scoped tenant also sees it. An unauthenticated caller gets an unavailable area with `Sign in to see the tenants you administer.` Other refusals and faults hide the area fail-closed.
@@ -54,7 +56,7 @@ The area's addresses and commands:
 
 - `/tenancy` is the operator directory. It lists every tenant the caller can reach, shows lifecycle state, quota use, resident regions, installed-app counts, and links to the tenant workspace or Apps area. The `tenancy.create-tenant` command opens this page with `?new=true`, the same form as the visible `New tenant` button.
 - `/tenancy/{tenant}` is the operator administration overview for one tenant. It links to `/tenancy/{tenant}/grants`, `/tenancy/{tenant}/access`, and `/tenancy/{tenant}/regions`. Non-operators who reach an administration address are redirected to the equivalent `/t/{tenant}/tenancy` workspace section.
-- `/t/{tenant}/tenancy` is My tenant. Its sections are `/t/{tenant}/tenancy/members`, `/t/{tenant}/tenancy/quota`, `/t/{tenant}/tenancy/regions`, and `/t/{tenant}/tenancy/sharing`. It shows the tenant's state, the caller's standing, quota, residency, installed apps, and reachable sibling tenants.
+- `/t/{tenant}/tenancy` is My tenant (for the reserved `default` tenant, this root is the directory; see [The reserved default tenant](#the-reserved-default-tenant)). Its sections are `/t/{tenant}/tenancy/members`, `/t/{tenant}/tenancy/quota`, `/t/{tenant}/tenancy/regions`, and `/t/{tenant}/tenancy/sharing`. It shows the tenant's state, the caller's standing, quota, residency, installed apps, and reachable sibling tenants.
 - `tenancy.offer-grant` opens `/t/{tenant}/tenancy/sharing?new=true`. The visible `Offer a grant` button uses the same command id. The reserved `default` tenant does not offer or receive cross-tenant grants.
 
 The Tenancy area supplies the reachable-tenant list used by the directory and by the `t/` completions in the address line. It is exactly the tenants the cluster names for the caller, plus `default` for a proven platform operator, and never a tenant the cluster did not name. The established tenant is listed first and suspended tenants are not offered, except that the established tenant remains available so the current scope never disappears under the caller.
