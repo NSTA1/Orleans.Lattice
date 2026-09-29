@@ -35,7 +35,7 @@ DateTimeOffset at = evt.AtUtc;                // silo-side timestamp
 | `ReshardCompleted` | `null` | `null` | The reshard coordinator on terminal success. |
 | `TreeDeleted` | `null` | `null` | `ILattice.DeleteTreeAsync`, once per logical delete, under the logical tree id (also on an aliased tree). |
 | `TreeRecovered` | `null` | `null` | `ILattice.RecoverTreeAsync`, once per logical recovery, under the logical tree id. |
-| `TreePurged` | `null` | `null` | `ILattice.PurgeTreeAsync` or the soft-delete-expiry purge reminder, once per logical purge, under the logical tree id. |
+| `TreePurged` | `null` | `null` | `ILattice.PurgeTreeAsync` or the soft-delete-expiry purge reminder, once per logical purge, under the logical tree id. The purge removes the tree's registry entry before it publishes, so a per-tree `SetPublishEventsEnabledAsync` override has normally gone by then and the tree's configured `LatticeOptions.PublishEvents` decides whether this event is published. |
 
 ### Correlation
 

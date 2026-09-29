@@ -7,7 +7,7 @@ snapshot as a point-in-time copy - which is useful for backups, read-only
 analytics forks, or cloning a dataset for experimentation. The copy carries only
 live entries (never tombstoned or expired ones) and covers the tree's pinned
 shard range, so it leaves out any shard an adaptive split later added; an online
-snapshot also does not mirror typed CRDT deltas (see
+snapshot also does not mirror typed CRDT deltas or bulk appends (see
 [Snapshots](../../docs/lattice/snapshots.md)). This
 sample uses `SnapshotMode.Offline`: every source
 shard is locked when the copy starts and each is unlocked again once its own

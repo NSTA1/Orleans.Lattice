@@ -576,7 +576,7 @@ internal sealed partial class BPlusLeafGrain
     /// <paramref name="hasher"/>.
     /// <para>
     /// The string is transcoded exactly <em>once</em>: the byte count the
-    /// length prefix carries is the count <see cref="Encoding.GetBytes(string, Span{byte})"/>
+    /// length prefix carries is the count <see cref="Encoding.GetBytes(ReadOnlySpan{char}, Span{byte})"/>
     /// reports, which is by definition the same number a separate
     /// <see cref="Encoding.GetByteCount(string)"/> pass would have produced, so
     /// the emitted bytes are identical to the two-pass form this replaced while

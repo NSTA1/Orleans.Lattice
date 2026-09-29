@@ -100,6 +100,8 @@ Capturing each mutation into a WAL grain at commit time, rather than reading val
 
 The per-shard WAL grain is internal, so in-process consumers read the WAL through [`IChangeFeed`](./change-feed.md). The change feed walks every WAL partition for a tree from a per-partition offset cursor, filters by origin, and merges the result in HLC ascending order. The outbound shipper does not use it: it tails the WAL partitions directly from its own durable per-partition cursors.
 
+Only the shipper follows a tree's alias: it resolves the tree to the physical copy its writes are logged under and rebinds when the alias changes. The change feed, the fall-off probe's oldest-entry read (`ILatticeWalIntrospection`), and anti-entropy leaf re-replay address the WAL partitions by the tree id they are given, so after a shadow-cutover restore, a resize, or a schema remediation repoints the tree they read the retired copy's log rather than the one the tree's new writes land in (see the [change feed caveats](change-feed.md#caveats)).
+
 ## Pluggable durability (replication-only override)
 
 The replication WAL grain shape is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory, Azure Table, and file-system implementations.

@@ -23,7 +23,8 @@ using Orleans.Lattice.Tenancy;
 //   1. Tenant tree naming. A tenant-scoped tree id self-describes its owner:
 //      LatticeTenantTrees.Compose(tenant, name) -> "t/{tenant}/{name}", and
 //      TryGetTenant reverses it. This structural prefix is what the isolation
-//      gate checks - a caller in tenant "acme" can only ever name "t/acme/*".
+//      gate checks - a caller in tenant "acme" can only name "t/acme/*"
+//      unless another tenant grants it access.
 //   2. Tenant lifecycle as a platform operator. A bootstrap administrator
 //      creates two tenants and reads back their lifecycle status.
 //   3. Lifecycle transitions and guards. Suspend / resume a tenant, delete a

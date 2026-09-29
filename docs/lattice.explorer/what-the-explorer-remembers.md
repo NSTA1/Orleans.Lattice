@@ -3,6 +3,9 @@
 The Explorer remembers a small, enumerated set of view preferences so you do
 not have to rebuild your working context on every visit. This page is the
 contract: what is remembered, at what scope, for how long, and how to clear it.
+The sign-in credential is not a view preference and is not part of this
+contract; see
+[Where tokens live](connecting-to-an-auth-enabled-state-api.md#where-tokens-live).
 
 ## The remembered keys
 
@@ -23,15 +26,18 @@ registered, rather than written through ad hoc calls scattered across
 components. A key that is not registered cannot be read or written through the
 preference contract at all, which is what keeps this list honest.
 
-Some surfaces also retain per-tree working state directly in the same underlying
-preference store, outside the contract: the Data surface's key-search prefix,
-page size, scan mode, and selected tag index and value, and the active
-per-selection surface (`detail-plugin`). These expire with the store's retention
-window, but they are not registered keys, so `/reset-view` neither lists nor
-clears them. They are not scoped either: the Data surface's state is keyed by tree
-id alone and `detail-plugin` by nothing at all, so every account and cluster that
-uses the same browser profile - or, on the desktop head, the same app - shares
-them.
+Some surfaces also retain working state directly in the same underlying
+preference store, outside the contract: the Data surface's per-tree key-search
+prefix, page size, scan mode, and selected tag index and value; the one-shot tag
+the Data surface hands to the tag-index browser, which that browser removes when
+it reads it; the active per-selection surface (`detail-plugin`); and anything a
+plugin writes through its host context's preference store. These expire with the
+store's retention window, but they are not registered keys, so `/reset-view`
+neither lists nor clears them. They are not scoped either: the Data surface's
+state and the tag hand-off are keyed by tree id alone, a plugin's entries by its
+plugin id, and `detail-plugin` by nothing at all, so every account and cluster
+that uses the same browser profile - or, on the desktop head, the same app -
+shares them.
 
 ## Scope
 
@@ -67,7 +73,11 @@ revoked, a tenant is suspended. The console never restores such a value blindly.
 - If it no longer resolves, the console falls back to a safe default.
 - Where a user would otherwise be confused about why they did not land where
   they left off, the fallback is explained rather than silent.
-- The stale value is forgotten rather than left to fail again.
+- For most keys the stale value is also forgotten rather than left to fail
+  again. A remembered area or catalog selection is the exception: it stays in the
+  address, and so in what is remembered, and is re-evaluated each time; the
+  Backups and Schema areas likewise fall back to their first sub-surface without
+  forgetting the remembered one.
 
 Tenant scope is the sharpest case of this and is handled fail-closed: a
 remembered tenant is re-validated against the caller's current accessible list
@@ -77,7 +87,9 @@ allowed. See [Tenant scope](tenant-scope.md).
 ## Resetting
 
 The `/reset-view` page lists every registered key and, on request, clears them
-for the account and cluster you are connected to now. Use it when a restored view
+for the account and cluster you are connected to now. An area's key is registered
+when that area's panel first mounts in the running host, so until the area has
+been opened there the page neither lists nor clears its key. Use it when a restored view
 is not what you want. It is not a full wipe of the browser profile: values
 remembered for another account or against another cluster, and the unregistered
 working state described above, are left in place.

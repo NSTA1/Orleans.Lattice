@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Hashing;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -315,10 +316,32 @@ internal static class LeafSnapshotCodec
     {
         stateBytes = 0;
         liveRows = 0;
-        if (!TryReadHeader(frame, out var rowCount, out var indexOffset))
-        {
-            return false;
-        }
+        return TryReadHeader(frame, out var rowCount, out var indexOffset)
+            && TryComputeCacheAggregates(frame, rowCount, indexOffset, out stateBytes, out liveRows);
+    }
+
+    /// <summary>
+    /// Header-free aggregate walk, for a caller that already read the header.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="stateBytes">Receives the summed logical footprint on success.</param>
+    /// <param name="liveRows">Receives the number of non-tombstone rows on success.</param>
+    // Deliberately not inlined. This walk's body calls TryMeasureRowFootprint
+    // once per row, and that callee is small enough for the JIT to inline into
+    // it - which is where the walk gets its speed. Inlining the walk itself
+    // into a caller (the header-reading wrapper below, or TryAdmitForHydration)
+    // spends the caller's inline budget on the walk and leaves none for the
+    // per-row parser, so the row parser becomes a real call and the walk slows
+    // down by roughly 2.7x. Measured: 187,255 ns inlined against 68,590 ns not,
+    // over a 4096-row frame. See the leafsnapshotframetrims microbench suite.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static bool TryComputeCacheAggregates(
+        ReadOnlySpan<byte> frame, int rowCount, int indexOffset, out long stateBytes, out long liveRows)
+    {
+        stateBytes = 0;
+        liveRows = 0;
 
         var pos = HeaderLength;
         long totalBytes = 0;
@@ -348,6 +371,55 @@ internal static class LeafSnapshotCodec
     }
 
     /// <summary>
+    /// Decides in one header read everything a lazily hydrated leaf entry
+    /// cache needs to admit a frame for bounded, seek-based hydration: the
+    /// frame's row count and index-table offset, its two cache aggregates (see
+    /// <see cref="TryComputeCacheAggregates(ReadOnlySpan{byte}, out long, out long)"/>),
+    /// and whether its rows are in strictly ascending ordinal key order (see
+    /// <see cref="IsAscendingByKey(ReadOnlySpan{byte})"/>). Returns
+    /// <see langword="false"/> when the frame is unreadable <em>or</em> not
+    /// seekable, which is precisely the condition under which the caller must
+    /// fall back to a full decode.
+    /// <para>
+    /// Admission previously cost three independent <see cref="TryReadHeader"/>
+    /// calls, and the order check then re-read the header once more <em>per
+    /// row</em> on top of them. All four answers derive from the same header,
+    /// so it is read once and threaded through, and the resolved
+    /// <paramref name="rowCount"/> and <paramref name="indexOffset"/> are
+    /// handed back so the caller can keep using the header-free overloads for
+    /// the life of the frame rather than re-deriving them on every seek.
+    /// </para>
+    /// <para>
+    /// The two traversals are deliberately <em>not</em> fused into one. The
+    /// aggregate walk streams the row region front to back; the order check
+    /// walks the index table and follows it into that region. Interleaving
+    /// them - reading one index-table slot per row, from the far end of the
+    /// frame - was measured and made admission <em>slower</em>, because it
+    /// replaces two well-localised streams with one that thrashes between two
+    /// distant regions. Two cache-friendly passes beat one cache-hostile pass
+    /// here; see the <c>leafsnapshotframetrims</c> microbenchmark suite.
+    /// </para>
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="rowCount">Receives the frame's row count on success.</param>
+    /// <param name="indexOffset">Receives the index-table offset on success.</param>
+    /// <param name="stateBytes">Receives the summed logical footprint on success.</param>
+    /// <param name="liveRows">Receives the number of non-tombstone rows on success.</param>
+    internal static bool TryAdmitForHydration(
+        ReadOnlySpan<byte> frame,
+        out int rowCount,
+        out int indexOffset,
+        out long stateBytes,
+        out long liveRows)
+    {
+        stateBytes = 0;
+        liveRows = 0;
+        return TryReadHeader(frame, out rowCount, out indexOffset)
+            && TryComputeCacheAggregates(frame, rowCount, indexOffset, out stateBytes, out liveRows)
+            && IsAscendingByKey(frame, rowCount, indexOffset);
+    }
+
+    /// <summary>
     /// Reports the byte extent of the row record at <paramref name="index"/> -
     /// its absolute start offset and its length - by reading the index table
     /// only, without decoding the row. A bounded hydration uses this to account
@@ -364,8 +436,7 @@ internal static class LeafSnapshotCodec
         start = 0;
         length = 0;
         if (!TryReadHeader(frame, out var rowCount, out var indexOffset)
-            || (uint)index >= (uint)rowCount
-            || !TryGetRowStart(frame, index, out start, out _))
+            || !TryGetRowStart(frame, index, rowCount, indexOffset, out start))
         {
             return false;
         }
@@ -373,7 +444,7 @@ internal static class LeafSnapshotCodec
         var end = indexOffset;
         if (index + 1 < rowCount)
         {
-            if (!TryGetRowStart(frame, index + 1, out var next, out _))
+            if (!TryGetRowStart(frame, index + 1, rowCount, indexOffset, out var next))
             {
                 return false;
             }
@@ -401,25 +472,37 @@ internal static class LeafSnapshotCodec
     /// </summary>
     /// <param name="frame">Frame bytes.</param>
     internal static bool IsAscendingByKey(ReadOnlySpan<byte> frame)
-    {
-        if (!TryReadHeader(frame, out var rowCount, out _))
-        {
-            return false;
-        }
+        => TryReadHeader(frame, out var rowCount, out var indexOffset)
+            && IsAscendingByKey(frame, rowCount, indexOffset);
 
+    /// <summary>
+    /// Header-free order check, for a caller that already read the header. See
+    /// <see cref="TryGetRowStart(ReadOnlySpan{byte}, int, int, int, out int)"/>
+    /// for why the header is worth hoisting out of a per-row loop.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    // Not inlined, for the same reason as the aggregate walk above: this loop's
+    // speed comes from the JIT inlining TryReadRowKeyUtf8At into it, and that
+    // only happens while this method is the inline root rather than part of a
+    // larger caller.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static bool IsAscendingByKey(ReadOnlySpan<byte> frame, int rowCount, int indexOffset)
+    {
         if (rowCount <= 1)
         {
             return true;
         }
 
-        if (!TryReadRowKeyUtf8At(frame, 0, out var previous))
+        if (!TryReadRowKeyUtf8At(frame, 0, rowCount, indexOffset, out var previous))
         {
             return false;
         }
 
         for (var i = 1; i < rowCount; i++)
         {
-            if (!TryReadRowKeyUtf8At(frame, i, out var current)
+            if (!TryReadRowKeyUtf8At(frame, i, rowCount, indexOffset, out var current)
                 || CompareKeysUtf8(previous, current) >= 0)
             {
                 return false;
@@ -459,13 +542,63 @@ internal static class LeafSnapshotCodec
     {
         row = default;
         bytesConsumed = 0;
-        if (!TryGetRowStart(frame, index, out var start, out var indexOffset))
+        return TryReadHeader(frame, out var rowCount, out var indexOffset)
+            && TryReadRowAt(frame, index, rowCount, indexOffset, out row, out bytesConsumed);
+    }
+
+    /// <summary>
+    /// Header-free row decode, for a caller that already read the header and is
+    /// decoding more than one row. See
+    /// <see cref="TryGetRowStart(ReadOnlySpan{byte}, int, int, int, out int)"/>
+    /// for why the header is worth hoisting out of a block read.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="bytesConsumed">Receives the row record's byte length on success.</param>
+    internal static bool TryReadRowAt(
+        ReadOnlySpan<byte> frame,
+        int index,
+        int rowCount,
+        int indexOffset,
+        out LeafSnapshotRow row,
+        out int bytesConsumed)
+        => TryReadRowAt(frame, index, rowCount, indexOffset, out row, out bytesConsumed, out _);
+
+    /// <summary>
+    /// As <see cref="TryReadRowAt(ReadOnlySpan{byte}, int, int, int, out LeafSnapshotRow, out int)"/>,
+    /// but also reports the key's UTF-8 byte length, which the parser already
+    /// knows from the frame and would otherwise have to be recovered by
+    /// re-encoding the decoded key string.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="bytesConsumed">Receives the row record's byte length on success.</param>
+    /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
+    internal static bool TryReadRowAt(
+        ReadOnlySpan<byte> frame,
+        int index,
+        int rowCount,
+        int indexOffset,
+        out LeafSnapshotRow row,
+        out int bytesConsumed,
+        out int keyUtf8Length)
+    {
+        row = default;
+        bytesConsumed = 0;
+        keyUtf8Length = 0;
+        if (!TryGetRowStart(frame, index, rowCount, indexOffset, out var start))
         {
             return false;
         }
 
         var position = start;
-        if (!TryReadRow(frame, indexOffset, ref position, out row))
+        if (!TryReadRow(frame, indexOffset, ref position, out row, out keyUtf8Length))
         {
             return false;
         }
@@ -486,7 +619,30 @@ internal static class LeafSnapshotCodec
     internal static bool TryReadRowKeyUtf8At(ReadOnlySpan<byte> frame, int index, out ReadOnlySpan<byte> keyUtf8)
     {
         keyUtf8 = default;
-        if (!TryGetRowStart(frame, index, out var start, out var indexOffset))
+        if (!TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return false;
+        }
+
+        return TryReadRowKeyUtf8At(frame, index, rowCount, indexOffset, out keyUtf8);
+    }
+
+    /// <summary>
+    /// Header-free key probe, for a caller that already read the frame header
+    /// and is probing more than one row. See
+    /// <see cref="TryGetRowStart(ReadOnlySpan{byte}, int, int, int, out int)"/>
+    /// for why the header is worth hoisting.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="keyUtf8">Receives the key slice on success.</param>
+    internal static bool TryReadRowKeyUtf8At(
+        ReadOnlySpan<byte> frame, int index, int rowCount, int indexOffset, out ReadOnlySpan<byte> keyUtf8)
+    {
+        keyUtf8 = default;
+        if (!TryGetRowStart(frame, index, rowCount, indexOffset, out var start))
         {
             return false;
         }
@@ -521,17 +677,32 @@ internal static class LeafSnapshotCodec
     internal static bool TryFindFirstRowAtOrAfter(ReadOnlySpan<byte> frame, ReadOnlySpan<byte> keyUtf8, out int index)
     {
         index = 0;
-        if (!TryReadHeader(frame, out var rowCount, out _))
-        {
-            return false;
-        }
+        return TryReadHeader(frame, out var rowCount, out var indexOffset)
+            && TryFindFirstRowAtOrAfter(frame, keyUtf8, rowCount, indexOffset, out index);
+    }
+
+    /// <summary>
+    /// Header-free lower-bound seek, for a caller that already read the header.
+    /// The search probes <c>O(log n)</c> rows and each probe re-derived the
+    /// same frame constants; see
+    /// <see cref="TryGetRowStart(ReadOnlySpan{byte}, int, int, int, out int)"/>.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="keyUtf8">Inclusive lower-bound key, UTF-8 encoded.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="index">Receives the zero-based lower-bound row index.</param>
+    internal static bool TryFindFirstRowAtOrAfter(
+        ReadOnlySpan<byte> frame, ReadOnlySpan<byte> keyUtf8, int rowCount, int indexOffset, out int index)
+    {
+        index = 0;
 
         var low = 0;
         var high = rowCount;
         while (low < high)
         {
             var mid = low + ((high - low) / 2);
-            if (!TryReadRowKeyUtf8At(frame, mid, out var probe))
+            if (!TryReadRowKeyUtf8At(frame, mid, rowCount, indexOffset, out var probe))
             {
                 return false;
             }
@@ -563,12 +734,45 @@ internal static class LeafSnapshotCodec
     /// before comparing. Malformed UTF-8 on either side falls back to a raw
     /// byte compare so the result stays a total order instead of throwing.
     /// </para>
+    /// <para>
+    /// That divergence only exists above U+007F, and ordinal comparison is
+    /// decided entirely at the first position where the two keys differ. So
+    /// the comparison first locates that position with a vectorised
+    /// <see cref="MemoryExtensions.CommonPrefixLength{T}(ReadOnlySpan{T}, ReadOnlySpan{T})"/>
+    /// scan. If one key runs out first it is a proper prefix of the other and
+    /// sorts below it. Otherwise, when the first differing byte is ASCII on
+    /// <em>both</em> sides it necessarily starts a code point on both sides (a
+    /// continuation byte is never below 0x80), the identical bytes before it
+    /// decode identically on both sides, and both code points are their own
+    /// UTF-16 code unit - so that single byte comparison is exactly the answer
+    /// the rune walk would reach. This also holds when the shared prefix is
+    /// malformed: the walk would bail to a raw byte compare of two remainders
+    /// that share that same prefix, which is decided at the same byte.
+    /// </para>
+    /// <para>
+    /// Only a difference that falls on a non-ASCII byte reaches the walk. The
+    /// scan never reads past the deciding byte, so unlike a whole-key ASCII
+    /// validity gate it costs nothing on keys that diverge early, and keys in
+    /// this store are overwhelmingly ASCII while key comparison is the
+    /// dominant cost of a leaf seek.
+    /// </para>
     /// </summary>
     /// <param name="left">Left key, UTF-8 encoded.</param>
     /// <param name="right">Right key, UTF-8 encoded.</param>
     /// <returns>Negative, zero, or positive as <paramref name="left"/> sorts before, with, or after <paramref name="right"/>.</returns>
     internal static int CompareKeysUtf8(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
     {
+        var common = left.CommonPrefixLength(right);
+        if (common == left.Length || common == right.Length)
+        {
+            return left.Length.CompareTo(right.Length);
+        }
+
+        if (left[common] < 0x80 && right[common] < 0x80)
+        {
+            return left[common].CompareTo(right[common]);
+        }
+
         var leftRemaining = left;
         var rightRemaining = right;
         while (!leftRemaining.IsEmpty && !rightRemaining.IsEmpty)
@@ -645,10 +849,29 @@ internal static class LeafSnapshotCodec
     /// <param name="pos">Row start on entry; the next row's start on success.</param>
     /// <param name="row">Receives the decoded row on success.</param>
     internal static bool TryReadRow(ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row)
-        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row);
+        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out _);
+
+    /// <summary>
+    /// As <see cref="TryReadRow(ReadOnlySpan{byte}, int, ref int, out LeafSnapshotRow)"/>, but
+    /// also reports the UTF-8 byte length of the key the parser just read.
+    /// <para>
+    /// The decoder already holds the key as a slice of the frame, so its byte
+    /// length is known exactly and for free. Handing it back lets a caller that
+    /// must account the key's encoded size skip re-encoding the decoded
+    /// <see cref="string"/> to measure something the frame already stated.
+    /// </para>
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="limit">Exclusive end of the row region (the index-table offset).</param>
+    /// <param name="pos">Row start on entry; the next row's start on success.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
+    internal static bool TryReadRow(
+        ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row, out int keyUtf8Length)
+        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out keyUtf8Length);
 
     private static bool TrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
-        => TryReadRowCore(frame, limit, ref pos, materialize: false, out _);
+        => TryReadRowCore(frame, limit, ref pos, materialize: false, out _, out _);
 
     // Single parser for both the materialising and the skipping walk so the
     // field order can never drift between them.
@@ -657,9 +880,11 @@ internal static class LeafSnapshotCodec
         int limit,
         ref int pos,
         bool materialize,
-        out LeafSnapshotRow row)
+        out LeafSnapshotRow row,
+        out int keyUtf8Length)
     {
         row = default;
+        keyUtf8Length = 0;
 
         if (!TryReadSpan(frame, limit, ref pos, out var keyUtf8)
             || !TryReadByte(frame, limit, ref pos, out var flags)
@@ -669,6 +894,8 @@ internal static class LeafSnapshotCodec
         {
             return false;
         }
+
+        keyUtf8Length = keyUtf8.Length;
 
         LatticeMergeMode? mergeMode = null;
         if ((flags & RowFlagHasMergeMode) != 0)
@@ -841,6 +1068,34 @@ internal static class LeafSnapshotCodec
             return false;
         }
 
+        return TryGetRowStart(frame, index, rowCount, indexOffset, out start);
+    }
+
+    /// <summary>
+    /// Header-free row seek: resolves row <paramref name="index"/> against an
+    /// already-validated <paramref name="rowCount"/> and
+    /// <paramref name="indexOffset"/>.
+    /// <para>
+    /// Both are frame constants, so re-deriving them per row is pure waste in
+    /// any loop that probes more than one row - and every caller that matters
+    /// is such a loop: the lower-bound binary search probes <c>O(log n)</c>
+    /// rows, and a block hydration reads one row per admitted key.
+    /// <see cref="TryReadHeader"/> is not a field load: it re-checks the magic,
+    /// the format version, the declared total against the real buffer length,
+    /// and that the index table fills the gap to the trailer exactly. Hoisting
+    /// it out of those loops removes an <c>O(n)</c> revalidation of a fixed
+    /// 24-byte header.
+    /// </para>
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="rowCount">Row count from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="indexOffset">Index-table offset from a prior <see cref="TryReadHeader"/>.</param>
+    /// <param name="start">Receives the row's absolute start offset on success.</param>
+    private static bool TryGetRowStart(
+        ReadOnlySpan<byte> frame, int index, int rowCount, int indexOffset, out int start)
+    {
+        start = 0;
         if ((uint)index >= (uint)rowCount)
         {
             return false;

@@ -186,7 +186,7 @@ public readonly record struct GrainIndexFingerprint
     /// <para>
     /// A name short enough for its worst-case encoding to fit the stack budget
     /// is transcoded exactly <em>once</em>: the prefix carries the count
-    /// <see cref="Encoding.GetBytes(string, Span{byte})"/> reports, which is by
+    /// <see cref="Encoding.GetBytes(ReadOnlySpan{char}, Span{byte})"/> reports, which is by
     /// definition the number a separate
     /// <see cref="Encoding.GetByteCount(string)"/> pass would have produced, so
     /// the emitted bytes are identical to the two-pass form this replaced while

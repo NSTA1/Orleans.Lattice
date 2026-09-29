@@ -167,8 +167,23 @@ internal sealed partial class LeafEntryCache
     internal static long EntryBytes(string key, byte[]? value)
         => System.Text.Encoding.UTF8.GetByteCount(key) + (value?.Length ?? 0);
 
+    /// <summary>
+    /// <see cref="EntryBytes(string, byte[])"/> for a caller that already knows
+    /// the key's UTF-8 byte length exactly - a snapshot decode, which read the
+    /// key as a length-prefixed UTF-8 slice of the frame. Re-encoding the
+    /// decoded string to recover that length would re-scan every key byte to
+    /// recompute a figure the frame already stated.
+    /// </summary>
+    /// <param name="keyUtf8Length">The key's UTF-8 byte length.</param>
+    /// <param name="value">The stored value, or <see langword="null"/> for a tombstone.</param>
+    internal static long EntryBytes(int keyUtf8Length, byte[]? value)
+        => keyUtf8Length + (value?.Length ?? 0);
+
     private static long RowBytes(string key, in LwwValue<byte[]> row)
         => EntryBytes(key, row.IsTombstone ? null : row.Value);
+
+    private static long RowBytes(int keyUtf8Length, in LwwValue<byte[]> row)
+        => EntryBytes(keyUtf8Length, row.IsTombstone ? null : row.Value);
 
     /// <summary>
     /// Per-entry <see cref="StateBytes"/> contribution that accounts for a
@@ -927,7 +942,7 @@ internal sealed partial class LeafEntryCache
         var keys = source.BeginHydrate(block);
         for (var i = start; i < end; i++)
         {
-            if (!source.TryReadRowAt(i, out var row))
+            if (!source.TryReadRowAt(i, out var row, out var keyUtf8Length))
             {
                 // Unreachable for an installed source: the frame passed
                 // Validate before it was attached and a validated frame decodes
@@ -940,7 +955,7 @@ internal sealed partial class LeafEntryCache
             }
 
             keys[i - start] = row.Key;
-            InsertHydratedRow(row);
+            InsertHydratedRow(row, keyUtf8Length);
         }
 
         source.CommitHydrated(block);
@@ -963,9 +978,12 @@ internal sealed partial class LeafEntryCache
     // Moves one snapshot row from the residual aggregates into the resident
     // dictionary. Deliberately not StoreRow: a hydrated row is not a mutation,
     // so it must not evict a typed shadow, clear a merge mode, or pin anything.
-    private void InsertHydratedRow(in LeafSnapshotRow row)
+    // The key's UTF-8 length comes from the decoder, which read the key as a
+    // length-prefixed slice of the frame, so the accounting never re-encodes a
+    // string that was just built from bytes of exactly that length.
+    private void InsertHydratedRow(in LeafSnapshotRow row, int keyUtf8Length)
     {
-        var bytes = RowBytes(row.Key, row.Value);
+        var bytes = RowBytes(keyUtf8Length, row.Value);
         _rows[row.Key] = row.Value;
         _stateBytes += bytes;
         _residualStateBytes -= bytes;

@@ -479,7 +479,7 @@ dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene|FullyQualifiedName~SliceCoverage|FullyQualifiedName~DocsSnippet"
 ```
 
-Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI attaches an Azurite service container to every test leg, so the emulator-gated suites run there instead. If you *do* have Azurite up, remember the false-green trap above: a missing emulator shows up as a lower `Total`, never as a `Skipped` count.
+Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. The timer measures how long one test runs, so it cannot tell a hung test from a merely slow one, and the core project holds a slow one: `RepositoryWideGateRunnerTests` carries no category, so this filter selects it, and its `A_name_that_matches_nothing_reports_zero_executed_and_fails` drives `tools/Invoke-RepositoryWideGates.ps1` into a nested `dotnet test` of `test/lattice` itself - a build of the core test project (the runner is not given `-NoBuild`) followed by discovery of the whole assembly - and waits for it to finish. That one test can outlast a three-minute hang blame and abort an otherwise clean run. When you run the whole core project under the hang blame, append `&FullyQualifiedName!~RepositoryWideGateRunnerTests` to the filter; the core hygiene filter above still runs the fixture (its namespace contains `Hygiene`), with no hang blame. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI attaches an Azurite service container to every test leg, so the emulator-gated suites run there instead. If you *do* have Azurite up, remember the false-green trap above: a missing emulator shows up as a lower `Total`, never as a `Skipped` count.
 
 **Scope Tier 4 to the fixtures your change can plausibly break, not reflexively to whole projects.** CI re-runs the full non-chaos suite for every matched package on the PR anyway, so a second full local run of the same project buys nothing but wall-clock. The local pass exists to catch *your* mistake before it costs a CI cycle - so run the fixtures you touched (and their nearest neighbours) first, and widen only when the change is broad enough that you genuinely cannot predict the blast radius. A test-only or single-grain change is usually well served by a `--filter "FullyQualifiedName~<Fixture>"` pass plus the hygiene filter; a change to a widely-referenced core type warrants the whole project. When you are unsure of the blast radius, `repocontext_related <path>` lists the indexed dependents and covering test types for a file, which is a cheaper way to size the run than guessing.
 
@@ -851,7 +851,7 @@ is safe):**
   with no cross-participant invariant.
 
 **Coverage summary.** Of the enumerated atomic-commit decisions, all are now
-either executed by a verified core (7 cores: the 5 pre-existing plus
+either executed by one of the verified cores listed above (this phase added
 `TerminalDecisionGuard` and `TerminalArrivalTally`) or carry a documented
 exclusion above (5 exclusions, each a wall-clock, real-RPC, grain-local
 synchronous-state, or trivial-adapter concern the models do not encode). No enumerated
@@ -963,7 +963,7 @@ pwsh test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1 install ch
 dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj --filter "TestCategory=UI"
 ```
 
-`[Category("UI")]` is mandatory on every fixture in that project and is enforced by its own hygiene gate. It is what keeps browser tests out of Tier 2, out of the CI package matrix, and out of the publish gate.
+`[Category("UI")]` is mandatory on every fixture in that project and is enforced by its own hygiene gate. It is what keeps browser tests out of Tier 2; the CI package matrix and the publish gate never select the project at all, as the next section explains.
 
 ### How CI runs them, and why it is a separate workflow
 
@@ -1080,6 +1080,8 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `PerturbationResidueHygieneTests` | No perturbation-driver marker (the `LATTICE` + `-PERTURBATION` token) survives in any file in the repository. | Stamp the marker beside every edit a perturbation driver makes and stage explicit paths - see "A killed perturbation run leaves residue" under "False greens" above. Repo-wide with nothing excluded; runs only in the core project. |
 
 Additional code-shape gates run in the same suites (for example `AuditHygieneRegressionTests` in `test/lattice/` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). Not all of them live in `test/lattice/`: package-specific ones sit in their own package's test project (the Explorer's design-token, route-case, and class-namespace gates under `test/lattice.explorer/Hygiene/`, for example), and each is caught by a `FullyQualifiedName~Hygiene` filter run against the project that holds it.
+
+Two further gates in `test/lattice/Hygiene/` hold a script's or a benchmark's own documentation to its code, because nothing compiles the one against the other. `PowerShellScriptParameterHygieneTests` requires every `.PARAMETER` in a tracked PowerShell script's script-level comment-based help to be declared in that script's `param(...)` block. `BenchmarkZeroValuedEnvironmentHygieneTests` fails when a C# file under `benchmark/` documents a meaning for `0` in the `//` header entry of a `BENCH_*` variable but reads that variable through a zero-rejecting `ReadInt` helper with a non-zero default, which silently replaces `0` with the default - read such a variable through `ReadIntAllowZero`.
 
 ### How these gates reach CI
 

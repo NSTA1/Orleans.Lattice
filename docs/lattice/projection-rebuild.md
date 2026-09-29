@@ -8,8 +8,10 @@ lifetime of the activation, not persisted). The persisted leaf state row
 carries no entries: it holds topology, the per-partition projection
 checkpoint offsets, the HLC clock and version vectors, a 16-byte
 projection-digest XOR fold, and a little replay bookkeeping. On every
-activation the cache is rebuilt from the WAL strictly after the persisted
-checkpoints, seeded first from the leaf's snapshot when that is newer (see
+activation the cache is rebuilt: the leaf reloads its latest snapshot where
+it has a usable one and replays each WAL partition from just past the offset
+that snapshot covers, or from the start of the partition's readable window
+when no snapshot covers it (see
 [Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net)). Two
 operational concerns naturally arise:
 
@@ -275,9 +277,18 @@ foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
 
 ### Opting out of digest maintenance
 
-The digest's per-mutation cost is small in absolute terms (one XOR
-fold at the leaf plus an upward `ChildDigestSnapshot` publish to each
-ancestor up to the shard root), but it is **per-mutation**. For trees
+The digest's maintenance cost is small in absolute terms, but it recurs
+with the write load. Each leaf mutation costs one in-memory XOR fold over
+the entry's contribution. When the leaf's digest has changed, the leaf
+publishes it upward: the parent internal node rewrites its persisted
+subtree aggregate and publishes to its own parent in turn, up to the
+shard root, so each publish costs `O(treeHeight)` writes. With
+[`DigestCoalescingWindowMs`](configuration.md#digestcoalescingwindowms)
+at `0` every such mutation publishes. By default (5 ms) the foreground
+writes that land within one window - sets, deletes, range deletes and
+typed CRDT delta applies - share a single publish, while merge traffic
+and structural changes such as splits, tombstone reaps and saga
+terminals publish immediately. For trees
 that do not poll the digest - workloads that rely exclusively on
 audit logs, integration tests, application-level checksums, or
 external reconciliation, and never call
@@ -400,9 +411,10 @@ Moving the digest aggregate into the WAL would not eliminate the
 write amplification: the per-leaf XOR fold is already negligible
 (it lives inline in the leaf's persisted state - there is no extra
 WAL append for it today). The real amplification is the upward
-chain of internal-node updates that publishes a fresh
-`ChildDigestSnapshot` per leaf mutation and rewrites the
-`SubtreeProjectionHash` row on each ancestor up to the shard root.
+chain of internal-node updates: every publish from a leaf - one per
+coalesced group of foreground writes by default, or one per mutation when
+`DigestCoalescingWindowMs` is `0` - rewrites the persisted subtree
+aggregate on each ancestor up to the shard root.
 That cost lives in internal-node grain state, not in the WAL, and is
 the *whole point* of the incremental aggregate - readers need to
 find the pre-folded shard hash in `O(1)`. Reconstructing it by
@@ -610,14 +622,18 @@ touches in ten, and the WAL of the trees it was trying to clear grew without
 being reclaimed.
 
 When no permit is immediately available, or the drive's part of the GC
-share is occupied, the drive raises `LatticeSaturatedException` with source
-`ReplayPermitAdmission` before replay starts. The refusal neither advances
-nor retires the leaf's retention pin, and neither caller treats it as a
-fault:
+share is occupied, the drive is refused before replay starts. The refusal
+is a result rather than an exception (issue #3761): the drive returns an
+admission-refused verdict, and the refusal is counted on
+`orleans.lattice.saturation.refusals` with `source=replay_permit_admission`.
+It neither advances nor retires the leaf's retention pin, and neither
+caller treats it as a fault:
 
 - the sweep records the try as `outcome=admission_refused` on
-  `orleans.lattice.wal.gc.blocked_leaf_reactivations`, logs it at `Debug`
-  without a stack, and does not count it as `attempted` or charge it
+  `orleans.lattice.wal.gc.blocked_leaf_reactivations` (beside the drive's
+  own `drove_admission_refused` verdict when the drive returned one), logs
+  it at `Debug` without a stack, and does not count it as `attempted` or
+  charge it
   against the consumer's attempt budget, so a consumer the sweep never
   managed to drive is never abandoned. A pass keeps no more touches in
   flight than this silo's part of the GC share, so its own touches do not
@@ -627,9 +643,9 @@ fault:
   minutes that doubles with each consecutive refusal, up to its ordinary
   fifteen-minute cooldown;
 - the timer counts it as `reason=recheck_drive_refused` on
-  `orleans.lattice.leaf.snapshot.driver.declines` instead of letting it
-  escape the timer callback, and backs off: it skips its next drive
-  opportunities, counting each as `reason=recheck_drive_deferred` - one
+  `orleans.lattice.leaf.snapshot.driver.declines` and backs off: it skips
+  its next drive opportunities, counting each as
+  `reason=recheck_drive_deferred` - one
   after a first refusal, rising to four to seven after repeated ones,
   jittered per leaf. A drive that is admitted ends the backoff.
 
@@ -736,8 +752,9 @@ Treat the `Error` as data at risk rather than as noise. The live
 activation may hold the only copy of writes in the trimmed range. Once
 it is recycled or the silo restarts, the next cold activation refuses
 the leaf with the same exception. `RebuildLeafProjectionAsync` does not
-recover those writes: it resets the checkpoint and replays only the WAL
-that survives. So, before the activation is lost:
+recover those writes: it resets the checkpoint, and the next activation
+reloads the leaf's snapshot where it has one and replays only the WAL that
+survives. So, before the activation is lost:
 
 1. Capture a logical backup or export of the tree while the leaf is
    still serving.

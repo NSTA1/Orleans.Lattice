@@ -163,6 +163,8 @@ The local cluster id stamped onto authored mutations and used for cycle-breaking
 
 `ClusterId` is a **per-tree named option**, but a cross-tree atomic write carries a guard verdict reached on one participating tree across the tree boundary to another, and that step is sound only when the trees resolve the *same* origin cluster id. No options validator can check that relation, because it is handed one tree's options at a time; the check therefore runs where a participant set first exists - at admission of a cross-tree write, and at the replicated cross-tree barrier's wait-set freeze on the receiver - and throws `InvalidOperationException` naming both trees and their resolved ids before anything is staged or dispatched. The check is on *agreement*, not on any particular value, so a host that never configured replication (uniform empty cluster id) always passes. Configure `ClusterId` cluster-wide - `AddLatticeReplication` registers it for every named options instance - and avoid per-tree overrides on trees you span in a single cross-tree write. See [Atomic Writes](../lattice/atomic-writes.md#guarantees-and-non-guarantees).
 
+`ClusterId` also has to match what the gRPC transport stamps on its calls. Every push, peer high-water-mark probe, and content-manifest exchange request names the tree's own `ClusterId` as its origin, while the transport's `x-lattice-replication-origin` header carries `LatticeReplicationGrpcOptions.LocalClusterId` or, when that is unset, the cluster-wide `ClusterId`, fixed when a peer's channel is built and so the same for every tree that talks to that peer; a receiver refuses those calls when the two differ. A per-tree `ClusterId` override that differs from the cluster-wide value therefore gets that tree's pushes and probes refused. See [Transport Security](transport-security.md#grpc-transport-behavior).
+
 ### `ReplicatedTrees`
 
 Per-tree opt-in map from tree id to merge mode. A tree absent from the map does not replicate unless runtime replication config is enabled (`AddLatticeReplication(..., enableRuntimeConfig: true)`), in which case a tree enabled at runtime replicates too - see [Runtime Replication Config](runtime-config.md). See [Replication Modes](replication-modes.md) for mode selection.
@@ -251,7 +253,7 @@ Escape hatch (default `false`) that permits `WalRetention` on a replicated tree 
 
 ### `AutoBootstrapOnFallOffLog`
 
-When enabled, a fall-off detection makes this cluster re-seed the tree from a snapshot of the lagging source cluster automatically; when disabled the detection is still counted on `peer.fell_off_log`. See [Auto-Bootstrap](auto-bootstrap.md), and [`WalRetention`](#walretention) for the cross-cluster trim gap the built-in check cannot see.
+When enabled, a fall-off detection makes this cluster re-seed the tree automatically from a snapshot of the source cluster it fell behind; when disabled the detection is still counted on `peer.fell_off_log`. See [Auto-Bootstrap](auto-bootstrap.md), and [`WalRetention`](#walretention) for the cross-cluster trim gap the built-in check cannot see.
 
 ### `OperatorReseedMinInterval`
 
@@ -295,7 +297,7 @@ Cadence for the shipping phase timer. Shorter periods reduce idle latency and in
 
 ### `ShipSourceIdentityBackstopInterval`
 
-Safety-net cadence for re-resolving the source tree's physical identity from the registry. The shipper binds to the logical source tree's current physical WAL at activation and normally rebinds **reactively** - the tree registry pushes an alias-change notification on a shadow-cutover restore, resize, or reshard (see [Source-identity rebind](replication-drivers.md#source-identity-rebind)), so the steady-state pump performs **no** per-tick registry read on an idle tree. This interval bounds how long a *missed* notification (a transient observer fault, or a shipper that was deactivated across the swap) can leave the shipper bound to a retired physical identity before a coarse backstop resolve heals it. It is deliberately coarse: lowering it trades idle registry-read load for a tighter worst-case heal time, and it is never the primary detection path. Must be greater than zero.
+Safety-net cadence for re-resolving the source tree's physical identity from the registry. The shipper binds to the logical source tree's current physical WAL at activation and normally rebinds **reactively** - the tree registry pushes an alias-change notification whenever the tree's alias changes - a shadow-cutover restore or its revert, a resize or its undo, a schema remediation, or an operator alias change (see [Source-identity rebind](replication-drivers.md#source-identity-rebind)), so the steady-state pump performs **no** per-tick registry read on an idle tree. This interval bounds how long a *missed* notification (a transient observer fault, or a shipper that was deactivated across the swap) can leave the shipper bound to a retired physical identity before a coarse backstop resolve heals it. It is deliberately coarse: lowering it trades idle registry-read load for a tighter worst-case heal time, and it is never the primary detection path. Must be greater than zero.
 
 ### `LivenessProbeInterval`
 

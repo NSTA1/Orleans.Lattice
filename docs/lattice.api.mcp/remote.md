@@ -48,7 +48,7 @@ The remote binding keeps the same coarse authorizer seam as the in-silo one: the
 | `RegionId` | The id of the current (default) region a call targets when no `region` selector is supplied. Defaults to `current`. |
 | `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata; when unset, the discovery tool resolves it from the state facade at read time. |
 | `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument; empty by default. Each is a `LatticeApiMcpRemoteRegionOptions` with its own required `RegionId`, optional `ClusterId`, and the same eight optional per-group endpoints as the top level (`State` / `Data` / `Auth` / `Backup` / `Replication` / `TreeAdmin` / `TenantAdmin` / `Telemetry`). Keep each `RegionId` unique: the binding does not reject a duplicate. |
-| `VerifyRegionIdentity` | When `true`, each peer region's endpoint is probed once and its reported cluster id checked against the region's advertised `ClusterId` before any call is routed there; a region that reaches the wrong cluster is omitted from `lattice_list_regions` and rejected fail-closed. A probe that cannot reach the region fails that listing and call closed but is not cached, so a later call re-probes; a peer with no advertised `ClusterId` or no `State` endpoint cannot be verified and stays routable. Defaults to `false`. See [Region targeting behind a global load balancer](#region-targeting-behind-a-global-load-balancer). |
+| `VerifyRegionIdentity` | When `true`, each peer region's endpoint is probed once and its reported cluster id checked against the region's advertised `ClusterId` before any call is routed there; a region that reaches the wrong cluster is omitted from `lattice_list_regions` and rejected fail-closed. A probe that cannot reach the region fails that listing and call closed but is not cached, so a later call re-probes; a peer with no advertised `ClusterId` or no `State` endpoint cannot be verified and stays routable, and so does every peer when this head configures no top-level `State` endpoint, because the probe runs through the head's own state client. Defaults to `false`. See [Region targeting behind a global load balancer](#region-targeting-behind-a-global-load-balancer). |
 
 ## Multi-region routing
 
@@ -119,10 +119,11 @@ The in-silo permission-scoped discovery relies on a **system-origin bypass** to 
 
 `AdministratorCredential` is a **static** token. When acquired from Entra it typically carries a ~1h lifetime, so a long-lived remote MCP head silently loses its introspection capability once it expires (discovery then advertises no group tools to any caller - administrators included, since every introspection still forwards the expired token - until the process is restarted or the value is rotated by hand). For an always-on server, register the managed-identity administrator source instead: it acquires the silo-audience token from an `Azure.Core` `TokenCredential`, caches it, and refreshes it a configurable skew before expiry.
 
-```csharp
-using Azure.Identity;
+```csharp verify
+using Azure.Core;
 
 var builder = WebApplication.CreateBuilder();
+TokenCredential credential = CreateManagedIdentityCredential();
 
 builder.Services.AddLatticeMcpRemote(o =>
 {
@@ -130,9 +131,13 @@ builder.Services.AddLatticeMcpRemote(o =>
     // No static o.AdministratorCredential needed.
 });
 
+static TokenCredential CreateManagedIdentityCredential()
+    => throw new NotImplementedException(
+        "Use ManagedIdentityCredential or DefaultAzureCredential from Azure.Identity.");
+
 builder.Services.AddLatticeMcpManagedIdentityAdministrator(o =>
 {
-    o.Credential = new ManagedIdentityCredential();      // or DefaultAzureCredential()
+    o.Credential = credential;
     o.Scope = "api://<silo-app-id>/.default";            // the remote silo audience
     o.RefreshSkew = TimeSpan.FromMinutes(5);             // optional; defaults to 5 minutes
 });

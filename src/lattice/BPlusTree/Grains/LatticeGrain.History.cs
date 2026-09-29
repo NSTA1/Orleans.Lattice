@@ -230,16 +230,28 @@ internal sealed partial class LatticeGrain
         var revisions = new List<EntryRevision>(Math.Min(effectiveLimit, 16));
         string? continuationOut = null;
         var earliest = HybridLogicalClock.Zero;
-        var sawAny = false;
+        var earliestResolved = false;
+
+        // A page that resumes past the trim point starts its read after the
+        // oldest still-readable entry, so its own first entry is not the floor:
+        // probe the floor directly rather than report a later entry's clock (or
+        // Zero, on an empty tail page) as the point history was trimmed at.
+        if (truncated && fromOffsetExclusive >= tail)
+        {
+            earliest = await ReadOldestRetainedTimestampAsync(
+                reader, physicalTreeId, partition, tail, cancellationToken);
+            earliestResolved = true;
+        }
 
         await foreach (var (offset, mutation) in reader
             .ReadAsync(physicalTreeId, partition, fromOffsetExclusive, cancellationToken))
         {
-            if (!sawAny)
+            if (!earliestResolved)
             {
-                // The oldest readable entry on the partition is the trim-point floor.
+                // The page starts at or below the trim point, so its first
+                // readable entry is the oldest one on the partition.
                 earliest = mutation.Timestamp;
-                sawAny = true;
+                earliestResolved = true;
             }
 
             if (!EntryHistoryReader.WalMutationMatchesKey(mutation, key))
@@ -269,5 +281,27 @@ internal sealed partial class LatticeGrain
             EarliestAvailable = truncated ? earliest : HybridLogicalClock.Zero,
             Source = EntryHistorySource.WalWindow,
         };
+    }
+
+    /// <summary>
+    /// Reads the hybrid-logical-clock timestamp of the oldest still-readable entry
+    /// on a write-ahead-log partition - the first entry at or above
+    /// <paramref name="tail"/> - or <see cref="HybridLogicalClock.Zero"/> when the
+    /// partition retains nothing.
+    /// </summary>
+    private static async Task<HybridLogicalClock> ReadOldestRetainedTimestampAsync(
+        ICommitLogReader reader,
+        string physicalTreeId,
+        int partition,
+        long tail,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var (_, mutation) in reader
+            .ReadAsync(physicalTreeId, partition, tail - 1, cancellationToken))
+        {
+            return mutation.Timestamp;
+        }
+
+        return HybridLogicalClock.Zero;
     }
 }

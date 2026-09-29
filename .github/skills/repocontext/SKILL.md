@@ -135,5 +135,6 @@ disagree with the master file, the master file wins.
   `list_repos` with a null `lastIngested` / `fileCount` / `indexedCommit` /
   `indexedRoot` until
   it is re-onboarded, so the preserved memory stays discoverable. A reset whose
-  call times out keeps running: poll `index_status` (phase `Resetting`, then
-  `Completed` / `Failed`) instead of re-running it.
+  call times out keeps running: poll `index_status` (status `Running` in phase
+  `Resetting` while it runs, then status `Completed` or `Failed`) instead of
+  re-running it.

@@ -63,7 +63,8 @@ public sealed class LatticeSinkOptions
     public TimeSpan ShutdownDrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Custom serializer for <see cref="VehicleTelemetryEvent"/>. Defaults to a small
-    /// hand-rolled UTF-8 JSON encoder so the package doesn't depend on <c>System.Text.Json</c>.
+    /// UTF-8 JSON encoder built on <c>System.Text.Json.Utf8JsonWriter</c>; callers can
+    /// replace it when a different payload format is part of the experiment.
     /// </summary>
     public Func<VehicleTelemetryEvent, byte[]>? Serializer { get; set; }
 }

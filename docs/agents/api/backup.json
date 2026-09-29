@@ -1126,20 +1126,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; it runs a fresh verification and replaces the latest stored health report for the backup.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#CheckBackupHealthAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CheckBackupHealthAsync"
+        "idempotent": false,
+        "basis": "Each call creates a fresh health report with a new CheckedAtUtc and replaces the stored latest report.",
+        "source": "src/lattice.backup/LatticeBackupHealthService.cs#VerifyAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -1242,20 +1236,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the per-backup health configuration is set to the same replacement value.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#ConfigureBackupHealthAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ConfigureBackupHealthAsync"
+        "idempotent": true,
+        "basis": "SetConfigAsync stores the supplied BackupHealthConfig under the backup id, so re-sending the same config leaves the same configuration.",
+        "source": "src/lattice.backup/LatticeBackupHealthStore.cs#SetConfigAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -1296,20 +1284,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry captures a fresh current snapshot without a caller idempotency key.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureTreeAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+        "idempotent": false,
+        "basis": "A full capture has no caller operation id, mints a fresh artifact id from time and Guid, and captures the current tree snapshot.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#BuildArtifactId"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -1350,24 +1332,18 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry captures fresh member snapshots and can create a different set.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureSetAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+        "idempotent": false,
+        "basis": "A set capture has no caller operation id and computes the set id only from the member backup ids produced by that capture attempt.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#BuildSetManifest"
       },
       "concurrency": {
-        "rule": "Cross-tree consistent multi-tree sets use one causal fence.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+        "rule": "Cross-tree consistent multi-tree sets use one causal fence, a quiescence window that keeps cross-tree atomic writes whole but is not a single point-in-time cut for writes that touch only one member tree.",
+        "source": "docs/lattice.backup/architecture.md"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync",
@@ -1404,20 +1380,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry reads the current WAL delta from the base and has no caller idempotency key.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureIncrementalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+        "idempotent": false,
+        "basis": "An incremental capture has no caller operation id, mints a fresh artifact id, and captures the current WAL delta from the base backup frontier.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureIncrementalAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",

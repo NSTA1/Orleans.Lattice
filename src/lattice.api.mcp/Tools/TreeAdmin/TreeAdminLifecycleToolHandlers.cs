@@ -660,7 +660,7 @@ internal static class TreeAdminLifecycleToolHandlers
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree whose retention policy to set. Must not be null, empty, or a reserved system tree id.")]
         string treeId,
-        [Description("Retention mode for LWW value bytes: MetadataOnly stores hash and length only; FullValue stores the bytes; Hybrid stores bytes for recent revisions and metadata for older ones. Null clears the override (falls back to MetadataOnly).")]
+        [Description("Retention mode for LWW value bytes: MetadataOnly stores hash and length only; FullValue stores the bytes; Hybrid stores bytes for rows recent when written and metadata for rows already older than the hybrid window. Null clears the override (falls back to MetadataOnly).")]
         TreeHistoryRetentionMode? mode = null,
         [Description("Optional age in seconds after which a revision row expires. Null clears the age bound (revisions do not expire by age). Must be strictly positive when supplied.")]
         long? windowSeconds = null,

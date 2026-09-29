@@ -6,8 +6,9 @@ namespace Orleans.Lattice;
 /// point (<c>SetAliasAsync</c> / <c>RemoveAliasAsync</c>) after the new alias
 /// has been durably persisted and only when the effective physical id
 /// actually changed. Intended for consumers that bind to a logical tree's
-/// physical WAL and must rebind when a shadow-cutover restore, resize, or
-/// reshard swaps that binding underneath them - most notably the
+/// physical WAL and must rebind when a shadow-cutover restore or revert,
+/// resize or undo, schema remediation, or administrative alias assignment
+/// swaps that binding underneath them - most notably the
 /// cross-cluster replication shipper, which uses it to rebind reactively
 /// instead of re-reading the registry on every pump tick.
 /// <para>

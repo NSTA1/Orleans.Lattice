@@ -30,7 +30,7 @@ token-expiry maths so the flow stays testable.
 The simplest custom method returns a fixed header. Validate inputs, then build a
 `LatticeCallAuthentication`:
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Connection;
 
@@ -83,7 +83,7 @@ into a re-challenge state when renewal is no longer possible. Return the token
 source through `LatticeCallAuthentication.Bearer` so the connection always
 attaches a currently-valid token.
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Connection;
 
@@ -137,14 +137,45 @@ Register your method alongside the built-ins with `TryAddEnumerable`. The
 Explorer discovers it through `IEnumerable<IExplorerAuthMethod>` and selects it
 whenever an endpoint advertises its scheme - no Explorer core code changes.
 
-```csharp
+```csharp verify
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Connection;
 
-var services = new ServiceCollection();
-services.AddExplorerAuth();
-services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, ApiKeyAuthMethod>());
+public static class CustomAuthRegistration
+{
+    public static IServiceCollection AddApiKeyAuth(IServiceCollection services)
+    {
+        services.AddExplorerAuth();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, ApiKeyAuthMethod>());
+        return services;
+    }
+
+    private sealed class ApiKeyAuthMethod : IExplorerAuthMethod
+    {
+        public string SchemeId => "apikey";
+
+        public bool CanHandle(string advertisedScheme)
+            => string.Equals(advertisedScheme, SchemeId, StringComparison.OrdinalIgnoreCase);
+
+        public Task<ExplorerAuthSignIn> ChallengeAsync(
+            ExplorerAuthChallengeContext context,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new ExplorerAuthSignIn
+            {
+                SchemeId = SchemeId,
+                DisplayName = "API key",
+                Authentication = new LatticeCallAuthentication
+                {
+                    Headers = new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        [LatticeCallAuthentication.AuthorizationHeaderName] = "ApiKey example",
+                    },
+                },
+            });
+    }
+}
 ```
 
 ## Re-authentication, federated sign-out and CSP

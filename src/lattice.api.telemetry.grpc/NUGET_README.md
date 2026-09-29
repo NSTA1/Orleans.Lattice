@@ -19,6 +19,10 @@ builder.Services.AddLatticeTelemetryApiGrpc(o => o.RequireAuthorization = true);
 app.MapLatticeTelemetryApiGrpc();
 ```
 
+The host must also register the facade this binding exposes -
+`services.AddLatticeTelemetryApi()` from `Orleans.Lattice.Api.Telemetry` - in the
+same service provider; this package does not reference it.
+
 ## Curated queries only
 
 The binding carries no query text, on any RPC, in any deployment mode. A caller
@@ -43,8 +47,10 @@ exemption, so a client can learn how to sign in before it holds a credential.
 The facade itself re-derives and authorizes the caller server-side, so on a
 cluster running the `Orleans.Lattice.Auth` add-on the surface still fails closed
 for an unauthenticated caller even when the transport gate is disabled. Without
-that add-on the core no-op access gate admits every caller, and each query is
-pinned to the reserved default tenant.
+that add-on the core no-op access gate admits every caller - as a platform
+operator too, so a request for an all-tenant or single-tenant view is honoured -
+and a query that asks only for the caller's own scope is pinned to the reserved
+default tenant.
 
 ## Client-safe by construction
 

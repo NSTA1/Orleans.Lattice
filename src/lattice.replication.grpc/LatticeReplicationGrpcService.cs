@@ -289,15 +289,17 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <para>
     /// <c>GrpcChannelHardening</c> stamps
     /// <c>LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader</c> from
-    /// the sender's own configured cluster id alongside the shared secret. The
-    /// receiving interceptor does not read that header: it matches the presented
-    /// secret against the whole accepted set, so the header is not bound to the
-    /// secret, and this check compares the stamped header with the body only.
-    /// The header is absent-tolerant (an older or custom binding may
-    /// not stamp it), matching how <c>LatticeSagaGrpcService</c> treats the
-    /// same header; only a present-and-disagreeing value is rejected, so this
-    /// never refuses a call the previous build would have accepted from an
-    /// honest peer.
+    /// the sender's configured local cluster id alongside the shared secret.
+    /// The receiving interceptor does not read that header: it matches the
+    /// presented secret against the whole accepted set, so the header is not
+    /// bound to the secret, and this check compares the stamped header with the
+    /// body-declared origin only. The header is fixed per peer channel from the
+    /// configured local cluster id, or from the cluster-wide replication cluster id
+    /// when no override is set; request bodies carry the sending tree's resolved
+    /// replication cluster id. The header is absent-tolerant (an older or custom
+    /// binding may not stamp it), matching how <c>LatticeSagaGrpcService</c> treats
+    /// the same header; a present value that differs from the body refuses the
+    /// live-push, content-manifest, or high-water-mark call.
     /// </para>
     /// </summary>
     /// <param name="context">The server call context carrying the request headers.</param>

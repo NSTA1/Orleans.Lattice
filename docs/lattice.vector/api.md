@@ -90,7 +90,7 @@ that must keep a partially-loaded instance across a fault uses
 | `LoadedKeyCount`, `IsLoaded`, `HasBankedLoadProgress` | Load observability: identifier mappings loaded so far, whether a load has completed, and whether an interrupted load banked progress. |
 | `KeyPrefix`, `Generation`, `LoadMode` | Where the index lives, which partitioning is live, and how it was opened. |
 | `Status`, `Count`, `UpdatesSinceTraining` | The core's status, the live vector count, and the drift signal that tells you when to retrain. |
-| `Progress` | A `VectorIndexBuildProgress`: phase, generation, vectors indexed and expected, partitions persisted and total, whether the state was restored rather than recomputed, the lifetime counts of ingest slices stopped by their wall-clock budget (`SlicesDeadlined`) and of those that banked nothing (`SlicesDeadlinedWithoutProgress`), plus `EmptyDeadlinesSinceLastAdvance`, `IsStarvedBySource`, `IsReady`, and `IngestedFraction`. `IsStarvedBySource` is the present-tense stall signal: `true` while at least one slice has been deadlined empty-handed since the build last banked anything, cleared the moment a slice banks an item. `IsReady` is `true` only when the build has finished *and* produced a partitioning. `IngestedFraction` reports `1` when the build has finished *or* when the expected count is unknown, deliberately, so a caller never renders a progress bar implying knowledge the index does not have. |
+| `Progress` | A `VectorIndexBuildProgress`: phase, generation, vectors indexed and expected, partitions persisted and total, whether the state was restored rather than recomputed, the lifetime counts of ingest slices stopped by their wall-clock budget (`SlicesDeadlined`) and of those that banked nothing (`SlicesDeadlinedWithoutProgress`), plus `EmptyDeadlinesSinceLastAdvance`, `IsStarvedBySource`, `IsReady`, and `IngestedFraction`. `IsStarvedBySource` is the present-tense stall signal: `true` while at least one slice has been deadlined empty-handed since the build last banked anything, cleared the moment a slice banks an item. `IsReady` is `true` only when the build has finished *and* produced a partitioning. `IngestedFraction` reports `1` when the build has finished *or* when the expected count is unknown, deliberately, so a caller never renders a progress bar implying knowledge the index does not have. While the expected count is unknown (`VectorsExpected` is `0`, which a failed source count also leaves), each ingest slice retries the count until it succeeds. |
 | `BuildStepAsync` | Does one bounded slice of build work and returns progress. |
 | `RunBuildAsync` | Loops `BuildStepAsync` to completion. |
 | `UpsertAsync`, `RemoveAsync` | Incremental maintenance. |
@@ -127,7 +127,8 @@ partitioning exists - so it stays `false` for that small corpus even though
 | `IVectorIndexStore` | The narrow async store seam: read, read-many, write, delete, scan by prefix (optionally resuming strictly after a key already consumed, which has a correct but unoptimised default implementation), delete by prefix. |
 | `LatticeVectorIndexStore` | The `ILattice` adapter. The only type in the package that binds to Orleans. Its prefix scans push a resume point down into the tree scan, and resume a page walk abandoned by a bare Orleans response `TimeoutException` up to `DefaultScanTimeoutResumeAttempts` (2) consecutive times without banking a record. |
 | `IVectorSource`, `VectorSourceEntry` | The store-of-record seam the background build streams from. |
-| `VectorKeyDictionary` | The durable string-to-`long` identifier mapping. A monotonic allocator, never a hash. |
+| `VectorKeyDictionary` | The durable string-to-`long` identifier mapping. A monotonic allocator, never a hash. `GetOrAddAsync` writes a new identifier's mapping record at once; `GetOrAddBufferedAsync` assigns the key the same way but buffers the record until `FlushPendingAsync` writes every buffered record in one store write (`PendingWriteCount` reports how many are waiting). |
+| `IVectorIndexBuildObserver`, `VectorIndexBuildSliceTimings` | The build-timing seam, bound through `DurableVectorIndexOptions.BuildObserver`. `OnSliceCompleted` receives a `VectorIndexBuildSliceTimings` - `SourceWait`, `KeyAssign`, `IndexUpsert`, `KeyFlush`, and `Consumed` - so a host can publish them on its own meter; the package itself declares no instruments. It is called once for each ingest slice that returns normally, after that slice has checkpointed and written its build state, including a slice that consumed nothing; a slice that throws, including one whose checkpoint or build-state write fails, reports nothing. `SourceWait`, `KeyAssign` and `IndexUpsert` accumulate across the slice's items, and `KeyFlush` times its one batched key-map write. The four do not cover the whole slice: the source count taken while the expected count is still unknown, releasing the source enumerator, the ingest checkpoint that then persists the slice's vector chunks and build state, and the loop's own bookkeeping belong to no stage, so the four sum to less than the slice's elapsed time. An implementation must not throw, block, or retain the timings. |
 | `VectorIndexBuildPhase` | `NotStarted`, `Ingesting`, `Training`, `Persisting`, `Ready`, in that order during a build. It is not monotonic over the index's life: `RebuildAsync` (or a failed verification) returns it to `NotStarted`, and a writer that reopens an index whose build committed its trained generation but had not yet deleted the one it superseded resumes at `Persisting`, finishing that deletion on its next build step. |
 | `VectorIndexBuildState`, `VectorIndexManifest`, `VectorIndexPartitionState` | The durable build checkpoint, the commit record, and per-partition commit state. |
 | `VectorIndexStorageKeys`, `VectorIndexPersistenceFormat`, `VectorIndexRecord` | The key layout, the framing constants, and the checksummed record envelope. |
@@ -143,6 +144,17 @@ because a collision returns the wrong record silently and undiagnosably. It is a
 durable monotonic allocator: the watermark is made durable before any identifier
 in a block is handed out, so a crash burns the remainder of a block rather than
 reissuing. Keys are never recycled, and a rebuild does not rewind the counter.
+
+The background build does not issue a store write per identifier. It assigns
+keys through the buffered path and writes each slice's mapping records in one
+batch **before** that slice's checkpoint, so the mapping may run ahead of
+the committed cells but never behind them: a committed cell whose key had no
+durable identifier would be unresolvable on the next load. A failed batch keeps
+its records for the next attempt, and because keys are never recycled a retry
+rewrites the same identifier to the same key. Only the per-identifier records are
+batched; the watermark is still written before any identifier in a new block is
+handed out. `UpsertAsync` of an identifier the index has not seen writes its
+mapping record immediately.
 
 Only the forward direction is persisted; the reverse map is rebuilt in memory from
 the same scan, so resolving a result costs no round trip and no allocation.

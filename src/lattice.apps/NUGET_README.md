@@ -62,11 +62,9 @@ in the runtime replication configuration as the app is activated.
 Tree sizing fields are optional pins; omission inherits host defaults. An install
 applies them only when it first registers a tree, so a tree that already exists
 keeps its structure. `VirtualShardCount` cannot change in an upgrade; pass the
-previous manifest to `AppManifestValidator.Validate` to check this. The tree does
-not keep the declared slot count through every later operation, though: an
-`ILattice.ReshardAsync` to a different shard count while the tree is still empty,
-or an `ILattice.ResizeAsync` once it holds data, leaves it routing over the
-default 4096 virtual slots.
+previous manifest to `AppManifestValidator.Validate` to check this. An
+`ILattice.ResizeAsync` carries the declared slot count over to the resized copy,
+and an `ILattice.ReshardAsync` keeps it and cannot target more shards than it.
 `Rebuildable` marks a tree whose contents can be re-derived; no backup or restore
 path in this version acts on it.
 MCP tool names are app-local and become `{slug}_{name}` at dispatch.

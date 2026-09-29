@@ -21,7 +21,7 @@ When the inbound apply pipeline cannot install a `WalRecord` after exhausting `L
    ISystemLattice "_lattice_replog_dlq_{treeId}"  (system tree, e/{19-padded-id} rows)
 ```
 
-The decorator is registered as the silo-side `IReplicationApplier` singleton. Apply paths inside the cluster therefore go through the decorator transparently. Operator inspection and replay use the public `ILatticeReplicationDeadLetters` seam, which routes through the **canonical** applier so a deterministically-failing parked entry does not re-park itself on every replay.
+The decorator is registered as the silo-side `IReplicationApplier` singleton. Apply paths inside the cluster therefore go through the decorator transparently. When it applies entries one at a time - every single-entry batch, and the per-entry fallback it takes for a batch with retry history or one the canonical applier's batch call threw on - it also records the inbound per-peer contact the canonical applier's batch path would otherwise record (the `direction="inbound"` series of `peer.last_contact_seconds` and `peer.consecutive_errors`): an error when the apply fails, whether the entry is then retried or parked, and a success otherwise (a cancelled apply records nothing). Operator inspection and replay use the public `ILatticeReplicationDeadLetters` seam, which routes through the **canonical** applier so a deterministically-failing parked entry does not re-park itself on every replay.
 
 ## Storage
 

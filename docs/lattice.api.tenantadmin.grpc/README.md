@@ -220,7 +220,7 @@ Server side (an ASP.NET Core host co-located with the silo):
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces the registered `ILatticeTenantAdminApiAuthorizer` on every admin call. Left at its default with the default-deny authorizer in place, the binding refuses everything. Set to `false` only when an outer authentication boundary already guards the endpoint. |
-| `CredentialHeaderName` | `string` | `"authorization"` | The request header the caller credential is read from. The default bridge reads it on every call; without `Orleans.Lattice.Auth` registered the core no-op access gate ignores the bridged credential. |
+| `CredentialHeaderName` | `string` | `"authorization"` | The request header the caller credential is read from. The default bridge reads it on every call except the unauthenticated `GetAuthScheme`; without `Orleans.Lattice.Auth` registered the core no-op access gate ignores the bridged credential. |
 | `CredentialScheme` | `string` | `"Bearer"` | The scheme stamped on the bridged credential. A case-insensitive scheme prefix on the header value is stripped before the remainder is used as the token. |
 | `ActiveTenantHeaderName` | `string` | `"lattice-active-tenant"` (`LatticeActiveTenantAssertion.DefaultHeaderName`) | The request header carrying the tenant the caller is acting as. Set to an empty string to disable header-based tenant selection. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` (get-only, mutate in place) | empty | The credential schemes the unauthenticated `GetAuthScheme` RPC advertises, in preference order. Each descriptor must carry only public configuration - never a secret. |

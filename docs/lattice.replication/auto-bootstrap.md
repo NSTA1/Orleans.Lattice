@@ -53,9 +53,10 @@ skipped, and the local cluster is never probed against its own origin.
 `ILatticeWalIntrospection` addresses the WAL partitions by the tree id it is
 given and, like the [change feed](change-feed.md), does not follow a tree's
 alias; the maintenance pass passes the logical tree id. After a shadow-cutover
-restore or a resize repoints the tree at a new physical copy, the probe
-therefore reads the retired copy's log - or nothing, once that copy is purged -
-rather than the log the tree's new writes land in.
+restore, a resize, a schema remediation, or an operator alias change repoints
+the tree at another physical copy, the probe therefore reads the retired copy's
+log - or nothing, once that copy is purged - rather than the log the tree's new
+writes land in.
 
 ## Configuration
 

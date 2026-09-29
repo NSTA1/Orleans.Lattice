@@ -22,7 +22,7 @@ internal sealed partial class BPlusLeafGrain
     {
         using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
-        await _splitGate.WaitAsync();
+        await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
             _warmCacheTopologyChanged = true;

@@ -122,11 +122,13 @@ reminders, so a process death resumes the work rather than abandoning it. See
 Every tree is classified as either **store of record** or **rebuildable
 projection**, and that classification is enforced by name rather than inferred.
 
-Store-of-record trees hold data that exists nowhere else: the structural nodes,
-the symbol records, and agent memory. Projections hold data derived from them:
-the content projection, the reverse cross-reference index, session reuse
-bookkeeping, and the whole vector plane. A projection can be dropped and rebuilt;
-a store-of-record tree cannot.
+Store-of-record trees hold the primary records: the structural nodes, the symbol
+records, and agent memory. Projections hold data derived from them: the content
+projection, the reverse cross-reference index, session reuse bookkeeping, and the
+whole vector plane. A projection can be dropped and rebuilt. Of the store-of-record
+trees, the structural and symbol trees can be re-created only by re-ingesting the
+working files, and agent memory exists nowhere else, so it cannot be re-created at
+all.
 
 That single distinction is what makes several otherwise-awkward behaviours safe
 and predictable:

@@ -71,8 +71,8 @@ public static class RepoContextRetrievalPath
     /// <summary>
     /// Wire value <c>"keyword.index_degraded"</c>: an embedding provider is bound and
     /// the semantic path ran, but the <b>semantic index itself is degraded</b> - it
-    /// threw (an index or backing-projection fault the fail-closed guard caught), or it
-    /// ranked candidates that no longer hydrate from the store of record. This is a
+    /// threw (an index or backing-projection fault the fail-closed guard caught), or
+    /// none of the candidates it ranked still hydrate from the store of record. This is a
     /// real capability loss, distinct from <see cref="KeywordNoEmbedder"/>.
     /// </summary>
     public const string KeywordIndexDegraded = "keyword.index_degraded";
@@ -81,8 +81,9 @@ public static class RepoContextRetrievalPath
     /// Wire value <c>"keyword.exact_fallback_suppressed"</c>: an embedding provider is
     /// bound and the approximate plane is not serving, so the exact scan would
     /// normally answer with complete recall - but a gather over this repository has
-    /// already stalled, so the exact fallback is <b>deliberately suppressed</b> and
-    /// keyword recall serves in its place.
+    /// already stalled or failed with another capacity-shaped fault, so the exact
+    /// fallback is <b>deliberately suppressed</b> and keyword recall serves in its
+    /// place.
     /// <para>
     /// <b>Why it is its own value.</b> Until issue #2720 this state reported as
     /// <see cref="KeywordVectorPlaneUnavailable"/>, which says the plane holds
@@ -90,9 +91,9 @@ public static class RepoContextRetrievalPath
     /// misleading here, because the plane's contents are not what stopped the query.
     /// A guard did, and it is holding a fallback shut that would otherwise answer.
     /// The two have opposite remedies: an unavailable plane needs the build to
-    /// finish, whereas a suppressed fallback needs the contention that stalled the
-    /// gather to clear, and will retry on its own through the breaker's half-open
-    /// probe whether or not the build ever completes.
+    /// finish, whereas a suppressed fallback needs the capacity fault that blocked
+    /// the gather to clear, and will retry on its own through the breaker's
+    /// half-open probe whether or not the build ever completes.
     /// </para>
     /// <para>
     /// <b>Only a suppression that can outlive its cause reports here.</b> The

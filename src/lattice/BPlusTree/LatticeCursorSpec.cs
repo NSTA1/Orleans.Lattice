@@ -51,8 +51,8 @@ public readonly record struct LatticeCursorSpec
     /// caller stalled past <see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/>)
     /// fails its next step with
     /// <see cref="LatticeCursorSnapshotExpiredException"/>; opening a
-    /// point-in-time cursor when the registry-wide pin footprint cap
-    /// would be exceeded throws
+    /// point-in-time cursor when any touched saga-decision registry shard's
+    /// pin footprint cap would be exceeded throws
     /// <see cref="LatticeCursorRegistryPinExhaustedException"/>.
     /// </para>
     /// </summary>

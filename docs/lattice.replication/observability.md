@@ -25,7 +25,7 @@ The `peer` tag carries the entry's `OriginClusterId` - i.e. the **authoring** cl
 
 The histogram is intentionally not recorded for:
 
-- **`MutationKind.DeleteRange`** - range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into one), so the lag would be a meaningless multi-decade value.
+- **`MutationKind.DeleteRange`** - a range delete applies through the range path, which records no lag sample: its single issue HLC stamps a whole key range rather than one point write (and a legacy range-delete entry written before that HLC was pinned carries `HybridLogicalClock.Zero`, which would read as a multi-decade lag).
 - **Deduplicated or deferred deliveries** - an entry dropped at or below the snapshot-pinned causal floor, suppressed by the shadow-forward identity cache, or deferred by a restore saga's receive fence never reaches the merge step, so reporting lag would conflate "applied" and "filtered" samples.
 - **Local-origin entries** - the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
 - **Source HLC equal to `Zero`** - protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
@@ -63,7 +63,7 @@ A receiver with a single overwhelmed subscriber surfaces as a rising `failure` b
 
 ## Parallel-apply degree (`apply.parallel_runs`)
 
-`orleans.lattice.replication.apply.parallel_runs` records the effective degree of parallelism the receiver-side batch-apply path used for a single inbound batch - the number of per-tree run groups (each tree's contiguous `(treeId, originClusterId)` runs, applied in order) it allowed to apply concurrently. One sample is recorded per multi-entry batch.
+`orleans.lattice.replication.apply.parallel_runs` records the effective degree of parallelism the receiver-side batch-apply path used for a single inbound batch - the number of per-tree run groups (each tree's contiguous `(treeId, originClusterId)` runs, applied in order) it allowed to apply concurrently. One sample is recorded per multi-entry batch that takes the batch path; a batch the receiver applies entry by entry from the start, because one of its entries is already retrying after a failed apply, records none.
 
 | Property | Value |
 |---|---|
@@ -83,7 +83,7 @@ The producer no longer emits a commit-time append counter: a commit reaches the 
 |---|---|---|
 | `orleans.lattice.replication.wal.entries_shipped` | `tree`, `peer` | When a `Push` call on the gRPC transport returns an acknowledgement - including one with `Accepted = false` (a receive-fence deferral), so a deferred batch is counted again when it is re-shipped. Incremented by the count of entries in the shipped envelope; a heartbeat / keep-alive (zero-entry) batch contributes zero. |
 
-Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL's growth and trim signals (`wal.entries_trimmed`, plus the configured retention window). A ship rate that persistently lags the WAL's growth means the local log is accumulating faster than the sender can drain it: the shipper's unacknowledged cursor then holds back the min-acked-cursor WAL GC, and the growing backlog surfaces on the per-peer `peer.entries_behind` gauge that the [back-pressure health check](health-check.md) evaluates.
+Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL's growth and trim signals (`wal.entries_trimmed`, plus the configured retention window). A ship rate that persistently lags the WAL's growth means the local log is accumulating faster than the sender can drain it: the shipper's unacknowledged cursor then holds back the min-acked-cursor WAL GC, and the backlog surfaces as a non-zero per-peer `peer.entries_behind` reading, which the [back-pressure health check](health-check.md) evaluates. That gauge is a per-tick floor rather than the full backlog: it reports the just-shipped batch size when a drain fills the batch cap and `0` otherwise, so under a sustained backlog it stays pinned at the batch size instead of growing.
 
 ## Ship duration (`ship.duration`)
 
@@ -110,7 +110,7 @@ Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL
 | `foreign_tenant` / `tenant_offline` / `tenant_suspended` | The tenant-isolation gate refused the write: unknown tenant / tenant not resident in this region / tenant suspended or disabled (the matching `apply.duration` outcomes are `rejected-foreign-tenant`, `rejected-tenant-offline`, and `rejected-tenant-suspended` above). |
 | `oversized` | Reserved. Nothing emits it today; it is published for host decorators that wrap the canonical applier with a per-entry size check. |
 
-`orleans.lattice.replication.dead_letter.removed` is tagged `discarded` (explicit operator discard), `replayed` (removed after a replay that returned without throwing, whatever its `Applied` result), or `evicted` (FIFO capacity eviction during a later enqueue).
+`orleans.lattice.replication.dead_letter.removed` is tagged `discarded` (explicit operator discard), `replayed` (removed after a replay that returned without throwing, whatever its `Applied` result - except a replay deferred by a restore saga's receive fence, which leaves the entry parked for a later replay), or `evicted` (FIFO capacity eviction during a later enqueue).
 
 The failure-to-reason mapping is intentionally conservative: only failure shapes whose source is under the package's control are matched explicitly, so the `reason` dimension stays stable across publishers and operators can alert on `unknown` rising without false positives from future schema-shape additions.
 
@@ -272,7 +272,7 @@ Operators monitor them together:
 The canonical applier records the highest source HLC applied so far per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
 
 - **After a successful apply** (direct or drained from the causal-apply buffer) - never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
-- **For point operations only** (`Set` / `Delete`). `DeleteRange` carries `HybridLogicalClock.Zero` by design and is excluded - it neither records a violation nor overwrites the recorded HLC.
+- **For point operations only** (`Set` / `Delete`). `DeleteRange` is excluded, because its single issue HLC covers a whole key range rather than a point write - it neither records a violation nor overwrites the recorded HLC.
 
 A violation **does not change apply behaviour**: the entry is still applied, and the high-water-mark advance is a monotonic no-op for it because the running maximum is already higher. Read the counter as a rate against `wal.entries_shipped` rather than alerting on `rate > 0`: a steady low rate reflects ordinary per-leaf interleaving, while a step change on one `(tree, origin)` pair points at a sender or transport path that has started reordering deliveries. Operators triage by joining the `tree` and `origin` tags against the producer-side topology.
 
@@ -328,7 +328,7 @@ Tailing the silo log for a single bootstrap run is `(treeName, sourceClusterId)`
 `peer.last_contact_seconds` and `peer.consecutive_errors` carry a `direction` tag with two values:
 
 - `direction="outbound"` - recorded by the per-peer shipper after a peer accepts a shipped batch. Includes the periodic empty **liveness probe** the shipper fires when the drain buffer is empty and the wall-clock interval since the last successful outbound contact has elapsed. The probe is configured by `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; set to `Timeout.InfiniteTimeSpan` to disable). The probe interval timer is anchored on the first idle pump tick after activation, so the first idle tick is silent and the probe begins one interval after activation. The payload is the fixed 32-byte framing header plus the length-prefixed tree name and origin cluster id; no entries are shipped.
-- `direction="inbound"` - recorded by the canonical applier's batch path after a per-origin run of inbound entries applies (or fails) on the local receiver. Keyed by the entries' `WalRecord.OriginClusterId`. Entries with no origin or tree id, and local-origin entries, skip the recording.
+- `direction="inbound"` - recorded on the receive path after inbound entries authored by the named peer apply (or fail) on the local receiver: once per per-origin run when a multi-entry push takes the batch path, and once per entry when a push is applied entry by entry - a single-entry push (the usual shape from a low-rate sender), or a batch the receiver applies entry by entry because one of its entries is already retrying or the batch path failed. When the batch path fails part-way, the runs it attempted have already recorded their contact before the per-entry retry records each entry again, so one push can record contact twice for the same entries. Keyed by the entries' `WalRecord.OriginClusterId`. Entries with no origin or tree id, and local-origin entries, skip the recording.
 
 The two directions are independent: a peer that this silo only ships to never produces an inbound row; a peer that this silo only receives from never produces an outbound row. `Snapshot()` returns one row per `(tree, peer, direction)` triple, each carrying a `Direction` property of type `ReplicationContactDirection`.
 

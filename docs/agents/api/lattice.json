@@ -16,6 +16,8 @@
     "src/lattice/ILatticeAdmin.cs#ILatticeAdmin",
     "src/lattice/ILatticeRetryPolicy.cs#ILatticeRetryPolicy",
     "src/lattice/IMutationObserver.cs#IMutationObserver",
+    "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard",
+    "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#LatticeCrossTreeAtomicWriteExtensions",
     "src/lattice/LatticeQuotaExceededException.cs#LatticeQuotaExceededException",
     "src/lattice/LatticeSaturatedException.cs#LatticeSaturatedException",
     "src/lattice/LatticeServiceCollectionExtensions.cs#AddLattice"
@@ -106,6 +108,14 @@
         }
       ],
       "source": "src/lattice/ClusterStorageUsageReport.cs#ClusterStorageUsageReport"
+    },
+    "CrossTreeAtomicWriteOutcome": {
+      "kind": "enum",
+      "values": [
+        "Committed",
+        "PreconditionFailed"
+      ],
+      "source": "src/lattice/CrossTreeAtomicWriteOutcome.cs#CrossTreeAtomicWriteOutcome"
     },
     "EntryHistoryPage": {
       "kind": "record",
@@ -205,6 +215,17 @@
         }
       ],
       "source": "src/lattice/IMutationObserver.cs#IMutationObserver"
+    },
+    "ITreeOwnershipGuard": {
+      "kind": "interface",
+      "fields": [
+        {
+          "name": "AuthorizeAliasAsync",
+          "type": "ValueTask<TreeOwnershipDecision> AuthorizeAliasAsync(string logicalTreeId, string physicalTreeId, string? derivedFrom, CancellationToken cancellationToken = default)",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard"
     },
     "LatticeBooleanOperator": {
       "kind": "enum",
@@ -615,6 +636,48 @@
       ],
       "source": "src/lattice/Predicates/LatticeStringMethod.cs#LatticeStringMethod"
     },
+    "LatticeTreeBatch": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Entries",
+          "type": "List<KeyValuePair<string, byte[]>>",
+          "required": true
+        },
+        {
+          "name": "Predicate",
+          "type": "LatticePredicateNode?",
+          "required": false
+        },
+        {
+          "name": "EntryDeltas",
+          "type": "List<byte[]?>?",
+          "required": false
+        },
+        {
+          "name": "EntryDeletes",
+          "type": "List<bool>?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/LatticeTreeBatch.cs#LatticeTreeBatch"
+    },
+    "LatticeTreeOwnershipDeniedException": {
+      "kind": "exception",
+      "fields": [
+        {
+          "name": "Reason",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice/LatticeTreeOwnershipDeniedException.cs#LatticeTreeOwnershipDeniedException"
+    },
     "LeafProjectionDigest": {
       "kind": "struct",
       "fields": [
@@ -784,6 +847,22 @@
         }
       ],
       "source": "src/lattice/BPlusTree/TreeDiagnosticReport.cs#TreeDiagnosticReport"
+    },
+    "TreeOwnershipDecision": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "Allowed",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Reason",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice/TreeOwnershipDecision.cs#TreeOwnershipDecision"
     },
     "TreeStorageUsageReport": {
       "kind": "struct",
@@ -1398,19 +1477,9 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/ILatticeAdmin.cs#AuditWalPlacementAsync"
+        "safe": true,
+        "policy": "Safe to retry because the operation performs registry, topology, and catalog reads only and returns a point-in-time audit snapshot.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.WalMove.cs#AuditWalPlacementAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -1479,13 +1548,8 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#BulkAppendChunkAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#BulkAppendChunkAsync"
+        "rule": "LatticeGrain fans the chunk out by physical shard, and each non-reentrant ShardRootGrain serializes BulkAppendAsync against LastCompletedBulkOperationId and PendingBulkGraft state for that shard.",
+        "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#BulkAppendAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#BulkAppendChunkAsync",
@@ -1530,43 +1594,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#BulkLoadAsync"
+        "safe": "conditional",
+        "policy": "A retry after a completed import is safe only if the caller treats InvalidOperationException from an already-populated shard as the benign duplicate outcome; the public call creates a fresh operation id, so it is not a resumable client retry protocol.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#BulkLoadAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#BulkLoadAsync"
+        "idempotent": false,
+        "basis": "Each public call creates a fresh Guid operation id, and after any shard has data a different operation id is rejected instead of being collapsed as the same request.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#BulkLoadAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#BulkLoadAsync"
+        "rule": "LatticeGrain fans out to every physical shard, and each non-reentrant ShardRootGrain serializes BulkLoadAsync on that shard before checking LastCompletedBulkOperationId and RootNodeId.",
+        "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#BulkLoadAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#BulkLoadAsync",
@@ -1621,13 +1660,8 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#CloseCursorAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#CloseCursorAsync"
+        "rule": "CloseCursorAsync routes to the single non-reentrant LatticeCursorGrain for the tree and cursor id, where CloseAsync serializes cleanup and no-ops when the cursor is not started or already closed.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeCursorGrain.cs#CloseAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#CloseCursorAsync",
@@ -1668,43 +1702,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#CompactShardAsync"
+        "safe": "conditional",
+        "policy": "Safe to retry while the original compaction is still in flight because the coordinator returns false for an active timer or InProgress state; after the pass completes, the same request may start a new operator-triggered pass.",
+        "source": "src/lattice/BPlusTree/Grains/TombstoneCompactionGrain.cs#TryBeginRequestedCompactionAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#CompactShardAsync"
+        "idempotent": "conditional",
+        "basis": "Duplicate requests collapse to false only while the coordinator has an active timer or InProgress state; once complete, the same request can begin another compaction pass.",
+        "source": "src/lattice/BPlusTree/Grains/TombstoneCompactionGrain.cs#TryBeginRequestedCompactionAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#CompactShardAsync"
+        "rule": "A singleton-per-tree non-reentrant TombstoneCompactionGrain serializes compaction requests and admits only one pass with its _compactionTimer and state.InProgress guard.",
+        "source": "src/lattice/BPlusTree/Grains/TombstoneCompactionGrain.cs#TryBeginRequestedCompactionAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#CompactShardAsync",
@@ -1863,6 +1872,86 @@
       ]
     },
     {
+      "id": "cross-tree-set-many-atomic",
+      "in_process": {
+        "interface": "LatticeCrossTreeAtomicWriteExtensions",
+        "method": "SetManyAtomicAsync",
+        "signature": "Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAsync(this IGrainFactory factory, IReadOnlyList<LatticeTreeBatch> batches, string operationId, CancellationToken cancellationToken = default)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "factory",
+            "type": "IGrainFactory",
+            "required": true
+          },
+          {
+            "name": "batches",
+            "type": "IReadOnlyList<LatticeTreeBatch>",
+            "required": true
+          },
+          {
+            "name": "operationId",
+            "type": "string",
+            "required": true
+          },
+          {
+            "name": "cancellationToken",
+            "type": "CancellationToken",
+            "required": false,
+            "default": "default"
+          }
+        ]
+      },
+      "response": {
+        "type": "CrossTreeAtomicWriteOutcome"
+      },
+      "errors": [
+        {
+          "error_id": "argument-null",
+          "condition": "factory or batches is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "operationId is null, empty, whitespace, or contains '/'; a tree id is null, empty, or repeated; or a tree's slice repeats a key (a Set and a Delete of one key count as a repeat), or carries a null key or a null upsert value. A rejected batch stages no write and persists no saga state."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "A write fails after the saga compensates, including a key or value that exceeds MaxKeyLength or MaxValueSizeBytes when the saga writes it; or the operationId is re-submitted with a different tree-set or key-set."
+        },
+        {
+          "error_id": "state-write-failed",
+          "condition": "A saga state-write conflict persists after the bounded re-attach attempts."
+        },
+        {
+          "error_id": "operation-canceled",
+          "condition": "The cancellation token is canceled before dispatch."
+        }
+      ],
+      "retry": {
+        "safe": "conditional",
+        "policy": "Re-submitting the same batch under the same operationId re-attaches to the in-flight or completed saga and returns its memoized outcome.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#SetManyAtomicAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The required operationId binds the tree-set and key-set; a matching re-submission returns the memoized outcome and the durable decision is never applied twice.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#SetManyAtomicAsync"
+      },
+      "concurrency": {
+        "rule": "Each participating tree runs its single-tree saga in prepare-and-pause mode and one coordinator decision flips visibility on every tree at once.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#LatticeCrossTreeAtomicWriteExtensions"
+      },
+      "sources": [
+        "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#SetManyAtomicAsync",
+        "src/lattice/LatticeTreeBatch.cs#LatticeTreeBatch",
+        "src/lattice/CrossTreeAtomicWriteOutcome.cs#CrossTreeAtomicWriteOutcome",
+        "docs/lattice/atomic-writes.md"
+      ]
+    },
+    {
       "id": "delete",
       "in_process": {
         "interface": "ILattice",
@@ -1910,13 +1999,8 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#DeleteAsync"
+        "rule": "The owning leaf accepts interleaved DeleteAsync calls, stamps each tombstone with a HybridLogicalClock, and applies it through LWW storage so concurrent writes resolve by timestamp.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#DeleteCoreAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#DeleteAsync",
@@ -1976,13 +2060,8 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#DeleteRangeAsync"
+        "rule": "Range delete fans out to every physical shard, pins one HLC for the whole request with LatticeHlcOverrideContext, and each leaf applies LWW tombstones for the matched keys.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.cs#DeleteRangeAsyncCore"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#DeleteRangeAsync",
@@ -2108,13 +2187,8 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#DeleteRangeWherePredicateAsync"
+        "rule": "Predicate range delete evaluates the predicate once on each leaf, records the matched key set, and applies one HLC-pinned LWW tombstone per matched key while shards run in parallel.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#DeleteRangeAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#DeleteRangeWherePredicateAsync",
@@ -2147,6 +2221,10 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The tree's alias targets a tree this tree does not own, another tree aliases this one, or a resize, restore or remediation holds the tree's alias."
         }
       ],
       "retry": {
@@ -2160,17 +2238,13 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#DeleteTreeAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
+        "rule": "The delete acts on the logical tree and throws InvalidOperationException while a resize, restore or remediation holds the tree's alias, when another tree aliases it, or when its alias targets a tree it does not own.",
         "source": "src/lattice/BPlusTree/ILattice.cs#DeleteTreeAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#DeleteTreeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#DeleteTreeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#DeleteTreeAsync",
+        "docs/lattice/tree-registry.md"
       ]
     },
     {
@@ -3053,13 +3127,8 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#GetOrSetAsync"
+        "rule": "A point write racing GetOrSetAsync applies in either order, and the owning leaf stamps the write with its own HLC so last-writer-wins resolves the race.",
+        "source": "src/lattice/BPlusTree/IShardRootGrain.cs#GetOrSetAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#GetOrSetAsync",
@@ -3253,19 +3322,9 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/ILatticeAdmin.cs#GetSplitActivityAsync"
+        "safe": true,
+        "policy": "Safe to retry because the operation performs a read-only call to the cluster split-admission singleton and returns a point-in-time activity snapshot.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.cs#GetSplitActivityAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -3409,19 +3468,9 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/ILatticeAdmin.cs#GetWalPlacementAsync"
+        "safe": true,
+        "policy": "Safe to retry because the operation performs registry, topology, and catalog reads only and returns a point-in-time placement snapshot.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.WalMove.cs#GetWalPlacementAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -3919,43 +3968,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#MergeAsync"
+        "safe": "conditional",
+        "policy": "Safe to retry only while the same-source merge remains in progress, where TreeMergeGrain returns without starting another merge; after completion, reissuing the call starts a new merge that can copy later source changes.",
+        "source": "src/lattice/BPlusTree/Grains/TreeMergeGrain.cs#MergeAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#MergeAsync"
+        "idempotent": "conditional",
+        "basis": "The same source idempotently reattaches only while state.InProgress is true; after CompleteMergeAsync clears InProgress, the same call initiates a new merge.",
+        "source": "src/lattice/BPlusTree/Grains/TreeMergeGrain.cs#MergeAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#MergeAsync"
+        "rule": "One non-reentrant TreeMergeGrain activation per target tree serializes merge requests with persisted InProgress and SourceTreeId state before timer-driven shard processing begins.",
+        "source": "src/lattice/BPlusTree/Grains/TreeMergeGrain.cs#MergeAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#MergeAsync",
@@ -4127,43 +4151,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorAsync"
+        "safe": "conditional",
+        "policy": "Retry after a lost open response creates a new cursor id over the same range; the abandoned cursor has no delete side effect and self-cleans by idle TTL, so callers must use only the returned cursor id.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.Cursor.cs#OpenDeleteRangeCursorCoreAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorAsync"
+        "idempotent": false,
+        "basis": "The public method generates a fresh Guid cursor id before opening the cursor grain, so repeated calls create distinct cursor resources.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.Cursor.cs#OpenDeleteRangeCursorCoreAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorAsync"
+        "rule": "Each generated cursor id maps to one non-reentrant LatticeCursorGrain; OpenAsync persists the spec once, accepts the same spec for that cursor id, and rejects a different spec.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeCursorGrain.cs#OpenAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorAsync",
@@ -4218,43 +4217,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorWherePredicateAsync"
+        "safe": "conditional",
+        "policy": "Retry after a lost open response creates a new cursor id over the same range and predicate; the abandoned cursor has no delete side effect and self-cleans by idle TTL, so callers must use only the returned cursor id.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.Cursor.cs#OpenDeleteRangeCursorCoreAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorWherePredicateAsync"
+        "idempotent": false,
+        "basis": "The public predicate overload delegates to the same core method that generates a fresh Guid cursor id for every call.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.Cursor.cs#OpenDeleteRangeCursorCoreAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorWherePredicateAsync"
+        "rule": "Each generated cursor id maps to one non-reentrant LatticeCursorGrain; OpenAsync persists the predicate spec once, accepts the same spec for that cursor id, and rejects a different spec.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeCursorGrain.cs#OpenAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#OpenDeleteRangeCursorWherePredicateAsync",
@@ -4864,18 +4838,8 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
+        "safe": true,
+        "policy": "Read-only planning is safe to retry; retrying only recomputes the current batch WAL move preview and changes no placement.",
         "source": "src/lattice/ILatticeAdmin.cs#PlanWalMoveAsync"
       },
       "idempotency": {
@@ -4936,18 +4900,8 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "No client retry policy is documented for this administrative method.",
-          "required_source": "src/lattice/ILatticeAdmin.cs",
-          "issue": 3634
-        },
+        "safe": true,
+        "policy": "Read-only planning is safe to retry; retrying only recomputes the current partition WAL move preview and changes no placement.",
         "source": "src/lattice/ILatticeAdmin.cs#PlanWalMoveAsync"
       },
       "idempotency": {
@@ -5037,50 +4991,30 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The tree has not been deleted, or the purge has already completed."
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#PurgeTreeAsync"
+        "safe": "conditional",
+        "policy": "Safe to retry after an interrupted shard purge, which is re-driven; once PurgeComplete is persisted a repeat throws InvalidOperationException even if the registry unregister that follows it failed, so after an ambiguous failure read the deletion status and treat an already-purged status as success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#PurgeTreeAsync"
+        "idempotent": "conditional",
+        "basis": "Shard clearing re-runs until PurgeComplete is persisted, after which a repeated call throws InvalidOperationException instead of returning the original success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#PurgeTreeAsync"
+        "rule": "The per-tree TreeDeletionGrain state machine serializes purge through persisted TreeDeletionState, pinning logical alias targets and fencing alias changes with AliasOperationId.",
+        "source": "src/lattice/BPlusTree/State/TreeDeletionState.cs#TreeDeletionState"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#PurgeTreeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#PurgeTreeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#PurgeTreeAsync",
+        "docs/lattice/tree-registry.md"
       ]
     },
     {
@@ -5402,13 +5336,8 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#RebuildLeafProjectionAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#RebuildLeafProjectionAsync"
+        "rule": "The public loop drives one physical shard through bounded shard-root pages, each page releases the shard between batches, and each leaf projection rebuild is idempotent.",
+        "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.ProjectionAdmin.cs#RebuildShardProjectionBoundedAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#RebuildLeafProjectionAsync",
@@ -5503,50 +5432,30 @@
         {
           "error_id": "operation-canceled",
           "condition": "The cancellation token is canceled before or during the operation."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The tree has not been deleted (including a live resized tree), a purge is in progress, or the purge has already completed."
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#RecoverTreeAsync"
+        "safe": "conditional",
+        "policy": "Safe to retry after partial recovery failure because per-shard unmark and reseed run before clearing the deletion record; after successful recovery, retry throws InvalidOperationException because the tree is no longer deleted.",
+        "source": "src/lattice/BPlusTree/ITreeDeletionGrain.cs#RecoverAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#RecoverTreeAsync"
+        "idempotent": "conditional",
+        "basis": "Partial recovery is retryable, but a repeated call after the deletion record is cleared throws InvalidOperationException because the tree has not been deleted.",
+        "source": "src/lattice/BPlusTree/ITreeDeletionGrain.cs#RecoverAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#RecoverTreeAsync"
+        "rule": "The per-tree TreeDeletionGrain state machine serializes recovery through persisted TreeDeletionState, pinning logical alias targets and fencing alias changes with AliasOperationId.",
+        "source": "src/lattice/BPlusTree/State/TreeDeletionState.cs#TreeDeletionState"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#RecoverTreeAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#RecoverTreeAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#RecoverTreeAsync",
+        "docs/lattice/tree-registry.md"
       ]
     },
     {
@@ -5641,13 +5550,8 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#RepairOrphanedLeavesAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#RepairOrphanedLeavesAsync"
+        "rule": "The repair pass walks shards sequentially, each shard declines a concurrent pass with ShardPassAlreadyRunning, and the orphan unsplice commits through the predecessor sibling compare-and-swap after the leaf retirement latch.",
+        "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#RunOrphanedLeafPassAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#RepairOrphanedLeavesAsync",
@@ -5753,43 +5657,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#ResizeAsync"
+        "safe": "conditional",
+        "policy": "Safe to retry the initiation with the same sizing while the resize is in progress; a different in-flight sizing throws InvalidOperationException, and after completion a later call can start a new resize.",
+        "source": "src/lattice/BPlusTree/ITreeResizeGrain.cs#ResizeAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#ResizeAsync"
+        "idempotent": "conditional",
+        "basis": "ResizeAsync is a no-op only when the persisted resize is already in progress with the same parameters; different in-flight parameters throw and completed resizes do not memoize the prior call.",
+        "source": "src/lattice/BPlusTree/ITreeResizeGrain.cs#ResizeAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#ResizeAsync"
+        "rule": "TreeResizeGrain persists a phase state and operation id, runs one keepalive-backed coordinator pump, reserves the alias through ITreeDeletionGrain.BeginAliasChangeAsync, and refuses to start while reshard is not idle.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#ResizeCoreAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#ResizeAsync",
@@ -5929,13 +5808,8 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetAsync"
+        "rule": "IBPlusLeafGrain.SetAsync is AlwaysInterleave, but Orleans serializes synchronous code between awaits so the per-key LWW merge, HLC tick and projection-hash updates are race-free; the split state machine is serialized by the per-activation split gate.",
+        "source": "src/lattice/BPlusTree/IBPlusLeafGrain.cs#SetAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetAsync",
@@ -5981,43 +5855,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetHistoryRetentionAsync"
+        "safe": true,
+        "policy": "Retry after an ambiguous failure is safe because the registry upsert stores the same tree retention override values again.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetHistoryRetentionAsync"
+        "idempotent": true,
+        "basis": "Repeating the call with the same arguments leaves the registry entry with the same HistoryRetentionMode and HistoryRetentionWindowTicks.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetHistoryRetentionAsync"
+        "rule": "LatticeRegistryGrain is a non-reentrant singleton whose mutating members are not AlwaysInterleave, so each retention upsert serializes and concurrent configuration writes resolve by last writer.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetHistoryRetentionAsync",
@@ -6137,6 +5986,10 @@
         {
           "error_id": "saturated",
           "condition": "The per-shard fan-out has not settled within LatticeOptions.SetManyFanOutBudget; already-committed branches are retained and in-flight branches are not cancelled."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "A key exceeds LatticeOptions.MaxKeyLength or a value exceeds LatticeOptions.MaxValueSizeBytes; every entry is checked on entry before any shard work."
         }
       ],
       "retry": {
@@ -6155,7 +6008,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6193,6 +6047,14 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "An upsert key exceeds LatticeOptions.MaxKeyLength or an upsert value exceeds LatticeOptions.MaxValueSizeBytes; the batch is refused before its saga starts."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6211,7 +6073,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6258,7 +6121,7 @@
         },
         {
           "error_id": "argument-exception",
-          "condition": "operationId is null, empty, whitespace, or contains '/'; or the combined batch contains a duplicate or null key, or a null upsert value."
+          "condition": "operationId is null, empty, whitespace, or contains '/'; or the combined batch contains a duplicate or null key, or a null upsert value; or an upsert key exceeds LatticeOptions.MaxKeyLength or an upsert value exceeds LatticeOptions.MaxValueSizeBytes; the batch is refused before its saga starts."
         },
         {
           "error_id": "invalid-operation",
@@ -6271,6 +6134,10 @@
         {
           "error_id": "idempotency-key-mismatch",
           "condition": "The operationId was previously submitted with a different key set."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole. A delete-only batch is not checked."
         }
       ],
       "retry": {
@@ -6289,7 +6156,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6332,6 +6200,14 @@
         {
           "error_id": "argument-null",
           "condition": "A non-null reference parameter is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "An entry key exceeds LatticeOptions.MaxKeyLength or an entry value exceeds LatticeOptions.MaxValueSizeBytes; checked before the precondition is evaluated and before the saga starts."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6350,7 +6226,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicWhereAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6402,6 +6279,14 @@
         {
           "error_id": "idempotency-key-mismatch",
           "condition": "The operationId was previously submitted with a different key set."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "An entry key exceeds LatticeOptions.MaxKeyLength or an entry value exceeds LatticeOptions.MaxValueSizeBytes; checked before the precondition is evaluated and before the saga starts."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6420,7 +6305,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicWhereAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicWhereAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6462,7 +6348,7 @@
         },
         {
           "error_id": "argument-exception",
-          "condition": "operationId is null, empty, whitespace, or contains '/'; or entries contains duplicate keys or null values."
+          "condition": "operationId is null, empty, whitespace, or contains '/'; or entries contains duplicate keys or null values; or an upsert key exceeds LatticeOptions.MaxKeyLength or an upsert value exceeds LatticeOptions.MaxValueSizeBytes; the batch is refused before its saga starts."
         },
         {
           "error_id": "invalid-operation",
@@ -6475,6 +6361,10 @@
         {
           "error_id": "idempotency-key-mismatch",
           "condition": "The operationId was previously submitted with a different key set."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "A locally-authored batch reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; checked once per call before the saga starts, so the batch is admitted or refused as a whole."
         }
       ],
       "retry": {
@@ -6493,7 +6383,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyAtomicAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyAtomicAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6540,37 +6431,21 @@
         {
           "error_id": "quota-exceeded",
           "condition": "A locally-authored write reaches a configured MaxLiveKeys or MaxEstimatedBytes cap; replication and prepared saga apply paths bypass this guard."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "A key exceeds LatticeOptions.MaxKeyLength or a value exceeds LatticeOptions.MaxValueSizeBytes; every entry is checked on entry before any shard work. The check runs before the predicate is evaluated."
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetManyWherePredicateAsync"
+        "safe": false,
+        "policy": "Not safe after an ambiguous failure because a retry re-evaluates the predicate against current committed values and every matched entry is committed as a fresh LWW write with a new HLC.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#SetManyWherePredicateAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetManyWherePredicateAsync"
+        "idempotent": false,
+        "basis": "The method has no operation id or LatticeIdempotencyContext wrapper and CommitSetManyAsync stamps each matched entry with a new HybridLogicalClock.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#CommitSetManyAsync"
       },
       "concurrency": {
         "rule": "Not atomic; shard fan-out may leave a half-applied batch on partial failure.",
@@ -6578,7 +6453,8 @@
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetManyWherePredicateAsync",
-        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyWherePredicateAsync"
+        "src/lattice/BPlusTree/Grains/LatticeGrain.cs#SetManyWherePredicateAsync",
+        "docs/lattice/configuration.md"
       ]
     },
     {
@@ -6615,43 +6491,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetPublishEventsEnabledAsync"
+        "safe": true,
+        "policy": "Retry after an ambiguous failure is safe because the registry upsert stores the same tree publish-events override again.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetPublishEventsAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetPublishEventsEnabledAsync"
+        "idempotent": true,
+        "basis": "Repeating the call with the same argument leaves the registry entry with the same PublishEvents override.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetPublishEventsAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetPublishEventsEnabledAsync"
+        "rule": "LatticeRegistryGrain is a non-reentrant singleton whose mutating members are not AlwaysInterleave, so each publish-events upsert serializes and concurrent configuration writes resolve by last writer.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetPublishEventsAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetPublishEventsEnabledAsync",
@@ -6724,13 +6575,8 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SetAsync"
+        "rule": "The TTL overload uses the same AlwaysInterleave leaf SetAsync contract as a normal set, with Orleans-serialized HLC tick and LWW merge plus split-gate serialization, and stores the absolute expiry in the LWW value.",
+        "source": "src/lattice/BPlusTree/IBPlusLeafGrain.cs#SetAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SetAsync",
@@ -6792,43 +6638,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SnapshotAsync"
+        "safe": "conditional",
+        "policy": "Retry the same destination, mode and sizing only when the caller treats an in-progress no-op or a destination-already-exists InvalidOperationException as the prior attempt winning; different parameters while in progress throw.",
+        "source": "src/lattice/BPlusTree/Grains/TreeSnapshotGrain.cs#StartSnapshotAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SnapshotAsync"
+        "idempotent": "conditional",
+        "basis": "A duplicate call with the same parameters is a no-op while snapshot state is InProgress, but after completion or destination registration the call is rejected instead of returning a memoized success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeSnapshotGrain.cs#StartSnapshotAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#SnapshotAsync"
+        "rule": "TreeSnapshotGrain is a persistent coordinator keyed by source tree; it rejects different parameters while InProgress and persists InProgress and phase before shard side effects.",
+        "source": "src/lattice/BPlusTree/Grains/TreeSnapshotGrain.cs#StartSnapshotAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#SnapshotAsync",
@@ -6972,43 +6793,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#UndoResizeAsync"
+        "safe": "conditional",
+        "policy": "Retrying the same undo is safe while resize state remains InProgress or Complete; after a successful undo the InvalidOperationException that no resize exists is the benign terminal condition.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#UndoResizeAsync"
+        "idempotent": "conditional",
+        "basis": "UndoResizeAsync can be re-driven while the persisted resize state still names work to undo, but after ResetResizeState is written a repeat throws that no resize exists.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#UndoResizeAsync"
+        "rule": "TreeResizeGrain persists a resize state machine and reserves the tree alias with BeginAliasChangeAsync before undo, fencing alias mutations while undo runs.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#UndoResizeAsync",
@@ -7048,43 +6844,18 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "policy": {
-          "status": "uncertain",
-          "reason": "Retry safety is not documented for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#WarmUpAsync"
+        "safe": true,
+        "policy": "Retrying repeats read-authorized shard activation probes; in-flight probes are not cancelled but re-probing the same shard only warms it again.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.WarmUp.cs#WarmUpAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "basis": {
-          "status": "uncertain",
-          "reason": "The source does not state idempotency for this method.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#WarmUpAsync"
+        "idempotent": true,
+        "basis": "The method writes no tree data and only pre-activates shard and root grains, so repeating it leaves tree contents and configuration unchanged.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.WarmUp.cs#WarmUpAsync"
       },
       "concurrency": {
-        "rule": {
-          "status": "uncertain",
-          "reason": "The source does not state a concurrency rule beyond ordinary Orleans grain serialization.",
-          "required_source": "src/lattice/BPlusTree/ILattice.cs",
-          "issue": 3634
-        },
-        "source": "src/lattice/BPlusTree/ILattice.cs#WarmUpAsync"
+        "rule": "WarmUpAsync snapshots routing, caps fan-out with SemaphoreSlim to MaxWarmUpParallelism, and each shard probe uses ShardActivationRetry against IShardRootGrain.WarmUpAsync.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.WarmUp.cs#WarmUpAsync"
       },
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#WarmUpAsync",
@@ -7260,6 +7031,14 @@
       "retryable": false,
       "meaning": "Opening a snapshot cursor would exceed the configured replay entry budget.",
       "source": "src/lattice/LatticeSnapshotReplayBudgetExceededException.cs#LatticeSnapshotReplayBudgetExceededException"
+    },
+    {
+      "id": "state-write-failed",
+      "type": "LatticeStateWriteFailedException",
+      "grpc_status": null,
+      "retryable": "conditional",
+      "meaning": "A saga state write kept losing its optimistic-concurrency check after bounded re-attach; Conflict is set and the saga resumes when the same batch is re-submitted under the same operationId.",
+      "source": "src/lattice/LatticeStateWriteFailedException.cs#LatticeStateWriteFailedException"
     },
     {
       "id": "wal-provider-missing",

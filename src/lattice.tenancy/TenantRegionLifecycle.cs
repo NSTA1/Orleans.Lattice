@@ -4,9 +4,9 @@ namespace Orleans.Lattice.Tenancy;
 /// The single source of truth for the per-tenant region-residency lifecycle: the
 /// legal <see cref="TenantRegionStatus"/> transitions, the classification of a
 /// status as resident or online, and the last-resident-region guard. Both the
-/// tenant-admin residency operations (which initiate an add or a remove) and the
-/// internal backfill/drain promotion driver validate every transition here, so the
-/// rules live in exactly one place.
+/// tenant-admin residency operations (which initiate an add or a remove) and any
+/// explicit backfill/drain promotion caller validate every transition here, so
+/// the rules live in exactly one place.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -72,7 +72,7 @@ public static class TenantRegionLifecycle
     /// <summary>
     /// Returns <c>true</c> when a forward promotion from <paramref name="from"/> to
     /// <paramref name="to"/> is one of the legal single-step lifecycle advances the
-    /// backfill/drain driver may apply.
+    /// backfill/drain promotion caller may apply.
     /// </summary>
     /// <param name="from">The current status.</param>
     /// <param name="to">The candidate next status.</param>
@@ -88,7 +88,7 @@ public static class TenantRegionLifecycle
         };
 
     /// <summary>
-    /// Computes the single legal forward promotion the backfill/drain driver applies
+    /// Computes the single legal forward promotion a backfill/drain caller applies
     /// from <paramref name="current"/>: <see cref="TenantRegionStatus.Provisioning"/>
     /// -&gt; <see cref="TenantRegionStatus.Backfilling"/> -&gt;
     /// <see cref="TenantRegionStatus.Online"/> on the add path, and
@@ -98,7 +98,8 @@ public static class TenantRegionLifecycle
     /// <c>false</c> for a terminal or non-transitional status
     /// (<see cref="TenantRegionStatus.None"/>, <see cref="TenantRegionStatus.Online"/>,
     /// <see cref="TenantRegionStatus.Removed"/>), leaving <paramref name="next"/> equal
-    /// to <paramref name="current"/> so the driver is an idempotent no-op there.
+    /// to <paramref name="current"/> so repeated promotion attempts are idempotent
+    /// no-ops there.
     /// </summary>
     /// <param name="current">The region's current status.</param>
     /// <param name="next">The promoted status when this returns <c>true</c>; otherwise <paramref name="current"/>.</param>

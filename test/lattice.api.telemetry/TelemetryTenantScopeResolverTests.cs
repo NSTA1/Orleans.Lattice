@@ -74,6 +74,57 @@ public sealed class TelemetryTenantScopeResolverTests
     }
 
     [Test]
+    public async Task The_absent_tenancy_resolver_answers_the_asynchronous_contract_too()
+    {
+        // The scope resolver only ever takes its synchronous answer, so the asynchronous half
+        // of the interface is never reached through the facade. It is still part of the
+        // implemented contract, and a host holding the resolver directly may await it.
+        var resolved = await NullTelemetryTenantContext.Instance.ResolveCurrentAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved, Is.EqualTo(TenantId.Default));
+            Assert.That(NullTelemetryTenantContext.Instance.TryResolveCurrent(out var synchronous), Is.True);
+            Assert.That(synchronous, Is.EqualTo(resolved),
+                "both halves of the contract must agree, or the path taken would change the answer");
+        });
+    }
+
+    [Test]
+    public async Task ResolveAsync_validates_a_widening_request_taken_through_the_asynchronous_path()
+    {
+        // The warm path answers a widening request by calling the validator directly; the
+        // asynchronous path has to reach the same validator after awaiting the tenant. Every
+        // existing widening case resolves synchronously, so the async path only ever ran for
+        // the default visibility, which returns before any validation happens.
+        var scope = await Resolver(isOperator: true, resolvesSynchronously: false)
+            .ResolveAsync(TelemetryTenantVisibility.AllTenants);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.EffectiveVisibility, Is.EqualTo(TelemetryTenantVisibility.AllTenants));
+            Assert.That(scope.IsCrossTenant, Is.True);
+            Assert.That(scope.WasDowngraded, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task ResolveAsync_downgrades_an_unvalidated_widening_taken_through_the_asynchronous_path()
+    {
+        // Anti-vacuity for the case above: the async path must reach the validator and be
+        // refused by it, not merely honour whatever visibility it was handed.
+        var scope = await Resolver(isOperator: false, resolvesSynchronously: false)
+            .ResolveAsync(TelemetryTenantVisibility.AllTenants);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.EffectiveVisibility, Is.EqualTo(TelemetryTenantVisibility.ActiveTenant));
+            Assert.That(scope.TenantId, Is.EqualTo("acme"));
+            Assert.That(scope.WasDowngraded, Is.True);
+        });
+    }
+
+    [Test]
     public void ResolveAsync_refuses_a_caller_that_cannot_be_attributed_to_a_tenant()
     {
         var resolver = new TelemetryTenantScopeResolver(

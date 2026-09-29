@@ -76,7 +76,10 @@ the absence explained in the rail's capabilities affordance rather than left as
 a silent gap. Any other transport fault, including an unreachable endpoint or a
 console not yet configured with one, withholds the grant instead: the area
 resolves `Denied` for a signed-in caller and `AuthenticationRequired` for an
-anonymous one, and is re-probed when the connection status next changes. Inside
+anonymous one, and is re-probed when the connection status next changes. A probe
+the server rejects as `Unauthenticated` resolves `AuthenticationRequired` even for
+a caller the console believes is signed in, because the server did not accept the
+credential. Inside
 the area, each action - setting or clearing a policy, changing or advancing the
 version config, running remediation, and the read-only compliance scan -
 disables from the **per-tree capability snapshot** the panel requests when a

@@ -9,12 +9,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// ahead of the record's fence that the lock did not issue and is not holding, or
 /// wrote from a region other than the one the claim was taken in.
 /// <para>
-/// It derives from <see cref="McpException"/> so the refusal travels the protocol's
-/// own error channel exactly as every other caller error on this surface does,
+/// It derives from <see cref="McpException"/> so the refusal is projected as the
+/// protocol's own tool error instead of being translated into a generic host fault,
 /// while remaining a distinct type a host or a test can catch and attribute without
-/// parsing a message. The structured fields carry the fencing state that produced
-/// the refusal, so an agent can decide whether to re-claim or to abandon the item
-/// without a second round trip.
+/// parsing a message. Unlike the classified validation helpers on this surface, this
+/// exception is not counted on the shared MCP client-error counter. The structured
+/// fields carry the fencing state that produced the refusal, so an agent can decide
+/// whether to re-claim or to abandon the item without a second round trip.
 /// </para>
 /// </summary>
 /// <remarks>

@@ -162,6 +162,7 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | Exception | gRPC status | Why |
 |---|---|---|
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller lacks the tier the verb requires. A refusal by the transport authorizer is also `PermissionDenied`. |
+| `LatticeTreeOwnershipDeniedException` | `PermissionDenied` | The registered [tree-ownership guard](../lattice/tree-registry.md#ownership-bounded-aliasing) refused an alias change, for example a `SetTreeAlias` between trees an installed app owns on one side only; the status message carries the guard's reason. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the call: the asserted tenant failed validation against the caller's membership, or, under an asserted tenant, the call named a `sys-` tree or a malformed `t/` id. A call that asserts no tenant is not refused here; it resolves the default tenant. |
 | `KeyNotFoundException` | `NotFound` | The named materialised view or tag index is not registered. |
 | `TreeNotEmptyException` | `FailedPrecondition` | A bulk-load session was opened against a tree that already holds data. |

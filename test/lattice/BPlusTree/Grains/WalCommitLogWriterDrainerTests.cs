@@ -4,6 +4,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -54,20 +55,16 @@ public class WalCommitLogWriterDrainerTests
     /// Polls <paramref name="condition"/> until it holds, failing with
     /// <paramref name="because"/> if it never does inside
     /// <paramref name="timeoutMs"/>.
+    /// <para>
+    /// Routed to the shared <see cref="TestPoll"/> so this fixture and
+    /// <see cref="WalCommitLogWriterDrainTests"/> - which carried a
+    /// byte-identical private copy - cannot drift apart, and so a condition
+    /// that becomes true during the final sampling delay is still observed.
+    /// </para>
     /// </summary>
-    private static async Task WaitUntilAsync(Func<bool> condition, string because, int timeoutMs = 10_000)
-    {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        while (!condition())
-        {
-            if (stopwatch.ElapsedMilliseconds > timeoutMs)
-            {
-                Assert.Fail($"Timed out after {timeoutMs} ms waiting for {because}.");
-            }
-
-            await Task.Delay(5);
-        }
-    }
+    private static Task WaitUntilAsync(Func<bool> condition, string because, int timeoutMs = 10_000) =>
+        TestPoll.UntilAsync(
+            condition, because, TimeSpan.FromMilliseconds(timeoutMs), TimeSpan.FromMilliseconds(5));
 
     /// <summary>
     /// Waits until the held caller has provably filled the single

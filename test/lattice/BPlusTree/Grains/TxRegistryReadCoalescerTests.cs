@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -298,18 +300,19 @@ public class TxRegistryReadCoalescerTests
         return (new TxRegistryReadCoalescer(factory), factory, gate);
     }
 
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow + Timeout;
-        while (!condition())
-        {
-            if (DateTime.UtcNow > deadline)
-            {
-                Assert.Fail("Condition not reached within the timeout.");
-            }
-
-            await Task.Delay(5);
-        }
-    }
+    /// <summary>
+    /// The fixture's bounded-poll barrier, routed to the shared
+    /// <see cref="TestPoll"/>. Two things change against the private copy this
+    /// replaces: the deadline is monotonic rather than
+    /// <see cref="DateTime"/>-based, so a wall-clock step cannot move it under a
+    /// waiting barrier; and a timeout now quotes the caller's own source text
+    /// for <paramref name="condition"/> instead of reporting an anonymous
+    /// "condition not reached", which across the dozen call sites here named
+    /// nothing at all.
+    /// </summary>
+    private static Task WaitUntilAsync(
+        Func<bool> condition,
+        [CallerArgumentExpression(nameof(condition))] string? because = null) =>
+        TestPoll.UntilAsync(
+            condition, because ?? "the polled condition", Timeout, TimeSpan.FromMilliseconds(5));
 }

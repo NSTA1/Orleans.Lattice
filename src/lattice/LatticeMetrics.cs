@@ -48,12 +48,14 @@ public static class LatticeMetrics
     public const string MeterName = "orleans.lattice";
 
     /// <summary>
-    /// Tag key for the logical tree id. Lifecycle-created physical copies use
-    /// their registry <c>DerivedFrom</c> identity, keeping series stable through
-    /// resize, shadow restore/revert and schema-remediation cutovers. Maintenance
-    /// on a retired or discarded copy remains attributed to that logical owner.
-    /// Independent trees without provenance retain their own identity; arbitrary
-    /// aliases do not rewrite creation-time ownership.
+    /// Tag key for the tree identity associated with a series. Most grain-side
+    /// series use the logical tree id so an alias swap keeps the same series.
+    /// Some surfaces instead report the physical or addressed id they operate on:
+    /// WAL garbage collection, WAL storage providers, storage-usage and
+    /// admission gauges, saturation refusals, and several leaf-level replay,
+    /// scan-stall, zero-prime, and frozen-baseline series. Independent trees
+    /// without provenance retain their own identity; arbitrary aliases do not
+    /// rewrite creation-time ownership.
     /// </summary>
     public const string TagTree = "tree";
 
@@ -310,9 +312,9 @@ public static class LatticeMetrics
     /// Deliberately DISTINCT from <see cref="TagReason"/>. The two carry
     /// unrelated value vocabularies - this one names how a grain was torn down,
     /// while <see cref="TagReason"/> on
-    /// <see cref="LeafActivationFailures"/> names how an activation failed
-    /// (<c>canceled</c> / <c>faulted</c>). Sharing one key would invite a
-    /// reader to join two series that have no value in common.
+    /// <see cref="LeafActivationFailures"/> names the activation-failure arms
+    /// declared below. Sharing one key would invite a reader to join two series
+    /// that have no value in common.
     /// </para>
     /// </summary>
     public const string TagDeactivationReason = "deactivation_reason";
@@ -935,19 +937,30 @@ public static class LatticeMetrics
             description: "Leaves observed over the MaxLeafBytes bound, by whether they could be split.");
 
     /// <summary>
-    /// Histogram of per-step latency on the leaf commit path
-    /// (build-and-WAL-append, in-memory Apply, observer-publish,
-    /// parent-digest publish). Tagged with <see cref="TagStep"/> =
+    /// Histogram of per-step latency on the leaf foreground commit path
+    /// (build-and-WAL-append, in-memory apply, observer-publish, and
+    /// projection-digest hand-off). Tagged with <see cref="TagStep"/> =
     /// <c>wal</c>, <c>apply</c>, <c>observer</c>, or <c>digest</c> so
     /// operators can attribute total commit latency to its constituent
-    /// stages. The <c>digest</c> step covers the awaited cross-grain
-    /// <c>OnChildDigestPublishedAsync</c> RPC to the parent internal
-    /// node emitted from every foreground write path (single-key
-    /// <c>SetAsync</c> / <c>DeleteAsync</c>, per-leaf
-    /// <c>DeleteRangeAsync</c>); cold / structural digest publishes
-    /// (leaf-split topology, projection-checkpoint flush, saga
-    /// terminal) are deliberately excluded so the histogram remains
-    /// attributable to the per-write pipeline.
+    /// stages. Recorded paths include single-key <c>SetAsync</c> /
+    /// <c>DeleteAsync</c>, per-leaf batched <c>SetManyAsync</c> and
+    /// conditional-batch commits, per-leaf <c>DeleteRangeAsync</c>, and saga
+    /// prepare writes that ride the same set paths.
+    /// <para>
+    /// The <c>apply</c> step covers the in-memory merge plus any relocation of
+    /// out-of-span rows or write-triggered leaf split; the merge itself does
+    /// not persist grain state. The <c>digest</c> step hands the write's
+    /// projection-digest change upward. With the default positive
+    /// <c>DigestCoalescingWindowMs</c> it schedules, or joins, a publish the
+    /// leaf sends after the window outside the commit; it includes the awaited
+    /// cross-grain publish itself only when that window is <c>0</c>. When the
+    /// write leaves the digest unchanged, the leaf has no parent, or digest
+    /// maintenance is off, the step instead covers the best-effort byte-footprint
+    /// publish. Structural digest publishes from checkpoint flushes, saga
+    /// terminals, tombstone-reap compaction, and cross-shard merges run outside
+    /// these paths, while a split triggered by the write runs inside
+    /// <c>apply</c>, including its inline digest publish.
+    /// </para>
     /// </summary>
     public static readonly Histogram<double> LeafCommitDuration =
         Meter.CreateHistogram<double>("orleans.lattice.leaf.commit.duration", unit: "ms",
@@ -1115,8 +1128,8 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of the number of fan-in permits this silo held at the moment a
-    /// gated registry round trip was dispatched - the width the bound in
-    /// <c>RegistryFanInGate.GlobalMaxConcurrentReads</c> actually caps.
+    /// gated registry round trip was dispatched - the width this silo's share of
+    /// the cluster-wide registry read bound actually caps.
     /// <para>
     /// <b>Why this is not <see cref="RegistryCallInFlight"/>.</b> That instrument
     /// counts calls executing inside the registry singleton's grain body, summed
@@ -1124,15 +1137,17 @@ public static class LatticeMetrics
     /// through the gate at all (an Orleans client addressing
     /// <c>ILatticeRegistry</c> directly, for one). This instrument counts permits
     /// held by one silo's gate. They are different populations with different
-    /// ceilings, and only this one is bounded by
-    /// <c>GlobalMaxConcurrentReads</c>. Reading the registry-side width against
-    /// that constant compares two quantities that were never the same number, and
-    /// a low reading there is not evidence that the bound has room.
+    /// ceilings, and only this one is bounded by this silo's share of the
+    /// cluster-wide read bound. Reading the registry-side width against that
+    /// bound compares two quantities that were never the same number, and a low
+    /// reading there is not evidence that the gate has room.
     /// </para>
     /// <para>
     /// <b>The recorded value INCLUDES the dispatch being recorded</b>, so it runs
-    /// 1..<c>GlobalMaxConcurrentReads</c> and a recorded value equal to that
-    /// constant means the ceiling was actually reached. This deliberately differs
+    /// from <c>1</c> to this silo's current share of the cluster-wide bound; that
+    /// share is the global bound divided by the live silo count and floored at
+    /// one. A recorded value equal to the share means the ceiling was actually
+    /// reached. This deliberately differs
     /// from the exclude-the-arrival convention of <see cref="RegistryCallInFlight"/>
     /// and <see cref="LeafCommitInFlight"/>: under that convention a fully
     /// saturated gate would top out one below its own bound, and a saturated
@@ -1145,7 +1160,8 @@ public static class LatticeMetrics
     /// Read the distribution, never the mean: permit occupancy is bursty, so a
     /// window mean is dominated by idle time and measures something other than
     /// the peak. The actionable reading is the share of dispatches at the
-    /// ceiling - <c>_bucket{le="16"}</c> against the total count.
+    /// ceiling: the total count minus the bucket immediately below this silo's
+    /// current share, divided by the total count.
     /// </para>
     /// </summary>
     public static readonly Histogram<int> RegistryAdmissionInFlight =
@@ -4199,7 +4215,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafActivationFailures =
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation.failures", unit: "{activation}",
-            description: "Leaf activations that threw out of OnActivateAsync, tagged by tree, activation temperature and reason (canceled/canceled_awaiting_permit/faulted). LOWER BOUND: faults raised before the guarded replay region, and outright process kills, are not counted.");
+            description: "Leaf activations that threw out of OnActivateAsync, tagged by tree, activation temperature and reason (canceled/canceled_awaiting_permit/canceled_resolving_options/canceled_rehydrating_snapshot/faulted/refused_replay_admission). LOWER BOUND: faults raised before the guarded replay region, and outright process kills, are not counted.");
 
     /// <summary>
     /// Counter of leaf activations cancelled while COLD that carried the leaf's
@@ -4578,8 +4594,9 @@ public static class LatticeMetrics
     /// <see cref="TagOutcome"/> = <c>recovered</c> on
     /// <see cref="LeafSplitAttempts"/>: a division whose intent was already
     /// durable - left half-finished by an earlier attempt that threw, by a
-    /// deactivation, or by a crash - was resumed by the recovery path and ran
-    /// to completion. Issue #2860.
+    /// deactivation, or by a crash - was completed later, either by the recovery
+    /// path before the next write was admitted or by an over-capacity check that
+    /// resumed the half-finished division. Issue #2860.
     /// <para>
     /// Distinct from <see cref="LeafSplitDivided"/> so that a recovered
     /// completion is never mistaken for a fresh one, and deliberately NOT
@@ -9497,9 +9514,9 @@ public static class LatticeMetrics
             description: "Per-WAL-shard pending-segment count sampled at every StartFlush entry.");
 
     /// <summary>
-    /// Count of <c>TreeReshardGrain.ReshardAsync</c> invocations that
-    /// progressed past argument / interlock validation and started a
-    /// reshard coordinator. Tagged with <see cref="TagTree"/>.
+    /// Count of reshard requests that progressed past argument / interlock
+    /// validation and started a reshard coordinator. Tagged with
+    /// <see cref="TagTree"/>.
     /// <para>
     /// Diagnostic intent: the residual WAL wedge is correlated with the
     /// <c>reshard ... REJECTED (Forwarding failed)</c> log storm
@@ -9516,40 +9533,40 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> ShardRootReshardInitiated =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.initiated", unit: "{reshard}",
-            description: "Count of TreeReshardGrain.ReshardAsync invocations that started a reshard coordinator.");
+            description: "Count of reshard requests that started a reshard coordinator.");
 
     /// <summary>
-    /// Count of <c>TreeReshardGrain.ReshardAsync</c> invocations that
-    /// were rejected at the Lattice layer before starting a coordinator.
-    /// Tagged with <see cref="TagTree"/> and a <c>reason</c> tag
-    /// enumerating the rejection cause (e.g. <c>argument_out_of_range</c>,
+    /// Count of reshard requests that were rejected at the Lattice layer
+    /// before starting a coordinator. Tagged with <see cref="TagTree"/> and a
+    /// <c>reason</c> tag enumerating the rejection cause (e.g.
+    /// <c>argument_out_of_range_min</c>, <c>argument_out_of_range_max</c>,
     /// <c>resize_in_flight</c>, <c>state_write_failed</c>).
     /// <para>
     /// Excludes Orleans-side message-routing rejections, which the
     /// Orleans runtime logs as "Forwarding failed" but does not surface
-    /// to <c>TreeReshardGrain</c> as a catchable exception inside
-    /// <c>ReshardAsync</c>. See <see cref="ShardRootReshardInitiated"/>.
+    /// to the reshard coordinator as a catchable exception inside the request.
+    /// See <see cref="ShardRootReshardInitiated"/>.
     /// </para>
     /// </summary>
     public static readonly Counter<long> ShardRootReshardRejected =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.rejected", unit: "{rejection}",
-            description: "Count of TreeReshardGrain.ReshardAsync rejections, tagged by reason.");
+            description: "Count of reshard requests rejected before a coordinator started, tagged by reason.");
 
     /// <summary>
-    /// Count of <c>TreeReshardGrain</c> coordinator completions that
-    /// reached the terminal phase successfully. Tagged with
-    /// <see cref="TagTree"/>. The difference between this and
+    /// Count of reshard coordinator completions that reached the terminal
+    /// phase successfully. Tagged with <see cref="TagTree"/>. The difference
+    /// between this and
     /// <see cref="ShardRootReshardInitiated"/> over a window is the
     /// number of reshards still in flight or that failed mid-coordinator.
     /// </summary>
     public static readonly Counter<long> ShardRootReshardCompleted =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.reshard.completed", unit: "{reshard}",
-            description: "Count of TreeReshardGrain coordinator completions.");
+            description: "Count of reshard coordinator completions.");
 
     /// <summary>
     /// Histogram observation of the reshard in-flight state for a tree,
-    /// emitted at every <c>ReshardAsync</c> entry as either <c>0</c>
-    /// (idle) or <c>1</c> (a reshard is already in progress for this
+    /// emitted at every reshard request entry as either <c>0</c> (idle) or
+    /// <c>1</c> (a reshard is already in progress for this
     /// tree). Tagged with <see cref="TagTree"/>. Bridges the gap left
     /// by not registering an <c>ObservableGauge</c>: a non-zero
     /// observation immediately preceding the wedge onset is the same
@@ -9557,7 +9574,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<long> ShardRootReshardInFlight =
         Meter.CreateHistogram<long>("orleans.lattice.shard_root.reshard.in_flight", unit: "{reshard}",
-            description: "Per-tree reshard in-flight (0/1) observation, recorded at ReshardAsync entry.");
+            description: "Per-tree reshard in-flight (0/1) observation, recorded at reshard request entry.");
 
     /// <summary>
     /// Count of <c>WalCommitLogWriter</c> append dispatches that started
@@ -9732,22 +9749,31 @@ public static class LatticeMetrics
     public const string SaturationRefusalsName = "orleans.lattice.saturation.refusals";
 
     /// <summary>
-    /// Count of saturation refusals, one per refusal, at every seam that
-    /// raises <see cref="LatticeSaturatedException"/>, and at the one seam
-    /// that now reports its refusal as a result instead: a starvation drive
-    /// refused a replay permit, which returns
-    /// <c>LeafStarvationDriveOutcome.AdmissionRefused</c> (issue #3761).
-    /// Tagged with <see cref="TagTree"/>, <see cref="TagSaturationSource"/>
-    /// and the tenant.
+    /// Count of saturation refusals raised or returned by each refusing seam,
+    /// not necessarily the exceptions a caller observes. Most seams raise
+    /// <see cref="LatticeSaturatedException"/>; a starvation drive refused a
+    /// replay permit now reports a refused result instead (issue #3761). Tagged
+    /// with <see cref="TagTree"/>, <see cref="TagSaturationSource"/> and the
+    /// tenant.
     /// <para>
     /// <b>Why it exists.</b> The runtime's own exception counter reported
     /// about 490 refusals a minute with no way to say which seam raised
     /// them, while every per-seam counter read zero. Each seam already
     /// knows its <see cref="LatticeSaturationSource"/>, so the source is
-    /// recorded here at the refusal itself rather than reconstructed from
-    /// logs. Every refusal is recorded through
-    /// <see cref="RecordSaturationRefusal"/> immediately before the seam
-    /// throws or returns its refused result.
+    /// recorded here at the refusal itself rather than reconstructed from logs.
+    /// Every refusal is recorded through <see cref="RecordSaturationRefusal"/>
+    /// immediately before the seam throws or returns its refused result. A saga
+    /// quiesce-budget refusal is recorded once where it is raised and again by
+    /// the saga saturation fast path, so one caller-visible refusal can add two
+    /// samples under <c>atomic_write_saga</c>.
+    /// </para>
+    /// <para>
+    /// The <see cref="TagTree"/> value is the id held at the refusing seam, not
+    /// forcibly the resolved logical id. WAL admission and replay-permit
+    /// admission can therefore report a physical copy id on an aliased tree,
+    /// and the saga fast path inherits the id from the refusal it wraps. The
+    /// <c>unspecified</c> source arm is mapped for completeness but no current
+    /// recording site emits it.
     /// </para>
     /// <para>
     /// Not primed: the tree id is a runtime value, so a prime would need
@@ -9758,7 +9784,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> SaturationRefusals =
         Meter.CreateCounter<long>(SaturationRefusalsName, unit: "{refusal}",
-            description: "Count of saturation refusals by the admission seam (source) that refused them, whether raised as LatticeSaturatedException or returned as a refused result.");
+            description: "Count of saturation refusals raised or returned by the refusing seam (source); the tree tag is the id held at that seam.");
 
     /// <summary>
     /// Records one saturation refusal from <paramref name="source"/> on

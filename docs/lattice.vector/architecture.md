@@ -170,6 +170,13 @@ over the corpus rather than one per checkpoint, and no complete committed chunk 
 rewritten; the durable cursor lags by less than a chunk, which the next step
 re-consumes.
 
+The identifier mapping follows the same order. A build slice assigns keys as it
+ingests but buffers their mapping records, and writes them in one batch before
+the slice's checkpoint rather than one write per vector. Because that batch lands
+first, the mapping can run ahead of the committed cells but never behind them;
+a batch that fails part-applied leaves only mappings no committed cell refers to
+yet, and its retry rewrites the same identifiers to the same keys.
+
 A replacement or a removal during the build - one the build streams itself, or an
 `UpsertAsync` that replaces a vector or a `RemoveAsync` that retires one in the
 meantime - costs the cell that property, because it backfills or re-appends

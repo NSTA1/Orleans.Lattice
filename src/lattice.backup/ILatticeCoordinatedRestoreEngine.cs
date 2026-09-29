@@ -65,6 +65,7 @@ public interface ILatticeCoordinatedRestoreEngine
     /// <exception cref="ArgumentException"><paramref name="request"/> is not a shadow-cutover request.</exception>
     /// <exception cref="LatticeRestoreValidationException">The backup fails pre-apply validation.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - on a cross-tree retarget - to back up the manifest's captured source scope.</exception>
+    /// <exception cref="InvalidOperationException">The target tree cannot reserve an alias change because another alias-changing operation or a delete is in progress.</exception>
     Task<LatticeRestoreResult> BuildShadowAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
@@ -80,6 +81,10 @@ public interface ILatticeCoordinatedRestoreEngine
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="ArgumentNullException"><paramref name="shadow"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="shadow"/> is not a shadow-cutover build result.</exception>
+    /// <exception cref="LatticeRestoreValidationException">The supplied physical tree ids do not belong to the target tree.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    /// <exception cref="InvalidOperationException">The target tree cannot change aliases because another alias-changing operation or a delete is in progress.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias swap.</exception>
     Task CommitShadowAsync(
         LatticeRestoreResult shadow,
         CancellationToken cancellationToken = default);
@@ -93,6 +98,9 @@ public interface ILatticeCoordinatedRestoreEngine
     /// <param name="shadowPhysicalTreeId">The shadow physical tree id to delete. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="ArgumentException"><paramref name="shadowPhysicalTreeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeRestoreValidationException"><paramref name="shadowPhysicalTreeId"/> is not a restore shadow.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the owning target tree's scope.</exception>
+    /// <exception cref="InvalidOperationException">The shadow or owning tree refuses lifecycle work because a conflicting alias change or delete is in progress.</exception>
     Task DeleteShadowAsync(
         string shadowPhysicalTreeId,
         CancellationToken cancellationToken = default);

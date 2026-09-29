@@ -52,8 +52,8 @@ public sealed class TenantRecord
 
     /// <summary>
     /// The LWW-element-map of per-region lifecycle statuses, keyed by region id.
-    /// Written by the tenant-admin residency operations and the backfill/drain
-    /// promotion driver. A region absent from this map is
+    /// Written by the tenant-admin residency operations and by explicit lifecycle
+    /// promotion calls from trusted infrastructure. A region absent from this map is
     /// <see cref="TenantRegionStatus.None"/>.
     /// </summary>
     [Id(7)]

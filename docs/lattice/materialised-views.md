@@ -350,10 +350,11 @@ declaration and carry no runtime-provider constraint.
 
 A view tails its source by the source's logical id, but the maintainer binds to
 the source's current *physical* tree id - the effective id its registry alias
-resolves to. A restore or failover can repoint that alias at a new physical tree
+resolves to. A resize, a shadow-cutover restore, a schema remediation or an
+administrative alias change can repoint that alias at a new physical tree
 underneath a live view. When it does, the maintainer rebuilds the view from the
 new physical source and rebinds its tail: a WAL tail alone can never retract a key
-the restored source never had, so a rebuild is required for correctness. A view
+the new source never had, so a rebuild is required for correctness. A view
 that first activates over a source whose alias already resolves to a different
 physical tree likewise builds from that tree's current state rather than
 replaying its log.
@@ -967,7 +968,7 @@ row notes its rule:
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. See [Replication modes](#replication-modes). |
-| `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. When set it must be non-empty, and `ReplicationMode` must be `ShipView`. |
+| `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. When set it must not be empty or whitespace, and `ReplicationMode` must be `ShipView`. |
 | `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. A non-positive value falls back to the default. Has no effect when `MaxLagBudget` is 0. |
 | `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. Only engages while the source is actually saturated. |

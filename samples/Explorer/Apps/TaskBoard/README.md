@@ -10,7 +10,7 @@ app's one tree, `tasks`.
 
 | Path | Role |
 |------|------|
-| `src/manifest.json` | The manifest: one tree, the `viewer` and `editor` roles, the presentation, and the UI bundle with its digests and bridge operations. |
+| `src/manifest.json` | The manifest: one tree, declared for replication, the `viewer` and `editor` roles, the presentation, and the UI bundle with its digests and bridge operations. |
 | `src/ui/index.html` | The entry fragment, inserted into the frame's body. |
 | `src/ui/app.css` | The app's stylesheet, layered on the AppKit kit stylesheet (`lattice-app.css`). |
 | `src/ui/app.mjs` | The app's one ES module. It is self-contained and talks to the Explorer only through `globalThis.lattice`. |
@@ -43,7 +43,15 @@ or enabled until an administrator does so in the Explorer.
 
 ## Walkthrough
 
-Sign in as the demo administrator (the default), then:
+The walkthrough switches between identities in one run, and the sample keeps
+everything in memory, so start it signed out:
+
+```
+dotnet run --project samples/Explorer/Explorer.csproj -- --sign-in-as none
+```
+
+Sign in as `explorer-admin` (any password) from the console's **Sign in**
+dialog, then:
 
 1. **Find it in the catalogue.** Open **Apps**. The source selector lists
    `in-image` beside **All sources**; choose `in-image` and the **Available**
@@ -54,6 +62,7 @@ Sign in as the demo administrator (the default), then:
    - one tree, `tasks`;
    - two roles, `viewer` (`Read`, `RangeRead`) and `editor` (`Read`,
      `RangeRead`, `Write`, `Delete`), both scoped to `tasks`;
+   - replication of `tasks`, last-writer-wins (see [Tenants](#tenants));
    - six bridge operations for its UI: `context.read`, `data.read`,
      `data.write`, `data.delete`, `nav.sync` and `ui.notify`, the data ones
      limited to `tasks`.
@@ -66,8 +75,8 @@ Sign in as the demo administrator (the default), then:
    `viewer` to the `task-viewers` group. Leave the `visitors` group unbound.
 4. **Install, then enable.** Install records the consent and the bindings;
    enabling the install is what lets role holders open it.
-5. **Open it.** Signed in as a member of `task-editors` (`alice`), open
-   **Apps**, then Task board, then its **Open** tab. The board loads in a
+5. **Open it.** **Sign out**, then sign in as a member of `task-editors`
+   (`alice`), open **Apps**, then Task board, then its **Open** tab. The board loads in a
    sandboxed frame. Add a task, select it, move it between **To do**,
    **Doing** and **Done**, and delete it. Selecting a card updates the address
    line, so the link to a task can be copied and reopened. Switch the theme
@@ -80,6 +89,35 @@ Sign in as the demo administrator (the default), then:
 | `alice` | `task-editors` | `editor` | The full board: add, move and delete controls. |
 | `bob` | `task-viewers` | `viewer` | The same board, read-only. `context.read` reports only `viewer`, so the add, move and delete controls are not shown, and a note says the role cannot change the board. |
 | `carol` | `visitors` | none | Nothing. Task board is not in her apps at all, and its address resolves as not found. |
+
+## Tenants
+
+An app is installed per tenant: each install has its own consent, role
+bindings and lifecycle, and its trees live in that tenant's namespace. The
+manifest's one tree, `tasks`, is `a/task-board/tasks` in the default tenant and
+`t/{tenant}/a/task-board/tasks` in any other.
+
+The manifest also declares `tasks` for replication, last-writer-wins. Declaring
+it enrols nothing by itself: installing and enabling the app enrols that
+install's tree, through the cluster's runtime replication control. On the
+Explorer sample's two-region estate that control is on, so every install's
+`tasks` tree replicates between `east` and `west`; with `--minimal` there is no
+peer and the declaration is inert.
+
+The sample installs the task board in tenant `acme` at startup, the way a
+tenant's own install would be recorded: `editor` bound to `acme-editors`
+(`acme-admin`), and three cards on the board. Its tree,
+`t/acme/a/task-board/tasks`, is listed in **Replication > Enrolled trees** as a
+runtime enrolment, and its link to `west` is live. As the operator, `/t/acme/data`
+lists it as an app tree.
+
+The walkthrough above installs a second, independent copy. Install it from the
+console and it lands in the tenant the cluster resolves for the call. The
+console does not yet send its active tenant to the cluster, so today that is
+the default tenant, whichever tenant the address names; that is also why
+`alice`, `bob` and `carol`, who belong to no tenant, see it. The default tenant's
+copy and acme's copy share nothing: separate consent, separate bindings,
+separate boards.
 
 ## How the UI stays untrusted
 

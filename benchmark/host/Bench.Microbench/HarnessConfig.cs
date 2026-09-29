@@ -14,15 +14,15 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// BenchmarkDotNet <see cref="IConfig"/> tuned for the Orleans.Lattice harness.
 /// <para>
 /// <b>Toolchain.</b> Defaults to <see cref="InProcessEmitToolchain"/> so the BDN
-/// runner does not fork a child process per <c>[Benchmark]</c> &mdash; spawning
-/// a child <c>.exe</c> would re-pay the ~5s Orleans cluster startup cost five
-/// times. With the in-process toolchain the cluster comes up once in
-/// <see cref="LatticeMicroBenchmarks.GlobalSetup"/> and serves all five workloads.
+/// runner does not fork a child process per <c>[Benchmark]</c> - spawning a
+/// child <c>.exe</c> would re-pay the benchmark setup cost per benchmark. With
+/// the in-process toolchain, suites that share <see cref="LatticeMicroBenchmarks"/>
+/// reuse that fixture inside one process.
 /// Set <c>BENCH_MICROBENCH_FIDELITY=full</c> in the environment to switch to the
 /// default forking toolchain when methodology rigour outranks wall-clock budget.
 /// </para>
 /// <para>
-/// <b>Job.</b> Three fidelity levels are recognised via <c>BENCH_MICROBENCH_FIDELITY</c>:
+/// <b>Job.</b> Four fidelity levels are recognised via <c>BENCH_MICROBENCH_FIDELITY</c>:
 /// <list type="bullet">
 ///   <item><c>dry</c> &mdash; <see cref="Job.Dry"/> + <see cref="InProcessEmitToolchain"/>.
 ///     1 warmup, 1 measurement, single iteration. Use for fast smoke-test runs and for
@@ -30,6 +30,9 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 ///     guard. Per-method wall time drops by roughly an order of magnitude vs <c>quick</c>.</item>
 ///   <item><c>quick</c> &mdash; <see cref="Job.ShortRun"/> + <see cref="InProcessEmitToolchain"/>.
 ///     Default. 1 launch, 3 warmup, 3 measurement iterations. Standard cohort fidelity.</item>
+///   <item><c>quick-oop</c> &mdash; <see cref="Job.ShortRun"/> + default forking toolchain.
+///     Same iteration shape as <c>quick</c>, but each benchmark runs in its own child
+///     process for gate-enabled configurations that BenchmarkDotNet refuses in-process.</item>
 ///   <item><c>full</c> &mdash; <see cref="Job.Default"/> + default forking toolchain.
 ///     Gold-standard rigour; ~30+ minutes per run.</item>
 /// </list>

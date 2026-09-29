@@ -9,9 +9,9 @@ namespace Orleans.Lattice.Replication;
 /// high-water-mark grain so the first incremental entry arriving after the
 /// snapshot sees a non-empty frontier and a snapshot-pinned floor.
 /// <para>
-/// Triggered by the auto-bootstrap detector (when the inbound apply
-/// path observes the sender's cursor has fallen off the WAL) and by
-/// operator-driven re-seed flows. The coordinator itself is
+/// Triggered by the fall-off detector when the maintenance pass
+/// finds the receiver behind the source cluster's retained WAL,
+/// and by operator-driven re-seed flows. The coordinator itself is
 /// transport-agnostic: it consumes whichever
 /// <see cref="ISnapshotProvider"/> is registered in DI, so a host can
 /// front it with a transport-aware fetcher without changing this
@@ -23,7 +23,8 @@ namespace Orleans.Lattice.Replication;
 /// bootstrap mutually exclusive across every silo in the receiver
 /// cluster. Two silos that concurrently call
 /// <see cref="BootstrapAsync"/> for the same tree will both route to
-/// one grain activation; the first wins and the second receives an
+/// one grain activation. A same-source kickoff is absorbed as an
+/// idempotent no-op; a different-source kickoff receives an
 /// <see cref="InvalidOperationException"/> indicating an in-progress
 /// bootstrap. Different trees bootstrap on different activations and
 /// proceed in parallel.
@@ -35,9 +36,9 @@ public interface ILatticeBootstrapCoordinator
     /// Returns the current <see cref="LatticeBootstrapState"/> for
     /// <paramref name="treeName"/>, or
     /// <see cref="LatticeBootstrapState.Idle"/> when no bootstrap has
-    /// been started for that tree on the receiver cluster (or when
-    /// the silo hosting the activation restarted, which resets the
-    /// in-memory state). The read is a single grain RPC and may
+    /// been started for that tree on the receiver cluster. Bootstrap
+    /// phase is persisted, so an activation restart resumes from the
+    /// stored state instead of resetting it to idle. The read is a single grain RPC and may
     /// observe a transient state while a bootstrap is in progress.
     /// </summary>
     /// <param name="treeName">The logical tree id. Must be non-null and non-empty.</param>
@@ -52,9 +53,9 @@ public interface ILatticeBootstrapCoordinator
     /// <see langword="null"/>
     /// <see cref="BootstrapCoordinatorStatus.SourceClusterId"/> when
     /// no bootstrap has been started for the tree on this receiver
-    /// cluster (or when the silo hosting the activation restarted,
-    /// which resets the in-memory state). The read is a single grain
-    /// RPC and may observe a transient state while a bootstrap is in
+    /// cluster. Bootstrap phase is persisted, so an activation restart
+    /// resumes from the stored state instead of resetting it to idle.
+    /// The read is a single grain RPC and may observe a transient state while a bootstrap is in
     /// progress. Used by
     /// <see cref="ILatticeFallOffLogDetector.CheckAndTriggerAsync"/>
     /// to suppress duplicate alerting on probes that arrive while the
@@ -69,18 +70,20 @@ public interface ILatticeBootstrapCoordinator
     /// Bootstraps <paramref name="treeName"/> from the snapshot
     /// produced by the configured <see cref="ISnapshotProvider"/>.
     /// Drives the state machine through
-    /// <see cref="LatticeBootstrapState.RequestingSnapshot"/> →
-    /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/> →
-    /// <see cref="LatticeBootstrapState.IncrementalHandoff"/> →
-    /// <see cref="LatticeBootstrapState.LiveIncremental"/>. On any
-    /// thrown exception the state transitions to
-    /// <see cref="LatticeBootstrapState.Failed"/> and the exception
-    /// propagates to the caller; a subsequent call restarts the
-    /// cycle.
+    /// <see cref="LatticeBootstrapState.RequestingSnapshot"/> -
+    /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/> -
+    /// <see cref="LatticeBootstrapState.IncrementalHandoff"/> -
+    /// <see cref="LatticeBootstrapState.LiveIncremental"/>. The call
+    /// persists the kickoff and schedules the background phase pump;
+    /// kickoff-time failures propagate to the caller, while drain-time
+    /// failures are recorded in persisted state as
+    /// <see cref="LatticeBootstrapState.Failed"/> for later polling or
+    /// restart.
     /// <para>
     /// Only one bootstrap may run per tree at a time, enforced
     /// cluster-wide by the underlying grain activation. A concurrent
-    /// invocation against the same tree throws
+    /// same-source invocation is an idempotent no-op; a concurrent
+    /// different-source invocation throws
     /// <see cref="InvalidOperationException"/> immediately rather
     /// than queueing - including when the second invocation
     /// originates on a different silo from the first.

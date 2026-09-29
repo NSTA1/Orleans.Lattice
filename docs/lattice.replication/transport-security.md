@@ -44,14 +44,38 @@ public sealed class MyVaultSecretSource : ILatticeReplicationSecretSource
 
 Then register the source via the typed overload. The implementation is activated through DI as a singleton, so it can declare constructor dependencies on any other registered service:
 
-```csharp
-siloBuilder.AddLatticeReplicationSecrets<MyVaultSecretSource>();
+```csharp verify
+public sealed class MyVaultSecretSource : ILatticeReplicationSecretSource
+{
+    public ValueTask<string?> GetOutboundSecretAsync(string peerClusterId, CancellationToken cancellationToken)
+        => new("secret-loaded-from-vault");
+
+    public ValueTask<LatticeReplicationAcceptedSecrets> GetAcceptedSecretsAsync(CancellationToken cancellationToken)
+        => new(LatticeReplicationAcceptedSecrets.Empty);
+}
+
+public static void Register(ISiloBuilder siloBuilder)
+{
+    siloBuilder.AddLatticeReplicationSecrets<MyVaultSecretSource>();
+}
 ```
 
 The factory overload is the right tool when the custom source wraps a pre-existing configured client:
 
-```csharp
-siloBuilder.AddLatticeReplicationSecrets(sp => new MyVaultSecretSource());
+```csharp verify
+public sealed class MyVaultSecretSource : ILatticeReplicationSecretSource
+{
+    public ValueTask<string?> GetOutboundSecretAsync(string peerClusterId, CancellationToken cancellationToken)
+        => new("secret-loaded-from-vault");
+
+    public ValueTask<LatticeReplicationAcceptedSecrets> GetAcceptedSecretsAsync(CancellationToken cancellationToken)
+        => new(LatticeReplicationAcceptedSecrets.Empty);
+}
+
+public static void Register(ISiloBuilder siloBuilder)
+{
+    siloBuilder.AddLatticeReplicationSecrets(_ => new MyVaultSecretSource());
+}
 ```
 
 For non-file configuration providers (Azure App Configuration, Kubernetes secrets surfaced as environment variables, etc.), bind directly from a configuration section:
@@ -99,14 +123,14 @@ The gRPC package (`Orleans.Lattice.Replication.Grpc`) layers transport mechanics
 
 - **Refuses non-`https://` endpoints** unless `LatticeReplicationGrpcOptions.AllowPlaintextEndpoints` is explicitly set. The check runs at channel-resolution time, so a misconfigured `Peers` entry fails fast on the first batch dispatched to that peer rather than silently downgrading. When the opt-out is set and an insecure channel is actually built, the sender logs a warning and increments the `orleans.lattice.replication.grpc.insecure_channel` counter (tagged with the peer cluster id and the transport name) so that an accidental production plaintext downgrade is observable rather than silent.
 - **Attaches the outbound secret as gRPC `CallCredentials`** whenever the secret source returns a non-empty value. The credentials are added to the channel options the package builds, then `ConfigureChannel(...)` runs - so a host that needs to replace the credentials chain entirely (e.g. mTLS-only with no shared secret) can do so unconditionally.
-- **Stamps the local cluster id** as the `x-lattice-replication-origin` header on every call, sourced from `LatticeReplicationGrpcOptions.LocalClusterId` or, if unset, from `LatticeReplicationOptions.ClusterId`.
+- **Stamps the local cluster id** as the `x-lattice-replication-origin` header on every call, sourced from `LatticeReplicationGrpcOptions.LocalClusterId` or, if unset, from the cluster-wide `LatticeReplicationOptions.ClusterId` - the unnamed options instance that `AddLatticeReplication` and `ConfigureLatticeReplication` without a tree name configure, never a per-tree override. The value is fixed when a peer's channel is built, so every tree that talks to that peer sends the same header. The header rides the package's call credentials, so a `ConfigureChannel` that replaces them stops it being sent. The replication package fills the origin field of every push, peer high-water-mark probe, and content-manifest exchange request with the sending tree's own `ClusterId`, resolved per tree, and the receiver refuses those calls when that field differs from the header (see below). A tree's calls are therefore refused whenever its `ClusterId` differs from the header value - for example a `LocalClusterId` that differs from `ClusterId`, or a per-tree `ClusterId` override that differs from the cluster-wide value. Leave `LocalClusterId` unset, or set it to the same value as `ClusterId`, and give no replicated tree a per-tree `ClusterId` that differs from the cluster-wide value.
 
 The receiver-side auth interceptor is registered globally on the gRPC service, scoped by service-name prefix so co-hosted gRPC services in the same ASP.NET Core app are unaffected. It rejects:
 
 - **Calls without the `x-lattice-replication-secret` header** with `StatusCode.Unauthenticated`.
 - **Calls whose secret is not in the accepted-set snapshot** with `StatusCode.PermissionDenied`.
 
-Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The snapshot metadata and snapshot stream RPCs apply the same check on the exporting side before any tree is read, and refuse a non-enrolled tree with `StatusCode.PermissionDenied` too. The saga control RPCs additionally pass an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`.
+Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The snapshot metadata and snapshot stream RPCs apply the same check on the exporting side before any tree is read, and refuse a non-enrolled tree with `StatusCode.PermissionDenied` too. The push, peer high-water-mark, and content-manifest RPCs also compare the origin cluster id the request declares (for a push, the batch envelope's) with the `x-lattice-replication-origin` header, and refuse with `StatusCode.PermissionDenied` a request whose declared origin differs from it. The comparison runs only when the header is present, and it checks the request against the header rather than authenticating the origin. The saga control RPCs additionally pass an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`.
 
 The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to keep comparison time independent of how close the candidate secret is to a real one.
 
@@ -115,7 +139,7 @@ The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to 
 | Header | Direction | Purpose |
 |---|---|---|
 | `x-lattice-replication-secret` | sender to receiver | Authenticator material. Compared against the accepted-set snapshot in constant time. |
-| `x-lattice-replication-origin` | sender to receiver | Local cluster id. Not authoritative for the apply path - the canonical origin id lives inside the envelope - but the saga control service authorizes the caller by it (falling back to the request's coordinator id when absent), and the content-manifest exchange refuses a request whose body-declared origin disagrees with a present header. |
+| `x-lattice-replication-origin` | sender to receiver | The sender's local cluster id. Not an authenticator, and the receiver accepts a call without it. When it is present, the push, peer high-water-mark, and content-manifest RPCs refuse a request whose declared origin differs from it, and the saga control service authorizes the caller by it (falling back to the request's coordinator id when it is absent). |
 
 The legacy sample header `X-Replication-Token` is retired. Hosts that depended on it should migrate to `x-lattice-replication-secret` via the env-var or custom secret source paths above.
 
