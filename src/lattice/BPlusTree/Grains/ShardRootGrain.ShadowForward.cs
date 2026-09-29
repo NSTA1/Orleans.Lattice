@@ -12,13 +12,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>; the typed CRDT delta paths
 /// and bulk appends are not mirrored. The target is chosen by index alone. The
 /// snapshot coordinator registers the destination tree with this tree's pinned
-/// shard count and no <see cref="ShardMap"/> of its own
-/// (<c>TreeSnapshotGrain.InitiateSnapshotStateAsync</c>), so the destination
-/// routes keys by the default map for that count. A mirrored key therefore
-/// lands on the shard the destination routes it to only while this tree still
-/// uses that default map; once an adaptive split or a reshard has changed it,
-/// a key can be mirrored to a shard the destination does not route it to, and a
-/// shard at or above the pinned count is never given a shadow forward at all.
+/// shard count and its routing <see cref="ShardMap"/>
+/// (<c>TreeSnapshotGrain.InitiateSnapshotStateAsync</c>), and begins forwarding
+/// on every shard that map names as well as the pinned range, so a slot routes
+/// to the same physical index on both trees and a mirrored key lands on the
+/// shard the destination routes it to - including on a shard an adaptive split
+/// allocated above the pinned count.
 /// </para>
 /// <para>
 /// The three phases <see cref="ShadowForwardPhase.Draining"/>,

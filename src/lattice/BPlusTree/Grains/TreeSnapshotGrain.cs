@@ -9,21 +9,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Snapshots a source tree into a new destination tree, copying the live
-/// entries of its physical shards <c>0</c> to <c>ShardCount - 1</c> into the
-/// destination shards with the same indices. Supports offline mode (source
+/// entries of every physical shard the source's routing map names into the
+/// destination shard with the same index. Supports offline mode (source
 /// tree locked during copy) and online mode (source tree remains available).
 /// <para>
-/// The destination is registered with the source's pinned shard count and no
-/// shard map (see <see cref="InitiateSnapshotStateAsync"/>), so it routes by
-/// the default map for that count, and the copy is therefore faithful only
-/// while the source still uses that default map. Once a shard split has
-/// changed it: a physical shard at or above the pinned count (one a split
-/// added) is neither copied nor shadow-forwarded; the source leaves keep a
-/// sealed copy of every slot they split away, which the drain's
-/// <c>GetLiveRawEntriesAsync</c> read does not filter out, so that stale copy
-/// reaches the destination too; and after a reshard has repinned the
-/// count, entries are copied into the shard with their physical index even
-/// where the default map routes their slot to a different one.
+/// The destination is registered with the source's pinned shard count, its
+/// routing map, and its split allocation high-water mark (see
+/// <see cref="InitiateSnapshotStateAsync"/>), so a slot routes to the same
+/// physical index on both trees and an index-for-index copy and shadow-forward
+/// land every key on the shard that owns it. The shards visited are the union
+/// of <c>0</c> to <c>ShardCount - 1</c> and every index the map names
+/// (<see cref="RoutedShardIndices"/>), so a shard an adaptive split allocated
+/// above the pinned count is copied too (issue 3880). A copied entry is kept
+/// only when the map routes it to the shard it was read from: a split leaves a
+/// sealed copy of every entry it moved on the shard that gave the slots up,
+/// hidden from reads there but returned by the drain's
+/// <c>GetLiveRawEntriesAsync</c>, and copying it would resurrect the value
+/// the key held when the split moved it.
 /// </para>
 /// <para>
 /// Follows the same reminder + keepalive + grain-timer pattern used by
@@ -58,6 +60,14 @@ internal sealed class TreeSnapshotGrain(
     private string SourcePhysicalTreeId => string.IsNullOrEmpty(state.State.SourcePhysicalTreeId)
         ? SourceTreeId
         : state.State.SourcePhysicalTreeId;
+
+    /// <summary>
+    /// The physical shard indices this snapshot visits, in ascending order (see
+    /// <see cref="TreeSnapshotState.ShardIndices"/>). <see cref="TreeSnapshotState.NextShardIndex"/>
+    /// is a position in this array.
+    /// </summary>
+    private int[] CopiedShardIndices =>
+        RoutedShardIndices.OrContiguous(state.State.ShardIndices, state.State.ShardCount);
 
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "snapshot-keepalive";
@@ -161,19 +171,40 @@ internal sealed class TreeSnapshotGrain(
         string? operationId = null, string? logicalTreeId = null,
         bool releasesShadowForwardOnCompletion = false)
     {
+        var registry = grainFactory.GetLatticeRegistry();
+
+        // Capture the source's routing. Splits and reshards write the routing
+        // map and the split allocation high-water mark to the LOGICAL tree's
+        // entry, never to the physical copy an alias points at, so the logical
+        // id is what is read. System trees never carry a custom map, and reading
+        // one would be a circular registry call.
+        var routingTreeId = string.IsNullOrEmpty(logicalTreeId) ? SourceTreeId : logicalTreeId;
+        var sourceEntry = routingTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            ? null
+            : await registry.GetEntryAsync(routingTreeId);
+        var sourceMap = sourceEntry?.ShardMap;
+        var shardIndices = RoutedShardIndices.Resolve(shardCount, sourceMap);
+
         // Register the destination tree in the registry before any data is written.
         // Always seed the ShardCount pin from the source so the registry
         // resolver has a complete structural pin for the destination tree.
         // MaxLeafKeys / MaxInternalChildren are propagated only when the
         // caller overrode them (resize case); otherwise the registry-grain's
-        // seeding fills defaults.
-        var registry = grainFactory.GetLatticeRegistry();
+        // seeding fills defaults. The source's routing map and split
+        // high-water mark are carried over so every slot routes to the same
+        // physical index on both trees - the index-for-index copy and
+        // shadow-forward depend on it - and a later split of the destination
+        // allocates above every index the copy populated.
         var entry = new TreeRegistryEntry
         {
             MaxLeafKeys = maxLeafKeys,
             MaxInternalChildren = maxInternalChildren,
             ShardCount = shardCount,
             DerivedFrom = releasesShadowForwardOnCompletion ? null : logicalTreeId,
+            ShardMap = sourceMap is null
+                ? null
+                : new ShardMap { Slots = (int[])sourceMap.Slots.Clone(), Version = sourceMap.Version },
+            NextShardIndex = sourceEntry?.NextShardIndex,
         };
         await registry.RegisterAsync(destinationTreeId, entry);
 
@@ -215,6 +246,8 @@ internal sealed class TreeSnapshotGrain(
         var prevLogicalTreeId = state.State.LogicalTreeId;
         var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
         var prevSourcePhysicalTreeId = state.State.SourcePhysicalTreeId;
+        var prevShardIndices = state.State.ShardIndices;
+        var prevSourceShardMap = state.State.SourceShardMap;
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
@@ -237,6 +270,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.LogicalTreeId = logicalTreeId ?? "";
         state.State.ReleasesShadowForwardOnCompletion = releasesShadowForwardOnCompletion;
         state.State.SourcePhysicalTreeId = sourcePhysicalTreeId;
+        state.State.ShardIndices = shardIndices;
+        state.State.SourceShardMap = sourceMap;
         try
         {
             await state.WriteStateAsync();
@@ -258,23 +293,25 @@ internal sealed class TreeSnapshotGrain(
             state.State.LogicalTreeId = prevLogicalTreeId;
             state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
             state.State.SourcePhysicalTreeId = prevSourcePhysicalTreeId;
+            state.State.ShardIndices = prevShardIndices;
+            state.State.SourceShardMap = prevSourceShardMap;
             throw;
         }
     }
 
     /// <summary>
-    /// Marks source shards <c>0</c> to <c>ShardCount - 1</c> (the shards the
-    /// copy reads) as deleted. Called once when the
+    /// Marks every source shard the copy reads (see
+    /// <see cref="TreeSnapshotState.ShardIndices"/>) as deleted. Called once when the
     /// <see cref="SnapshotPhase.Lock"/> phase is processed (offline mode only).
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
     internal async Task LockSourceShardsAsync()
     {
-        var shardCount = state.State.ShardCount;
-        var tasks = new Task[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var shardIndices = CopiedShardIndices;
+        var tasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{shardIndices[i]}");
             tasks[i] = shard.MarkDeletedAsync();
         }
         await Task.WhenAll(tasks);
@@ -317,13 +354,13 @@ internal sealed class TreeSnapshotGrain(
 
         if (state.State.Mode == SnapshotMode.Online
             && state.State.Phase == SnapshotPhase.Copy
-            && state.State.NextShardIndex < state.State.ShardCount)
+            && state.State.NextShardIndex < CopiedShardIndices.Length)
         {
             await DrainAllShardsOnlineAsync();
         }
         else
         {
-            while (state.State.NextShardIndex < state.State.ShardCount)
+            while (state.State.NextShardIndex < CopiedShardIndices.Length)
             {
                 await ProcessCurrentPhaseAsync();
             }
@@ -351,7 +388,7 @@ internal sealed class TreeSnapshotGrain(
             return;
         }
 
-        if (state.State.NextShardIndex >= state.State.ShardCount)
+        if (state.State.NextShardIndex >= CopiedShardIndices.Length)
         {
             await CompleteSnapshotAsync();
             return;
@@ -362,7 +399,7 @@ internal sealed class TreeSnapshotGrain(
 
     private async Task ProcessCurrentPhaseAsync()
     {
-        var shardIndex = state.State.NextShardIndex;
+        var shardIndex = CopiedShardIndices[state.State.NextShardIndex];
 
         try
         {
@@ -594,11 +631,29 @@ internal sealed class TreeSnapshotGrain(
             offline ? null : resumeFromInclusive,
             offline ? LeafWalkBudget.Unbounded() : budget);
 
+        // Keep only the entries the source's routing map sends to this shard.
+        // An adaptive split leaves a sealed copy of every entry it moved on the
+        // shard that gave the slots up; reads there hide it, but this raw drain
+        // does not, and because the destination routes by the same map those
+        // entries would otherwise resurrect the values the keys held when the
+        // split moved them (issue 3880). A source on its default routing holds
+        // no such copies, so it skips the per-entry hash.
+        var sourceMap = state.State.SourceShardMap;
         var entries = new List<LwwEntry>();
         while (walk.HasLeaf)
         {
             var liveRaw = await walk.CurrentLeaf.GetLiveRawEntriesAsync();
-            entries.AddRange(liveRaw);
+            if (sourceMap is null)
+            {
+                entries.AddRange(liveRaw);
+            }
+            else
+            {
+                foreach (var entry in liveRaw)
+                {
+                    if (sourceMap.Resolve(entry.Key) == shardIndex) entries.Add(entry);
+                }
+            }
             if (!await walk.MoveNextAsync()) break;
         }
 
@@ -677,8 +732,8 @@ internal sealed class TreeSnapshotGrain(
     }
 
     /// <summary>
-    /// Begins shadow-forwarding on source shards <c>0</c> to
-    /// <c>ShardCount - 1</c> (the shards the copy reads). Must complete before
+    /// Begins shadow-forwarding on every source shard the copy reads (see
+    /// <see cref="TreeSnapshotState.ShardIndices"/>). Must complete before
     /// any drain reader starts so that live writes landing during drain are
     /// mirrored to the destination tree. Exposed as <c>internal</c> for unit
     /// testing.
@@ -699,11 +754,11 @@ internal sealed class TreeSnapshotGrain(
             ? SourceTreeId
             : state.State.LogicalTreeId;
 
-        var shardCount = state.State.ShardCount;
-        var tasks = new Task[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var shardIndices = CopiedShardIndices;
+        var tasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{shardIndices[i]}");
             tasks[i] = shard.BeginShadowForwardAsync(destinationTreeId, opId, logicalTreeId);
         }
         await Task.WhenAll(tasks);
@@ -743,32 +798,33 @@ internal sealed class TreeSnapshotGrain(
     /// </summary>
     internal async Task DrainAllShardsOnlineAsync()
     {
-        var shardCount = state.State.ShardCount;
+        var shardIndices = CopiedShardIndices;
+        var shardTotal = shardIndices.Length;
         var start = state.State.NextShardIndex;
         var cap = Math.Max(1, Options.MaxConcurrentDrains);
 
         using var sem = new SemaphoreSlim(cap);
-        var tasks = new List<Task>(shardCount - start);
+        var tasks = new List<Task>(Math.Max(0, shardTotal - start));
         // Resolve options once; each pass builds its own budget from them, so
         // the leaf cap and the wall-clock net apply per pass rather than
         // across the whole concurrent drain.
         var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
-        for (int i = start; i < shardCount; i++)
+        for (int i = start; i < shardTotal; i++)
         {
-            var idx = i;
+            var idx = shardIndices[i];
             await sem.WaitAsync();
             tasks.Add(DrainOneShardOnlineAsync(idx, sem, drainOptions));
         }
         await Task.WhenAll(tasks);
 
         // Snapshot the two fields the bulk-cursor advance mutates so a
-        // failing persist doesn't leak NextShardIndex=shardCount /
+        // failing persist doesn't leak NextShardIndex=shardTotal /
         // ShardRetries=0 ahead of disk. The DrainOneShardOnlineAsync
         // side effects above are deliberately not reverted (each shard's
         // MarkDrainedAsync transition is idempotent on the operationId).
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
-        state.State.NextShardIndex = shardCount;
+        state.State.NextShardIndex = shardTotal;
         state.State.ShardRetries = 0;
         try
         {
@@ -841,6 +897,8 @@ internal sealed class TreeSnapshotGrain(
         var prevShardRetries = state.State.ShardRetries;
         var prevPhase = state.State.Phase;
         var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
+        var prevShardIndices = state.State.ShardIndices;
+        var prevSourceShardMap = state.State.SourceShardMap;
 
         state.State.InProgress = false;
         state.State.Complete = true;
@@ -848,6 +906,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.ShardRetries = 0;
         state.State.Phase = SnapshotPhase.Lock;
         state.State.ReleasesShadowForwardOnCompletion = false;
+        state.State.ShardIndices = null;
+        state.State.SourceShardMap = null;
         try
         {
             await state.WriteStateAsync();
@@ -860,6 +920,8 @@ internal sealed class TreeSnapshotGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.Phase = prevPhase;
             state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
+            state.State.ShardIndices = prevShardIndices;
+            state.State.SourceShardMap = prevSourceShardMap;
             throw;
         }
 
@@ -888,20 +950,20 @@ internal sealed class TreeSnapshotGrain(
     /// <summary>
     /// Clears the shadow-forward this snapshot installed on every source shard
     /// (<see cref="BeginShadowForwardAllShardsAsync"/> covers the same
-    /// <c>0..ShardCount-1</c> range under the same operation id), so writes to
-    /// the source stop reaching the destination once the copy is complete.
-    /// Idempotent per shard.
+    /// <see cref="TreeSnapshotState.ShardIndices"/> under the same operation id),
+    /// so writes to the source stop reaching the destination once the copy is
+    /// complete. Idempotent per shard.
     /// </summary>
     private async Task ReleaseSourceShadowForwardAsync()
     {
         var opId = state.State.OperationId;
         if (string.IsNullOrEmpty(opId)) return;
 
-        var shardCount = state.State.ShardCount;
-        var tasks = new Task[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var shardIndices = CopiedShardIndices;
+        var tasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{shardIndices[i]}");
             tasks[i] = shard.ClearShadowForwardAsync(opId);
         }
         await Task.WhenAll(tasks);
@@ -950,6 +1012,8 @@ internal sealed class TreeSnapshotGrain(
         var prevMaxInternalChildren = state.State.MaxInternalChildren;
         var prevLogicalTreeId = state.State.LogicalTreeId;
         var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
+        var prevShardIndices = state.State.ShardIndices;
+        var prevSourceShardMap = state.State.SourceShardMap;
 
         state.State.InProgress = false;
         state.State.Complete = false;
@@ -962,6 +1026,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.MaxInternalChildren = null;
         state.State.LogicalTreeId = "";
         state.State.ReleasesShadowForwardOnCompletion = false;
+        state.State.ShardIndices = null;
+        state.State.SourceShardMap = null;
         try
         {
             await state.WriteStateAsync();
@@ -979,6 +1045,8 @@ internal sealed class TreeSnapshotGrain(
             state.State.MaxInternalChildren = prevMaxInternalChildren;
             state.State.LogicalTreeId = prevLogicalTreeId;
             state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
+            state.State.ShardIndices = prevShardIndices;
+            state.State.SourceShardMap = prevSourceShardMap;
             throw;
         }
 

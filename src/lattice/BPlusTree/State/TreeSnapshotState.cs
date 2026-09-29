@@ -17,7 +17,11 @@ internal sealed class TreeSnapshotState
     /// <summary>The current phase of the active shard being processed.</summary>
     [Id(1)] public SnapshotPhase Phase { get; set; }
 
-    /// <summary>The next source shard index to process (0-based).</summary>
+    /// <summary>
+    /// The position in <see cref="ShardIndices"/> of the next source shard to
+    /// process (0-based); the shard index itself when <see cref="ShardIndices"/>
+    /// is unset.
+    /// </summary>
     [Id(2)] public int NextShardIndex { get; set; }
 
     /// <summary>
@@ -121,6 +125,30 @@ internal sealed class TreeSnapshotState
     /// resumes against the shards it began on.
     /// </summary>
     [Id(14)] public string SourcePhysicalTreeId { get; set; } = "";
+
+    /// <summary>
+    /// The physical shard indices the snapshot quiesces, shadow-forwards, and
+    /// copies, in ascending order, captured from the source's routing map when
+    /// the snapshot starts (see <c>RoutedShardIndices.Resolve</c>). An adaptive
+    /// split routes keys to a shard above the pinned <see cref="ShardCount"/>, so
+    /// the pinned count alone does not name every shard that holds the tree's
+    /// data (issue 3880). While this is set, <see cref="NextShardIndex"/> is a
+    /// position in this array rather than a shard index. Legacy persisted state
+    /// decodes the missing slot to <see langword="null"/>, which falls back to
+    /// <c>0</c> to <c>ShardCount - 1</c>, the set such a snapshot began on.
+    /// </summary>
+    [Id(15)] public int[]? ShardIndices { get; set; }
+
+    /// <summary>
+    /// The source tree's custom routing map when the snapshot started, or
+    /// <see langword="null"/> when it still routed by the default map for
+    /// <see cref="ShardCount"/>. The destination is registered with the same map,
+    /// so each source shard copies into the destination shard with the same
+    /// index; the copy drops every entry the map does not route to the shard it
+    /// was read from, which is how the sealed copy a split leaves behind on the
+    /// shard that gave its slots up is kept out of the destination.
+    /// </summary>
+    [Id(16)] public ShardMap? SourceShardMap { get; set; }
 }
 
 /// <summary>

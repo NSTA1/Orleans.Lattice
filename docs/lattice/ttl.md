@@ -119,7 +119,7 @@ See [Shard Splitting](shard-splitting.md) for the full split lifecycle.
 
 ## Snapshots
 
-A snapshot copies the live entries of each source shard from `0` to `ShardCount - 1` as full stored rows, HLC timestamp and absolute expiry included. An offline snapshot bulk-loads those rows into the empty destination shard; an online snapshot merges them last-writer-wins alongside the live writes it shadow-forwards. Either way every entry the snapshot copies keeps its TTL unchanged, in both modes. A snapshot does not copy a shard an adaptive split added above that range, and an online snapshot does not mirror a typed CRDT delta - with or without a TTL - applied to a source shard after that shard was drained. See [Snapshots](snapshots.md).
+A snapshot copies the live entries of each source shard - `0` to `ShardCount - 1` and every shard the shard map routes to - as full stored rows, HLC timestamp and absolute expiry included. An offline snapshot bulk-loads those rows into the empty destination shard; an online snapshot merges them last-writer-wins alongside the live writes it shadow-forwards. Either way every entry the snapshot copies keeps its TTL unchanged, in both modes. An online snapshot does not mirror a typed CRDT delta - with or without a TTL - applied to a source shard after that shard was drained. See [Snapshots](snapshots.md).
 
 ## Resize
 
