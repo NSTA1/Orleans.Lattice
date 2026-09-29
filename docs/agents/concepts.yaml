@@ -370,8 +370,8 @@ concepts:
         - statement: "Uninstall soft-deletes structural app trees and never touches adopted trees."
           source: "src/lattice.apps/Activation/AppActivationEngine.cs#AppActivationEngine.UninstallAsync"
       out_of_scope:
-        - statement: "Physical purge is not part of uninstall and remains a separate TreeLifecycle operation."
-          source: "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl.UninstallAsync"
+        - statement: "Physical purge is not part of the uninstall transition; an immediate purge remains a separate TreeLifecycle operation, while the core deferred purge removes soft-deleted structural app trees after their soft-delete windows elapse."
+          source: "docs/lattice.apps/README.md"
     operational_envelope:
       limits: []
     sources:
@@ -437,6 +437,26 @@ concepts:
     sources:
       - "src/lattice.apps/Sources/IAppSource.cs"
       - "src/lattice.apps/Sources/InImageAppSource.cs"
+  - id: app-tree-ownership-ledger
+    name: "App tree ownership ledger"
+    category: apps
+    definition: "The app tree ownership ledger is the reserved sys-app-trees system tree that records, per tenant-composed tree id, the single install (tenant, app slug and publisher) that owns each structural or adopted app tree."
+    packages:
+      - "Orleans.Lattice.Apps"
+    capability_boundary:
+      in_scope:
+        - statement: "Install and upgrade claim every manifest tree with compare-and-set writes, and activation re-verifies each claim."
+          source: "docs/lattice.apps/README.md"
+        - statement: "The package registers an ITreeOwnershipGuard backed by the ledger, so a core alias cannot cross an install ownership boundary."
+          source: "docs/lattice.apps/README.md"
+      out_of_scope:
+        - statement: "A pre-existing unowned structural tree, a derived physical copy, or another tree's alias target is never claimed."
+          source: "docs/lattice.apps/README.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice.apps/README.md"
+      - "src/lattice.apps/Ownership/AppTreeOwnershipLedger.cs"
   - id: atomic-action-saga
     name: "Atomic action saga"
     category: coordination
@@ -1143,9 +1163,13 @@ concepts:
       in_scope:
         - statement: "The replication package attaches to the mutation observer seam."
           source: "docs/lattice/architecture.md"
+        - statement: "LatticeMutation.TreeId is the logical tree id the write was routed through, stable across resize, shadow restore and schema-remediation alias swaps."
+          source: "src/lattice/LatticeMutation.cs#LatticeMutation.TreeId"
       out_of_scope:
         - statement: "Observers run after the WAL append commit point."
           source: "docs/lattice/architecture.md"
+        - statement: "Durable WAL records keep their physical tree identity, and a direct physical-grain write without a matching routing target reports the physical tree id."
+          source: "src/lattice/LatticeMutation.cs#LatticeMutation.TreeId"
     operational_envelope:
       limits: []
     sources:
@@ -1491,7 +1515,7 @@ concepts:
   - id: shard-map
     name: "Shard map"
     category: core
-    definition: "A shard map persists the mapping from fixed virtual slots to mutable physical shard indexes."
+    definition: "A shard map persists the mapping from a tree's virtual slots to mutable physical shard indexes."
     packages:
       - "Orleans.Lattice"
     capability_boundary:
@@ -1574,7 +1598,7 @@ concepts:
   - id: snapshot
     name: "Snapshot"
     category: operation
-    definition: "A snapshot is a point-in-time copy of a tree in offline or online mode."
+    definition: "A snapshot copies a tree into a new destination tree; offline mode is point-in-time and online mode mirrors source writes until completion."
     packages:
       - "Orleans.Lattice"
     capability_boundary:
@@ -1774,6 +1798,10 @@ concepts:
       in_scope:
         - statement: "Tree alias is stored in the registry entry as optional indirection."
           source: "docs/lattice/architecture.md"
+        - statement: "A physical tree created by a resize, shadow-cutover restore or schema remediation records the logical tree id it backs in DerivedFrom, stamped once at creation."
+          source: "docs/lattice/tree-registry.md"
+        - statement: "Every alias assignment is decided by the registered tree ownership guard before it is written."
+          source: "docs/lattice/tree-registry.md"
       out_of_scope:
         - statement: "Alias indirection does not change the virtual shard count."
           source: "docs/lattice/architecture.md"
@@ -1782,6 +1810,26 @@ concepts:
     sources:
       - "docs/lattice/architecture.md"
       - "docs/lattice.api.treeadmin/README.md"
+  - id: tree-ownership-guard
+    name: "Tree ownership guard"
+    category: seam
+    definition: "The tree ownership guard is the optional ITreeOwnershipGuard seam the tree registry consults on every alias assignment to decide whether a logical tree may alias a physical tree."
+    packages:
+      - "Orleans.Lattice"
+    capability_boundary:
+      in_scope:
+        - statement: "The guard receives the logical tree id, the physical target id, and the target's DerivedFrom read from the registry, never from the caller."
+          source: "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard.AuthorizeAliasAsync"
+        - statement: "System-origin maintenance such as resize, restore and remediation is not exempt from the guard."
+          source: "docs/lattice/tree-registry.md"
+      out_of_scope:
+        - statement: "Core carries no notion of ownership itself; AddLattice registers an allow-all guard."
+          source: "docs/lattice/tree-registry.md"
+    operational_envelope:
+      limits: []
+    sources:
+      - "docs/lattice/tree-registry.md"
+      - "src/lattice/ITreeOwnershipGuard.cs"
   - id: ttl
     name: "Time-to-live"
     category: core
@@ -2180,6 +2228,11 @@ relationships:
       - "src/lattice.auth/LatticeAppRuleIds.cs"
   - from: app-owned-tree
     relation: depends-on
+    to: app-tree-ownership-ledger
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-owned-tree
+    relation: depends-on
     to: tenant
     sources:
       - "src/lattice.apps/Activation/AppActivationTreeNames.cs"
@@ -2211,6 +2264,11 @@ relationships:
   - from: app-source
     relation: produces
     to: app-manifest
+    sources:
+      - "docs/lattice.apps/README.md"
+  - from: app-tree-ownership-ledger
+    relation: implements
+    to: tree-ownership-guard
     sources:
       - "docs/lattice.apps/README.md"
   - from: atomic-action-saga
@@ -2528,6 +2586,11 @@ relationships:
     to: tree
     sources:
       - "docs/lattice/architecture.md"
+  - from: tree-ownership-guard
+    relation: guards
+    to: tree-alias
+    sources:
+      - "docs/lattice/tree-registry.md"
   - from: ttl
     relation: produces
     to: tombstone

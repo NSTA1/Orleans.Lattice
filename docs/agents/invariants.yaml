@@ -68,7 +68,7 @@ invariants:
       - "test/lattice.api.apps/LatticeAppsControlUpgradeRaceTests.cs"
   - id: app-lifecycle-retains-data
     name: "App lifecycle retains data"
-    description: "Disable and uninstall remove app authority but do not physically purge app data; uninstall soft-deletes structural trees and skips adopted trees."
+    description: "Disable removes app authority while keeping trees and data; uninstall removes app authority, skips adopted trees and soft-deletes structural trees without purging them itself, and the core deferred purge removes those trees after their soft-delete window unless the app is installed and enabled again first."
     scope:
       packages:
         - "Orleans.Lattice.Apps"
@@ -161,7 +161,7 @@ invariants:
       - "test/lattice.auth/LatticeAuthorizationPolicyStoreAppOwnedRuleTests.cs"
   - id: app-physical-tree-ids-not-disclosed
     name: "App control hides physical tree ids"
-    description: "App-control responses and sanitized exceptions expose app slugs and app-local tree names, not composed physical tree ids."
+    description: "App-control responses and sanitized exceptions expose app slugs, app-local tree names and, for an adopted tree, the pre-app tree id, but never composed physical tree ids."
     scope:
       packages:
         - "Orleans.Lattice.Api.Apps"
@@ -189,6 +189,41 @@ invariants:
       - "src/lattice.api.apps/AppsControlExceptionSanitizer.cs"
       - "src/lattice.api.apps/AppsControlMapping.cs"
       - "test/lattice.api.apps/LatticeAppsControlSanitizationTests.cs"
+  - id: app-tree-single-owner
+    name: "App trees have a single owning install"
+    description: "Every structural and adopted tree an app uses belongs to exactly one install at a time, as recorded in the sys-app-trees ownership ledger, so one app's data is never readable or writable under another app's name."
+    scope:
+      packages:
+        - "Orleans.Lattice.Apps"
+        - "Orleans.Lattice.Api.Apps"
+      components:
+        - "AppTreeOwnershipLedger"
+        - "AppRegistry"
+        - "AppActivationEngine"
+        - "AppTreeOwnershipGuard"
+    violation_modes:
+      - "Two installs hold a claim on the same tree."
+      - "An install takes over a pre-existing unowned structural tree, a derived copy, or another tree's alias target."
+      - "A structural claim is released while the uninstalled tree is still inside its soft-delete window."
+      - "A cross-app role scope or subscription compiles for a tree whose owner is not installed in the same tenant."
+    detection_signals:
+      - type: exception
+        name: "AppActivationFailure.TreeOwnershipConflict"
+        source: "src/lattice.apps/Activation/AppActivationFailure.cs#AppActivationFailure.TreeOwnershipConflict"
+      - type: test
+        name: "AppTreeOwnershipLedgerTests"
+        source: "test/lattice.apps/Ownership/AppTreeOwnershipLedgerTests.cs"
+      - type: test
+        name: "AppActivationEngineTests.Ownership"
+        source: "test/lattice.apps/Activation/AppActivationEngineTests.Ownership.cs"
+    remediation:
+      - step: "Read the conflicts an install would hit with IAppRegistry.GetTreeOwnershipConflictsAsync or DescribeAsync before installing."
+        source: "src/lattice.apps/Registry/IAppRegistry.cs#IAppRegistry.GetTreeOwnershipConflictsAsync"
+      - step: "Uninstall the owning install, or stop declaring the adopted tree, to release the claim before another install adopts the tree."
+        source: "docs/lattice.apps/README.md"
+    sources:
+      - "docs/lattice.apps/README.md"
+      - "src/lattice.apps/Ownership/AppTreeOwnershipLedger.cs"
   - id: atomic-action-compensation-terminal
     name: "Atomic action terminal outcome"
     description: "An atomic action reaches one terminal outcome and compensates prepared participants on failure without exposing a partial plan as successful."
@@ -611,6 +646,7 @@ invariants:
       - "A singleton captures per-user credential state."
       - "One circuit can reuse another operator's auth session."
       - "Security response headers are omitted on the Explorer branch."
+      - "A credential clear that cannot send response headers leaves the stored cookie replayable against an endpoint the console was repointed to."
     detection_signals:
       - type: test
         name: "Explorer service lifetime tests"
@@ -618,6 +654,9 @@ invariants:
       - type: health
         name: "security response headers"
         source: ".github/instructions/security.instructions.md"
+      - type: test
+        name: "CookieCredentialStoreTests"
+        source: "test/lattice.explorer/Web/CookieCredentialStoreTests.cs"
     remediation:
       - step: "Register per-user auth, connection, and credential services as scoped."
         source: ".github/instructions/security.instructions.md"
@@ -625,8 +664,11 @@ invariants:
         source: ".github/instructions/security.instructions.md"
       - step: "Emit the Explorer security response headers through middleware on the Explorer branch."
         source: ".github/instructions/security.instructions.md"
+      - step: "Revoke the presented cookie value in-process on every ClearAsync and refuse a revoked value in GetAsync, whether or not the delete header could be sent."
+        source: "src/lattice.explorer/WebHosting/CookieCredentialStore.cs#CookieCredentialStore"
     sources:
       - ".github/instructions/security.instructions.md"
+      - "src/lattice.explorer/WebHosting/CookieCredentialStore.cs"
   - id: grain-key-storage-safe
     name: "Persistent grain keys are storage safe"
     description: "A persistent grain composite key uses one marked builder that cannot emit storage-unsafe control or URL-forbidden characters."
@@ -766,10 +808,18 @@ invariants:
       - "A denied tool is hidden from tools/list but callable through tools/call."
       - "A null HttpContext or null authorizer allows a tool invocation."
       - "A second ungated tool is advertised without authorization."
+      - "A mutating data tool is advertised to, or invocable by, a caller holding only a Read grant."
+      - "A tree-scoped AppInstall grant satisfies a per-tool minimum."
     detection_signals:
       - type: test
         name: "MCP authorization lockstep tests"
         source: "test/lattice.api.mcp/McpToolAuthorizationGateTests.cs"
+      - type: test
+        name: "DataToolGroupTests"
+        source: "test/lattice.api.mcp/Tools/Data/DataToolGroupTests.cs"
+      - type: test
+        name: "AuthAdminMcpPermissionResolverTests"
+        source: "test/lattice.api.mcp/AuthAdminMcpPermissionResolverTests.cs"
     remediation:
       - step: "Route tool advertisement and invocation through one shared lock-step gate."
         source: ".github/instructions/security.instructions.md"
@@ -777,6 +827,10 @@ invariants:
         source: ".github/instructions/security.instructions.md"
       - step: "Leave lattice_capabilities as the only ungated advertisement."
         source: ".github/instructions/security.instructions.md"
+      - step: "Override RequiredOperationsFor in a tool group whose mutating tools must not be reachable on a bare read grant."
+        source: "src/lattice.api.mcp/Discovery/ILatticeApiMcpToolGroup.cs#ILatticeApiMcpToolGroup.RequiredOperationsFor"
+      - step: "Mask every scopeless capability (Telemetry and AppInstall) out of rules not written at cluster-wide scope during discovery."
+        source: "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
     sources:
       - ".github/instructions/security.instructions.md"
   - id: membership-directory-validation-fail-closed
@@ -860,6 +914,7 @@ invariants:
       - "A consumer resumes by HLC and skips a lower-HLC entry committed later in a partition."
       - "Tombstone reap envelopes are surfaced to a consumer that has no apply rule for them."
       - "CRDT-mode consumers read stripped Value payloads instead of Delta payloads."
+      - "A consumer subscribes by logical tree id after a resize or shadow-cutover restore and reads the retired physical log, or nothing after purge, because the feed does not follow aliases."
     detection_signals:
       - type: test
         name: "change feed tests"
@@ -973,6 +1028,30 @@ invariants:
         source: "docs/lattice.replication/replication-apply.md"
     sources:
       - "docs/lattice.replication/replication-apply.md"
+  - id: replication-peer-origin-binding
+    name: "Replication peers act only on their own origin"
+    description: "Every replication receiver verb that keys the durable per-origin high-water mark by a body-declared OriginClusterId binds it to the transport-stamped origin, so a peer can neither advance nor read another cluster's stream cursor."
+    scope:
+      packages:
+        - "Orleans.Lattice.Replication.Grpc"
+      components:
+        - "LatticeReplicationGrpcService"
+    violation_modes:
+      - "A mesh-secret holder pushes under a third cluster's origin and drives that stream's high-water mark forward, suppressing anti-entropy repair for it."
+      - "GetPeerHighWaterMark discloses a third cluster's replication cursor."
+      - "A new verb consuming a body-declared origin skips the binding."
+    detection_signals:
+      - type: test
+        name: "LatticeReplicationGrpcServiceEnrollmentTests"
+        source: "test/lattice.replication.grpc/LatticeReplicationGrpcServiceEnrollmentTests.cs"
+      - type: log
+        name: "Refusing replication origin mismatch warning"
+        source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
+    remediation:
+      - step: "Call EnsureOriginMatchesCaller from every verb that consumes a body-declared OriginClusterId, before reading or advancing the per-origin high-water mark."
+        source: "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs#EnsureOriginMatchesCaller"
+    sources:
+      - "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs"
   - id: replication-pinned-causal-floor
     name: "Replication pinned causal floor"
     description: "Steady-state receiver dedupe drops only entries at or below a pinned snapshot floor and not entries below the per-origin high-water mark."
@@ -1023,6 +1102,7 @@ invariants:
       - "A fenced tree applies inbound entries during a restore cutover."
       - "A deferred entry is acknowledged as applied and the sender advances permanently."
       - "A custom applier fails to propagate Deferred through ApplyBatchAsync."
+      - "A dead-letter replay the receive fence defers removes the parked entry, which was the write's only copy."
     detection_signals:
       - type: metric
         name: "orleans.lattice.replication.saga.fence.duration"
@@ -1033,6 +1113,9 @@ invariants:
       - type: status-field
         name: "Deferred"
         source: "docs/lattice.replication/replication-apply.md"
+      - type: test
+        name: "LatticeReplicationDeadLettersTests"
+        source: "test/lattice.replication/LatticeReplicationDeadLettersTests.cs"
     remediation:
       - step: "Return Applied=false and Deferred=true while the restore receive fence is active."
         source: "docs/lattice.replication/replication-apply.md"
@@ -1040,9 +1123,12 @@ invariants:
         source: "docs/lattice.replication/replication-apply.md"
       - step: "Override ApplyBatchAsync in custom appliers that can return deferred results."
         source: "docs/lattice.replication/replication-apply.md"
+      - step: "Leave a dead-letter entry parked when ReplayAsync returns Deferred true, and replay it again once the fence lifts."
+        source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ILatticeReplicationDeadLetters.ReplayAsync"
     sources:
       - "docs/lattice.replication/replication-apply.md"
       - "docs/lattice.replication/coordinated-restore.md"
+      - "docs/lattice.replication/dead-letter-queue.md"
   - id: replication-source-hlc-preservation
     name: "Replication source HLC preservation"
     description: "Receiver apply preserves the authoring cluster's HLC and origin where documented so last-writer-wins and provenance stay deterministic across clusters."
@@ -1081,7 +1167,7 @@ invariants:
       - "docs/lattice.replication/deltas.md"
   - id: snapshot-consistency
     name: "Snapshot consistency"
-    description: "Offline snapshots copy an exact lock-instant state and online snapshots converge to the source state at drain completion while preserving HLCs and TTLs."
+    description: "Offline snapshots copy an exact lock-instant state; online snapshots preserve source HLCs and absolute TTL expiry for the entries they copy or mirror, and do not mirror typed CRDT deltas applied to a source shard after it drained."
     scope:
       packages:
         - "Orleans.Lattice"
@@ -1344,6 +1430,82 @@ invariants:
       - "docs/lattice/ttl.md"
       - "docs/lattice/tombstone-compaction.md"
       - "docs/lattice/consistency.md"
+  - id: tree-alias-ownership-bounded
+    name: "Tree aliasing is bounded by ownership"
+    description: "Every alias assignment, including system-origin resize, restore and remediation, is decided by the registered ITreeOwnershipGuard before the registry writes or publishes it, and a denial or guard failure leaves the alias unwritten."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Apps"
+      components:
+        - "LatticeRegistryGrain"
+        - "ITreeOwnershipGuard"
+        - "AppTreeOwnershipGuard"
+    violation_modes:
+      - "An alias is written or published before the ownership guard decides."
+      - "A system-origin resize, restore or remediation alias bypasses the ownership guard."
+      - "A default TreeOwnershipDecision is treated as an allow."
+      - "A guard failure is swallowed and the alias is written."
+      - "An alias lets one install's logical tree read or write a tree another install owns."
+    detection_signals:
+      - type: exception
+        name: "LatticeTreeOwnershipDeniedException"
+        source: "src/lattice/LatticeTreeOwnershipDeniedException.cs#LatticeTreeOwnershipDeniedException"
+      - type: test
+        name: "LatticeRegistryGrainTests.Ownership"
+        source: "test/lattice/BPlusTree/Grains/LatticeRegistryGrainTests.Ownership.cs"
+      - type: test
+        name: "AppTreeOwnershipGuardTests"
+        source: "test/lattice.apps/Ownership/AppTreeOwnershipGuardTests.cs"
+    remediation:
+      - step: "Consult ITreeOwnershipGuard.AuthorizeAliasAsync with the target's registry-read DerivedFrom on every alias assignment, after namespace, target-control and lifecycle checks."
+        source: "docs/lattice/tree-registry.md"
+      - step: "Return an explicit TreeOwnershipDecision.Allow or Deny from a guard; never rely on the default value."
+        source: "src/lattice/TreeOwnershipDecision.cs#TreeOwnershipDecision"
+      - step: "Keep guard implementations to point reads; never call registry mutations or range scans from the guard."
+        source: "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard.AuthorizeAliasAsync"
+    sources:
+      - "docs/lattice/tree-registry.md"
+      - "src/lattice/ITreeOwnershipGuard.cs"
+      - "docs/lattice.apps/README.md"
+  - id: tree-logical-lifecycle-across-alias
+    name: "Logical tree lifecycle across an alias"
+    description: "Delete, recover and purge act on the logical tree: on an aliased tree they apply to the pinned live copy only when that copy was derived from the tree and no other logical tree aliases it, and alias-changing operations never overlap a logical delete."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Api.TreeAdmin"
+      components:
+        - "TreeDeletionGrain"
+        - "LatticeRegistryGrain"
+        - "Tree resize, restore and schema remediation coordinators"
+    violation_modes:
+      - "A delete on an aliased tree marks only the logical id's own shards while reads and writes through the alias keep succeeding."
+      - "A delete through one logical name removes an independent tree or a tree another logical tree aliases."
+      - "A retry after an ambiguous failure re-resolves the alias and acts on a different target."
+      - "A resize, restore or remediation changes the alias while a logical delete is pending."
+      - "A resize's retirement of its old copy makes the live tree read as deleted."
+    detection_signals:
+      - type: test
+        name: "TreeDeletionGrainTests.Aliases"
+        source: "test/lattice/BPlusTree/Grains/TreeDeletionGrainTests.Aliases.cs"
+      - type: test
+        name: "TreeResizeAliasLifecycleIntegrationTests.Deletion"
+        source: "test/lattice/BPlusTree/TreeResizeAliasLifecycleIntegrationTests.Deletion.cs"
+      - type: exception
+        name: "InvalidOperationException"
+        source: "src/lattice/BPlusTree/ILattice.cs#ILattice.DeleteTreeAsync"
+    remediation:
+      - step: "Resolve the alias target, require its DerivedFrom to equal the logical tree id and no other logical tree to alias it, and pin it in durable state before any physical effect."
+        source: "docs/lattice/tree-registry.md"
+      - step: "Hold a durable alias-change reservation keyed by operation id for the whole of a resize, restore or remediation alias change, and refuse a delete while one is held."
+        source: "docs/lattice/tree-registry.md"
+      - step: "Wait for the alias-changing operation to finish, then retry the delete."
+        source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ILatticeTreeAdmin.DeleteTreeAsync"
+    sources:
+      - "docs/lattice/tree-registry.md"
+      - "src/lattice/BPlusTree/ILattice.cs"
+      - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
   - id: tree-resize-shadow-swap
     name: "Tree resize shadow swap"
     description: "An online resize drains into a new physical tree, shadow-forwards live writes, atomically swaps the registry alias, and leaves callers with at most one transparent retry."

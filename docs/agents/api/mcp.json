@@ -187,10 +187,8 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "status": "uncertain",
-        "reason": "The auth API source does not state an explicit concurrent-writer conflict rule for member edges.",
-        "required_source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs",
-        "issue": 3637
+        "rule": "Each membership edge is stored as independent forward and reverse ILattice rows; add writes marker rows and remove tombstones them, so concurrent add and remove resolve per row by the ILattice per-key LWW HLC merge.",
+        "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Auth/AuthToolHandlers.cs#AuthToolHandlers.AddMemberAsync",
@@ -867,10 +865,8 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "status": "uncertain",
-        "reason": "The auth API source does not state the conflict rule for concurrent replacements of the same rule id.",
-        "required_source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs",
-        "issue": 3637
+        "rule": "Rules are stored as ILattice LWW rows keyed by governed tree id and rule id; concurrent replacements of the same rule id resolve by the row with the highest HLC.",
+        "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Auth/AuthToolHandlers.cs#AuthToolHandlers.PutRuleAsync",
@@ -926,10 +922,8 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "status": "uncertain",
-        "reason": "The auth API source does not state the conflict rule for concurrent remove and upsert of the same group.",
-        "required_source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs",
-        "issue": 3637
+        "rule": "Group records are ILattice LWW rows; concurrent remove and upsert of the same group resolve by the highest HLC, with the delete tombstone winning an exact HLC tie.",
+        "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Auth/AuthToolHandlers.cs#AuthToolHandlers.RemoveGroupAsync",
@@ -990,10 +984,8 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "status": "uncertain",
-        "reason": "The auth API source does not state the conflict rule for concurrent add and remove of the same edge.",
-        "required_source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs",
-        "issue": 3637
+        "rule": "Each membership edge is stored as independent forward and reverse ILattice rows; add writes marker rows and remove tombstones them, so concurrent add and remove resolve per row by the ILattice per-key LWW HLC merge.",
+        "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Auth/AuthToolHandlers.cs#AuthToolHandlers.RemoveMemberAsync",
@@ -1054,10 +1046,8 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "status": "uncertain",
-        "reason": "The auth API source does not state the conflict rule for concurrent remove and put of the same rule.",
-        "required_source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs",
-        "issue": 3637
+        "rule": "Rules are stored as ILattice LWW rows keyed by governed tree id and rule id; concurrent remove and put of the same rule resolve by the highest HLC, with the delete tombstone winning an exact HLC tie.",
+        "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Auth/AuthToolHandlers.cs#AuthToolHandlers.RemoveRuleAsync",
@@ -1119,10 +1109,8 @@
         "source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
       },
       "concurrency": {
-        "status": "uncertain",
-        "reason": "The auth API source does not state the conflict rule for concurrent replacements of the same group.",
-        "required_source": "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs",
-        "issue": 3637
+        "rule": "Group records are ILattice LWW rows; concurrent replacements of the same group resolve by the row with the highest HLC.",
+        "source": "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Auth/AuthToolHandlers.cs#AuthToolHandlers.UpsertGroupAsync",
@@ -1196,20 +1184,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry captures a fresh current snapshot without a caller idempotency key.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureTreeAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupAsync"
+        "idempotent": false,
+        "basis": "A full capture has no caller operation id, mints a fresh artifact id from time and Guid, and captures the current tree snapshot.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#BuildArtifactId"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -1293,20 +1275,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not blindly retry after an ambiguous failure; list or describe backups first because a retry reads the current WAL delta from the base and has no caller idempotency key.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureIncrementalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateIncrementalBackupAsync"
+        "idempotent": false,
+        "basis": "An incremental capture has no caller operation id, mints a fresh artifact id, and captures the current WAL delta from the base backup frontier.",
+        "source": "src/lattice.backup/LatticeBackupCaptureService.cs#CaptureIncrementalAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -1987,10 +1963,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#DeleteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "Point delete has no documented idempotency key or replay contract beyond returning whether a live value existed and was removed.",
-        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The first successful delete writes an LWW tombstone and returns true, while a repeat after that tombstone short-circuits as absent and returns false without replaying the original response.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#BPlusLeafGrain.DeleteCoreAsync"
       },
       "concurrency": {
         "rule": "Deleting from an unknown tree is a documented no-op that must still run behind the delete gate.",
@@ -2057,10 +2032,9 @@
         "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#DeleteRangeAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "Range delete has no documented caller-supplied idempotency key or replay contract.",
-        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
-        "issue": 3636
+        "idempotent": false,
+        "basis": "The request has no operation id or resume token and each invocation drains the current half-open range, so a replay can produce a different DeletedCount and can tombstone keys inserted into the range after the first call.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.cs#LatticeGrain.DeleteRangeAsync"
       },
       "concurrency": {
         "rule": "Range delete is all-or-nothing across its span for authorization; partial authorization tombstones nothing.",
@@ -2132,10 +2106,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -2328,10 +2301,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -2524,10 +2496,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -2657,10 +2628,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -2795,10 +2765,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -2870,10 +2839,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3021,10 +2989,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3165,10 +3132,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3309,10 +3275,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3532,10 +3497,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3676,10 +3640,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3827,10 +3790,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -3960,10 +3922,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#SetAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "Point set has no documented idempotency key or replay contract at the API layer.",
-        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
-        "issue": 3636
+        "idempotent": false,
+        "basis": "The facade carries no operation id and each SetAsync invocation reaches a leaf commit that advances HLC, writes a new LWW value, and can publish another mutation even when the bytes match a previous call.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#BPlusLeafGrain.CommitSetAsync"
       },
       "concurrency": {
         "rule": "The operation routes through the same gated ILattice.SetAsync write path used by in-cluster clients.",
@@ -4293,10 +4254,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -7281,20 +7241,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the registry overwrites the same retention fields and the facade reads back the effective policy.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+        "idempotent": true,
+        "basis": "SetHistoryRetentionAsync writes the requested retention mode and window ticks onto the registry entry, replacing the same fields on repeat.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "concurrency": {
         "rule": "Already-written rows keep their stamped shape.",
@@ -8746,7 +8700,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "concurrency": {
-        "rule": "Trees that source materialised views are rejected.",
+        "rule": "Rejected while the tree is the source of a materialised view, while another tree aliases it, when its alias targets a tree it does not own, or while a resize, restore or remediation is changing its alias.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "sources": [
@@ -9033,20 +8987,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Safe to retry after an interrupted shard purge, which is re-driven; once PurgeComplete is persisted a repeat throws InvalidOperationException even if the registry unregister that follows it failed, so after an ambiguous failure read the deletion status and treat an already-purged status as success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Irreversible hard purge has no retry-safe contract.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PurgeTreeAsync"
+        "idempotent": "conditional",
+        "basis": "Shard clearing re-runs until PurgeComplete is persisted, after which a repeated call throws InvalidOperationException instead of returning the original success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "concurrency": {
         "rule": "confirm must be true before irreversible purge.",
@@ -9097,23 +9045,17 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry is safe until recovery state is durably cleared; after success a repeated call fails with InvalidOperationException because the tree is not deleted.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#RecoverPhysicalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+        "idempotent": "conditional",
+        "basis": "RecoverPhysicalAsync re-runs before IsDeleted is cleared, but a repeat after a successful clear throws because the tree is no longer deleted.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#RecoverPhysicalAsync"
       },
       "concurrency": {
-        "rule": "Available within the soft-delete recovery window.",
+        "rule": "Available within the soft-delete recovery window; on an aliased tree it recovers the live copy the delete pinned, and a live resized tree is not deleted, so recovering it is rejected.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
       },
       "sources": [
@@ -9411,20 +9353,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry is safe until undo state is durably cleared; after success a repeated call fails with InvalidOperationException because no undoable resize remains.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeCoreAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+        "idempotent": "conditional",
+        "basis": "UndoResizeCoreAsync preserves retryability until ResetResizeState is persisted, but after that persisted clear a repeat is rejected because no resize remains to undo.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeCoreAsync"
       },
       "concurrency": {
         "rule": "Available during resize or before pre-resize purge.",
@@ -9750,23 +9686,17 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; setting the same alias overwrites the registry entry with the same physical tree id.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+        "idempotent": true,
+        "basis": "SetAliasAsync stores PhysicalTreeId on the logical tree's registry entry, so the same alias request leaves the same alias mapping.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed.",
+        "rule": "Only one level of alias indirection is allowed, and the alias is refused while either tree is deleted or a delete of it is pending.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
       },
       "sources": [
@@ -9877,20 +9807,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; every applied dimension is overwritten with the same value and unapplied dimensions are skipped again.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeConfigAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync"
+        "idempotent": true,
+        "basis": "SetTreeConfigAsync applies each flagged registry override by replacing that dimension with the requested value, so reapplying the same partial update leaves the same configuration.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeConfigAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -10159,20 +10083,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the durable view registration returns immediately when the same registration already exists.",
+        "source": "src/lattice/Views/ViewRegistryGrain.cs#RegisterAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateViewAsync"
+        "idempotent": true,
+        "basis": "The runtime view registry returns without writing when the existing registration equals the requested registration.",
+        "source": "src/lattice/Views/ViewRegistryGrain.cs#RegisterAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -10333,20 +10251,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not retry after an ambiguous failure; a repeated rebuild can advance to another view generation or rebuild in place from later source state.",
+        "source": "src/lattice/Views/ViewMaintainerGrain.cs#RebuildAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether a repeated rebuild is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Shadow-swap rebuild from current source state with no stated retry contract.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RebuildViewAsync"
+        "idempotent": false,
+        "basis": "RebuildAsync targets ActiveGeneration plus one and SwapToShadowAsync persists a new ActiveGeneration on each completed locally derived rebuild.",
+        "source": "src/lattice/Views/ViewMaintainerGrain.ShadowSwap.cs#SwapToShadowAsync"
       },
       "concurrency": {
         "rule": "A complete new generation is built and the active generation is flipped in one durable commit; readers never observe a half-built view and the source keeps serving reads and writes.",
@@ -10686,20 +10598,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; after the source tail is trimmed the live-range check leaves the outcome as NoOp.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.WalMove.cs#ReclaimMovedWalSourceAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Irreversible finalisation has no retry-safe contract.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+        "idempotent": true,
+        "basis": "ReclaimMovedWalSourceAsync trims only when the source provider still has a live retained range, otherwise it returns NoOp without trimming.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.WalMove.cs#ReclaimMovedWalSourceAsync"
       },
       "concurrency": {
         "rule": "Refused if the source provider is the live placement.",
@@ -13622,11 +13528,11 @@
     },
     {
       "id": "invalid-argument",
-      "type": "McpException",
+      "type": "result-error",
       "grpc_status": null,
       "retryable": false,
-      "meaning": "The request supplied an unknown parameter, invalid value, unsafe path, or unsupported region.",
-      "source": "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs#CredentialStampingTool.InvokeAsync"
+      "meaning": "The request supplied an unknown parameter, a missing or invalid value, refused content, an unsafe path, or an unsupported region. A fault classified as a client error is answered as an MCP error result (isError true) rather than thrown, logged at Debug and counted; authorization denials are never classified as client errors.",
+      "source": "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
     },
     {
       "id": "mcp-exception",
