@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Api.Apps.Tests;
 
 /// <summary>
 /// Shared harness for the workspace tests: a settable registry projection, named test sources composed into a
-/// real <see cref="AppSourceSet"/>, a granting access gate and a fixed-subject membership context, wired into
-/// the real <see cref="AppRoleGrantEvaluator"/> and <see cref="LatticeAppWorkspace"/>.
+/// real <see cref="AppSourceSet"/>, and a fixed-subject membership context whose groups a test joins, wired into
+/// the real <see cref="AppRoleGrantEvaluator"/> and <see cref="LatticeAppWorkspace"/>. Roles are held by binding,
+/// so a test grants one by joining Alice to the group the record binds to it.
 /// </summary>
 internal sealed class WorkspaceHarness
 {
@@ -20,6 +21,7 @@ internal sealed class WorkspaceHarness
     {
         Source = new TestCatalogSource(InImageAppSource.SourceKey).Publish(Manifest()).WithUiAssets();
         Sources = new AppSourceSet([Source]);
+        Membership = AliceMembership;
     }
 
     public TestCatalogSource Source { get; }
@@ -28,16 +30,16 @@ internal sealed class WorkspaceHarness
 
     public SettableProjection Projection { get; } = new();
 
-    public GrantingGate Gate { get; } = new();
-
     public ConfigurableTenantResolver Tenants { get; } = new();
 
-    public ILatticeMembershipContext? Membership { get; set; } = new FixedSubjectMembership(Alice);
+    public FixedSubjectMembership AliceMembership { get; } = new(Alice);
+
+    public ILatticeMembershipContext? Membership { get; set; }
 
     public IAppActivationPipeline Pipeline { get; } = Substitute.For<IAppActivationPipeline>();
 
     public LatticeAppWorkspace Workspace => new(
-        new AppRoleGrantEvaluator(Projection, Sources, Gate), Sources, Tenants, Membership, Pipeline);
+        new AppRoleGrantEvaluator(Projection, Sources), Sources, Tenants, Membership, Pipeline);
 
     public static AppManifest Manifest(string version = AppsControlHarness.Version) =>
         UiTestManifests.WithUi(AppsControlHarness.Manifest(version), UiTestManifests.Bridge(AppUiBridgeOperations.DataRead));
@@ -54,12 +56,18 @@ internal sealed class WorkspaceHarness
         return this;
     }
 
-    /// <summary>Grants Alice read on the app's contacts tree, which holds the manifest's reader role.</summary>
-    public WorkspaceHarness GrantReader(TenantId? tenant = null)
+    /// <summary>
+    /// Joins Alice to <c>g-readers</c>, the group the harness record binds to the manifest's reader role. The
+    /// binding lives on the record, so it holds the role in whichever tenant the record is installed in.
+    /// </summary>
+    public WorkspaceHarness GrantReader()
     {
-        Gate.Grant(Alice, AppsTreeId(tenant ?? TenantId.Default, "contacts"), LatticeOperation.Read);
+        AliceMembership.Join(ReadersGroup);
         return this;
     }
+
+    /// <summary>The group <see cref="Record"/> binds to the reader role.</summary>
+    public const string ReadersGroup = "g-readers";
 
     public static string AppsTreeId(TenantId tenant, string tree) =>
         tenant.IsDefault ? $"a/{AppsControlHarness.Slug}/{tree}" : $"t/{tenant.Value}/a/{AppsControlHarness.Slug}/{tree}";
@@ -92,15 +100,25 @@ internal sealed class WorkspaceHarness
         }
     }
 
-    /// <summary>A membership context resolving one fixed subject.</summary>
+    /// <summary>A membership context resolving one fixed subject with the groups a test joined it to.</summary>
     internal sealed class FixedSubjectMembership(string subject) : ILatticeMembershipContext
     {
-        public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default) => new(new LatticeSubject(subject));
+        private readonly HashSet<string> _groups = new(StringComparer.Ordinal);
+
+        public FixedSubjectMembership Join(string group)
+        {
+            _groups.Add(group);
+            return this;
+        }
+
+        public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default) => new(Current());
 
         public bool TryResolveCurrent(out LatticeSubject resolved)
         {
-            resolved = new LatticeSubject(subject);
+            resolved = Current();
             return true;
         }
+
+        private LatticeSubject Current() => new(subject, new HashSet<string>(_groups, StringComparer.Ordinal));
     }
 }

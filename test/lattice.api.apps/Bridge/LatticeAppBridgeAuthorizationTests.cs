@@ -268,6 +268,34 @@ public sealed class LatticeAppBridgeAuthorizationTests
         Assert.That(harness.Gate.Requests, Is.Zero, "the caller's own rules are never consulted to grant an app role");
     }
 
+    /// <summary>
+    /// #3902: the roles the workspace reports to the app's frame are exactly the roles the bridge honours. A
+    /// broad-rights operator bound only to viewer is reported as viewer and may read but not write; a bound
+    /// editor is reported as editor and may write.
+    /// </summary>
+    [TestCase("olga", new[] { BridgeHarness.Viewers, "g-operators" }, new[] { "viewer" }, false)]
+    [TestCase("erin", new[] { BridgeHarness.Editors }, new[] { "editor" }, true)]
+    [TestCase("vera", new[] { BridgeHarness.Viewers, BridgeHarness.Editors }, new[] { "viewer", "editor" }, true)]
+    public async Task The_workspace_reports_exactly_the_roles_the_bridge_honours(string subject, string[] groups, string[] roles, bool mayWrite)
+    {
+        var harness = new BridgeHarness().Installed(subject, groups);
+        var evaluator = new AppRoleGrantEvaluator(harness.Projection, harness.Sources);
+        var workspace = new LatticeAppWorkspace(evaluator, harness.Sources, harness.Tenants, harness.Membership);
+        var bridge = new LatticeAppBridge(evaluator, harness.Grains, harness.Tenants, harness.Membership, new AppBridgeRateLimiter(harness.Options, harness.Time));
+
+        Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(roles));
+        Assert.That(await bridge.GetAsync(BridgeHarness.Target(), "k"), Is.Null, "every role here may read");
+        if (mayWrite)
+        {
+            await bridge.SetAsync(BridgeHarness.Target(), "k", new byte[] { 1 });
+            Assert.That(harness.Store(BridgeHarness.NotesTree).ContainsKey("k"), Is.True);
+        }
+        else
+        {
+            BridgeAssert.Fails(AppBridgeFailure.Denied, () => bridge.SetAsync(BridgeHarness.Target(), "k", new byte[] { 1 }));
+        }
+    }
+
     [Test]
     public async Task A_role_that_may_read_keys_but_not_ranges_is_denied_a_scan()
     {
@@ -438,7 +466,6 @@ public sealed class LatticeAppBridgeAuthorizationTests
 
     [TestCase("grains")]
     [TestCase("tenants")]
-    [TestCase("gate")]
     [TestCase("projection")]
     [TestCase("source")]
     public void A_missing_collaborator_is_denied(string missing)
@@ -447,7 +474,6 @@ public sealed class LatticeAppBridgeAuthorizationTests
         var bridge = harness.Create(
             withGrains: missing != "grains",
             withTenants: missing != "tenants",
-            withGate: missing != "gate",
             withProjection: missing != "projection",
             withSource: missing != "source");
 

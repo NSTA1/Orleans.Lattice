@@ -3,122 +3,138 @@ using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
+/// <summary>
+/// Unit tests for <see cref="AppRoleGate"/>, the single definition of "holds an app role": a role is held by
+/// binding - membership of a group the install binds to it - never by the caller's other rights.
+/// </summary>
 [TestFixture]
 public sealed class AppRoleGateTests
 {
-    private static readonly LatticeSubject Alice = new("alice");
+    private static readonly LatticeScope[] Notes = [LatticeScope.Tree("t1")];
+
+    private static LatticeSubject Member(string subject, params string[] groups) =>
+        new(subject, new HashSet<string>(groups, StringComparer.Ordinal));
 
     [Test]
-    public async Task A_role_is_held_only_when_every_operation_is_allowed_on_one_scope()
+    public void A_member_of_a_bound_group_holds_the_role()
     {
-        var gate = new GrantingAccessGate().Grant("alice", "t1", LatticeOperation.Read);
-        var role = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Tree("t1")]);
+        var role = new AppRoleGate(LatticeOperation.Read, Notes, ["g-viewers"]);
 
-        Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
-
-        gate.Grant("alice", "t1", LatticeOperation.Write);
-        Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(role.IsHeld(Member("alice", "g-viewers")), Is.True);
+            Assert.That(role.IsHeld(Member("alice", "g-other", "g-viewers")), Is.True);
+            Assert.That(role.ConfersGrant, Is.True);
+        });
     }
 
     [Test]
-    public async Task A_role_is_held_when_any_one_scope_carries_every_operation()
+    public void A_role_bound_to_several_groups_is_held_through_any_of_them()
     {
-        var gate = new GrantingAccessGate()
-            .Grant("alice", "t1", LatticeOperation.Read)
-            .Grant("alice", "t2", LatticeOperation.Read | LatticeOperation.Write);
-        var role = new AppRoleGate(
-            LatticeOperation.Read | LatticeOperation.Write,
-            [LatticeScope.Tree("t1"), LatticeScope.Tree("t2")]);
+        var role = new AppRoleGate(LatticeOperation.Read, Notes, ["g-a", "g-b"]);
 
-        Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.True);
+        Assert.That(role.IsHeld(Member("alice", "g-b")), Is.True);
     }
 
     [Test]
-    public async Task Operations_split_across_scopes_do_not_hold_the_role()
+    public void A_caller_outside_every_bound_group_does_not_hold_the_role_whatever_else_it_belongs_to()
     {
-        var gate = new GrantingAccessGate()
-            .Grant("alice", "t1", LatticeOperation.Read)
-            .Grant("alice", "t2", LatticeOperation.Write);
-        var role = new AppRoleGate(
-            LatticeOperation.Read | LatticeOperation.Write,
-            [LatticeScope.Tree("t1"), LatticeScope.Tree("t2")]);
+        var editor = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, Notes, ["g-editors"]);
 
-        Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
-    }
-
-    [Test]
-    public async Task Each_operation_bit_is_asked_separately_with_the_key_of_a_key_scope()
-    {
-        var gate = new GrantingAccessGate().Grant("alice", "t1", LatticeOperation.Read | LatticeOperation.Write);
-        var role = new AppRoleGate(LatticeOperation.Read | LatticeOperation.Write, [LatticeScope.Key("t1", "k")]);
-
-        await role.IsHeldAsync(gate, Alice, CancellationToken.None);
-
-        Assert.That(
-            gate.Requests.Select(r => (r.TreeId, r.Operation, r.Key, r.Subject.SubjectId)),
-            Is.EqualTo(new[] { ("t1", LatticeOperation.Read, (string?)"k", "alice"), ("t1", LatticeOperation.Write, (string?)"k", "alice") }));
+        Assert.That(editor.IsHeld(Member("bob", "g-viewers", "cluster-admins")), Is.False);
     }
 
     /// <summary>
-    /// Security regression (#3863). A key filter is a per-key predicate, so probing it with
-    /// the prefix string itself asks about the single key equal to that prefix - not about
-    /// the prefix. A policy of "deny by default, plus one Allow/Read on the exact key
-    /// <c>p/</c>" compiles to exactly this filter, and used to report a role scoped to the
-    /// whole <c>p/</c> prefix as held. Only an unfiltered allow spans a prefix, so any
-    /// filtered decision must fail closed.
+    /// Security regression (#3863, re-stated under #3902). A caller whose only right on a prefix-scoped role
+    /// is its own grant on the single key that spells the prefix must not hold the role. Under the binding
+    /// definition no right of the caller's own is consulted at all, so a key-filtered allow, an unfiltered allow
+    /// or any other rule outside the app's bindings is equally unable to confer the prefix.
     /// </summary>
     [Test]
-    public async Task A_filtered_allow_never_holds_a_prefix_scope()
+    public void A_prefix_role_is_never_held_through_the_callers_own_rights()
     {
-        var exactKeyOnly = new GrantingAccessGate
-        {
-            Override = _ => LatticeAccessDecision.Filtered(k => string.Equals(k, "p/", StringComparison.Ordinal)),
-        };
-        var keepsEverything = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(_ => true) };
-        var prefix = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Prefix("t1", "p/")]);
+        var prefix = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Prefix("t1", "p/")], ["g-readers"]);
 
-        Assert.Multiple(async () =>
+        Assert.Multiple(() =>
         {
-            Assert.That(await prefix.IsHeldAsync(exactKeyOnly, Alice, CancellationToken.None), Is.False);
-            Assert.That(await prefix.IsHeldAsync(keepsEverything, Alice, CancellationToken.None), Is.False);
+            Assert.That(prefix.IsHeld(Member("alice", "exact-key-p-readers")), Is.False);
+            Assert.That(prefix.IsHeld(Member("alice", "g-readers")), Is.True);
         });
     }
 
     [Test]
-    public async Task A_filtered_allow_never_holds_a_whole_tree_scope()
+    public void A_role_that_confers_nothing_is_never_held()
     {
-        var gate = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Filtered(_ => true) };
-        var role = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Tree("t1")]);
+        var member = Member("alice", "g");
 
-        Assert.That(await role.IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
-    }
-
-    [Test]
-    public async Task A_role_with_no_operations_or_no_scopes_is_never_held()
-    {
-        var gate = new GrantingAccessGate { Override = _ => LatticeAccessDecision.Allow() };
-
-        Assert.Multiple(async () =>
+        Assert.Multiple(() =>
         {
-            Assert.That(await new AppRoleGate(LatticeOperation.None, [LatticeScope.Tree("t1")]).IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
-            Assert.That(await new AppRoleGate(LatticeOperation.Read, []).IsHeldAsync(gate, Alice, CancellationToken.None), Is.False);
+            var noOperations = new AppRoleGate(LatticeOperation.None, Notes, ["g"]);
+            var noScopes = new AppRoleGate(LatticeOperation.Read, [], ["g"]);
+            var unbound = new AppRoleGate(LatticeOperation.Read, Notes, []);
+            Assert.That(noOperations.IsHeld(member), Is.False);
+            Assert.That(noScopes.IsHeld(member), Is.False);
+            Assert.That(unbound.IsHeld(member), Is.False);
+            Assert.That(noOperations.ConfersGrant || noScopes.ConfersGrant || unbound.ConfersGrant, Is.False);
         });
     }
 
     [Test]
-    public void Constructor_rejects_null_scopes()
-        => Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, null!));
+    public void A_caller_without_a_resolved_identity_or_group_closure_holds_nothing()
+    {
+        var role = new AppRoleGate(LatticeOperation.Read, Notes, ["g"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(role.IsHeld(LatticeSubject.Anonymous with { GroupIds = new[] { "g" } }), Is.False);
+            Assert.That(role.IsHeld(new LatticeSubject(string.Empty, ["g"])), Is.False);
+            Assert.That(role.IsHeld(new LatticeSubject("alice")), Is.False);
+            Assert.That(role.IsHeld(default), Is.False);
+        });
+    }
 
     [Test]
-    public async Task The_tool_gate_delegates_to_the_shared_role_gate()
+    public void Group_membership_is_matched_ordinally_for_every_closure_shape()
     {
-        var gate = new GrantingAccessGate().Grant("alice", "t1", LatticeOperation.Read);
-        var held = new AppRoleGate(LatticeOperation.Read, [LatticeScope.Tree("t1")]);
-        var notHeld = new AppRoleGate(LatticeOperation.Write, [LatticeScope.Tree("t1")]);
+        var role = new AppRoleGate(LatticeOperation.Read, Notes, ["g-Viewers"]);
 
-        Assert.That(await AppMcpRoleGate.IsHeldAsync(held, gate, Alice, CancellationToken.None), Is.True);
-        Assert.That(await AppMcpRoleGate.IsHeldAsync(notHeld, gate, Alice, CancellationToken.None), Is.False);
-        Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(null!, gate, Alice, CancellationToken.None));
-        Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(held, null!, Alice, CancellationToken.None));
+        Assert.Multiple(() =>
+        {
+            Assert.That(role.IsHeld(new LatticeSubject("alice", new[] { "g-Viewers" })), Is.True, "array");
+            Assert.That(role.IsHeld(new LatticeSubject("alice", new List<string> { "g-Viewers" })), Is.True, "list");
+            Assert.That(role.IsHeld(new LatticeSubject("alice", new[] { "g-viewers" })), Is.False, "array, case differs");
+            Assert.That(role.IsHeld(new LatticeSubject("alice", new List<string> { "g-viewers" })), Is.False, "list, case differs");
+            Assert.That(AppRoleGate.IsMember(new HashSet<string>(["g-Viewers"], StringComparer.Ordinal), "g-Viewers"), Is.True, "set");
+        });
+    }
+
+    [Test]
+    public void Null_arguments_are_rejected()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, null!, []));
+            Assert.Throws<ArgumentNullException>(() => new AppRoleGate(LatticeOperation.Read, Notes, null!));
+            Assert.Throws<ArgumentNullException>(() => AppRoleGate.IsMember(null!, "g"));
+            Assert.Throws<ArgumentNullException>(() => AppMcpRoleGate.IsHeldAsync(null!, Member("alice")));
+        });
+    }
+
+    [Test]
+    public async Task The_tool_gate_delegates_to_the_shared_role_gate_and_completes_synchronously()
+    {
+        var held = new AppRoleGate(LatticeOperation.Read, Notes, ["g-readers"]);
+        var notHeld = new AppRoleGate(LatticeOperation.Write, Notes, ["g-writers"]);
+        var alice = Member("alice", "g-readers");
+
+        var heldTask = AppMcpRoleGate.IsHeldAsync(held, alice);
+        var notHeldTask = AppMcpRoleGate.IsHeldAsync(notHeld, alice);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(heldTask.IsCompletedSuccessfully && notHeldTask.IsCompletedSuccessfully, Is.True);
+            Assert.That(await heldTask, Is.True);
+            Assert.That(await notHeldTask, Is.False);
+        });
     }
 }

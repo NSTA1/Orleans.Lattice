@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Mcp.Apps</PackageId>
     <Version>9.6.0</Version>
-    <Description>Installable-app tool surface for Orleans.Lattice.Api.Mcp. Exposes every enabled app's MCP tools on the single Lattice MCP endpoint under a mandatory {slug}_{tool} namespace, gated per tool by the caller's grants on the declaring role's scopes through the shared access gate. Reuses the Api.Mcp credential bridge, default-deny authorizer, per-session tool collection and fail-closed discovery. Registered with AddAppMcpTools() alongside AddLatticeMcp(...).</Description>
+    <Description>Installable-app tool surface for Orleans.Lattice.Api.Mcp. Exposes every enabled app's MCP tools on the single Lattice MCP endpoint under a mandatory {slug}_{tool} namespace, gated per tool by whether the caller is a member of a group the install binds to the tool's declared role. Reuses the Api.Mcp credential bridge, default-deny authorizer, per-session tool collection and fail-closed discovery. Registered with AddAppMcpTools() alongside AddLatticeMcp(...).</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
 
