@@ -1,0 +1,114 @@
+@page "/access/rules/{p1}"
+@page "/t/{tenant}/access/rules/{p1}"
+@inherits ExplorerPage
+
+@*
+    One rule. An authored rule can be edited and deleted here; an app-owned rule
+    is read-only, attributed to its app, and links to the app's roles, where the
+    bindings it was compiled from are changed.
+*@
+
+<PageTitle>@(RuleId ?? "Rule") - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title lt-shell-mono">@RuleId</h1>
+<AccessNav Current="@AccessRoutes.RulesSegment" />
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The rule could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_candidates is { Count: > 1 })
+{
+    <p class="lt-shell-page-lede">The id @RuleId is used by a rule in more than one tree. Choose the one you mean.</p>
+    <AccessRuleTable Rules="_candidates" Caption="Rules with this id" />
+}
+else if (_rule is null)
+{
+    <LtSkeleton Lines="6" Label="Loading the rule" />
+}
+else
+{
+    var rule = _rule;
+    @if (_owner is { } owner)
+    {
+        <p class="lt-access-notice" role="note" data-lt-app-owned="true">
+            This rule is owned by
+            @if (owner.HasSlug)
+            {
+                <a href="@AppRolesHref(owner.Slug)">the @owner.Slug app</a>
+            }
+            else
+            {
+                <span>an installed app</span>
+            }.
+            It is compiled from the app's manifest and its role bindings, so it is read-only here. Change the app's roles to change it.
+        </p>
+    }
+    <LtDefinitionList>
+        <LtDefinition Term="Effect">@AccessRuleFormat.EffectLabel(rule.Effect)</LtDefinition>
+        <LtDefinition Term="Subject" Mono="true">
+            @if (rule.Subject.Kind == LatticeSubjectSelectorKind.Group)
+            {
+                <a href="@GroupHref(rule.Subject.Id)">@AccessRuleFormat.SubjectLabel(rule.Subject)</a>
+            }
+            else
+            {
+                @AccessRuleFormat.SubjectLabel(rule.Subject)
+            }
+        </LtDefinition>
+        <LtDefinition Term="Scope" Mono="true">@AccessRuleFormat.ScopeLabel(rule.Scope)</LtDefinition>
+        <LtDefinition Term="Operations">@AccessRuleFormat.OperationsLabel(rule.Operations)</LtDefinition>
+        @if (!string.IsNullOrEmpty(rule.Condition))
+        {
+            <LtDefinition Term="Condition" Mono="true">@rule.Condition</LtDefinition>
+        }
+        <LtDefinition Term="Owner">
+            @if (_owner is { } appOwner)
+            {
+                @(appOwner.HasSlug ? $"app {appOwner.Slug}" : "an app")
+                @if (appOwner.Role is not null)
+                {
+                    @($", role {appOwner.Role}")
+                }
+            }
+            else
+            {
+                @("Authored")
+            }
+        </LtDefinition>
+    </LtDefinitionList>
+    <div class="lt-access-actions">
+        @if (_owner is { } linked && linked.HasSlug)
+        {
+            <a class="lt-btn" href="@AppRolesHref(linked.Slug)">Open @linked.Slug roles</a>
+        }
+        @if (_owner is null)
+        {
+            <LtButton OnClick="@(() => _editorOpen = true)">Edit rule</LtButton>
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="@(() => _confirmOpen = true)">Delete rule</LtButton>
+        }
+        <a class="lt-btn lt-btn--quiet" href="@ExplainHref(rule)">Explain for this subject</a>
+    </div>
+
+    @if (_owner is null)
+    {
+        <LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="Edit rule" Placement="DialogPlacement">
+            @if (_editorOpen)
+            {
+                <AccessRuleEditor Rule="rule" Model="_model" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
+            }
+        </LtDialog>
+        <LtConfirmDestructive Open="_confirmOpen"
+                              OpenChanged="@(open => _confirmOpen = open)"
+                              Title="Delete this rule"
+                              ObjectKind="rule"
+                              ObjectName="@rule.RuleId"
+                              ConfirmText="Delete rule"
+                              OnConfirm="DeleteAsync">
+            @AccessRuleFormat.EffectLabel(rule.Effect) for @AccessRuleFormat.SubjectLabel(rule.Subject) on @AccessRuleFormat.ScopeLabel(rule.Scope) stops applying at once. This cannot be undone.
+        </LtConfirmDestructive>
+    }
+}

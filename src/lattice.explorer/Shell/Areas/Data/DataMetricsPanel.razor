@@ -1,0 +1,62 @@
+@*
+    Metrics: the tree's measures as a booktabs figure - lifecycle, shards, live
+    keys, tombstones, depth, splits and views - and its per-shard hotness. A
+    tree whose detail is paused while it settles says so instead of showing
+    stale or zero numbers.
+*@
+
+@if (Workspace is not null)
+{
+    <div class="lt-toolbar">
+        <LtButton OnClick="LoadAsync" Disabled="@_loading">Refresh</LtButton>
+        <span class="lt-data-toolbar__status" role="status">@(_sampledAt is { } at ? $"Sampled {DataFormat.Time(at)}" : string.Empty)</span>
+    </div>
+
+    @if (_error is not null)
+    {
+        <LtEmptyState Title="The metrics did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_loading && _metrics is null)
+    {
+        <LtSkeleton Lines="6" Label="Loading the metrics" />
+    }
+    else if (_metrics is null)
+    {
+        <LtEmptyState Title="No metrics for this tree" HeadingLevel="2">
+            The cluster reported no measures for this tree.
+        </LtEmptyState>
+    }
+    else
+    {
+        @if (_metrics.DetailPaused)
+        {
+            <p class="lt-data-note" role="status">This tree is resharding or resizing, so its key counts, depth and hotness are paused until it settles.</p>
+        }
+
+        <figure class="lt-data-figure">
+            <LtTable TItem="DataMeasure" Items="@_measures" Caption="Measures" RowKey="@(measure => measure.Name)">
+                <LtColumn TItem="DataMeasure" Title="Measure" RowHeader="true" Value="@(measure => measure.Name)" />
+                <LtColumn TItem="DataMeasure" Title="Value" Align="LtColumnAlign.End" Mono="true" Value="@(measure => measure.Value)" />
+            </LtTable>
+        </figure>
+
+        @if (!_metrics.DetailPaused && _metrics.ShardHotness.Count > 0)
+        {
+            <figure class="lt-data-figure">
+                <LtTable TItem="ShardHotness"
+                         Items="@_metrics.ShardHotness"
+                         Caption="Shard hotness"
+                         RowKey="@(shard => shard.ShardIndex)"
+                         Compact="LtTableCompact.List">
+                    <LtColumn TItem="ShardHotness" Title="Shard" RowHeader="true" Mono="true" Value="@(shard => shard.ShardIndex)" SortBy="@(shard => shard.ShardIndex)" />
+                    <LtColumn TItem="ShardHotness" Title="Operations per second" Align="LtColumnAlign.End" Value="@(shard => shard.OpsPerSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))" SortBy="@(shard => shard.OpsPerSecond)" />
+                    <LtColumn TItem="ShardHotness" Title="Live keys" Align="LtColumnAlign.End" Value="@(shard => DataFormat.Count(shard.LiveKeys))" SortBy="@(shard => shard.LiveKeys)" />
+                    <LtColumn TItem="ShardHotness" Title="Splitting" Value="@(shard => shard.SplitInProgress ? "Yes" : "No")" />
+                </LtTable>
+            </figure>
+        }
+    }
+}

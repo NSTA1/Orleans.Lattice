@@ -1,0 +1,240 @@
+/*
+ * Orleans.Lattice Explorer - the Backups area (#3826).
+ *
+ * Only lt-backups-* classes. Everything else on the area's pages is a design
+ * primitive (tables, fields, dialogs, pills) or chrome (page title, lede,
+ * toolbar). No width query lives here: the compact form follows the Shell
+ * root's lt-shell--compact class, and colour comes only from tokens.
+ */
+
+/* The area's own pages, as a row of links under the title. The current page is
+   the marker, always paired with weight. */
+
+.lt-backups-nav {
+  margin: 0 0 var(--lt-space-4);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+.lt-backups-nav__list {
+  display: flex;
+  gap: var(--lt-space-5);
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.lt-backups-nav__link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  padding: 0 var(--lt-space-1);
+  color: var(--lt-ink-2);
+  font-weight: var(--lt-weight-label);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.lt-backups-nav__link:hover {
+  color: var(--lt-ink);
+}
+
+.lt-backups-nav__link[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-backups-nav__link[aria-current]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 3px;
+  background: var(--lt-marker);
+}
+
+.lt-backups-nav__link:focus-visible,
+.lt-backups-link:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+/* Inline links in tables, definition lists and results. */
+
+.lt-backups-link {
+  color: var(--lt-link);
+  text-underline-offset: 0.15em;
+}
+
+.lt-backups-link:hover {
+  color: var(--lt-link-hover);
+}
+
+.lt-backups-mono {
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
+/* A section of a page: a hairline above, a heading, then content. */
+
+.lt-backups-section {
+  margin-top: var(--lt-space-6);
+  padding-top: var(--lt-space-4);
+  border-top: 1px solid var(--lt-rule);
+}
+
+.lt-backups-section__title {
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-backups-note {
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-backups-status {
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink);
+}
+
+.lt-backups-error {
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-danger);
+  font-weight: var(--lt-weight-strong);
+}
+
+/* A form: stacked fields, then a row of actions. */
+
+.lt-backups-fieldset {
+  display: grid;
+  gap: var(--lt-space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.lt-backups-form {
+  display: grid;
+  gap: var(--lt-space-3);
+  max-width: 36rem;
+}
+
+.lt-backups-form__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--lt-space-3);
+}
+
+.lt-shell--compact .lt-backups-form__row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lt-backups-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  align-items: center;
+}
+
+.lt-shell--compact .lt-backups-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* The trees a set capture includes: one line each, remove control first. */
+
+.lt-backups-trees {
+  display: grid;
+  gap: var(--lt-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-backups-trees__item {
+  display: flex;
+  gap: var(--lt-space-2);
+  align-items: center;
+  min-height: var(--lt-op-row-height);
+  border-bottom: 1px solid var(--lt-rule);
+}
+
+/* A backed-up tree: its app-local name, then its owning app. */
+
+.lt-backups-tree__app {
+  margin-inline-start: var(--lt-space-2);
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}
+
+/* An operation's stages, drawn as a spine. The stage under way is marked with
+   the join node and aria-current. */
+
+.lt-backups-stages {
+  display: grid;
+  gap: var(--lt-space-1);
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.lt-backups-stages__stage {
+  display: flex;
+  gap: var(--lt-space-3);
+  align-items: center;
+  min-height: var(--lt-op-row-height);
+  color: var(--lt-ink-2);
+}
+
+.lt-backups-stages__stage[aria-current] {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-backups-stages__state {
+  margin-inline-start: auto;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-body);
+}
+
+/* Plain lists of identifiers, such as the orphan rows a scrub found. */
+
+.lt-backups-list {
+  margin: 0 0 var(--lt-space-3);
+  padding-inline-start: var(--lt-space-5);
+}
+
+.lt-backups-list__item {
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The catalogue's pager. */
+
+.lt-backups-pager {
+  display: flex;
+  gap: var(--lt-space-2);
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: var(--lt-space-3);
+}
+
+.lt-backups-pager__position {
+  margin-inline-end: auto;
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-sm);
+}

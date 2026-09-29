@@ -1,0 +1,171 @@
+@*
+    One chart of a Telemetry board: it asks the facade for its catalogue entry
+    under the board's window and draws the answer in the order-diagram world -
+    hairline axes on paper or slate, series in ink and link blue (chalk and chalk
+    blue on Board), more than two told apart by dash pattern and a direct label,
+    and the marker only on the point a reader is pointing at or has selected.
+
+    A current reading (an instant query) is a table of readings, not a line. The
+    board's table view draws a time series as a table too, which is the
+    alternative a screen reader reads; the figure also links to it.
+*@
+
+<section class="lt-telemetry-chart" aria-labelledby="@_headingId">
+    <div class="lt-telemetry-chart__head">
+        <h2 id="@_headingId" class="lt-telemetry-chart__title">@Descriptor.Title</h2>
+        @if (UnitText.Length > 0)
+        {
+            <span class="lt-telemetry-chart__unit">@UnitText</span>
+        }
+    </div>
+    <p class="lt-telemetry-chart__description">@Descriptor.Description</p>
+
+    @if (Note is not null)
+    {
+        <p class="lt-telemetry-chart__note">@Note</p>
+    }
+
+    @if (Problem is not null)
+    {
+        <p class="lt-telemetry-chart__problem" role="status">@Problem</p>
+    }
+    else if (_failure is not null)
+    {
+        <div class="lt-telemetry-chart__problem" role="alert">
+            <p class="lt-telemetry-chart__problem-text">@_failure</p>
+            @if (_retryable)
+            {
+                <LtButton OnClick="RetryAsync">Try again</LtButton>
+            }
+        </div>
+    }
+    else if (_geometry is null)
+    {
+        <LtSkeleton Lines="4" Label="@($"Reading {Descriptor.Title}")" />
+    }
+    else if (_geometry.IsEmpty)
+    {
+        <p class="lt-telemetry-chart__empty">No series matched this window.</p>
+    }
+    else if (!_geometry.IsTimeSeries)
+    {
+        <LtTable TItem="TelemetrySeriesView"
+                 Items="_geometry.Series"
+                 Caption="@($"{Descriptor.Title}, current readings")"
+                 CaptionHidden="true"
+                 RowKey="series => series.Name">
+            <LtColumn TItem="TelemetrySeriesView" Title="Series" RowHeader="true" Mono="true" Value="series => series.Name" SortBy="series => series.Name" />
+            <LtColumn TItem="TelemetrySeriesView" Title="Reading" Align="LtColumnAlign.End" Value="series => Format(series.Latest)" SortBy="series => series.Latest" />
+        </LtTable>
+    }
+    else if (ShowTable)
+    {
+        <LtTable TItem="TelemetryValuesRow"
+                 Items="_rows"
+                 Caption="@($"{Descriptor.Title}, values by time (UTC)")"
+                 CaptionHidden="true"
+                 RowKey="row => row.Time">
+            <LtColumn TItem="TelemetryValuesRow" Title="Time (UTC)" RowHeader="true" Mono="true" Value="row => TelemetryFormat.Time(row.Time, _geometry.SpansDays)" />
+            @for (var s = 0; s < _geometry.Series.Count; s++)
+            {
+                var index = s;
+                <LtColumn TItem="TelemetryValuesRow" @key="_geometry.Series[index].Name" Title="@_geometry.Series[index].Name" Align="LtColumnAlign.End" Value="row => Format(row.Values[index])" />
+            }
+        </LtTable>
+    }
+    else
+    {
+        <figure class="lt-telemetry-figure">
+            <div class="lt-telemetry-plot"
+                 tabindex="0"
+                 role="group"
+                 aria-label="@PlotLabel"
+                 aria-describedby="@_readoutId"
+                 @onkeydown="OnKeyDown"
+                 @onmouseleave="OnPointerLeave">
+                <svg class="lt-telemetry-svg" viewBox="@ViewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true" focusable="false">
+                    @foreach (var tick in _geometry.Ticks)
+                    {
+                        <line class="lt-telemetry-svg__grid" x1="@Coordinate(TelemetryChartGeometry.Left)" x2="@Coordinate(TelemetryChartGeometry.PlotRight)" y1="@Coordinate(tick.Y)" y2="@Coordinate(tick.Y)" />
+                        @SvgText("lt-telemetry-svg__tick", TelemetryChartGeometry.Left - 8, tick.Y + 4, "end", tick.Label)
+                    }
+                    <line class="lt-telemetry-svg__axis" x1="@Coordinate(TelemetryChartGeometry.Left)" x2="@Coordinate(TelemetryChartGeometry.PlotRight)" y1="@Coordinate(TelemetryChartGeometry.PlotBottom)" y2="@Coordinate(TelemetryChartGeometry.PlotBottom)" />
+                    <text class="lt-telemetry-svg__tick" x="@Coordinate(TelemetryChartGeometry.Left)" y="@Coordinate(TelemetryChartGeometry.PlotBottom + 20)" text-anchor="start">@TelemetryFormat.Time(_geometry.Times[0], _geometry.SpansDays)</text>
+                    <text class="lt-telemetry-svg__tick" x="@Coordinate(TelemetryChartGeometry.PlotRight)" y="@Coordinate(TelemetryChartGeometry.PlotBottom + 20)" text-anchor="end">@TelemetryFormat.Time(_geometry.Times[^1], _geometry.SpansDays) UTC</text>
+
+                    @foreach (var line in _geometry.Lines)
+                    {
+                        <path class="lt-telemetry-svg__line @line.PigmentClass" d="@line.Path" stroke-dasharray="@DashOf(line)" />
+                        <line class="lt-telemetry-svg__swatch @line.PigmentClass" x1="@Coordinate(TelemetryChartGeometry.PlotRight + 8)" x2="@Coordinate(TelemetryChartGeometry.PlotRight + 26)" y1="@Coordinate(line.LabelY)" y2="@Coordinate(line.LabelY)" stroke-dasharray="@DashOf(line)" />
+                        @SvgText("lt-telemetry-svg__label", TelemetryChartGeometry.PlotRight + 30, line.LabelY + 4, "start", line.Label)
+                    }
+
+                    @if (_selected is { } selected)
+                    {
+                        <line class="lt-telemetry-svg__cursor" x1="@Coordinate(_geometry.X(selected))" x2="@Coordinate(_geometry.X(selected))" y1="@Coordinate(TelemetryChartGeometry.Top)" y2="@Coordinate(TelemetryChartGeometry.PlotBottom)" />
+                        @foreach (var line in _geometry.Lines)
+                        {
+                            var value = line.Series.Values[selected];
+                            if (double.IsFinite(value))
+                            {
+                                <circle class="lt-telemetry-svg__point" cx="@Coordinate(_geometry.X(selected))" cy="@Coordinate(_geometry.Y(value))" r="4.5" aria-current="true" />
+                            }
+                        }
+                    }
+
+                    @for (var t = 0; t < _geometry.Times.Count; t++)
+                    {
+                        var index = t;
+                        var band = _geometry.Band(index);
+                        <rect class="lt-telemetry-svg__band"
+                              x="@Coordinate(band.X)"
+                              y="@Coordinate(TelemetryChartGeometry.Top)"
+                              width="@Coordinate(band.Width)"
+                              height="@Coordinate(TelemetryChartGeometry.PlotBottom - TelemetryChartGeometry.Top)"
+                              data-time-index="@index"
+                              @onmouseover="() => Point(index)"
+                              @onclick="() => Pin(index)" />
+                    }
+                </svg>
+            </div>
+            <p id="@_readoutId" class="lt-telemetry-readout" aria-live="polite">@ReadoutText</p>
+            <figcaption class="lt-telemetry-figure__caption">
+                @Summary
+                @if (TableHref is not null)
+                {
+                    <a class="lt-telemetry-link" href="@TableHref">Values as a table</a>
+                }
+            </figcaption>
+            <ul class="lt-telemetry-legend" aria-label="@($"{Descriptor.Title} series")">
+                @foreach (var line in _geometry.Lines)
+                {
+                    <li class="lt-telemetry-legend__item" @key="line.Series.Name">
+                        <svg class="lt-telemetry-legend__swatch" viewBox="0 0 28 8" aria-hidden="true" focusable="false">
+                            <line class="lt-telemetry-svg__swatch @line.PigmentClass" x1="0" x2="28" y1="4" y2="4" stroke-dasharray="@DashOf(line)" />
+                        </svg>
+                        <span class="lt-visually-hidden">@line.PigmentName @line.DashName line:</span>
+                        @if (line.Series.Tree is { } tree && TreeHref is not null)
+                        {
+                            <a class="lt-telemetry-link lt-telemetry-legend__name" href="@TreeHref(tree)">@line.Series.Name<span class="lt-visually-hidden">, narrow the board to this tree</span></a>
+                        }
+                        else
+                        {
+                            <span class="lt-telemetry-legend__name">@line.Series.Name</span>
+                        }
+                        <span class="lt-telemetry-legend__value">@Format(line.Series.Latest)</span>
+                        @if (line.Series.Tree is { } dataTree && DataHref is not null)
+                        {
+                            <a class="lt-telemetry-link lt-telemetry-legend__data" href="@DataHref(dataTree)">Open @dataTree in Data</a>
+                        }
+                    </li>
+                }
+            </ul>
+            @if (_geometry.IsTruncated)
+            {
+                <p class="lt-telemetry-chart__note">
+                    Drawing the @_geometry.Lines.Count largest of @_geometry.Series.Count series. Narrow the board to one tree, or use the table view to read all of them.
+                </p>
+            }
+        </figure>
+    }
+</section>

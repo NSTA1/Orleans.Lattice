@@ -1,0 +1,59 @@
+<PageTitle>@TreeId - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+@if (_access.IsLoading)
+{
+    <ClusterTreeHeader TreeId="@TreeId" />
+    <LtSkeleton Lines="4" Label="Loading the tree" />
+}
+else if (_access.Value is not { } access)
+{
+    <ClusterTreeHeader TreeId="@TreeId" />
+    <p class="lt-cluster-error" role="alert">@_access.Error</p>
+}
+else if (!ClusterTreeAccess.Any(access))
+{
+    <ClusterTreeHeader TreeId="@TreeId" />
+    <LtEmptyState Title="Nothing you can administer" HeadingLevel="2">
+        Your identity holds no tree-administration grant over this tree.
+    </LtEmptyState>
+}
+else
+{
+    <ClusterTreeHeader TreeId="@TreeId">@Lede</ClusterTreeHeader>
+
+    <nav class="lt-toolbar lt-cluster-actions" aria-label="Tree operations">
+        @if (access.CanManageTreeLifecycle || access.CanViewDiagnostics)
+        {
+            <ClusterTreeLink TreeId="@TreeId" View="reshard" Text="Reshard" />
+            <ClusterTreeLink TreeId="@TreeId" View="resize" Text="Resize" />
+        }
+        @if (access.CanAdministerTree || access.CanViewDiagnostics)
+        {
+            <ClusterTreeLink TreeId="@TreeId" View="snapshot" Text="Snapshot" />
+        }
+        <ClusterTreeLink TreeId="@TreeId" View="tools" Text="Admin tools" />
+        @if (access.CanViewDiagnostics)
+        {
+            <a class="lt-cluster-link" href="@Href(ClusterAddresses.Wal(TreeId))">WAL placement</a>
+            <a class="lt-cluster-link" href="@Href(ClusterAddresses.Orphans(TreeId))">Orphaned leaves</a>
+        }
+    </nav>
+
+    <LtTabs Label="Tree administration" @bind-ActiveId="_tab">
+        <LtTab Id="summary" Title="Summary">
+            <ClusterTreeSummary TreeId="@TreeId" Capabilities="access" />
+        </LtTab>
+        <LtTab Id="configuration" Title="Configuration">
+            <ClusterTreeConfiguration TreeId="@TreeId" Capabilities="access" />
+        </LtTab>
+        <LtTab Id="shards" Title="Shards">
+            <ClusterTreeShards TreeId="@TreeId" Capabilities="access" />
+        </LtTab>
+        <LtTab Id="storage" Title="Storage">
+            <ClusterTreeStorage TreeId="@TreeId" Capabilities="access" />
+        </LtTab>
+        <LtTab Id="lifecycle" Title="Lifecycle">
+            <ClusterTreeLifecycle TreeId="@TreeId" Capabilities="access" />
+        </LtTab>
+    </LtTabs>
+}

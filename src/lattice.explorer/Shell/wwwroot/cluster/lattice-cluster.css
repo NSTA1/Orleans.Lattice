@@ -1,0 +1,289 @@
+/*
+ * Orleans.Lattice Explorer - the Cluster area (A10, issue #3828).
+ *
+ * The estate overview's region picture (an order diagram: this region is the
+ * join at the top and each peer hangs from it by a hairline edge; a peer whose
+ * every link is stalled is dashed and labelled, never marked by colour alone),
+ * the area's section rhythm, its forms, and its one native control, the bulk-load
+ * text area. Drawn in the order-diagram world (DESIGN.md): hairlines, no cards,
+ * no shadows, and the marker only on the join node the primitives already paint.
+ *
+ * No width query appears here: the compact form reacts to the layout's
+ * lt-shell--compact root class. Plain ASCII only: the hygiene gates scan it.
+ */
+
+/* ==========================================================================
+   1. Page rhythm
+   ========================================================================== */
+
+.lt-cluster-section {
+  margin: 0 0 var(--lt-space-6);
+}
+
+.lt-cluster-heading {
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-lg);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-cluster-subheading {
+  margin: var(--lt-space-4) 0 var(--lt-space-2);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-md);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-cluster-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--lt-space-2) var(--lt-space-3);
+}
+
+.lt-cluster-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lt-space-1);
+  padding: 0 var(--lt-space-2);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-cluster-note {
+  max-width: 48rem;
+  margin: var(--lt-space-2) 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-cluster-result {
+  margin: var(--lt-space-3) 0;
+  color: var(--lt-ink);
+}
+
+.lt-cluster-error {
+  margin: var(--lt-space-2) 0;
+  padding-inline-start: var(--lt-space-3);
+  border-inline-start: 1px solid var(--lt-op-state-failed);
+  color: var(--lt-ink);
+}
+
+.lt-cluster-stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  margin: 0 0 var(--lt-space-3);
+}
+
+.lt-cluster-review {
+  padding-block: var(--lt-space-3);
+  border-block: 1px solid var(--lt-rule);
+}
+
+.lt-cluster-list {
+  margin: 0 0 var(--lt-space-3);
+  padding-inline-start: var(--lt-space-5);
+  color: var(--lt-ink);
+}
+
+.lt-cluster-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+  border-radius: var(--lt-radius-sm);
+  color: var(--lt-link);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.lt-cluster-link:hover {
+  color: var(--lt-link-hover);
+}
+
+.lt-cluster-link:focus-visible,
+.lt-cluster-textarea__input:focus-visible {
+  outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
+  outline-offset: var(--lt-op-focus-ring-offset);
+}
+
+.lt-cluster-actions {
+  gap: var(--lt-space-2) var(--lt-space-4);
+}
+
+/* ==========================================================================
+   2. Forms
+   ========================================================================== */
+
+.lt-cluster-form {
+  display: grid;
+  gap: var(--lt-space-3);
+  max-width: 32rem;
+  margin: var(--lt-space-3) 0;
+}
+
+.lt-cluster-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
+  margin-top: var(--lt-space-2);
+}
+
+.lt-cluster-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--lt-space-2);
+}
+
+.lt-shell--compact .lt-cluster-inline-form {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.lt-cluster-textarea {
+  display: grid;
+  gap: var(--lt-space-1);
+}
+
+.lt-cluster-textarea__label {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-cluster-textarea__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: calc(var(--lt-op-control-height) * 3);
+  padding: var(--lt-space-2) var(--lt-space-3);
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-sunken);
+  color: var(--lt-ink);
+  font-family: var(--lt-font-mono);
+  font-size: var(--lt-text-sm);
+  font-variant-ligatures: none;
+  resize: vertical;
+}
+
+.lt-cluster-textarea__hint {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+/* ==========================================================================
+   3. Administer stops (a spine, never cards)
+   ========================================================================== */
+
+.lt-cluster-stops {
+  max-width: 42rem;
+}
+
+.lt-cluster-stops__link {
+  align-items: flex-start;
+}
+
+.lt-cluster-stops__text {
+  display: grid;
+  gap: var(--lt-space-1);
+}
+
+.lt-cluster-stops__name {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-cluster-stops__detail {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+/* ==========================================================================
+   4. The region picture - an order diagram
+   ========================================================================== */
+
+.lt-cluster-regions {
+  margin: 0 0 var(--lt-space-3);
+}
+
+.lt-cluster-regions__caption {
+  margin: 0 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-cluster-regions__local {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-2);
+  padding-bottom: var(--lt-space-3);
+}
+
+.lt-cluster-regions__here {
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-cluster-regions__name {
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-cluster-regions__peers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-4) var(--lt-space-6);
+  margin: 0 0 0 calc(var(--lt-diagram-node-size-lg) / 2);
+  padding: var(--lt-space-4) 0 0;
+  border-top: var(--lt-diagram-edge-width) solid var(--lt-diagram-edge);
+  border-left: var(--lt-diagram-edge-width) solid var(--lt-diagram-edge);
+  list-style: none;
+}
+
+.lt-cluster-regions__peer {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-1) var(--lt-space-2);
+  min-height: var(--lt-op-control-height);
+  padding-inline-start: var(--lt-space-4);
+}
+
+.lt-cluster-regions__edge {
+  position: absolute;
+  top: calc(var(--lt-space-4) * -1);
+  inset-inline-start: var(--lt-space-2);
+  height: calc(var(--lt-space-4) + 50%);
+  border-inline-start: var(--lt-diagram-edge-width) solid var(--lt-diagram-edge);
+}
+
+.lt-cluster-regions__peer--stalled .lt-cluster-regions__edge {
+  border-inline-start-style: dashed;
+}
+
+.lt-cluster-regions__peer--stalled .lt-node {
+  border-style: dashed;
+}
+
+.lt-cluster-regions__detail {
+  flex-basis: 100%;
+  padding-inline-start: calc(var(--lt-diagram-node-size) + var(--lt-space-2));
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-cluster-regions__alone {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-shell--compact .lt-cluster-regions__peers {
+  flex-direction: column;
+  border-top: 0;
+}

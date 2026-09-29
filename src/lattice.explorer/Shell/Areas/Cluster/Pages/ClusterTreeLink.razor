@@ -1,0 +1,8 @@
+@if (_href is not null)
+{
+    <a class="lt-cluster-link lt-shell-mono" href="@_href">@(Text ?? TreeId)</a>
+}
+else
+{
+    <span class="lt-shell-mono">@(Text ?? TreeId)</span>
+}

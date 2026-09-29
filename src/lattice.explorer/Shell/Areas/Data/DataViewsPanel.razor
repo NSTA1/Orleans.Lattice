@@ -1,0 +1,94 @@
+@*
+    Views: for a tree, the materialised views that read from it; for a view,
+    the view itself. Each shows its kind, projection version and apply lag, and
+    - when the caller holds administrative authority over the source tree - the
+    reconcile and rebuild actions the tree-administration facade offers, each
+    behind the destructive-action confirmation. A view's physical generation
+    tree is never shown.
+*@
+
+@if (Workspace is not null)
+{
+    <div class="lt-toolbar">
+        <LtButton OnClick="RefreshStatusesAsync" Disabled="@(_busy is not null)">Refresh</LtButton>
+        <span class="lt-data-toolbar__status" role="status">@DataArea.Plural(_views.Count, "view")</span>
+    </div>
+
+    @if (_views.Count == 0)
+    {
+        <LtEmptyState Title="No views" HeadingLevel="2">
+            No materialised view reads from this tree.
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtTable TItem="DataTreeEntry"
+                 Items="@_views"
+                 Caption="Views"
+                 CaptionHidden="true"
+                 RowKey="@(view => view.StateId)"
+                 DetailTitle="@(view => view.DisplayName)">
+            <ChildContent>
+                <LtColumn TItem="DataTreeEntry" Context="view" Title="View" RowHeader="true" Mono="true">
+                    <a href="@Workspace.Href(view.Address)">@view.DisplayName</a>
+                </LtColumn>
+                <LtColumn TItem="DataTreeEntry" Title="Kind" Value="@(view => view.KindText)" />
+                <LtColumn TItem="DataTreeEntry" Title="Projection" Mono="true" Value="@(view => view.ProjectionVersion)" />
+                <LtColumn TItem="DataTreeEntry" Context="view" Title="Status">
+                    <LtStatusPill State="@LagRole(view)" Text="@LagText(view)" />
+                </LtColumn>
+                <LtColumn TItem="DataTreeEntry" Context="view" Title="Actions">
+                    @RenderActions(view)
+                </LtColumn>
+            </ChildContent>
+            <CompactRow Context="view">
+                <LtCompactRow Mono="true">
+                    <Primary>@view.DisplayName</Primary>
+                    <Secondary>@view.KindText</Secondary>
+                    <State><LtStatusPill State="@LagRole(view)" Text="@LagText(view)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions Context="view">
+                <a class="lt-btn" href="@Workspace.Href(view.Address)">Open @view.DisplayName</a>
+                @RenderActions(view)
+            </DetailActions>
+        </LtTable>
+    }
+
+    @if (_pending is { } pending)
+    {
+        <LtConfirmDestructive Open="true"
+                              OpenChanged="OnConfirmOpenChanged"
+                              Title="@(pending.Rebuild ? "Rebuild this view?" : "Reconcile this view?")"
+                              ObjectKind="view"
+                              ObjectName="@pending.View.DisplayName"
+                              ConfirmText="@(pending.Rebuild ? "Rebuild" : "Reconcile")"
+                              OnConfirm="RunPendingAsync">
+            @if (pending.Rebuild)
+            {
+                <span>Rebuilding builds a complete new generation of the view from its source and swaps it in at once. The source keeps serving throughout, but the rebuild reads every source key.</span>
+            }
+            else
+            {
+                <span>Reconciling builds the expected view, compares it with the live one, and swaps it in only if they differ. It reads every source key.</span>
+            }
+        </LtConfirmDestructive>
+    }
+}
+
+@code {
+    private RenderFragment RenderActions(DataTreeEntry view) => __builder =>
+    {
+        @if (CanAdminister(view))
+        {
+            <span class="lt-data-actions">
+                <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(_busy is not null)" OnClick="() => Ask(view, rebuild: false)">
+                    @(_busy == view.StateId && !_busyRebuild ? "Reconciling" : "Reconcile")
+                </LtButton>
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(_busy is not null)" OnClick="() => Ask(view, rebuild: true)">
+                    @(_busy == view.StateId && _busyRebuild ? "Rebuilding" : "Rebuild")
+                </LtButton>
+            </span>
+        }
+    };
+}

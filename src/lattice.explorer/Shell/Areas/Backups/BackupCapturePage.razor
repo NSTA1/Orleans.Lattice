@@ -1,0 +1,84 @@
+@page "/backups/new"
+@page "/t/{tenant}/backups/new"
+@inherits ExplorerPage
+@*
+    /backups/new: capture a full, incremental or set backup. The form checks what
+    the caller may capture before offering the capture, then starts a staged
+    operation and moves to its status page.
+*@
+
+<PageTitle>Capture a backup - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Capture a backup</h1>
+<p class="lt-shell-page-lede">A full backup captures a whole tree, an incremental backup captures what changed since a base backup, and a set captures several trees together.</p>
+<BackupsNav />
+
+<form class="lt-backups-form" @onsubmit="CaptureAsync">
+    <LtSelect Label="Kind" Options="@KindOptions" Value="@_kind" ValueChanged="SetKindAsync" />
+    <LtTextInput Label="Name" Value="@_name" ValueChanged="value => _name = value" Hint="How the backup is listed in the catalogue." Error="@_nameError" />
+
+    @if (_kind == SetKind)
+    {
+        <fieldset class="lt-backups-fieldset">
+            <legend class="lt-backups-section__title">Trees in the set</legend>
+            @if (_setTrees.Count == 0)
+            {
+                <p class="lt-backups-note">No tree added yet.</p>
+            }
+            else
+            {
+                <ul class="lt-backups-trees" aria-label="Trees in the set">
+                    @foreach (var tree in _setTrees)
+                    {
+                        <li class="lt-backups-trees__item" @key="tree">
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveTree(tree)" aria-label="@("Remove " + tree)">Remove</LtButton>
+                            <BackupTreeLabel TreeId="@tree" />
+                        </li>
+                    }
+                </ul>
+            }
+            <div class="lt-backups-form__row">
+                <LtTextInput Label="Tree to add" Mono="true" Value="@_tree" ValueChanged="value => _tree = value" Placeholder="a/crm/orders" Error="@_treeError" />
+                <div class="lt-backups-actions">
+                    <LtButton OnClick="AddTreeAsync">Add tree</LtButton>
+                </div>
+            </div>
+            <LtCheckbox Label="Capture every tree at one consistency fence" Checked="@_crossTree" CheckedChanged="value => _crossTree = value" Hint="A write that spans trees is then never torn across the set." />
+        </fieldset>
+    }
+    else
+    {
+        <LtTextInput Label="Tree" Mono="true" Value="@_tree" ValueChanged="SetTree" Placeholder="a/crm/orders" Error="@_treeError" Hint="The tree to back up." />
+        <LtSelect Label="Scope" Options="@ScopeOptions" Value="@_scopeKind" ValueChanged="value => _scopeKind = value" />
+        @if (_scopeKind != WholeTree)
+        {
+            <LtTextInput Label="@(_scopeKind == PrefixScope ? "Key prefix" : "Key")" Mono="true" Value="@_keyOrPrefix" ValueChanged="value => _keyOrPrefix = value" Error="@_keyError" />
+        }
+        @if (_kind == IncrementalKind)
+        {
+            @if (_bases is null)
+            {
+                <div class="lt-backups-actions">
+                    <LtButton OnClick="FindBasesAsync">Find full backups of this tree</LtButton>
+                </div>
+            }
+            else if (_bases.Count == 0)
+            {
+                <p class="lt-backups-note">This tree has no full backup to build on yet. Capture a full backup first.</p>
+            }
+            else
+            {
+                <LtSelect Label="Base backup" Options="@BaseOptions" Value="@_base" ValueChanged="value => _base = value" Hint="The incremental backup captures what changed since this one." />
+            }
+        }
+    }
+
+    @if (_error is { } error)
+    {
+        <p class="lt-backups-error" role="alert">@error</p>
+    }
+    <div class="lt-backups-actions">
+        <LtButton Type="LtButtonType.Submit">Capture backup</LtButton>
+        <a class="lt-btn lt-btn--quiet" href="@Navigator.Canonicalize(BackupsAddresses.Root).ToHref()">Cancel</a>
+    </div>
+</form>

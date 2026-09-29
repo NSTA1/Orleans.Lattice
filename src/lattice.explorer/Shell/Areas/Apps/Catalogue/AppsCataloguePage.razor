@@ -1,0 +1,165 @@
+@page "/apps/catalogue"
+@page "/t/{tenant}/apps/catalogue"
+@inherits ExplorerPage
+
+@*
+    The source catalogue: a source selector, All/Installed/Available/Updates, a text
+    filter enabled only where a selected source can search, and one booktabs row per
+    (source, slug) - a slug several sources offer is one row per source with the
+    ambiguity called out, never merged. The query string is the state.
+*@
+
+<PageTitle>App catalogue - Orleans.Lattice Explorer</PageTitle>
+
+@if (_denied)
+{
+    return;
+}
+
+<link rel="stylesheet" href="@AppsCatalogueAssets.Stylesheet" />
+
+<h1 class="lt-shell-page-title">Apps</h1>
+<p class="lt-shell-page-lede">Install, consent and lifecycle@(TenantPhrase). Sources are configured per cluster.</p>
+
+<AppsViewLinks YourAppsHref="@Href(AppsRoutes.Landing(Address.Tenant))"
+               CatalogueHref="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))"
+               ShowCatalogue="true"
+               CatalogueCurrent="true" />
+
+@if (_sources is null)
+{
+    <LtSkeleton Lines="5" Label="Loading the catalogue" />
+    return;
+}
+
+@if (_sources.Value.IsEmpty)
+{
+    <LtEmptyState Title="No app sources" HeadingLevel="2">
+        This cluster has no app source configured, so there is nothing to install. Sources are configured per cluster by its operator.
+    </LtEmptyState>
+    return;
+}
+
+<div class="lt-toolbar">
+    <LtSelect Label="Source" Options="SourceOptions" Value="@(_view.SourceKey ?? AppsRoutes.AllSources)" ValueChanged="SelectSourceAsync" Hint="@SourceHint" />
+    @if (IsCompact)
+    {
+        <LtSelect Label="Show" Options="FilterOptions" Value="@AppsRoutes.FilterText(_view.Filter)" ValueChanged="SelectFilterFromTextAsync" />
+    }
+    else
+    {
+        <div class="lt-apps-filter" role="group" aria-label="Show">
+            @foreach (var filter in Filters)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet" Pressed="@(_view.Filter == filter.Filter)" OnClick="() => SelectFilterAsync(filter.Filter)">@filter.Text</LtButton>
+            }
+        </div>
+    }
+    <LtSearchInput Label="Search apps" Placeholder="Search apps" Value="@_text" ValueChanged="text => _text = text" OnSubmit="SearchAsync" Disabled="@(!TextEnabled)" />
+    <span class="lt-apps-count" role="status">@CountText</span>
+</div>
+@if (!TextEnabled)
+{
+    <p class="lt-apps-hint">@(_view.SourceKey is null ? "No configured source supports search." : "This source does not support search.")</p>
+}
+
+@if (_error is not null)
+{
+    <div class="lt-apps-error" role="alert">
+        <p>@_error</p>
+        <LtButton OnClick="ReloadAsync">Try again</LtButton>
+    </div>
+}
+
+@if (_loading && _rows.Count == 0)
+{
+    <LtSkeleton Lines="5" Label="Loading apps" />
+}
+else if (_error is null || _rows.Count > 0)
+{
+    <LtTable TItem="AvailableAppSummary"
+             Items="_items"
+             Caption="@Caption"
+             CaptionHidden="true"
+             Virtualize="@(_rows.Count > VirtualizeThreshold)"
+             RowKey="app => app.SourceKey + '/' + app.Slug"
+             DetailTitle="app => AppsPresentation.DisplayName(app.Presentation, app.Slug)">
+        <ChildContent>
+            <LtColumn TItem="AvailableAppSummary" Title="App" RowHeader="true" SortBy="app => AppsPresentation.DisplayName(app.Presentation, app.Slug)">
+                <div class="lt-apps-app">
+                    <AppIcon Slug="@context.Slug" DataUrl="@IconOf(context)" />
+                    <span class="lt-apps-app__text">
+                        <span class="lt-apps-app__name">@AppsPresentation.DisplayName(context.Presentation, context.Slug)</span>
+                        @if (!string.IsNullOrWhiteSpace(context.Presentation?.Summary))
+                        {
+                            <span class="lt-apps-app__summary">@context.Presentation.Summary</span>
+                        }
+                        @if (OfferedBy(context.Slug) is > 1 and var sources)
+                        {
+                            <span class="lt-apps-app__note">Offered by @sources sources: install from the one you trust</span>
+                        }
+                    </span>
+                </div>
+            </LtColumn>
+            <LtColumn TItem="AvailableAppSummary" Title="Source" Mono="true" Value="app => app.SourceKey" SortBy="app => app.SourceKey" />
+            <LtColumn TItem="AvailableAppSummary" Title="Version" Mono="true" Value="app => app.NewestVersion" />
+            <LtColumn TItem="AvailableAppSummary" Title="State">
+                @StatePill(context)
+            </LtColumn>
+            <LtColumn TItem="AvailableAppSummary" Title="Actions">
+                <span class="lt-apps-actions">@RowActions(context)</span>
+            </LtColumn>
+        </ChildContent>
+        <CompactRow>
+            <LtCompactRow>
+                <Primary>@AppsPresentation.DisplayName(context.Presentation, context.Slug)</Primary>
+                <Secondary><span class="lt-shell-mono">@context.SourceKey</span> v@(context.NewestVersion)</Secondary>
+                <State>@StatePill(context)</State>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions>@RowActions(context)</DetailActions>
+        <EmptyContent>
+            <LtEmptyState Title="No apps match" HeadingLevel="2">@EmptyText</LtEmptyState>
+        </EmptyContent>
+    </LtTable>
+
+    @if (_continuation is not null)
+    {
+        <div class="lt-apps-more">
+            <LtButton OnClick="LoadMoreAsync" Disabled="_loading">@(_loading ? "Loading..." : "Load more apps")</LtButton>
+        </div>
+    }
+}
+
+@code {
+    private RenderFragment StatePill(AvailableAppSummary app) => __builder =>
+    {
+        var offeredBy = OfferedBy(app.Slug);
+        if (app.InstalledState is null && offeredBy > 1)
+        {
+            <LtStatusPill State="LtStateRole.Unknown" Text="@($"Offered by {offeredBy} sources")" />
+        }
+        else
+        {
+            var (role, text) = AppsPresentation.RowState(app);
+            <LtStatusPill State="role" Text="@text" />
+        }
+    };
+
+    private RenderFragment RowActions(AvailableAppSummary app) => __builder =>
+    {
+        var name = AppsPresentation.DisplayName(app.Presentation, app.Slug);
+        if (CanOpen(app))
+        {
+            <a class="lt-btn lt-btn--quiet" href="@Href(AppsRoutes.Open(Address.Tenant, app.Slug))" aria-label="@($"Open {name}")">Open</a>
+        }
+
+        if (!CanReview)
+        {
+            return;
+        }
+
+        var (text, version) = PrimaryAction(app);
+        <a class="lt-btn" href="@Href(AppsRoutes.Review(Address.Tenant, app.SourceKey, app.Slug, version))" aria-label="@($"{text} {name} from {app.SourceKey}")">@text</a>
+    };
+}

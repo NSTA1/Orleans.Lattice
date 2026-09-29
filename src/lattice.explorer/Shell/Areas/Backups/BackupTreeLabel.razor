@@ -1,0 +1,8 @@
+@*
+    A backed-up tree as the page names it: the app-local tree name, then the app
+    that owns it. Never the composed id.
+*@
+<span class="@(Mono ? "lt-backups-mono" : null)" title="@Tree.TreeId">@Tree.Name</span>@if (Tree.AppSlug is { } app)
+{
+    <span class="lt-backups-tree__app">app @(AppLabel ?? app)</span>
+}

@@ -1,0 +1,17 @@
+@*
+    The Backups area's own pages, as a row of links under the page title. Every
+    destination belongs to the one Backups stop on the directory spine; this row
+    only moves within it. Health appears only where health monitoring applies.
+*@
+<nav class="lt-backups-nav" aria-label="Backups pages">
+    <ul class="lt-backups-nav__list">
+        @foreach (var link in Pages)
+        {
+            <li @key="link.Key">
+                <a class="lt-backups-nav__link"
+                   href="@Navigator.Canonicalize(link.Address).ToHref()"
+                   aria-current="@(string.Equals(link.Key, Current, StringComparison.Ordinal) ? "page" : null)">@link.Text</a>
+            </li>
+        }
+    </ul>
+</nav>

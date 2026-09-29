@@ -1,0 +1,115 @@
+@*
+    One tenant's regions: each region's residency lifecycle, the residency plan
+    the tenant's admins edit within the allowed set, and - for a platform
+    operator - the allowed set itself.
+*@
+<section class="lt-tenancy-section" aria-labelledby="@HeadingId">
+    <div class="lt-tenancy-section__head">
+        <h2 class="lt-tenancy-section__title" id="@HeadingId">Regions</h2>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="LoadAsync" Disabled="_busy">Refresh</LtButton>
+    </div>
+    <p class="lt-tenancy-note">
+        Residency is where the tenant's data is kept. It stays inside the regions a platform operator has allowed, and in at
+        least one region. A region being added or removed moves through provisioning, backfilling or draining; refresh to follow it.
+    </p>
+
+    @if (_failure is { } failure)
+    {
+        <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Regions could not be read")" HeadingLevel="3">
+            <ChildContent>@failure.Message</ChildContent>
+            <Actions>
+                @if (failure.IsRetryable)
+                {
+                    <LtButton OnClick="LoadAsync">Try again</LtButton>
+                }
+            </Actions>
+        </LtEmptyState>
+    }
+    else if (_regions is null)
+    {
+        <LtSkeleton Lines="4" Label="Loading regions" />
+    }
+    else
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="Allowed" Mono="true">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(_regions))</LtDefinition>
+            <LtDefinition Term="Resident" Mono="true">@TenancyFormat.RegionList(TenancyFormat.ResidentRegions(_regions))</LtDefinition>
+        </LtDefinitionList>
+
+        <LtTable TItem="TenancyRegionRow" Items="_plan.Rows" Caption="@($"Regions of tenant {TenantId}")" CaptionHidden="true" RowKey="@(row => row.RegionId)" DetailTitle="@(row => row.RegionId)">
+            <ChildContent>
+                <LtColumn TItem="TenancyRegionRow" Title="Region" RowHeader="true" Mono="true" SortBy="@(row => row.RegionId)" Value="@(row => row.RegionId)" />
+                <LtColumn TItem="TenancyRegionRow" Title="Status">
+                    <LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status)" />
+                </LtColumn>
+                <LtColumn TItem="TenancyRegionRow" Title="Allowed" Value="@(row => row.IsAllowed ? "Allowed" : "Not allowed")" />
+                <LtColumn TItem="TenancyRegionRow" Title="Residency">
+                    @ResidencyControl(context)
+                </LtColumn>
+            </ChildContent>
+            <EmptyContent><span>No region is allowed for tenant @TenantId yet.</span></EmptyContent>
+            <CompactRow>
+                <LtCompactRow Mono="true">
+                    <Primary>@context.RegionId</Primary>
+                    <Secondary>@(context.IsAllowed ? "Allowed" : "Not allowed")@(context.IsPlanned != context.IsResident ? (context.IsPlanned ? ", to be added" : ", to be removed") : string.Empty)</Secondary>
+                    <State><LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions>@ResidencyControl(context)</DetailActions>
+        </LtTable>
+
+        <div class="lt-tenancy-actions">
+            <LtButton OnClick="ApplyResidency" Disabled="@(_busy || !_plan.IsChanged)">Apply residency</LtButton>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _plan.Revert())" Disabled="@(_busy || !_plan.IsChanged)">Reset</LtButton>
+            @if (_plan.IsChanged)
+            {
+                <span class="lt-tenancy-count" role="status">@PlanSummary</span>
+            }
+        </div>
+
+        @if (CanAuthorize)
+        {
+            <form class="lt-tenancy-form lt-tenancy-allowed" @onsubmit="SaveAllowed" novalidate>
+                <h3 class="lt-tenancy-subtitle">Allowed regions</h3>
+                <LtTextInput Label="Allowed region ids" Mono="true" Value="@_allowedText" ValueChanged="@(value => _allowedText = value)" Error="@_allowedError"
+                             Hint="The complete allowed set, separated by commas. A region the tenant is resident in cannot be revoked." />
+                <div class="lt-tenancy-form__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="_busy">Save allowed regions</LtButton>
+                </div>
+            </form>
+        }
+    }
+</section>
+
+<LtDialog Open="_confirmResidency" OpenChanged="@(open => _confirmResidency = open)" Title="Remove regions from the residency?" Alert="true" Placement="DialogPlacement">
+    <p>
+        Tenant <code class="lt-tenancy-mono">@TenantId</code> will start draining <code class="lt-tenancy-mono">@TenancyFormat.RegionList(Removed)</code>.
+        Its data there is removed once draining completes.
+    </p>
+    <div class="lt-dialog__actions">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _confirmResidency = false)">Cancel</LtButton>
+        <LtButton Variant="LtButtonVariant.Destructive" OnClick="SetResidencyAsync" Disabled="_busy">Drain and apply</LtButton>
+    </div>
+</LtDialog>
+
+<LtDialog Open="_confirmAllowed" OpenChanged="@(open => _confirmAllowed = open)" Title="Revoke allowed regions?" Alert="true" Placement="DialogPlacement">
+    <p>
+        Tenant <code class="lt-tenancy-mono">@TenantId</code> will no longer be allowed <code class="lt-tenancy-mono">@TenancyFormat.RegionList(_revokedAllowed)</code>,
+        and its admins will not be able to make it resident there.
+    </p>
+    <div class="lt-dialog__actions">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _confirmAllowed = false)">Cancel</LtButton>
+        <LtButton Variant="LtButtonVariant.Destructive" OnClick="AuthorizeAsync" Disabled="_busy">Revoke and save</LtButton>
+    </div>
+</LtDialog>
+
+@code {
+    private RenderFragment ResidencyControl(TenancyRegionRow row) => __builder =>
+    {
+        <LtCheckbox Label="@($"Resident in {row.RegionId}")"
+                    Checked="row.IsPlanned"
+                    CheckedChanged="@(_ => Toggle(row.RegionId))"
+                    Disabled="@(_busy || row.Refusal is not null)"
+                    Hint="@row.Refusal" />
+    };
+}

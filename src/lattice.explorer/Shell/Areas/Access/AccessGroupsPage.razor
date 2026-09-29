@@ -1,0 +1,90 @@
+@page "/access/groups"
+@page "/t/{tenant}/access/groups"
+@inherits ExplorerPage
+
+@*
+    The group catalogue, paged, with a validated, fail-closed create form.
+*@
+
+<PageTitle>Access groups - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Groups collect users and other groups, so a rule can name them once.</p>
+<AccessNav Current="@AccessRoutes.GroupsSegment" />
+<AccessPostureBanner Model="_model" />
+
+<div class="lt-toolbar">
+    <LtSearchInput Label="Search groups" Placeholder="Group id or name" Value="@_search" ValueChanged="@(value => _search = value)" />
+    <LtButton OnClick="OpenCreate" Disabled="@(_failure is not null || !MembershipEditable)" data-lt-command="@AccessArea.CreateGroupCommandId">New group</LtButton>
+    @if (_groups is not null)
+    {
+        <span class="lt-access-count" role="status">@CountText</span>
+    }
+</div>
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Groups could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions><LtButton OnClick="LoadFirstPageAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_groups is null)
+{
+    <LtSkeleton Lines="6" Label="Loading groups" />
+}
+else
+{
+    <LtTable TItem="AuthGroup" Items="Visible" Caption="Groups" CaptionHidden="true" RowKey="@(group => group.GroupId)" DetailTitle="@(group => group.GroupId)">
+        <ChildContent>
+            <LtColumn TItem="AuthGroup" Title="Group" RowHeader="true" Mono="true" SortBy="@(group => group.GroupId)">
+                <a href="@GroupHref(context.GroupId)">@context.GroupId</a>
+            </LtColumn>
+            <LtColumn TItem="AuthGroup" Title="Display name" Value="@(group => group.DisplayName)" SortBy="@(group => group.DisplayName)" />
+        </ChildContent>
+        <EmptyContent>
+            <span>@(_groups.Count == 0 ? "No groups are defined on this cluster yet." : "No group matches.")</span>
+        </EmptyContent>
+        <CompactRow>
+            <LtCompactRow Mono="true">
+                <Primary>@context.GroupId</Primary>
+                <Secondary>@(context.DisplayName ?? "No display name")</Secondary>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions>
+            <a class="lt-btn" href="@GroupHref(context.GroupId)">Open group</a>
+        </DetailActions>
+    </LtTable>
+    @if (_next is not null)
+    {
+        <div class="lt-access-actions">
+            <LtButton OnClick="LoadMoreAsync" Disabled="_loadingMore">Load more groups</LtButton>
+        </div>
+    }
+}
+
+<LtDialog Open="_createOpen" OpenChanged="@(open => _createOpen = open)" Title="New group" Placement="DialogPlacement">
+    @if (_createOpen)
+    {
+        <form class="lt-access-form" @onsubmit="CreateAsync" novalidate>
+            <AccessSubjectPicker Label="Group id"
+                                 Kind="LatticeSubjectSelectorKind.Group"
+                                 AllowKindChange="false"
+                                 Id="@_newId"
+                                 IdChanged="@(value => _newId = value)"
+                                 Error="@_idError"
+                                 DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                                 DirectoryExplanation="@_model?.DirectoryExplanation"
+                                 OnPrincipalSelected="OnPrincipalSelected" />
+            <LtTextInput Label="Display name (optional)" Value="@_newName" ValueChanged="@(value => _newName = value)" />
+            @if (_formError is not null)
+            {
+                <p class="lt-access-form__error" role="alert" data-lt-field="form">@_formError</p>
+            }
+            <div class="lt-access-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="_saving">Create group</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => _createOpen = false)" Disabled="_saving">Cancel</LtButton>
+            </div>
+        </form>
+    }
+</LtDialog>

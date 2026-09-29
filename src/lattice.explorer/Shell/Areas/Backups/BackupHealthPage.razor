@@ -1,0 +1,143 @@
+@page "/backups/health"
+@page "/t/{tenant}/backups/health"
+@inherits ExplorerPage
+@*
+    /backups/health: backup health, only where monitoring applies (a durable,
+    external backup store). Lists the latest health of the newest backups; for
+    one backup (?backup=) reads its latest report, re-checks it now, and
+    configures its periodic monitoring.
+*@
+
+<PageTitle>Backup health - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Health</h1>
+<p class="lt-shell-page-lede">Health verification checks that each backup's manifest and artifacts are present in the backup store and still match their recorded hashes.</p>
+<BackupsNav Current="@BackupsNav.HealthPage" />
+
+@if (!_ready)
+{
+    <LtSkeleton Lines="4" Label="Loading backup health" />
+}
+else if (FocusedId is { } focused)
+{
+    @if (_focusError is { } focusError)
+    {
+        <p class="lt-backups-error" role="alert">@focusError</p>
+    }
+    else if (_focus is not { } manifest)
+    {
+        <LtSkeleton Lines="3" Label="Loading the backup's health" />
+    }
+    else
+    {
+        <h2 class="lt-backups-section__title">
+            <a class="lt-backups-link" href="@Href(BackupsAddresses.Backup(manifest.Id))">@BackupsFormat.Name(manifest)</a>
+            of <BackupTreeLabel TreeId="@manifest.Scope.TreeId" />
+        </h2>
+        @if (_focusReport is { } report)
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Status"><BackupHealthPill Report="@report" /></LtDefinition>
+                <LtDefinition Term="Checked" Mono="true">@BackupsFormat.Time(report.CheckedAtUtc)</LtDefinition>
+                <LtDefinition Term="Explanation">@report.Explanation</LtDefinition>
+                <LtDefinition Term="Manifest">@(report.ManifestPresent ? "Present" : "Missing")</LtDefinition>
+                @if (report.MissingArtifactIds.Count > 0)
+                {
+                    <LtDefinition Term="Missing or uncommitted artifacts" Mono="true">@string.Join(", ", report.MissingArtifactIds)</LtDefinition>
+                }
+                @if (report.HashMismatchArtifactIds.Count > 0)
+                {
+                    <LtDefinition Term="Hash mismatches" Mono="true">@string.Join(", ", report.HashMismatchArtifactIds)</LtDefinition>
+                }
+                @if (report.PeerVisibility != BackupSinkSharingStatus.NotApplicable)
+                {
+                    <LtDefinition Term="Visible to peer clusters">@PeerText(report)</LtDefinition>
+                }
+            </LtDefinitionList>
+        }
+        else
+        {
+            <p class="lt-backups-note">This backup has not been checked yet.</p>
+        }
+
+        @if (!_focusAllowed)
+        {
+            <p class="lt-backups-note">You may not check or configure this backup's health.</p>
+        }
+        else
+        {
+            <div class="lt-backups-actions">
+                <LtButton Disabled="@_checking" OnClick="CheckNowAsync">@(_checking ? "Checking" : "Check now")</LtButton>
+            </div>
+            @if (_checkError is { } checkError)
+            {
+                <p class="lt-backups-error" role="alert">@checkError</p>
+            }
+
+            <section class="lt-backups-section" aria-labelledby="lt-backups-monitor-title">
+                <h3 id="lt-backups-monitor-title" class="lt-backups-section__title">Periodic monitoring</h3>
+                <form class="lt-backups-form" @onsubmit="ConfigureAsync">
+                    <LtSwitch Label="Verify this backup periodically" Checked="@_monitor" CheckedChanged="value => _monitor = value" OnText="On" OffText="Off" />
+                    <div class="lt-backups-form__row">
+                        <LtTextInput Label="Every hours" Value="@_hours" ValueChanged="value => _hours = value" inputmode="numeric" />
+                        <LtTextInput Label="and minutes" Value="@_minutes" ValueChanged="value => _minutes = value" inputmode="numeric" Error="@_intervalError" />
+                    </div>
+                    <p class="lt-backups-note">The monitor applies this on its next sweep.</p>
+                    @if (_configureMessage is { } configureMessage)
+                    {
+                        <p class="lt-backups-status" role="status">@configureMessage</p>
+                    }
+                    @if (_configureError is { } configureError)
+                    {
+                        <p class="lt-backups-error" role="alert">@configureError</p>
+                    }
+                    <div class="lt-backups-actions">
+                        <LtButton Type="LtButtonType.Submit">Save monitoring</LtButton>
+                    </div>
+                </form>
+            </section>
+        }
+    }
+    <p class="lt-backups-note"><a class="lt-backups-link" href="@Href(BackupsAddresses.Health)">All backups' health</a></p>
+}
+else if (_listError is { } listError)
+{
+    <p class="lt-backups-error" role="alert">@listError</p>
+}
+else if (_page is not { } catalogue)
+{
+    <LtSkeleton Lines="6" Label="Loading backups" />
+}
+else
+{
+    <LtTable TItem="BackupManifest"
+             Items="@catalogue.Entries"
+             Caption="The newest backups' health"
+             CaptionHidden="true"
+             RowKey="manifest => manifest.Id"
+             DetailTitle="BackupsFormat.Name">
+        <ChildContent>
+            <LtColumn TItem="BackupManifest" Title="Backup" RowHeader="true">
+                <a class="lt-backups-link" href="@Href(BackupsAddresses.HealthOf(context.Id))">@BackupsFormat.Name(context)</a>
+            </LtColumn>
+            <LtColumn TItem="BackupManifest" Title="Tree"><BackupTreeLabel TreeId="@context.Scope.TreeId" /></LtColumn>
+            <LtColumn TItem="BackupManifest" Title="Health">
+                <BackupHealthPill Report="@ReportOf(context)" Pending="@(!_read.Contains(context.Id))" />
+            </LtColumn>
+            <LtColumn TItem="BackupManifest" Title="Checked" Mono="true" Value="manifest => CheckedText(manifest)" />
+        </ChildContent>
+        <CompactRow>
+            <LtCompactRow>
+                <Primary>@BackupsFormat.Name(context)</Primary>
+                <Secondary>@BackupTreeName.Parse(context.Scope.TreeId).Name - checked @CheckedText(context)</Secondary>
+                <State><BackupHealthPill Report="@ReportOf(context)" Pending="@(!_read.Contains(context.Id))" /></State>
+            </LtCompactRow>
+        </CompactRow>
+        <DetailActions>
+            <a class="lt-btn" href="@Href(BackupsAddresses.HealthOf(context.Id))">Check or configure</a>
+        </DetailActions>
+        <EmptyContent>
+            <LtEmptyState Title="No backups yet" HeadingLevel="2">Health applies once a backup exists.</LtEmptyState>
+        </EmptyContent>
+    </LtTable>
+}

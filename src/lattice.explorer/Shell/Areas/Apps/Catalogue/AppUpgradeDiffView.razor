@@ -1,0 +1,65 @@
+@*
+    What an upgrade changes: trees, roles, the ceiling and bridge operations between
+    the installed version and the reviewed one. Anything that needs the operator's
+    consent again is flagged, and the upgrade then routes through the ceiling step.
+*@
+@if (Flow?.Diff is { } diff)
+{
+    <section class="lt-apps-section" aria-labelledby="lt-apps-diff">
+        <h2 id="lt-apps-diff" class="lt-apps-section__title">What changes from v@(diff.FromVersion) to v@(diff.ToVersion)</h2>
+        @if (diff.IsEmpty)
+        {
+            <p>Nothing that needs your attention: the same trees, roles, ceiling and bridge operations.</p>
+        }
+        else
+        {
+            <ul class="lt-apps-list">
+                @foreach (var tree in diff.TreesAdded)
+                {
+                    <li>Adds the tree <span class="lt-shell-mono">@AppsPresentation.TreePath(diff.Slug, tree)</span></li>
+                }
+                @foreach (var tree in diff.TreesRemoved)
+                {
+                    <li>No longer declares <span class="lt-shell-mono">@AppsPresentation.TreePath(diff.Slug, tree)</span>; its data is kept</li>
+                }
+                @foreach (var role in diff.RolesAdded)
+                {
+                    <li>Adds the role <span class="lt-shell-mono">@role</span>, which needs a group binding</li>
+                }
+                @foreach (var role in diff.RolesRemoved)
+                {
+                    <li>Drops the role <span class="lt-shell-mono">@role</span></li>
+                }
+                @foreach (var role in diff.RolesChanged)
+                {
+                    <li>Changes what the role <span class="lt-shell-mono">@role</span> may do</li>
+                }
+                @if (diff.CeilingAdded != LatticeOperation.None)
+                {
+                    <li>Needs the ceiling to allow it to @AppsPresentation.OperationsText(diff.CeilingAdded) <span class="lt-apps-flag">needs re-consent</span></li>
+                }
+                @foreach (var scope in diff.ScopesAdded)
+                {
+                    <li>Needs <span class="lt-shell-mono">@AppsPresentation.ScopeText(scope)</span>, outside a/@(diff.Slug)/ <span class="lt-apps-flag">needs re-consent</span></li>
+                }
+                @foreach (var grant in diff.BridgeAdded)
+                {
+                    <li>Its UI newly asks to @AppsPresentation.BridgeText(grant) <span class="lt-apps-flag">needs re-consent</span></li>
+                }
+                @foreach (var grant in diff.BridgeRemoved)
+                {
+                    <li>Its UI no longer asks to @AppsPresentation.BridgeText(grant)</li>
+                }
+            </ul>
+            @if (diff.RequiresReconsent)
+            {
+                <p class="lt-apps-flag" data-lt-reconsent="true">This upgrade needs your consent again before it can activate.</p>
+            }
+        }
+    </section>
+}
+
+@code {
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+}

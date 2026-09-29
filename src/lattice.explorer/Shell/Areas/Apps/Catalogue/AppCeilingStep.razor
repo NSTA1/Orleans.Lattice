@@ -1,0 +1,96 @@
+@*
+    Confirm the ceiling: edit the operations the app may be granted, the exception
+    scopes outside a/{slug}/ and the UI bridge grants, and see exactly what would
+    fail activation under the draft before anything is sent.
+*@
+@if (Flow?.Descriptor is { } app)
+{
+    var requested = AppConsentAnalysis.RequiredOperations(app);
+    var scopes = AppConsentAnalysis.RequiredScopes(app).Concat(Flow.Draft.Scopes).Distinct().ToArray();
+    var grants = AppConsentAnalysis.RequestedBridge(app).Concat(Flow.Draft.BridgeGrants).Distinct().ToArray();
+    var issues = Flow.Issues;
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-ceiling">
+        <h2 id="lt-apps-ceiling" class="lt-apps-section__title">Confirm the ceiling</h2>
+        <p>The ceiling caps what any role of this app can ever be granted, whatever its manifest asks for. It is pinned to v@(app.Version).</p>
+
+        <fieldset class="lt-apps-fieldset">
+            <legend class="lt-apps-fieldset__legend">Operations</legend>
+            <div class="lt-apps-options">
+                @foreach (var operation in AppsPresentation.Operations)
+                {
+                    var op = operation;
+                    <LtCheckbox @key="op"
+                                Label="@AppsPresentation.OperationText(op)"
+                                Hint="@(requested.HasFlag(op) ? "requested" : null)"
+                                Checked="@Flow.Draft.Operations.HasFlag(op)"
+                                CheckedChanged="value => Flow.SetOperation(op, value)" />
+                }
+            </div>
+        </fieldset>
+
+        @if (scopes.Length > 0)
+        {
+            <fieldset class="lt-apps-fieldset">
+                <legend class="lt-apps-fieldset__legend">Exception scopes outside a/@(app.Slug)/</legend>
+                @foreach (var scope in scopes)
+                {
+                    var item = scope;
+                    <LtCheckbox Label="@AppsPresentation.ScopeText(item)"
+                                Checked="@Flow.Draft.Scopes.Contains(item)"
+                                CheckedChanged="value => Flow.SetScope(item, value)" />
+                }
+            </fieldset>
+        }
+
+        @if (grants.Length > 0)
+        {
+            <fieldset class="lt-apps-fieldset">
+                <legend class="lt-apps-fieldset__legend">What its UI may do</legend>
+                @foreach (var grant in grants)
+                {
+                    var item = grant;
+                    <LtCheckbox Label="@AppsPresentation.BridgeText(item)"
+                                Checked="@Flow.Draft.BridgeGrants.Contains(item)"
+                                CheckedChanged="value => Flow.SetBridge(item, value)" />
+                }
+            </fieldset>
+        }
+
+        <h3 class="lt-apps-section__title">What would fail activation</h3>
+        @if (issues.Count == 0)
+        {
+            <p data-lt-activation="ok">Nothing: under this consent it would activate.</p>
+        }
+        else
+        {
+            <ul class="lt-apps-list" data-lt-activation="fails">
+                @foreach (var issue in issues)
+                {
+                    <li data-lt-issue="@issue.Kind">@issue.Text</li>
+                }
+            </ul>
+        }
+
+        <div class="lt-apps-actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="Flow.Back">Back</LtButton>
+            <LtButton OnClick="() => Flow.CommitAsync()" Disabled="@Flow.IsBlocked">@CommitText</LtButton>
+        </div>
+        @if (Flow.IsBlocked)
+        {
+            <p class="lt-apps-hint">It cannot be installed while one of its trees cannot be owned.</p>
+        }
+    </section>
+}
+
+@code {
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+
+    private string CommitText => Flow!.Mode switch
+    {
+        AppInstallMode.Upgrade => $"Upgrade to v{Flow.Descriptor!.Version}",
+        AppInstallMode.Reconsent => "Record consent",
+        _ => $"Install v{Flow.Descriptor!.Version}",
+    };
+}

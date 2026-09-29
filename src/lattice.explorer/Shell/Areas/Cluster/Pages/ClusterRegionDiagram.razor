@@ -1,0 +1,44 @@
+@if (_picture.IsLoading)
+{
+    <LtSkeleton Lines="3" Label="Loading the region picture" />
+}
+else if (_picture.Value is { } picture)
+{
+    <figure class="lt-cluster-regions" aria-labelledby="lt-cluster-regions-caption">
+        <figcaption class="lt-cluster-regions__caption" id="lt-cluster-regions-caption">@Caption(picture)</figcaption>
+        <div class="lt-cluster-regions__local">
+            <LtNode Kind="LtNodeKind.Join" Size="LtNodeSize.Large" />
+            <span class="lt-cluster-regions__name lt-shell-mono">@picture.LocalRegionId</span>
+            <span class="lt-cluster-regions__here">this region</span>
+        </div>
+        @if (picture.Peers.Count > 0)
+        {
+            <ul class="lt-cluster-regions__peers">
+                @foreach (var peer in picture.Peers)
+                {
+                    <li class="@(peer.IsStalled ? "lt-cluster-regions__peer lt-cluster-regions__peer--stalled" : "lt-cluster-regions__peer")" @key="peer.RegionId">
+                        <span class="lt-cluster-regions__edge" aria-hidden="true"></span>
+                        <LtNode Kind="@(peer.IsStalled ? LtNodeKind.Hollow : LtNodeKind.Filled)" />
+                        <span class="lt-cluster-regions__name lt-shell-mono">@peer.RegionId</span>
+                        <LtStatusPill State="@StateOf(peer)" Text="@HealthText(peer)" />
+                        <span class="lt-cluster-regions__detail">@Detail(peer)</span>
+                    </li>
+                }
+            </ul>
+        }
+        else
+        {
+            <p class="lt-cluster-regions__alone">No peer region: this cluster replicates with no other region.</p>
+        }
+    </figure>
+    @if (picture.Truncated)
+    {
+        <p class="lt-cluster-note">The peer report was longer than the Explorer reads at once; some links are not counted.</p>
+    }
+}
+else
+{
+    <p class="lt-cluster-note">@_picture.Error</p>
+}
+
+<p class="lt-cluster-note"><a class="lt-cluster-link" href="@ReplicationHref">Open Replication</a> for every link, its backlog and its last contact.</p>
