@@ -118,13 +118,32 @@ public class LatticeReplicationGrpcServiceTests
     private sealed class TestServerCallContext : ServerCallContext
     {
         private readonly CancellationToken _ct;
+        private readonly string? _origin;
+
+        // The transport stamps the origin-cluster header on every outbound call
+        // (GrpcChannelHardening.PopulateMetadataAsync adds it unconditionally),
+        // so the default here models a conforming peer. Pass origin: null to
+        // model a hand-rolled caller that omits it.
         public TestServerCallContext() : this(CancellationToken.None) { }
-        public TestServerCallContext(CancellationToken ct) { _ct = ct; }
+        public TestServerCallContext(CancellationToken ct, string? origin = "remote")
+        {
+            _ct = ct;
+            _origin = origin;
+        }
+
+        public TestServerCallContext(string? origin) : this(CancellationToken.None, origin) { }
+
         protected override string MethodCore => "Push";
         protected override string HostCore => string.Empty;
         protected override string PeerCore => string.Empty;
         protected override DateTime DeadlineCore => DateTime.MaxValue;
-        protected override global::Grpc.Core.Metadata RequestHeadersCore => new();
+        protected override global::Grpc.Core.Metadata RequestHeadersCore =>
+            _origin is null
+                ? new global::Grpc.Core.Metadata()
+                : new global::Grpc.Core.Metadata
+                {
+                    { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, _origin },
+                };
         protected override CancellationToken CancellationTokenCore => _ct;
         protected override global::Grpc.Core.Metadata ResponseTrailersCore => new();
         protected override Status StatusCore { get; set; }
@@ -1075,7 +1094,7 @@ public class LatticeReplicationGrpcServiceTests
             },
         };
 
-        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext("site-a"));
 
         Assert.Multiple(() =>
         {
@@ -1116,7 +1135,7 @@ public class LatticeReplicationGrpcServiceTests
             },
         };
 
-        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext("site-a"));
 
         Assert.Multiple(() =>
         {
@@ -1159,7 +1178,7 @@ public class LatticeReplicationGrpcServiceTests
             },
         };
 
-        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext());
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext("site-a"));
 
         Assert.Multiple(() =>
         {
@@ -1434,7 +1453,7 @@ public class LatticeReplicationGrpcServiceTests
             Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "site-a" },
         };
 
-        var response = await svc.GetPeerHighWaterMark(box, new TestServerCallContext());
+        var response = await svc.GetPeerHighWaterMark(box, new TestServerCallContext("site-a"));
 
         Assert.That(response.Value.Clock, Is.EqualTo(clock));
     }
@@ -1454,7 +1473,7 @@ public class LatticeReplicationGrpcServiceTests
             Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "never-seen" },
         };
 
-        var response = await svc.GetPeerHighWaterMark(box, new TestServerCallContext());
+        var response = await svc.GetPeerHighWaterMark(box, new TestServerCallContext("never-seen"));
 
         Assert.That(response.Value.Clock, Is.EqualTo(HybridLogicalClock.Zero));
     }

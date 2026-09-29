@@ -303,11 +303,13 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
     }
 
     [Test]
-    public async Task ExchangeContentManifest_accepts_a_call_with_no_stamped_origin_header()
+    public void ExchangeContentManifest_refuses_a_call_with_no_stamped_origin_header()
     {
-        // Absent-tolerant by design: a binding that does not stamp the header
-        // must keep working, so the gate refuses only a present-and-disagreeing
-        // value. This mirrors how the saga control channel reads the header.
+        // Regression: the gate was absent-tolerant, so omitting the header
+        // bypassed the origin binding entirely. Omitting a header is strictly
+        // easier than forging one, so a tolerated absence was not a weaker
+        // gate but no gate at all - a peer could enumerate a third cluster's
+        // replication cursor simply by not stamping itself.
         var factory = Substitute.For<IGrainFactory>();
         var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
@@ -324,9 +326,10 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
             },
         };
 
-        var response = await svc.ExchangeContentManifest(box, NoHeaders());
+        var rpc = Assert.ThrowsAsync<RpcException>(async () =>
+            await svc.ExchangeContentManifest(box, NoHeaders()));
 
-        Assert.That(response.Value.ExchangeSupported, Is.True);
+        Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
     }
 
     [Test]
@@ -423,10 +426,11 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
     }
 
     [Test]
-    public async Task GetPeerHighWaterMark_accepts_a_call_with_no_stamped_origin_header()
+    public void GetPeerHighWaterMark_refuses_a_call_with_no_stamped_origin_header()
     {
-        // Same absent-tolerant posture as the manifest exchange, so an older or
-        // custom binding that does not stamp the header keeps working.
+        // Same fail-closed posture as the manifest exchange: an unstamped call
+        // carries no authenticated origin, so it may not read back a
+        // per-origin replication cursor it merely names.
         var factory = Substitute.For<IGrainFactory>();
         var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
@@ -442,8 +446,9 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
             },
         };
 
-        var response = await svc.GetPeerHighWaterMark(box, NoHeaders());
+        var rpc = Assert.ThrowsAsync<RpcException>(async () =>
+            await svc.GetPeerHighWaterMark(box, NoHeaders()));
 
-        Assert.That(response.Value.Clock, Is.EqualTo(HybridLogicalClock.Zero));
+        Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
     }
 }

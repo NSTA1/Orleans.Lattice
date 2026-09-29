@@ -296,24 +296,40 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// body-declared origin only. The header is fixed per peer channel from the
     /// configured local cluster id, or from the cluster-wide replication cluster id
     /// when no override is set; request bodies carry the sending tree's resolved
-    /// replication cluster id. The header is absent-tolerant (an older or custom
-    /// binding may not stamp it), matching how <c>LatticeSagaGrpcService</c> treats
-    /// the same header; a present value that differs from the body refuses the
-    /// live-push, content-manifest, or high-water-mark call.
+    /// replication cluster id. The header is <b>required</b>: an absent value refuses
+    /// the call rather than admitting it. Absent-tolerance would have made the binding
+    /// optional at the caller's discretion, and omitting a header is strictly easier
+    /// than forging one, so a tolerated absence is not a weaker gate but no gate at
+    /// all. <c>GrpcChannelHardening</c> stamps the header unconditionally - it is
+    /// added outside the credential's own presence check - so every conforming sender
+    /// carries it and only a hand-rolled caller omits it.
     /// </para>
     /// </summary>
     /// <param name="context">The server call context carrying the request headers.</param>
     /// <param name="declaredOrigin">The origin cluster id the request body declares.</param>
     /// <param name="rpc">The RPC name, for the refusal diagnostic.</param>
     /// <exception cref="RpcException">
-    /// <see cref="StatusCode.PermissionDenied"/> when the stamped origin is
-    /// present and names a different cluster than the body declares.
+    /// <see cref="StatusCode.PermissionDenied"/> when the stamped origin is absent,
+    /// or names a different cluster than the body declares.
     /// </exception>
     private void EnsureOriginMatchesCaller(ServerCallContext context, string declaredOrigin, string rpc)
     {
         var stamped = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
-        if (string.IsNullOrWhiteSpace(stamped)
-            || string.Equals(stamped, declaredOrigin, StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(stamped))
+        {
+            // Cold reject path only.
+            _logger.LogWarning(
+                "Refusing replication {Rpc}: the request declares origin '{DeclaredOrigin}' but the call "
+                + "carries no transport-stamped origin. A peer may only advance its own stream.",
+                rpc,
+                declaredOrigin);
+
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                $"The {rpc} call carries no stamped origin cluster; the origin declared in the request "
+                + "body is not an authorization input. A peer may only act on its own origin."));
+        }
+
+        if (string.Equals(stamped, declaredOrigin, StringComparison.Ordinal))
         {
             return;
         }

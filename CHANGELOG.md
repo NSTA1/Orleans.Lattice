@@ -263,6 +263,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A saga peer authorized itself from the request body.** With the origin header absent, the saga service read the coordinator cluster id from the body, so any mesh-secret holder could name an authorized peer and drive `Prepare`/`Commit`/`Abort`. Unstamped calls are now refused. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Omitting a header bypassed the replication origin gate.** `Push`, `ExchangeContentManifest`, and `GetPeerHighWaterMark` allowed a call carrying no stamped origin, so a peer could poison or read a third cluster's cursor by not stamping itself. Absent is now refused. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Replication credentials were not bound to a cluster.** The accepted-secret set carries no peer attribution, so origin checks compared caller-chosen values. New opt-in `BindCredentialToOriginCluster` requires the presented secret to be the one configured for the claimed origin. ([#3893](https://github.com/NSTA1/Orleans.Lattice/pull/3893)) (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`)
+
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - A single-key allow certified a whole prefix.** An app role scoped to a key prefix probed its key filter with the prefix string, which resolves on the exact-key tier, so a policy allowing only the key equal to that prefix held the role prefix-wide. Filtered decisions now fail closed. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp.Apps`)
