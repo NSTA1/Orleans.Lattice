@@ -353,14 +353,14 @@ Authorization is **two-tier and inherited from the facade**, which the tools do 
 
 Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request resolves to deny even under `DefaultEffect = Allow`.
 
-Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. A newly added region reports `Provisioning`, not `Online`, and no shipped component advances it further: the later lifecycle steps are reserved for backfill and drain machinery that no shipped package runs, so an added region stays `Provisioning` and a dropped one `Draining` until the host advances them itself through the tenancy registry (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`, so until the host has advanced one it is served in none.
+Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. A newly added region reports `Provisioning`, not `Online`, and no shipped component advances it further: nothing backfills the tenant's existing data into an added region, so promoting it through `Backfilling` to `Online` is an operator step the host takes on a silo, one lifecycle step at a time with `TenantRecord.TryPromoteRegionStatus`. A dropped region's drain completes on its own, `Draining` -> `Offline` -> `Removed`, on each silo of that region that registers the tenant-admin control API (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`, so until an operator has advanced one it is served in none.
 
 The typical workflow is:
 
 1. An operator calls `lattice_tenant_authorize_regions` to widen the allowed set.
 2. A tenant admin calls `lattice_tenant_region_status` and sees the new region as `isAllowed: true` with status `None`.
 3. The tenant admin calls `lattice_tenant_set_residency` to move into it; it reports `Provisioning`.
-4. The region stays `Provisioning` until the host advances it, one lifecycle step at a time, to `Online`; no shipped component does. Only then does a `region`-targeted call routed there succeed.
+4. The region stays `Provisioning` until an operator of the host advances it, one lifecycle step at a time, to `Online`; no shipped component does. Only then does a `region`-targeted call routed there succeed.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires a region-residency gRPC adapter off the same `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint.
 

@@ -100,17 +100,20 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         // T20 per-tenant region residency. The two-tier fail-closed authorizer
         // (operator authorizes the allowed set; tenant-admin sets residency within
         // it), the region-residency control facade every transport binding adapts
-        // over, and the explicit lifecycle promotion helper trusted co-hosted
-        // infrastructure may call as milestones complete. No background service
-        // invokes that helper automatically today; residency changes stop at the
-        // status written by the facade until such a caller advances them. All are
-        // append-only siblings of the tenant-lifecycle facade above.
+        // over, the single-step lifecycle driver, and the listener that uses it to
+        // complete the drain of this silo's own serving region automatically
+        // (issue #3897). The add path is deliberately not driven: nothing copies a
+        // tenant's existing data into an added region, so promoting it to Online is
+        // the operator step the tenancy documentation names. All are append-only
+        // siblings of the tenant-lifecycle facade above.
         builder.Services.TryAddSingleton(sp => new TenantRegionResidencyAuthorizer(
             sp.GetRequiredService<ILatticeAccessGate>(),
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetService<ILatticeMembershipContext>()));
         builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
         builder.Services.TryAddSingleton<TenantRegionLifecycleDriver>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ITenantRegionStatusChangeListener, TenantRegionDrainCompletionListener>());
 
         // N1 tenant access administration. The tenant-tier surface that manages a
         // tenant's admin-subject set (list / add / remove), so membership can be

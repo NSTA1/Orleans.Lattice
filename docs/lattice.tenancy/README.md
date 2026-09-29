@@ -553,15 +553,64 @@ where its status is exactly `Online`.
 `SetResidencyAsync` applies only the first step of each path: `Provisioning` for an
 added region and `Draining` for a dropped one. The later steps (`Provisioning` ->
 `Backfilling` -> `Online`, and `Draining` -> `Offline` -> `Removed`) are single-step
-promotions reserved for backfill and drain machinery that no shipped package runs, so
-a region stays at the status `SetResidencyAsync` gave it. A tenant whose residency has
-been set is therefore served in no region until a host advances those statuses
-itself, which it can do only through the public `ITenantRegistry` and
-`TenantRecord.SetRegionStatus`, one legal step at a time as `TenantRegionLifecycle`
-defines them. `SetRegionStatus` does not check the step itself - it applies any
-status whose stamp supersedes the region's current one - so the host must take the
-next status from `TenantRegionLifecycle.TryNextPromotion` and stamp each write later
-than the last.
+promotions, and the two paths are completed differently.
+
+**The remove path completes on its own.** With the
+[tenant-admin control API](../lattice.api.tenantadmin/README.md#registration)
+registered, each silo watches its own serving region (its cluster id) and, when a
+tenant's status there becomes `Draining`, advances it to `Offline` and then to
+`Removed` without any caller. Nothing needs to be waited for first: a region stops
+serving a tenant and stops admitting its replicated writes the moment its status
+leaves `Online`, and outbound shipping of the writes it accepted while online does not
+depend on the status. A dropped region whose silos never run again (a decommissioned
+region) keeps the `Draining` it was given, which is harmless - it is already neither
+resident nor serving.
+
+**The add path needs an operator step.** No shipped component backfills a region a
+tenant is added to. While the tenant is not `Online` in a region, that region refuses
+and dead-letters every replicated write for it - including anything a backfill would
+apply, because dead-letter replay and snapshot re-seed go through the same gate - so
+an added region lacks whatever was written while it was not admitting the tenant, and
+cannot be filled in until it is `Online`. Promoting it automatically would declare an
+incomplete replica online without anyone deciding to, so nothing does: an added region
+stays at `Provisioning`, and a tenant whose residency has been set is served in no
+region until an operator advances one. Where the region was admitting the tenant's
+writes up to the add - residency being configured for the first time, so every region
+was admit-all until then - it misses at most the writes shipped since, and advancing
+it is enough. Otherwise advance it and then recover the gap: replay the region's
+dead-lettered writes for the tenant's trees (see the
+[dead-letter queue](../lattice.replication/dead-letter-queue.md)), or let the
+[anti-entropy digest probe](../lattice.replication/anti-entropy-digest-probe.md)
+repair it where that is enabled. Advance the region one step at a time,
+`Provisioning` -> `Backfilling` -> `Online`, from host code on a silo:
+
+```csharp verify
+using Orleans.Lattice.Tenancy;
+
+// Advances a region one legal lifecycle step and returns its committed status.
+// Call it twice to take an added region from Provisioning to Online.
+static async Task<TenantRegionStatus> PromoteRegionAsync(
+    ITenantRegistry registry, TenantId tenant, string regionId, string clusterId, CancellationToken cancellationToken)
+{
+    var record = await registry.GetAsync(tenant, cancellationToken)
+        ?? throw new InvalidOperationException($"Tenant '{tenant}' is not registered.");
+
+    if (!record.TryPromoteRegionStatus(regionId, clusterId, out _))
+    {
+        return record.GetRegionStatus(regionId);
+    }
+
+    var committed = await registry.PutAsync(record, cancellationToken);
+    return committed.GetRegionStatus(regionId);
+}
+```
+
+`TenantRecord.TryPromoteRegionStatus` applies only the next legal step
+(`TenantRegionLifecycle.TryNextPromotion`) and is a no-op at `Online`, `Removed`, and
+`None`. It stamps the promotion as the immediate successor of the status it read, not
+at wall-clock now, so it never overwrites a residency change a tenant admin commits
+after that read. Prefer it to `TenantRecord.SetRegionStatus`, which applies any status
+whose stamp supersedes the current one and checks neither the step nor that ordering.
 
 Quota accounting does not follow these statuses: the `GlobalConverged`
 fold sums every cluster slot the tenant has published, whatever the status of that
