@@ -168,8 +168,8 @@ public sealed class LatticeScalingSignalOptions
     /// both for the aggregate <see cref="StoragePressure.OverThreshold"/> flag and
     /// for per-account <see cref="WalAccountPressure.OverThreshold"/> /
     /// <see cref="WalPressureClassification.CapacityBound"/> classification. At
-    /// evaluation time a non-positive value falls back to the default and a value
-    /// above 1 is clamped to 1, so the effective ratio is always in <c>(0, 1]</c>.
+    /// evaluation time a non-positive or NaN value falls back to the default and a
+    /// value above 1 is clamped to 1, so the effective ratio is always in <c>(0, 1]</c>.
     /// <para>
     /// The ceiling is resolved <b>per tree</b>, so a per-tree option value or
     /// runtime override applies, not only the silo-wide default. An account's
