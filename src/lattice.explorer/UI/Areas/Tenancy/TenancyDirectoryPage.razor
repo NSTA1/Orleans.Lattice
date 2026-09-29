@@ -80,10 +80,12 @@ else
     @if (_createOpen)
     {
         <form class="lt-tenancy-form" @onsubmit="CreateAsync" novalidate>
-            <LtTextInput Label="Tenant id" Mono="true" Value="@_newId" ValueChanged="@(value => _newId = value)" Error="@_idError"
-                         Hint="Lower-case letters, digits and hyphens. It names the tenant's trees, so it cannot change later." />
-            <LtTextInput Label="Admin subjects (optional)" Mono="true" Value="@_newAdmins" ValueChanged="@(value => _newAdmins = value)" Error="@_adminsError"
-                         Hint="Separate subject ids with commas. Left blank, you become its first admin subject; listing any replaces that." />
+            <LtComboBox Label="Tenant id" Value="@_newId" ValueChanged="@(value => _newId = value)" Error="@_idError"
+                        Source="@Suggestions.Tenants" Mode="LtComboBoxMode.Suggest" RejectExisting="true" Noun="tenant"
+                        Hint="Lower-case letters, digits and hyphens. It names the tenant's trees, so it cannot change later." />
+            <LtMultiComboBox @ref="_adminsBox" Label="Admin subjects (optional)" Values="@_newAdmins" ValuesChanged="@(values => _newAdmins = values)" Error="@_adminsError"
+                             Source="@Suggestions.Principals" Noun="subject"
+                             Hint="Choose users or groups from the directory, or type ids separated by commas. Left blank, you become its first admin subject; listing any replaces that." />
             @if (_formError is not null)
             {
                 <p class="lt-tenancy-form__error" role="alert">@_formError</p>

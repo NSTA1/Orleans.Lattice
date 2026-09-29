@@ -31,7 +31,7 @@
     else
     {
         <form class="lt-toolbar lt-tenancy-add" @onsubmit="AddAsync" novalidate>
-            <LtTextInput Label="Subject id" Mono="true" Value="@_newSubject" ValueChanged="@(value => _newSubject = value)" Error="@_addError" Placeholder="user or group id" />
+            <LtComboBox @ref="_subjectBox" Label="Subject id" Value="@_newSubject" ValueChanged="@(value => _newSubject = value)" Error="@_addError" Placeholder="user or group id" Source="@Suggestions.Principals" Noun="subject" />
             <LtButton Type="LtButtonType.Submit" Disabled="_busy">Add admin subject</LtButton>
         </form>
 

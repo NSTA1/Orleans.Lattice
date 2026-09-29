@@ -80,4 +80,21 @@ public sealed class ReflowTests : UiTestBase
 
         Assert.That(measured, Is.GreaterThan(ExplorerAreas.Shown.Count()), "The touch-target scan measured almost nothing.");
     }
+
+    [Test]
+    public async Task An_open_picker_reflows_on_a_phone_and_its_suggestions_are_touch_targets()
+    {
+        var world = await UiHosts.WorldAsync();
+        var page = await OpenAsync(world.Head, "/cluster/orphans", WorldIdentities.Admin, Shell.SmallWidth);
+        var tree = Accessibility.ComboBoxAccessibilityTests.Tree(page);
+        await Expect(tree).ToBeVisibleAsync();
+
+        await Accessibility.ComboBoxAccessibilityTests.OpenListAsync(page, tree);
+
+        await Shell.AssertNoHorizontalPageScrollAsync(page, $"An open tree picker at {Shell.SmallWidth}px");
+        var heights = await page.Locator(".lt-combobox__option").EvaluateAllAsync<double[]>("options => options.map(o => o.getBoundingClientRect().height)");
+        Assert.That(heights, Is.Not.Empty.And.All.GreaterThanOrEqualTo(43.5), "Every suggestion on a phone is a 44px touch target.");
+        var list = await page.Locator(".lt-combobox__list").BoundingBoxAsync();
+        Assert.That(list!.X + list.Width, Is.LessThanOrEqualTo(Shell.SmallWidth + 0.5), "The listbox stays inside the viewport.");
+    }
 }

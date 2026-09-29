@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
@@ -31,9 +32,14 @@ public partial class AccessExplainPage
     private AuthEffectivePermissions? _permissions;
     private IReadOnlyList<LatticeAuthorizationRule> _matched = [];
     private AccessModelDescriptor? _model;
+    private LtComboBox? _treeBox;
+    private AccessSubjectPicker? _subjectPicker;
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     private static IReadOnlyList<LtSelectOption> OperationOptions { get; } =
         [.. AccessRuleFormat.Operations.Select(option => new LtSelectOption(option.Value, option.Label))];
@@ -102,7 +108,7 @@ public partial class AccessExplainPage
 
     private async Task RunExplainAsync(bool updateAddress)
     {
-        if (!TryReadScope(out var scope) | !ValidateSubject())
+        if (!TryReadScope(out var scope) | !ValidateSubject() || (updateAddress && !await ConfirmPickersAsync(checkTree: _scopeKind != AccessRuleDraft.ClusterScope).ConfigureAwait(true)))
         {
             return;
         }
@@ -123,7 +129,7 @@ public partial class AccessExplainPage
 
     private async Task RunPermissionsAsync(bool updateAddress)
     {
-        if (!ValidateSubject())
+        if (!ValidateSubject() || (updateAddress && !await ConfirmPickersAsync(checkTree: false).ConfigureAwait(true)))
         {
             return;
         }
@@ -139,6 +145,13 @@ public partial class AccessExplainPage
         {
             UpdateAddress(permissions: true);
         }
+    }
+
+    private async Task<bool> ConfirmPickersAsync(bool checkTree)
+    {
+        var tree = !checkTree || _treeBox is null || await _treeBox.ConfirmAsync().ConfigureAwait(true);
+        var subject = _subjectPicker is null || await _subjectPicker.ConfirmAsync().ConfigureAwait(true);
+        return tree && subject;
     }
 
     private async Task RunAsync(Func<Task> ask)

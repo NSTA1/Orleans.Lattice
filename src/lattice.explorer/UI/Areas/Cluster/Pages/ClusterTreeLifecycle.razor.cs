@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -12,6 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterTreeLifecycle : IDisposable
 {
+    private LtComboBox? _aliasBox;
     /// <summary>What the page says about purge on every tree.</summary>
     internal const string PurgeRule =
         "Purge requires the TreeLifecycle grant and is not an app operation: no app role can purge a tree, even one its app owns.";
@@ -44,6 +46,9 @@ public partial class ClusterTreeLifecycle : IDisposable
     private ClusterFacades Facades { get; set; } = default!;
 
     [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
+
+    [Inject]
     private ClusterTreeCatalog Catalog { get; set; } = default!;
 
     [Inject]
@@ -70,7 +75,7 @@ public partial class ClusterTreeLifecycle : IDisposable
         }
     }
 
-    private void ReviewAlias()
+    private async Task ReviewAlias()
     {
         var target = _aliasTarget?.Trim();
         _aliasError = string.IsNullOrEmpty(target)
@@ -78,7 +83,7 @@ public partial class ClusterTreeLifecycle : IDisposable
             : string.Equals(target, TreeId, StringComparison.Ordinal)
                 ? "A tree cannot alias itself."
                 : null;
-        if (_aliasError is null)
+        if (_aliasError is null && (_aliasBox is null || await _aliasBox.ConfirmAsync().ConfigureAwait(true)))
         {
             _aliasTarget = target;
             _confirm = Verb.Alias;

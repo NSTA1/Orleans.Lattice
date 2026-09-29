@@ -2,23 +2,21 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
 /// <summary>
-/// Picks a subject - a user or a group - by id, searching the cluster's identity
-/// directory when one is configured. Searches run only when asked for, never on
-/// a timer, and a principal's display name is always rendered as text.
+/// Picks a subject - a user or a group - by id, as a type-ahead combobox over the
+/// cluster's identity directory when one is configured. The directory is searched
+/// as the id is typed (debounced by input, never on a timer), only a listed
+/// principal is accepted, and a principal's display name is always rendered as
+/// text. Without a directory the id is used as typed.
 /// </summary>
 public partial class AccessSubjectPicker
 {
-    private const int PageSize = 20;
-
-    private IReadOnlyList<DirectoryPrincipalDescriptor>? _results;
-    private string? _continuation;
-    private string? _searchError;
-    private bool _searching;
+    private LtComboBox? _box;
 
     /// <summary>The field's label, such as <c>Subject</c> or <c>Member</c>.</summary>
     [Parameter]
@@ -65,7 +63,7 @@ public partial class AccessSubjectPicker
     public EventCallback<DirectoryPrincipalDescriptor> OnPrincipalSelected { get; set; }
 
     [Inject]
-    internal AccessCatalog Catalog { get; set; } = default!;
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     private static IReadOnlyList<LtSelectOption> KindOptions { get; } =
     [
@@ -73,13 +71,19 @@ public partial class AccessSubjectPicker
         new("group", "Group"),
     ];
 
+    private ILtSuggestionSource? Source => DirectoryAvailable ? Suggestions.Subjects(Kind) : null;
+
     private string KindValue => AccessRuleFormat.SubjectKindLabel(Kind);
 
     private string KindWord => Kind == LatticeSubjectSelectorKind.Group ? "group" : "user";
 
     private string IdHint => DirectoryAvailable
-        ? (string.IsNullOrWhiteSpace(DirectoryExplanation) ? "Type part of a name or id, then search the directory." : DirectoryExplanation!)
+        ? (string.IsNullOrWhiteSpace(DirectoryExplanation) ? "Type part of a name or id to search the directory." : DirectoryExplanation!)
         : "No identity directory is configured, so the id is used as typed and is not validated.";
+
+    /// <summary>Checks the typed id against the directory, as a submit must before acting.</summary>
+    /// <returns><see langword="false"/> when a directory is configured and lists no such principal.</returns>
+    public Task<bool> ConfirmAsync() => _box?.ConfirmAsync() ?? Task.FromResult(true);
 
     private async Task OnKindChangedAsync(string value)
     {
@@ -90,7 +94,6 @@ public partial class AccessSubjectPicker
         }
 
         Kind = kind;
-        ClearResults();
         await KindChanged.InvokeAsync(kind);
         Id = string.Empty;
         await IdChanged.InvokeAsync(string.Empty);
@@ -102,60 +105,11 @@ public partial class AccessSubjectPicker
         await IdChanged.InvokeAsync(value);
     }
 
-    private Task SearchAsync()
-    {
-        ClearResults();
-        return RunSearchAsync(null);
-    }
-
-    private Task LoadMoreAsync() => RunSearchAsync(_continuation);
-
-    private async Task RunSearchAsync(string? continuation)
-    {
-        _searching = true;
-        _searchError = null;
-        try
+    private Task OnChooseAsync(LtSuggestion suggestion) =>
+        OnPrincipalSelected.InvokeAsync(new DirectoryPrincipalDescriptor
         {
-            var result = await Catalog.Admin.SearchDirectoryAsync(
-                new DirectorySearchRequest
-                {
-                    Term = Id?.Trim() ?? string.Empty,
-                    Kind = Kind == LatticeSubjectSelectorKind.Group ? DirectoryPrincipalKind.Group : DirectoryPrincipalKind.User,
-                    PageSize = PageSize,
-                    ContinuationToken = continuation,
-                }).ConfigureAwait(true);
-
-            if (!result.Available)
-            {
-                _searchError = "The identity directory is unavailable, so the id is used as typed and is not validated.";
-                return;
-            }
-
-            _results = continuation is null ? result.Principals : [.. _results ?? [], .. result.Principals];
-            _continuation = result.ContinuationToken;
-        }
-        catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
-        {
-            _searchError = failure.Message;
-        }
-        finally
-        {
-            _searching = false;
-        }
-    }
-
-    private async Task SelectAsync(DirectoryPrincipalDescriptor principal)
-    {
-        Id = principal.Id;
-        ClearResults();
-        await IdChanged.InvokeAsync(principal.Id);
-        await OnPrincipalSelected.InvokeAsync(principal);
-    }
-
-    private void ClearResults()
-    {
-        _results = null;
-        _continuation = null;
-        _searchError = null;
-    }
+            Id = suggestion.Value,
+            DisplayName = suggestion.Detail ?? suggestion.Value,
+            Kind = Kind == LatticeSubjectSelectorKind.Group ? DirectoryPrincipalKind.Group : DirectoryPrincipalKind.User,
+        });
 }

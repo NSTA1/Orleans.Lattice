@@ -27,6 +27,7 @@ public sealed class ShellServiceCollectionExtensionsTests
         "AppsCatalogue",
         "App",
         "Data",
+        "Suggestions",
         "Access",
         "Tenancy",
         "Schema",

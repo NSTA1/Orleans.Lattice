@@ -1,0 +1,78 @@
+@*
+    A combobox: a labelled text input that offers the existing values matching
+    what is typed, as an ARIA 1.2 combobox with a listbox popup. The options are
+    drawn as the address line draws its suggestions: a hollow node and the value
+    in mono, the highlighted one on the marker band.
+*@
+<div class="lt-field lt-combobox">
+    <label class="lt-field__label" for="@_inputId">@Label</label>
+    @Leading
+    <div class="lt-combobox__control">
+        <input @ref="_input"
+               @attributes="AdditionalAttributes"
+               id="@_inputId"
+               class="@InputClass"
+               type="text"
+               role="combobox"
+               aria-autocomplete="list"
+               aria-expanded="@(IsListOpen ? "true" : "false")"
+               aria-controls="@_listboxId"
+               aria-activedescendant="@ActiveId"
+               aria-invalid="@(EffectiveError is null ? null : "true")"
+               aria-describedby="@DescribedBy"
+               data-lt-enter="@EnterBehaviour"
+               placeholder="@Placeholder"
+               disabled="@Disabled"
+               readonly="@ReadOnly"
+               spellcheck="@(Mono ? "false" : null)"
+               autocomplete="off"
+               autocapitalize="off"
+               @bind:get="_text"
+               @bind:set="OnTextChangedAsync"
+               @bind:event="oninput"
+               @onkeydown="OnKeyDownAsync"
+               @onkeydown:stopPropagation="@IsListOpen"
+               @onclick="OnClickAsync"
+               @onblur="OnBlurAsync" />
+        @if (IsListOpen)
+        {
+            <ul id="@_listboxId" class="lt-combobox__list" role="listbox" aria-label="@ListLabel">
+                @for (var i = 0; i < _items.Count; i++)
+                {
+                    var index = i;
+                    var item = _items[i];
+                    <li id="@OptionId(index)"
+                        class="lt-combobox__option"
+                        role="option"
+                        aria-selected="@(index == _active ? "true" : "false")"
+                        @onmousedown:preventDefault
+                        @onclick="@(() => ChooseAsync(item))">
+                        <LtNode Kind="LtNodeKind.Hollow" />
+                        <span class="@ValueClass">@item.Value</span>
+                        @if (item.Detail is not null)
+                        {
+                            <span class="lt-combobox__detail">@item.Detail</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+    @if (Hint is not null)
+    {
+        <p id="@_hintId" class="lt-field__hint">@Hint</p>
+    }
+    @if (_note is not null)
+    {
+        <p id="@_noteId" class="lt-combobox__note">@_note</p>
+    }
+    @if (ShowsFlag)
+    {
+        <p id="@_flagId" class="lt-combobox__flag">@_flag</p>
+    }
+    @if (EffectiveError is not null)
+    {
+        <p id="@_errorId" class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @EffectiveError</p>
+    }
+    <p class="lt-visually-hidden" role="status" aria-live="polite">@_status</p>
+</div>

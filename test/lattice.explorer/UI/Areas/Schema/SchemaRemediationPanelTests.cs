@@ -30,6 +30,44 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
             (step.GetAttribute("aria-current") == "step" ? "*" : string.Empty) + step.TextContent.Trim())];
 
     [Test]
+    public void The_member_fields_suggest_the_members_the_policy_names_and_accept_any_other()
+    {
+        UseEstate();
+        Schema.Policies["orders"] = new LatticeSchemaPolicy([LatticeSchemaRule.Regex("^[a-z]+$", "customer.name"), LatticeSchemaRule.Regex(".+", "customer.email")]);
+        var cut = Open();
+
+        Assert.That(
+            Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Offers(cut, "Member", "customer", atLeast: 2),
+            Is.EqualTo(new[] { "customer.email", "customer.name" }));
+
+        Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Box(cut, "Member").Input("order.total");
+        cut.WaitUntil(() => Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.ErrorOf(cut, "Member"), Is.Null, "a member the policy does not name is still accepted"));
+    }
+    [Test]
+    public async Task The_member_source_names_each_member_once_is_forgotten_on_request_and_fails_closed()
+    {
+        Schema.Policies["orders"] = new LatticeSchemaPolicy([LatticeSchemaRule.Regex("a", "m"), LatticeSchemaRule.Regex("b", "m"), LatticeSchemaRule.Json()]);
+        var facades = new SchemaFacades(Services);
+        var tree = "orders";
+        var source = new SchemaMemberSuggestionSource(facades, () => tree);
+
+        var members = await source.SuggestAsync(string.Empty, 5, CancellationToken.None);
+        Schema.Faults["GetPolicy"] = new InvalidOperationException("down");
+        var remembered = await source.SuggestAsync(string.Empty, 5, CancellationToken.None);
+        source.Invalidate();
+        var failed = await source.SuggestAsync(string.Empty, 5, CancellationToken.None);
+        tree = string.Empty;
+        var none = await source.SuggestAsync(string.Empty, 5, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(members.Items.Select(item => item.Value), Is.EqualTo(new[] { "m" }));
+            Assert.That(remembered.Items, Has.Count.EqualTo(1), "read once per tree and tenant");
+            Assert.That(failed.UnavailableReason, Is.EqualTo(SchemaMemberSuggestionSource.UnavailableReason));
+            Assert.That(none, Is.SameAs(Orleans.Lattice.Explorer.UI.Design.Components.LtSuggestionSet.Empty));
+        });
+    }
+    [Test]
     public void A_tree_where_nothing_has_run_says_so()
     {
         UseEstate();

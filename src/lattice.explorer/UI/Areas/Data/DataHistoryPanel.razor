@@ -17,7 +17,7 @@
                 History is kept per key. Name a key here, or open one from the Keys tab. With a prefix set, this tab follows every change under it.
                 <form class="lt-toolbar" @onsubmit="ShowKey" @onsubmit:preventDefault>
                     <div class="lt-data-toolbar__grow">
-                        <LtTextInput Label="Key" Mono="true" Value="@_keyInput" ValueChanged="value => _keyInput = value" />
+                        <LtComboBox Label="Key" Value="@_keyInput" ValueChanged="value => _keyInput = value" Source="@_keySource" Mode="LtComboBoxMode.Suggest" Noun="key" ExistingMessage="This key is in the tree now." />
                     </div>
                     <LtButton Type="LtButtonType.Submit" Disabled="@string.IsNullOrEmpty(_keyInput)">Show history</LtButton>
                 </form>

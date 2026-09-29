@@ -35,7 +35,7 @@ internal static class AccessForms
     public static string? ErrorOf<TComponent>(IRenderedComponent<TComponent> cut, string label)
         where TComponent : IComponent
     {
-        var field = Field(cut, label).ParentElement!;
+        var field = Field(cut, label).Closest(".lt-field")!;
         return field.QuerySelector(".lt-field__error")?.TextContent.Replace("!", string.Empty, StringComparison.Ordinal).Trim();
     }
 

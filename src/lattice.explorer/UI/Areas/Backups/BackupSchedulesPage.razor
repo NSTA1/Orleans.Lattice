@@ -14,7 +14,7 @@
 <BackupsNav Current="@BackupsNav.SchedulesPage" />
 
 <form class="lt-toolbar" @onsubmit="ShowTreeAsync">
-    <LtTextInput Label="Tree" Mono="true" Value="@_treeInput" ValueChanged="value => _treeInput = value" Placeholder="a/crm/orders" Error="@_treeError" />
+    <LtComboBox @ref="_treeBox" Label="Tree" Value="@_treeInput" ValueChanged="value => _treeInput = value" Source="@Suggestions.Trees" Noun="tree" Placeholder="a/crm/orders" Error="@_treeError" />
     <LtButton Type="LtButtonType.Submit">Show schedules</LtButton>
 </form>
 

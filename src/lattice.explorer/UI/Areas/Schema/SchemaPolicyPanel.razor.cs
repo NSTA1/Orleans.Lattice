@@ -38,6 +38,8 @@ public partial class SchemaPolicyPanel : IDisposable
     private bool _busy;
     private bool _confirmClear;
 
+    private SchemaMemberSuggestionSource? _members;
+
     [CascadingParameter]
     internal SchemaWorkspace? Workspace { get; set; }
 
@@ -57,6 +59,9 @@ public partial class SchemaPolicyPanel : IDisposable
         _lifetime.Dispose();
         GC.SuppressFinalize(this);
     }
+
+    /// <inheritdoc />
+    protected override void OnInitialized() => _members = new SchemaMemberSuggestionSource(Facades, () => Workspace?.TreeId);
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -183,6 +188,7 @@ public partial class SchemaPolicyPanel : IDisposable
             await Facades.RequireSchema().SetPolicyAsync(workspace.TreeId, new LatticeSchemaPolicy(_draftRules.ToArray(), _draftStrict), _lifetime.Token);
             _editing = false;
             Ledger.Forget(workspace.TreeId);
+            _members?.Invalidate();
             Toasts.Show($"The policy of {workspace.TreeId} is saved.", LtToastTone.Success);
             await ReloadAsync();
             await workspace.RefreshAsync();
@@ -212,6 +218,7 @@ public partial class SchemaPolicyPanel : IDisposable
         {
             var removed = await Facades.RequireSchema().ClearPolicyAsync(workspace.TreeId, _lifetime.Token);
             Ledger.Forget(workspace.TreeId);
+            _members?.Invalidate();
             Toasts.Show(
                 removed ? $"The policy of {workspace.TreeId} is cleared." : $"{workspace.TreeId} had no policy to clear.",
                 removed ? LtToastTone.Success : LtToastTone.Info);

@@ -5,13 +5,16 @@
     pairs them with one is refused before it is sent.
 *@
 <form class="lt-access-form" @onsubmit="SaveAsync" novalidate>
-    <LtTextInput Label="Rule id" Mono="true" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
+    <LtComboBox @ref="_ruleIdBox" Label="Rule id" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
+                Source="@_ruleIds" Mode="LtComboBoxMode.Suggest" Noun="rule" RejectExisting="@(!_draft.IsExisting)"
+                ExistingMessage="A rule with this id already governs this tree."
                  ReadOnly="_draft.IsExisting" Error="@_errors.RuleId"
                  Hint="@(_draft.IsExisting ? "A rule's id and governed tree are fixed once it exists." : "A stable id, unique within the governed tree.")" />
     <LtSelect Label="Effect" Options="EffectOptions" Value="@(_draft.Effect == LatticeEffect.Deny ? "deny" : "allow")"
               ValueChanged="@(value => _draft.Effect = value == "deny" ? LatticeEffect.Deny : LatticeEffect.Allow)"
               Hint="Where two rules of equal standing disagree, Deny wins." />
-    <AccessSubjectPicker Label="Subject"
+    <AccessSubjectPicker @ref="_subjectPicker"
+                         Label="Subject"
                          Kind="_draft.SubjectKind"
                          KindChanged="@(kind => _draft.SubjectKind = kind)"
                          Id="@_draft.SubjectId"
@@ -22,7 +25,7 @@
     <LtSelect Label="Scope" Options="ScopeOptions" Value="@_draft.ScopeKind" ValueChanged="OnScopeChanged" Disabled="_draft.IsExisting" Hint="@ScopeHint" />
     @if (_draft.NeedsTree)
     {
-        <LtTextInput Label="Tree" Mono="true" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="The logical tree id the rule governs." />
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="The logical tree id the rule governs." Source="@Suggestions.Trees" Noun="tree" />
     }
     @if (_draft.NeedsKeyOrPrefix)
     {

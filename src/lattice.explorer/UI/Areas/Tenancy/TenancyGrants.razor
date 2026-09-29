@@ -90,8 +90,8 @@
     @if (_offering)
     {
         <form class="lt-tenancy-form" @onsubmit="OfferAsync" novalidate>
-            <LtTextInput Label="To tenant" Mono="true" Value="@_grantee" ValueChanged="@(value => _grantee = value)" Error="@_granteeError" Hint="The id of the tenant to share with." />
-            <LtTextInput Label="Scope" Mono="true" Value="@_scope" ValueChanged="@(value => _scope = value)" Error="@_scopeError" Hint="A tree name, or a tree-name prefix, in this tenant." />
+            <LtComboBox @ref="_granteeBox" Label="To tenant" Value="@_grantee" ValueChanged="@(value => _grantee = value)" Error="@_granteeError" Hint="The id of the tenant to share with." Source="@Suggestions.Tenants" Mode="@GranteeMode" Noun="tenant" ExistingMessage="A tenant you can reach." />
+            <LtComboBox Label="Scope" Value="@_scope" ValueChanged="@(value => _scope = value)" Error="@_scopeError" Hint="A tree name, or a tree-name prefix, in this tenant." Source="@Suggestions.Trees" Mode="LtComboBoxMode.Suggest" Noun="tree" ExistingMessage="Shares this whole tree." />
             <LtSelect Label="Access" Options="AccessOptions" Value="@_access" ValueChanged="@(value => _access = value)" />
             @if (_formError is not null)
             {

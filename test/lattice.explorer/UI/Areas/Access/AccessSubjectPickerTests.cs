@@ -8,9 +8,11 @@ using Orleans.Lattice.Membership;
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
 
 /// <summary>
-/// The subject picker: directory search on request, display names rendered as
-/// text, choosing a match, paging, a kind change clearing the id, and the plain
-/// id box when no directory is configured.
+/// The subject picker, folded onto the shared combobox: the directory is searched
+/// as the id is typed, display names are rendered as text beside the id, choosing
+/// a match fills the id and reports the principal, only a listed principal is
+/// accepted, a kind change clears the id, and without a directory the picker is a
+/// plain id box that says the id is not validated.
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
@@ -21,29 +23,32 @@ public sealed class AccessSubjectPickerTests : AccessTestContext
     {
         var cut = RenderPicker(directory: false);
 
+        AccessForms.Type(cut, "Subject", "anyone");
+
         Assert.Multiple(() =>
         {
-            Assert.That(cut.FindAll("button"), Is.Empty);
+            Assert.That(cut.FindAll("[role=listbox]"), Is.Empty);
             Assert.That(cut.Find(".lt-field__hint").TextContent, Does.Contain("not validated"));
+            Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.SearchDirectoryAsync)));
         });
     }
 
     [Test]
-    public void A_search_lists_matches_by_display_name_as_text_with_the_id_beside_it()
+    public void Typing_offers_directory_matches_by_id_with_the_display_name_as_text()
     {
         Admin.WithPrincipal("u-1", "<img src=x onerror=alert(1)>", DirectoryPrincipalKind.User)
             .WithPrincipal("g-1", "Operations", DirectoryPrincipalKind.Group);
         var cut = RenderPicker();
 
-        AccessForms.Button(cut, "Search the directory").Click();
+        AccessForms.Type(cut, "Subject", "u");
 
         cut.WaitUntil(() =>
         {
-            var option = cut.Find(".lt-access-results__option");
-            Assert.That(cut.FindAll(".lt-access-results__option"), Has.Count.EqualTo(1), "only the chosen kind is searched");
-            Assert.That(option.QuerySelector("span")!.TextContent, Is.EqualTo("<img src=x onerror=alert(1)>"));
+            var option = cut.Find("[role=option]");
+            Assert.That(cut.FindAll("[role=option]"), Has.Count.EqualTo(1), "only the chosen kind is searched");
+            Assert.That(option.QuerySelector(".lt-combobox__value")!.TextContent, Is.EqualTo("u-1"));
+            Assert.That(option.QuerySelector(".lt-combobox__detail")!.TextContent, Is.EqualTo("<img src=x onerror=alert(1)>"));
             Assert.That(option.QuerySelectorAll("img"), Is.Empty, "a display name is never markup");
-            Assert.That(option.QuerySelector(".lt-access-results__id")!.TextContent, Is.EqualTo("u-1"));
         });
     }
 
@@ -55,68 +60,79 @@ public sealed class AccessSubjectPickerTests : AccessTestContext
         DirectoryPrincipalDescriptor? chosen = null;
         var cut = RenderPicker(onId: value => id = value, onPrincipal: principal => chosen = principal);
 
-        AccessForms.Button(cut, "Search the directory").Click();
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-access-results__option"), Has.Count.EqualTo(1)));
-        cut.Find(".lt-access-results__option").Click();
+        AccessForms.Type(cut, "Subject", "ali");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option]"), Has.Count.EqualTo(1)));
+        cut.Find("[role=option]").Click();
 
         Assert.Multiple(() =>
         {
             Assert.That(id, Is.EqualTo("u-1"));
             Assert.That(chosen!.DisplayName, Is.EqualTo("Alice"));
-            Assert.That(cut.FindAll(".lt-access-results"), Is.Empty);
+            Assert.That(chosen.Kind, Is.EqualTo(DirectoryPrincipalKind.User));
+            Assert.That(cut.FindAll("[role=listbox]"), Is.Empty);
         });
     }
 
     [Test]
-    public void No_match_says_so_and_more_matches_load_on_request()
+    public async Task A_subject_the_directory_does_not_list_is_refused()
     {
-        for (var i = 0; i < 25; i++)
-        {
-            Admin.WithPrincipal($"u-{i:00}", $"User {i}", DirectoryPrincipalKind.User);
-        }
-
+        Admin.WithPrincipal("u-1", "Alice", DirectoryPrincipalKind.User);
         var cut = RenderPicker();
-        AccessForms.Button(cut, "Search the directory").Click();
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-access-results__option"), Has.Count.EqualTo(20)));
 
-        AccessForms.Button(cut, "Load more matches").Click();
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-access-results__option"), Has.Count.EqualTo(25)));
+        AccessForms.Type(cut, "Subject", "u-404");
+        var refused = await cut.InvokeAsync(cut.Instance.ConfirmAsync);
+        AccessForms.Type(cut, "Subject", "u-1");
+        var accepted = await cut.InvokeAsync(cut.Instance.ConfirmAsync);
 
-        AccessForms.Type(cut, "Subject", "nobody");
-        AccessForms.Button(cut, "Search the directory").Click();
-        cut.WaitUntil(() => Assert.That(cut.Find("[role=status]").TextContent, Is.EqualTo("No user in the directory matches.")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused, Is.False);
+            Assert.That(accepted, Is.True);
+        });
     }
 
     [Test]
-    public void Changing_the_kind_clears_the_id_and_the_results()
+    public void A_refused_subject_is_named_inline()
     {
         Admin.WithPrincipal("u-1", "Alice", DirectoryPrincipalKind.User);
+        var cut = RenderPicker();
+
+        AccessForms.Type(cut, "Subject", "u-404");
+        AccessForms.Field(cut, "Subject").Blur();
+
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Subject"), Is.EqualTo("No user is named u-404. Choose one from the list.")));
+    }
+
+    [Test]
+    public void Changing_the_kind_clears_the_id_and_searches_the_other_kind()
+    {
+        Admin.WithPrincipal("u-1", "Alice", DirectoryPrincipalKind.User).WithPrincipal("g-1", "Ops", DirectoryPrincipalKind.Group);
         var kinds = new List<LatticeSubjectSelectorKind>();
         var ids = new List<string>();
         var cut = RenderPicker(onId: ids.Add, onKind: kinds.Add, initialId: "u-1");
-        AccessForms.Button(cut, "Search the directory").Click();
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-access-results__option"), Has.Count.EqualTo(1)));
 
         AccessForms.Choose(cut, "Subject kind", "group");
+        AccessForms.Type(cut, "Subject", "1");
 
         Assert.Multiple(() =>
         {
             Assert.That(kinds, Is.EqualTo(new[] { LatticeSubjectSelectorKind.Group }));
-            Assert.That(ids, Is.EqualTo(new[] { string.Empty }));
-            Assert.That(cut.FindAll(".lt-access-results"), Is.Empty);
+            Assert.That(ids.First(), Is.Empty);
         });
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option] .lt-combobox__value").Select(value => value.TextContent), Is.EqualTo(new[] { "g-1" })));
     }
 
     [Test]
-    public void A_failed_search_is_reported_in_place()
+    public async Task A_failed_search_is_a_note_and_the_id_is_used_as_typed()
     {
         Admin.WithPrincipal("u-1", "Alice", DirectoryPrincipalKind.User);
         Admin.Fail(nameof(FakeAuthAdmin.SearchDirectoryAsync), new InvalidOperationException("down"));
         var cut = RenderPicker();
 
-        AccessForms.Button(cut, "Search the directory").Click();
+        AccessForms.Type(cut, "Subject", "someone");
 
-        cut.WaitUntil(() => Assert.That(cut.Find("[role=alert]").TextContent, Does.Contain("could not be reached")));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-combobox__note").TextContent, Does.Contain("used as typed")));
+        Assert.That(await cut.InvokeAsync(cut.Instance.ConfirmAsync), Is.True);
     }
 
     [Test]
@@ -134,6 +150,7 @@ public sealed class AccessSubjectPickerTests : AccessTestContext
         {
             Assert.That(cut.FindAll("select"), Is.Empty);
             Assert.That(cut.Find(".lt-field__hint").TextContent, Is.EqualTo("An object id."));
+            Assert.That(cut.Find("input").GetAttribute("role"), Is.EqualTo("combobox"));
         });
     }
 

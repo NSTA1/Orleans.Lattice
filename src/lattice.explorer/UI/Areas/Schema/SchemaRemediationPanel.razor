@@ -47,11 +47,11 @@
                 <fieldset class="lt-schema-builder">
                     <legend class="lt-schema-builder__legend">Add a step</legend>
                     <LtSelect Label="Step" Options="@StepKinds" Value="@_draft.Kind.ToString()" ValueChanged="OnStepKindChanged" />
-                    <LtTextInput Label="Member" Mono="true" Value="@_draft.Path" ValueChanged="value => _draft.Path = value" />
+                    <LtComboBox Label="Member" Value="@_draft.Path" ValueChanged="value => _draft.Path = value" Source="@_members" Mode="LtComboBoxMode.Suggest" Noun="member" ExistingMessage="The policy names this member." />
                     @switch (_draft.Kind)
                     {
                         case SchemaTransformStepKind.Rename:
-                            <LtTextInput Label="New name" Mono="true" Value="@_draft.ToPath" ValueChanged="value => _draft.ToPath = value" />
+                            <LtComboBox Label="New name" Value="@_draft.ToPath" ValueChanged="value => _draft.ToPath = value" Source="@_members" Mode="LtComboBoxMode.Suggest" Noun="member" ExistingMessage="The policy already names a member with this name." />
                             break;
                         case SchemaTransformStepKind.Set:
                             <LtSelect Label="Value kind" Options="@ValueKinds" Value="@_draft.ValueKind.ToString()" ValueChanged="OnValueKindChanged" />

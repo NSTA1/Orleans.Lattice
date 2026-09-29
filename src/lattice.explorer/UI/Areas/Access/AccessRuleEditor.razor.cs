@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
@@ -22,6 +23,10 @@ public partial class AccessRuleEditor
     private LatticeAuthorizationRule? _editing;
     private bool _initialised;
     private bool _saving;
+    private LtComboBox? _ruleIdBox;
+    private LtComboBox? _treeBox;
+    private AccessSubjectPicker? _subjectPicker;
+    private AccessRuleIdSuggestionSource? _ruleIds;
 
     /// <summary>The rule to edit, or <see langword="null"/> to create one.</summary>
     [Parameter]
@@ -41,6 +46,9 @@ public partial class AccessRuleEditor
 
     [Inject]
     internal AccessCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     private static IReadOnlyList<LtSelectOption> EffectOptions { get; } =
     [
@@ -75,6 +83,9 @@ public partial class AccessRuleEditor
         AccessRuleDraft.AccessAdministrationScope => "Grant Admin here to delegate access administration.",
         _ => null,
     };
+
+    /// <inheritdoc />
+    protected override void OnInitialized() => _ruleIds = new AccessRuleIdSuggestionSource(Catalog, () => _draft.TreeId);
 
     /// <inheritdoc />
     protected override void OnParametersSet()
@@ -114,7 +125,7 @@ public partial class AccessRuleEditor
         }
 
         _errors = _draft.Validate();
-        if (_errors.HasAny)
+        if (_errors.HasAny || !await ConfirmPickersAsync().ConfigureAwait(true))
         {
             return;
         }
@@ -150,6 +161,15 @@ public partial class AccessRuleEditor
 
         Catalog.Invalidate();
         await OnSaved.InvokeAsync(rule);
+    }
+
+    private async Task<bool> ConfirmPickersAsync()
+    {
+        // Each picker shows its own message; every one is checked so all are shown at once.
+        var ruleId = _draft.IsExisting || _ruleIdBox is null || await _ruleIdBox.ConfirmAsync().ConfigureAwait(true);
+        var tree = _draft.IsExisting || !_draft.NeedsTree || _treeBox is null || await _treeBox.ConfirmAsync().ConfigureAwait(true);
+        var subject = _subjectPicker is null || await _subjectPicker.ConfirmAsync().ConfigureAwait(true);
+        return ruleId && tree && subject;
     }
 
     private Task CancelAsync() => OnCancel.InvokeAsync();

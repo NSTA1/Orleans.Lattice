@@ -63,6 +63,7 @@
 .lt-table-frame:focus-visible,
 .lt-table__sort:focus-visible,
 .lt-mono-cell__copy:focus-visible,
+.lt-combobox__remove:focus-visible,
 .lt-table-list__open:focus-visible,
 .lt-dialog:focus-visible {
   outline: var(--lt-op-focus-ring-width) solid var(--lt-op-focus-ring-color);
@@ -385,6 +386,155 @@
 .lt-switch:disabled {
   color: var(--lt-ink-3);
   cursor: not-allowed;
+}
+
+/*
+ * The combobox: a field whose input offers the existing values that match what
+ * is typed. The listbox is drawn as the address line draws its suggestions - a
+ * hollow node and the value in mono, the highlighted option on the marker band
+ * with an ink bar and a heavier weight. It floats over the page, but it is
+ * drawn with a hairline rule, not a shadow (the Hairline Rule).
+ */
+.lt-combobox {
+  min-width: 0;
+}
+
+.lt-combobox__control {
+  position: relative;
+  min-width: 0;
+}
+
+.lt-combobox__list {
+  position: absolute;
+  top: calc(100% + var(--lt-space-1));
+  inset-inline: 0;
+  z-index: 950;
+  box-sizing: border-box;
+  max-height: min(20rem, 60vh);
+  margin: 0;
+  padding: var(--lt-space-1) 0;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface-raised);
+}
+
+.lt-combobox__option {
+  display: flex;
+  align-items: center;
+  gap: var(--lt-space-3);
+  min-height: var(--lt-op-row-height);
+  padding: 0 var(--lt-space-3);
+  color: var(--lt-ink-2);
+  cursor: pointer;
+}
+
+.lt-combobox__option:hover {
+  background: var(--lt-op-row-hover);
+  color: var(--lt-ink);
+}
+
+.lt-combobox__option[aria-selected="true"] {
+  background: var(--lt-op-row-current);
+  box-shadow: inset 3px 0 0 var(--lt-ink);
+  color: var(--lt-ink);
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-combobox__value {
+  min-width: 0;
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-combobox__value--mono,
+.lt-combobox__chip-value--mono {
+  font-family: var(--lt-font-mono);
+  font-variant-ligatures: none;
+}
+
+.lt-combobox__detail {
+  margin-inline-start: auto;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-xs);
+  font-weight: var(--lt-weight-body);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+.lt-combobox__note {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-style: italic;
+}
+
+.lt-combobox__flag {
+  margin: 0;
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-combobox__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lt-combobox__chip {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: var(--lt-op-control-height);
+  border: 1px solid var(--lt-rule-strong);
+  border-radius: var(--lt-radius-md);
+  background: var(--lt-surface);
+  color: var(--lt-ink);
+}
+
+.lt-combobox__chip-value {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding-inline-start: var(--lt-space-2);
+  font-size: var(--lt-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.lt-combobox__remove {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--lt-op-control-height);
+  padding: 0;
+  border: 0;
+  border-radius: var(--lt-radius-md);
+  background: none;
+  color: var(--lt-ink-2);
+  cursor: pointer;
+}
+
+.lt-combobox__remove:hover {
+  background: var(--lt-marker-soft);
+  color: var(--lt-ink);
+}
+
+.lt-combobox__remove:disabled {
+  color: var(--lt-ink-3);
+  cursor: not-allowed;
+}
+
+.lt-combobox__remove-mark {
+  width: 0.625rem;
+  height: 0.625rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 
 /* ==========================================================================
@@ -1313,5 +1463,14 @@ a.lt-chain__text:hover {
   .lt-table__row[aria-current] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+
+  .lt-combobox__option[aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .lt-combobox__list {
+    border-color: CanvasText;
   }
 }

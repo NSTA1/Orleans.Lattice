@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -16,6 +17,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterWalPage : IDisposable
 {
+    private LtComboBox? _treeBox;
+    private LtComboBox? _planTreeBox;
+    private LtComboBox? _planTargetBox;
+    private ClusterProviderKeySuggestionSource? _providerKeys;
     private CancellationTokenSource _load = new();
     private (string? Tree, int? Partition, string? Target) _loaded;
     private ClusterLoad<TreeWalPlacementAudit> _audit = ClusterLoad<TreeWalPlacementAudit>.Loading;
@@ -59,6 +64,9 @@ public partial class ClusterWalPage : IDisposable
     private ClusterFacades Facades { get; set; } = default!;
 
     [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
+
+    [Inject]
     private ClusterCommandSignals Signals { get; set; } = default!;
 
     [Inject]
@@ -94,6 +102,7 @@ public partial class ClusterWalPage : IDisposable
     protected override void OnInitialized()
     {
         _access = ClusterTreeAccess.None(TreeId ?? string.Empty);
+        _providerKeys = new ClusterProviderKeySuggestionSource(Facades, () => _planTree);
         Signals.Requested += OnCommand;
         if (Signals.TryTake(ClusterArea.PlanWalMoveCommandId))
         {
@@ -141,7 +150,7 @@ public partial class ClusterWalPage : IDisposable
         }
     }
 
-    private void Audit()
+    private async Task Audit()
     {
         var tree = _tree?.Trim();
         if (string.IsNullOrEmpty(tree))
@@ -151,6 +160,11 @@ public partial class ClusterWalPage : IDisposable
         }
 
         _treeError = null;
+        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         Navigator.NavigateTo(ClusterAddresses.Wal(tree));
     }
 
@@ -175,7 +189,7 @@ public partial class ClusterWalPage : IDisposable
         _planOpen = true;
     }
 
-    private void ContinuePlan()
+    private async Task ContinuePlan()
     {
         var tree = _planTree?.Trim();
         var target = _planTarget?.Trim();
@@ -185,11 +199,18 @@ public partial class ClusterWalPage : IDisposable
             : "Enter a partition index: a whole number from 0.";
         _planTargetError = string.IsNullOrEmpty(target) ? "Name the provider key to move to." : null;
 
-        if (_planTreeError is null && _planPartitionError is null && _planTargetError is null)
+        if (_planTreeError is null && _planPartitionError is null && _planTargetError is null && await ConfirmPlanAsync().ConfigureAwait(true))
         {
             _planOpen = false;
             Navigator.NavigateTo(ClusterAddresses.Wal(tree, partition, target));
         }
+    }
+
+    private async Task<bool> ConfirmPlanAsync()
+    {
+        var tree = _planTreeBox is null || await _planTreeBox.ConfirmAsync().ConfigureAwait(true);
+        var target = _planTargetBox is null || await _planTargetBox.ConfirmAsync().ConfigureAwait(true);
+        return tree && target;
     }
 
     private void Close(bool open)

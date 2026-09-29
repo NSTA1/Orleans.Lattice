@@ -4,6 +4,7 @@ using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -58,6 +59,9 @@ public partial class BackupPage : IDisposable
 
     [Inject]
     internal BackupActions Actions { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
     internal BackupsInterop Interop { get; set; } = default!;

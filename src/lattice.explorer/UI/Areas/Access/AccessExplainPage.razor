@@ -15,7 +15,8 @@
 <AccessNav Current="@AccessRoutes.ExplainSegment" />
 
 <form class="lt-access-form" @onsubmit="ExplainAsync" novalidate>
-    <AccessSubjectPicker Label="Subject"
+    <AccessSubjectPicker @ref="_subjectPicker"
+                         Label="Subject"
                          Kind="_kind"
                          KindChanged="@(kind => _kind = kind)"
                          Id="@_subject"
@@ -27,7 +28,7 @@
     <LtSelect Label="Scope" Options="ScopeOptions" Value="@_scopeKind" ValueChanged="@(value => _scopeKind = value)" />
     @if (_scopeKind != AccessRuleDraft.ClusterScope)
     {
-        <LtTextInput Label="Tree" Mono="true" Value="@_tree" ValueChanged="@(value => _tree = value)" Error="@_treeError" />
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="@(value => _tree = value)" Error="@_treeError" Source="@Suggestions.Trees" Noun="tree" />
     }
     @if (_scopeKind is AccessRuleDraft.PrefixScope or AccessRuleDraft.KeyScope)
     {

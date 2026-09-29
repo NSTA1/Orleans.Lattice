@@ -71,8 +71,9 @@
         {
             <form class="lt-tenancy-form lt-tenancy-allowed" @onsubmit="SaveAllowed" novalidate>
                 <h3 class="lt-tenancy-subtitle">Allowed regions</h3>
-                <LtTextInput Label="Allowed region ids" Mono="true" Value="@_allowedText" ValueChanged="@(value => _allowedText = value)" Error="@_allowedError"
-                             Hint="The complete allowed set, separated by commas. A region the tenant is resident in cannot be revoked." />
+                <LtMultiComboBox @ref="_allowedBox" Label="Allowed region ids" Values="@_allowed" ValuesChanged="@(values => _allowed = values)" Error="@_allowedError"
+                                 Source="@_regionSource" Noun="region"
+                                 Hint="The complete allowed set: choose regions this cluster knows. A region the tenant is resident in cannot be revoked." />
                 <div class="lt-tenancy-form__actions">
                     <LtButton Type="LtButtonType.Submit" Disabled="_busy">Save allowed regions</LtButton>
                 </div>

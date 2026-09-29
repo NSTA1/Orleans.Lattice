@@ -90,6 +90,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
         Admin.GetTreeDeletionStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeDeletionStatus { TreeId = TreeId });
         Admin.SetTreeAliasAsync(TreeId, "a/crm/orders-v2", Arg.Any<CancellationToken>())
             .Returns(new TreeAliasResolution { TreeId = TreeId, PhysicalTreeId = "a/crm/orders-v2", IsAliased = true });
+        UseTrees(Tree(TreeId), Tree("a/crm/orders-v2"));
         Assert.That(HasButton(RenderTab<ClusterTreeLifecycle>(Grants.Read | Grants.Lifecycle), "Set alias..."), Is.False);
         var cut = RenderTab<ClusterTreeLifecycle>();
 
@@ -101,7 +102,7 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
 
         cut.Find("form[aria-label='Set alias'] input").Input("a/crm/orders-v2");
         cut.Find("form[aria-label='Set alias']").Submit();
-        Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("a/crm/orders-v2"));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("a/crm/orders-v2")));
         ConfirmTyping(cut, TreeId);
 
         cut.WaitUntil(() => Assert.That(Toasts, Does.Contain("Alias set.")));

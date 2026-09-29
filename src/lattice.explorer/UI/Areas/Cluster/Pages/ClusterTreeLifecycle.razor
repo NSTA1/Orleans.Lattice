@@ -49,7 +49,7 @@
         <h2 class="lt-cluster-heading" id="lt-cluster-alias">Alias</h2>
         <p class="lt-cluster-note">Point this name at another physical tree, so reads and writes routed through it reach that tree. Only one level of indirection is allowed.</p>
         <form class="lt-cluster-form" @onsubmit="ReviewAlias" aria-label="Set alias">
-            <LtTextInput Label="Target tree" Mono="true" @bind-Value="_aliasTarget" Error="@_aliasError" />
+            <LtComboBox @ref="_aliasBox" Label="Target tree" @bind-Value="_aliasTarget" Error="@_aliasError" Source="@Suggestions.ClusterTrees" Noun="tree" />
             <div class="lt-cluster-form__actions">
                 <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Set alias...</LtButton>
             </div>

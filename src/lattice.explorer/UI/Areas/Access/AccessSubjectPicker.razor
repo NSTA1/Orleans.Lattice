@@ -1,46 +1,24 @@
 @*
-    The subject picker: a User / Group choice, the id in mono, and - when the
-    cluster has an identity directory - a search that lists matching principals
-    by their display name (rendered as text) with the id beside it. Without a
-    directory it degrades to the plain id box and says the id is not validated.
+    The subject picker: a User / Group choice and the id as a type-ahead
+    combobox over the cluster's identity directory, listing matching principals
+    by id with their display name (rendered as text) beside it. With a
+    directory only a listed principal is accepted; without one the picker is a
+    plain id box and says the id is not validated.
 *@
 <div class="lt-access-form__row">
     @if (AllowKindChange)
     {
         <LtSelect Label="@($"{Label} kind")" Options="KindOptions" Value="@KindValue" ValueChanged="OnKindChangedAsync" />
     }
-    <LtTextInput Label="@Label" Mono="true" Value="@Id" ValueChanged="OnIdChangedAsync" Error="@Error" Hint="@IdHint" Disabled="Disabled" />
-    @if (DirectoryAvailable)
-    {
-        <LtButton Variant="LtButtonVariant.Quiet" OnClick="SearchAsync" Disabled="@(Disabled || _searching)">Search the directory</LtButton>
-    }
+    <LtComboBox @ref="_box"
+                Label="@Label"
+                Value="@Id"
+                ValueChanged="OnIdChangedAsync"
+                OnChoose="OnChooseAsync"
+                Source="@Source"
+                Mode="@(DirectoryAvailable ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest)"
+                Noun="@KindWord"
+                Error="@Error"
+                Hint="@IdHint"
+                Disabled="Disabled" />
 </div>
-@if (_searchError is not null)
-{
-    <p class="lt-access-form__error" role="alert">@_searchError</p>
-}
-@if (_results is not null)
-{
-    @if (_results.Count == 0)
-    {
-        <p class="lt-access-fieldset__hint" role="status">No @KindWord in the directory matches.</p>
-    }
-    else
-    {
-        <ul class="lt-access-results" aria-label="@($"Directory matches for {Label.ToLowerInvariant()}")">
-            @foreach (var principal in _results)
-            {
-                <li @key="principal.Id">
-                    <button type="button" class="lt-access-results__option" @onclick="() => SelectAsync(principal)">
-                        <span>@principal.DisplayName</span>
-                        <span class="lt-access-results__id">@principal.Id</span>
-                    </button>
-                </li>
-            }
-        </ul>
-        @if (_continuation is not null)
-        {
-            <LtButton Variant="LtButtonVariant.Quiet" OnClick="LoadMoreAsync" Disabled="_searching">Load more matches</LtButton>
-        }
-    }
-}
