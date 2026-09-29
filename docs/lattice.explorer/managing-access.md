@@ -66,7 +66,7 @@ The Rule details page shows effect, subject, scope, operations, condition, and o
 
 The Groups page lists groups 200 at a time and searches by group id or display name. **New group** opens a create dialog.
 
-The group id field uses the same subject picker used elsewhere in Access. When an identity directory is available, the group id must resolve as a group before the create is sent. Selecting a directory result can fill the display name. When no directory is available, the page says so and accepts the typed id as-is.
+The group id field uses the same subject picker used elsewhere in Access. When an identity directory is available, the group id must resolve as a group before the create is sent. Choosing a directory match fills the display name. When no directory is available, the field says so and accepts the typed id as it is.
 
 The Group details page shows the display name, direct members, parent groups, and rules that apply to the group. Operators can rename the group, add a user or nested group as a direct member, remove a direct member, explain access for the group, or delete the group.
 
@@ -82,9 +82,11 @@ The form supports cluster-wide, tree, key-prefix, and single-key scopes. Groups 
 
 ## Subject picking and directory validation
 
-Every user or group field uses a searchable picker when an identity directory is available. It searches users or groups in pages of 20 results, uses the display name as the visible label, keeps the raw id available to assistive technology, and exposes a load-more control. Changing between user and group clears the selection.
+Every user or group field is a type-ahead picker (see [Pickers](navigation-model.md#pickers)) over the cluster's identity directory. It searches as you type: each query is one bounded directory search, and a burst of typing costs one search. It lists matching principals by id, with the display name, rendered as text, beside each; choosing one can fill a form's display name. There is no separate search button and no load-more control: the list is bounded, so keep typing to narrow it. Changing between user and group clears the id.
 
-The same directory seam validates group creation and member additions when validation is required. Unknown ids and wrong-kind ids fail before the membership write. With no configured directory, the picker falls back to a plain text id field and validation is not attempted.
+With a directory, only a listed principal is accepted, so an unknown id is refused inline before anything is sent, and the directory's own explanation of what a valid id looks like is shown as the hint. The same directory seam validates group creation and member additions when validation is required: unknown ids and wrong-kind ids fail before the membership write. With no configured directory, the picker says "No identity directory is configured, so the id is used as typed and is not validated." and accepts the typed id.
+
+Other Access fields are pickers too. The Tree field of a rule or an explanation offers the trees you can reach, and a new rule's id is checked as you type against the rule ids already in use under its tree. That check reads one page of rules, so it is a guide rather than a guarantee: the cluster still refuses a real collision when the rule is saved.
 
 ## Access posture banner
 
@@ -116,7 +118,7 @@ The address line completes `group:{id}` and `rule:{id}` from the first page of t
 
 - The availability probe reads one group row.
 - Rule and group lists load 200 rows at a time.
-- Subject-picker searches load 20 directory results at a time.
+- A subject-picker query is one directory search bounded by the picker's limit (8 by default).
 - Address completions read at most the facade's maximum auth page size for groups and rules.
 - The access model and completion catalogues are scoped to the circuit. Writes clear the group and rule completion cache.
 - The area availability answer is cached per signed-in identity on the circuit.

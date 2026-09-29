@@ -53,6 +53,8 @@ The Catalogue page lists the newest backups first, 25 at a time. Filters are sen
 - `name={prefix}` for backup-name prefix;
 - `tree={treeId}` for one tree.
 
+The **Filter by tree** field is a [picker](navigation-model.md#pickers) that suggests the trees you can reach but accepts any name, and Enter applies it.
+
 When inventory extensions are served, the lede summarises total backups, full and incremental counts, catalogue bytes, and newest backup time. If inventory is not served, the area falls back to the newest catalogue row. A selected tree filter also shows schedule status for that tree: full and incremental schedule registration, last successes, last scheduled run outcome, and chain depth, with a link to that tree's Schedules page.
 
 Rows link to the Backup details page. When health monitoring is available, rows also show the latest stored health report as a health pill. The page lists recent operations from the current circuit and links to their status pages.
@@ -65,7 +67,7 @@ The Capture page can start three staged operations:
 - **Incremental** captures changes since a selected full backup. The page can find up to 50 newest full backups for the named tree and requires a base before capture.
 - **Set of trees** captures one full backup per tree under one set manifest. The set can be captured at one cross-tree consistency fence.
 
-A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. The first operation stage checks access before the capture call.
+A capture requires a name. A full or incremental capture requires a tree, and a prefix or key when that scope is selected. A set requires at least one tree. The **Tree** and **Tree to add** fields are pickers that accept only a tree you can reach; the key or prefix is typed. Submitting starts a staged operation and navigates to `/backups/operations/{id}`. The first operation stage checks access before the capture call.
 
 Capture operations report links to the captured backup pages, the number of backups captured, artifact count, and size.
 
@@ -79,7 +81,7 @@ The **Artifacts** section lists artifact id, size, chunk count, and an **Export*
 
 ### Restore
 
-Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where in-process extensions are served, a cold-restore option that reads from the backup store alone.
+Restore is offered only when the scope probe grants restore. The form chooses a target tree, mode, optional restore point from the chain, and, where in-process extensions are served, a cold-restore option that reads from the backup store alone. The target tree defaults to the backup's own tree and is a picker that also accepts a new name: naming an existing tree is flagged, because restoring replaces what it holds, and a new name restores into a new tree.
 
 Both restore modes are confirmed before the operation starts:
 
@@ -96,7 +98,7 @@ Delete is offered only when the scope probe grants delete. It opens a destructiv
 
 ## Schedules
 
-The Schedules page works on one tree, selected with `?tree={tree}` or the **Show schedules** form. It probes the whole-tree backup scope, then shows full and incremental schedule rows when the caller may list backup status.
+The Schedules page works on one tree, selected with `?tree={tree}` or the **Show schedules** form, whose **Tree** field is a picker that accepts only a tree you can reach. It probes the whole-tree backup scope, then shows full and incremental schedule rows when the caller may list backup status.
 
 Each row shows whether a schedule is registered, its interval, last run, and last success. A registered schedule can be cancelled when the caller may capture that backup kind. Cancelling opens a dialog named **Cancel this schedule?** and states that existing backups are kept.
 

@@ -268,9 +268,9 @@ dotnet run --project samples/Explorer/Explorer.csproj
 
 ## Identity directory: static (default) and Entra (opt-in)
 
-The Access area's **subject picker** (the **Search the directory** control that
-finds users and groups) and its **validated forms** run against an identity
-directory. When a directory is configured, entering a principal id that the
+The Access area's **subject picker** (a type-ahead field that searches the
+directory for users and groups as you type) and its **validated forms** run against
+an identity directory. When a directory is configured, entering a principal id that the
 directory does not know **fails closed** - the form refuses it ("No principal with the id ... exists in
 the identity directory.") instead of creating an unvalidated free-text id.
 
@@ -281,9 +281,10 @@ With no configuration, an in-memory roster backs the directory: the users in
 `task-editors`, `task-viewers`, `visitors` and `acme-editors`. In a create form
 or a rule's subject picker:
 
-- type `al` and choose **Search the directory** -> the picker finds `alice`;
-- choose **Group** as the kind and search for `operators` -> found;
-- type `nobody` and save -> the form refuses it, because it is not in the roster.
+- type `al` -> the picker lists `alice`;
+- choose **Group** as the kind and type `oper` -> it lists `operators`;
+- type `nobody` and leave the field or save -> the picker refuses it, because it
+  is not in the roster.
 
 ### Entra directory (opt-in, your tenant over Microsoft Graph)
 

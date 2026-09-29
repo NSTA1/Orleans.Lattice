@@ -51,7 +51,10 @@ namespace as an exception:
 - MCP tools;
 - the bridge operations its UI requests.
 
-Installing binds each role to a membership group and confirms the ceiling. Enabling,
+Installing binds each role to a membership group and confirms the ceiling. Each
+role's group is a [picker](navigation-model.md#pickers) that suggests groups from the
+identity directory, or the auth store's own groups when there is no directory, and
+accepts any group id. Enabling,
 disabling, upgrading and uninstalling are native actions with explicit confirmation;
 the palette offers `apps.upgrade.{slug}` for an app with an update and
 `apps.disable.{slug}` for an enabled one.

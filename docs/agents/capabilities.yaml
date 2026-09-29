@@ -1267,7 +1267,7 @@ capabilities:
         source: "docs/lattice.membership/identity-directory-providers.md"
       - statement: "When validation is required and a real provider is active, group and member creates validate ids before writing any membership edge."
         source: "docs/lattice.membership/identity-directory-providers.md"
-      - statement: "The Explorer Access picker searches the configured identity-directory provider and pages further matches with Load more."
+      - statement: "The Explorer Access subject picker searches the configured identity-directory provider as the user types and shows a bounded list of matches, with no Load more control."
         source: "docs/lattice.explorer/managing-access.md"
       - statement: "Explorer group creation is blocked when a directory resolves the id as the wrong kind or does not resolve it."
         source: "docs/lattice.explorer/managing-access.md"
@@ -1297,7 +1297,7 @@ capabilities:
         source: "docs/lattice.membership/identity-directory-providers.md"
       - statement: "Identity-directory page sizes are bounded by LatticeIdentityDirectoryOptions across providers."
         source: "docs/lattice.membership/identity-directory-providers.md"
-      - statement: "The Explorer subject picker searches the directory only when the user asks it to, so typing issues no directory search."
+      - statement: "The Explorer subject picker keeps at most one directory search outstanding, cancels it when the user types again, and collapses the keys typed meanwhile into one search for the latest text."
         source: "docs/lattice.explorer/managing-access.md"
     sources:
       - "FEATURES.md"
