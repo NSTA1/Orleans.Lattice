@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.IO.Hashing;
 using System.Text;
 using static Orleans.Lattice.Views.AggregationRowCodec;
@@ -50,6 +51,18 @@ internal sealed class AggregationApplier(
     KeyValuePair<string, object?>? tenantTag = null)
 {
     private static readonly System.Diagnostics.Metrics.Counter<long> Rejected = LatticeMetrics.ViewAggregationRejected;
+
+    /// <summary>The literal every aggregation saga operation id starts with.</summary>
+    private const string OperationIdPrefix = "agg-";
+
+    /// <summary>Widest invariant "G" rendering of an <see cref="long"/> (<c>long.MinValue</c>).</summary>
+    private const int MaxInt64Digits = 20;
+
+    /// <summary>Widest invariant "G" rendering of an <see cref="int"/> (<c>int.MinValue</c>).</summary>
+    private const int MaxInt32Digits = 11;
+
+    /// <summary>The three NUL bytes separating the operation id's four fields.</summary>
+    private const int SeparatorCount = 3;
 
     private readonly int _fanout = fanout < 1 ? 1 : fanout;
     private readonly int _maxGroupEntries = maxGroupEntries;
@@ -314,23 +327,54 @@ internal sealed class AggregationApplier(
     // uniqueness within one view is sufficient.
     private string OperationId(string sourceKey, HybridLogicalClock timestamp)
     {
-        var payload = $"{_operationEpoch}\u0000{sourceKey}\u0000{timestamp.WallClockTicks}\u0000{timestamp.Counter}";
+        // Compose the hash input DIRECTLY into a stack (or pooled, for long keys)
+        // UTF-8 buffer. The payload was previously interpolated into a string
+        // purely so it could be transcoded into that same buffer on the next
+        // line and then thrown away - a whole heap string, sized by the source
+        // key, materialised per numeric contribution and retraction on the
+        // per-write view hot path, that no caller ever saw.
+        //
+        // The bytes are unchanged, so the returned id is unchanged: '\u0000'
+        // encodes to the single byte 0x00, and the "G" format of a non-negative
+        // integer is the same digit sequence in every culture, which is what the
+        // interpolation emitted. The integers are formatted invariantly here so
+        // that stays true of a negative value too.
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(_operationEpoch.Length)
+            + Encoding.UTF8.GetMaxByteCount(sourceKey.Length)
+            + MaxInt64Digits + MaxInt32Digits + SeparatorCount;
 
-        // Hash the payload from a stack (or pooled, for long payloads) UTF-8
-        // buffer instead of allocating a fresh byte[] per call. OperationId runs
-        // once per numeric contribution / retraction (the per-write view hot
-        // path), so the removed byte[] is one heap allocation per view mutation.
-        // The XxHash64 input bytes are identical, so the returned id is unchanged.
-        var maxByteCount = Encoding.UTF8.GetMaxByteCount(payload.Length);
         byte[]? rented = null;
         Span<byte> buffer = maxByteCount <= 256
             ? stackalloc byte[maxByteCount]
             : (rented = ArrayPool<byte>.Shared.Rent(maxByteCount));
         try
         {
-            var written = Encoding.UTF8.GetBytes(payload, buffer);
+            var written = 0;
+            written += Encoding.UTF8.GetBytes(_operationEpoch, buffer);
+            buffer[written++] = 0x00;
+            written += Encoding.UTF8.GetBytes(sourceKey, buffer[written..]);
+            buffer[written++] = 0x00;
+            timestamp.WallClockTicks.TryFormat(
+                buffer[written..], out var ticksWritten, default, CultureInfo.InvariantCulture);
+            written += ticksWritten;
+            buffer[written++] = 0x00;
+            timestamp.Counter.TryFormat(
+                buffer[written..], out var counterWritten, default, CultureInfo.InvariantCulture);
+            written += counterWritten;
+
             var hash = XxHash64.HashToUInt64(buffer[..written]);
-            return "agg-" + hash.ToString("x16");
+
+            // One allocation for the id rather than three: the interpolated
+            // payload, the "x16" hash string and the concatenation that joined it
+            // to the prefix were each a separate heap string.
+            return string.Create(
+                OperationIdPrefix.Length + 16,
+                hash,
+                static (destination, value) =>
+                {
+                    OperationIdPrefix.CopyTo(destination);
+                    value.TryFormat(destination[OperationIdPrefix.Length..], out _, "x16", CultureInfo.InvariantCulture);
+                });
         }
         finally
         {
@@ -551,10 +595,16 @@ internal sealed class AggregationApplier(
 
         var shards = await store.GetManyAsync(slotKeys, cancellationToken);
 
-        // Walk the freshly-materialised shard map and each decoded inverse map by
-        // their struct enumerators rather than through `.Values`: both dictionaries
-        // are fresh per call (the GetMany result and each per-shard decode), so
-        // every `.Values` access otherwise allocates a throwaway ValueCollection.
+        // Walk the freshly-materialised shard map by its struct enumerator rather
+        // than through `.Values`: it is a fresh GetMany result, so every `.Values`
+        // access otherwise allocates a throwaway ValueCollection.
+        //
+        // Each shard's entries are then walked STRAIGHT OUT OF THE ROW. This pass
+        // reduces a shard to one extremum or a member union and never looks a
+        // source key up, so the keyed Dictionary the decoder used to hand it - and
+        // the freshly-decoded string it held for every source key in the shard -
+        // were built only to be dropped. The cursor materialises neither, and the
+        // min/max walk additionally steps over the member string it does not read.
         foreach (var (_, bytes) in shards)
         {
             // GetManyAsync can return a slot holding the empty sentinel (and a
@@ -565,20 +615,32 @@ internal sealed class AggregationApplier(
                 continue;
             }
 
-            foreach (var (_, entry) in DecodeInverse(bytes))
+            var scan = new InverseRowScan(bytes);
+            if (kind == AggregationKind.Min)
             {
-                hasAny = true;
-                if (kind == AggregationKind.Min)
+                while (scan.MoveNextNumeric())
                 {
-                    extreme = Math.Min(extreme, entry.Numeric);
+                    hasAny = true;
+                    extreme = Math.Min(extreme, scan.Numeric);
                 }
-                else if (kind == AggregationKind.Max)
+            }
+            else if (kind == AggregationKind.Max)
+            {
+                while (scan.MoveNextNumeric())
                 {
-                    extreme = Math.Max(extreme, entry.Numeric);
+                    hasAny = true;
+                    extreme = Math.Max(extreme, scan.Numeric);
                 }
-                else if (entry.Member is not null)
+            }
+            else
+            {
+                while (scan.MoveNext())
                 {
-                    members!.Add(entry.Member);
+                    hasAny = true;
+                    if (scan.Member is not null)
+                    {
+                        members!.Add(scan.Member);
+                    }
                 }
             }
         }
@@ -699,6 +761,13 @@ internal sealed class AggregationApplier(
         // Walk the freshly-materialised shard map directly rather than through
         // `.Values`: `shards` is a fresh GetMany result, so a `.Values` access
         // otherwise allocates a throwaway ValueCollection wrapper per call.
+        //
+        // Each shard's members are appended straight from the row. The decoder
+        // used to build a keyed Dictionary per shard and this loop immediately
+        // walked it back out into the flat list below, so every member paid a
+        // hash and a bucket insert into a map nothing ever probed. The cursor's
+        // declared entry count also lets the list grow once to the exact incoming
+        // size rather than doubling into it.
         foreach (var (_, bytes) in shards)
         {
             // See MaterialiseInverseAsync: an empty-sentinel or absent slot is not
@@ -708,9 +777,11 @@ internal sealed class AggregationApplier(
                 continue;
             }
 
-            foreach (var (sourceKey, member) in DecodeFoldInverse(bytes))
+            var scan = new FoldInverseRowScan(bytes);
+            members.EnsureCapacity(members.Count + scan.Remaining);
+            while (scan.MoveNext())
             {
-                members.Add((sourceKey, member));
+                members.Add((scan.SourceKey, scan.Member));
             }
         }
 
