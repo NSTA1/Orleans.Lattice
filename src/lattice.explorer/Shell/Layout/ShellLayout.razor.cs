@@ -160,6 +160,15 @@ public partial class ShellLayout : IAsyncDisposable
         _directoryOpen = false;
         _menuOpen = false;
 
+        // The operator verdict decides whether a caller scoped to the reserved
+        // default tenant sees tenancy chrome, and canonicalisation reads it
+        // synchronously, so it is refreshed before the address is resolved.
+        await Tenancy.RefreshAsync(token);
+        if (version != _version)
+        {
+            return;
+        }
+
         var arrived = Navigator.Current ?? ExplorerAddress.Home;
         var resolution = await Navigator.ResolveAsync(arrived, token);
         if (version != _version)

@@ -7,47 +7,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="@Options.BaseHref" />
     <title>Lattice Explorer</title>
-    <link rel="icon" type="image/svg+xml" href="_content/Orleans.Lattice.Explorer.UI/favicon.svg" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.DesignSystem/lattice-tokens.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.DesignSystem/lattice-breakpoints.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.DesignSystem/lattice-primitives.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Selection/lattice-selection.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Metrics/lattice-plugin-metrics.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Topology/lattice-plugin-topology.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Data/lattice-plugin-data.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.History/lattice-plugin-history.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.DeadLetter/lattice-plugin-deadletter.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.TagIndex/lattice-plugin-tagindex.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-shell.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-appearance.css" />
+    @* The design system: fonts, the documentation site's tokens, the Operate tokens, breakpoints, primitives and the favicon. *@
+    <LtDesignHead />
+    <link rel="stylesheet" href="@ShellChromeAssets.Stylesheet" />
     @*
-        The operator's palette has to be on the document at the FIRST paint, so
-        this is a classic, blocking script in <head>: the parser stops on it, and
-        it has not reached <body>, so nothing has been laid out or painted when it
-        runs. It must not gain `defer` or `async`, and it must not move into
-        <body> - either change reintroduces a flash of the wrong palette on every
-        single load. See lattice-appearance.js for why the server cannot answer
-        this instead.
+        Areas whose pages do not link their own stylesheet. Every other area
+        (Apps, Access, Tenancy, Schema, Replication) links its stylesheet from its
+        own pages, as the app frame does.
     *@
-    <script src="_content/Orleans.Lattice.Explorer.UI/lattice-appearance.js"></script>
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Backup/lattice-backups.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Access/lattice-access.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Schema/lattice-schema.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Tenants/lattice-tenants.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.MyTenant/lattice-mytenant.css" />
-    <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Telemetry/lattice-telemetry.css" />
+    <link rel="stylesheet" href="@DataStylesheet" />
+    <link rel="stylesheet" href="@BackupsStylesheet" />
+    <link rel="stylesheet" href="@TelemetryStylesheet" />
+    <link rel="stylesheet" href="@ClusterStylesheet" />
+    @*
+        The operator's material has to be on the document at the FIRST paint, so
+        this is a classic, blocking script in <head>: the parser stops on it before
+        anything is laid out or painted. It must not gain `defer` or `async`, and it
+        must not move into <body>; either change reintroduces a flash of the wrong
+        material on every load.
+    *@
+    <script src="@ShellChromeAssets.FirstPaintScript"></script>
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 
 <body>
-    @*
-        Stamps the chosen density on <body>, which only exists now. Runs before
-        any shell content is parsed, so the choice is in effect for the first
-        layout rather than shifting it afterwards.
-    *@
-    <script>window.latticeAppearance && window.latticeAppearance.stamp();</script>
     <Routes @rendermode="InteractiveServer" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 
 </html>
+
+@code {
+    private const string DataStylesheet = Orleans.Lattice.Explorer.Shell.Areas.Data.DataAssets.Stylesheet;
+    private const string BackupsStylesheet = Orleans.Lattice.Explorer.Shell.Areas.Backups.BackupsAssets.Stylesheet;
+    private const string TelemetryStylesheet = Orleans.Lattice.Explorer.Shell.Areas.Telemetry.TelemetryAssets.Stylesheet;
+    private const string ClusterStylesheet = Orleans.Lattice.Explorer.Shell.Areas.Cluster.ClusterAssets.Stylesheet;
+}

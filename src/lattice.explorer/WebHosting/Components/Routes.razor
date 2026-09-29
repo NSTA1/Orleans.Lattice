@@ -1,0 +1,11 @@
+@*
+    The Explorer's router. Every routable page lives in the Shell assembly; the
+    Shell's layout gates each area page on its availability, and its not-found
+    page names the nearest valid ancestor. The layout manages focus itself
+    (skip links and the content landmark), so no FocusOnNavigate is added here.
+*@
+<Router AppAssembly="typeof(ShellLayout).Assembly" NotFoundPage="typeof(NotFoundPage)">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" DefaultLayout="typeof(ShellLayout)" />
+    </Found>
+</Router>

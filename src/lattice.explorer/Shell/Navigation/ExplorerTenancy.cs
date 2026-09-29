@@ -19,6 +19,8 @@ internal sealed class ExplorerTenancy
     private readonly IExplorerTenantView? _view;
     private readonly IExplorerTenantSwitcher? _switcher;
     private readonly IExplorerAccessibleTenantSource? _tenants;
+    private bool _operatorVerdict;
+    private string? _verdictTenant;
 
     /// <summary>Reads tenancy from whichever of Core's seams the head registered.</summary>
     /// <param name="view">The tenant view, or <see langword="null"/> when tenancy is not registered.</param>
@@ -34,8 +36,63 @@ internal sealed class ExplorerTenancy
         _tenants = tenants;
     }
 
-    /// <summary>Whether tenancy is on, so tenant-scoped addresses carry a tenant root.</summary>
-    public bool IsActive => _view is { IsActive: true };
+    /// <summary>
+    /// Whether tenancy is on for this caller, so tenant-scoped addresses carry a
+    /// tenant root.
+    /// </summary>
+    /// <remarks>
+    /// A caller scoped to the reserved default tenant who is not a platform
+    /// operator sees no tenancy chrome at all (tenant-scope.md): for that caller
+    /// the tenant root would only ever name <c>default</c>, so addresses stay
+    /// plain and <c>/t/default/...</c> canonicalises to the plain form. The
+    /// operator verdict is read by <see cref="RefreshAsync"/>, which the layout
+    /// awaits before resolving each navigation; until it has answered for the
+    /// active tenant the caller is treated as not an operator, which fails closed
+    /// to the plain, unscoped view the cluster enforces anyway.
+    /// </remarks>
+    public bool IsActive => _view is { IsActive: true } && !HidesDefaultTenant;
+
+    /// <summary>Whether the active tenant is the reserved default and the caller has not proven operator standing for it.</summary>
+    private bool HidesDefaultTenant =>
+        _view!.ActiveTenant is { } active
+        && string.Equals(active.Value, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal)
+        && !(_operatorVerdict && string.Equals(_verdictTenant, active.Value, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Refreshes the cached operator verdict that decides whether a caller scoped
+    /// to the reserved default tenant sees tenancy chrome. It asks the
+    /// operator-gated switcher only when the active tenant is the default one, so
+    /// every other navigation costs nothing, and any fault reads as "not an
+    /// operator".
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the operator validation.</param>
+    /// <returns>A task that completes once the verdict is current.</returns>
+    public async ValueTask RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        if (_view is not { IsActive: true, ActiveTenant: { } active }
+            || !string.Equals(active.Value, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal))
+        {
+            _operatorVerdict = false;
+            _verdictTenant = null;
+            return;
+        }
+
+        var verdict = false;
+        if (_switcher is not null)
+        {
+            try
+            {
+                verdict = await _switcher.IsOperatorAsync(cancellationToken).ConfigureAwait(true);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                verdict = false;
+            }
+        }
+
+        _operatorVerdict = verdict;
+        _verdictTenant = active.Value;
+    }
 
     /// <summary>The active tenant's id, or <see langword="null"/> when tenancy is off or none is established.</summary>
     public string? ActiveTenant => IsActive ? _view!.ActiveTenant?.Value : null;
