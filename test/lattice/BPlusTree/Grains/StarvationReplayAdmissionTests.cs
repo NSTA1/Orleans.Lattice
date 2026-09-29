@@ -296,4 +296,91 @@ public sealed class StarvationReplayAdmissionTests
             + "yielding it as well would starve the only remedy for a live leaf the sweep never reaches.");
         BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
     }
+
+    [TestCase(6, 0, 6)]
+    [TestCase(6, 2, 4)]
+    [TestCase(6, 5, 1)]
+    [TestCase(6, 6, 1)]
+    [TestCase(1, 0, 1)]
+    public void CirculatingReplayPermits_subtracts_the_withheld_permits_with_a_floor_of_one(
+        int ceiling, int withheld, int expected)
+        => Assert.That(BPlusLeafGrain.CirculatingReplayPermits(ceiling, withheld), Is.EqualTo(expected));
+
+    /// <summary>
+    /// Issue #3610. The share was sized from the configured ceiling, so with
+    /// two of six permits withheld the timer could take two of the four still
+    /// circulating and the GC drives three, leaving interactive activations
+    /// one. Sized from what circulates, the share is two, the timer one.
+    /// </summary>
+    [Test]
+    public void The_gc_share_is_sized_from_the_permits_in_circulation_not_the_configured_ceiling()
+    {
+        const int Ceiling = 6;
+        const int Withheld = 2;
+        const int Circulating = Ceiling - Withheld;
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(Ceiling, queued: 0);
+        BPlusLeafGrain.SeedWithheldReplayPermitsForTest(Withheld);
+        using var gate = new SemaphoreSlim(Circulating, Ceiling);
+
+        var timers = 0;
+        while (BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer))
+            timers++;
+
+        var sweeps = 0;
+        while (BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep))
+            sweeps++;
+
+        try
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(timers, Is.EqualTo(1),
+                    "four permits circulate, so the share is two and the timer stops one short of it. Sized "
+                    + "from the configured six, the timer took two.");
+                Assert.That(sweeps, Is.EqualTo(1),
+                    "the slot the timer may not take stays free for a WAL GC sweep drive.");
+                Assert.That(gate.CurrentCount, Is.EqualTo(Circulating / 2),
+                    "and GC drives together hold at most half the permits in circulation, leaving the rest "
+                    + "to interactive activations (issue #3480).");
+            });
+        }
+        finally
+        {
+            for (var i = 0; i < timers + sweeps; i++)
+                BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
+        }
+
+        Assert.That(gate.CurrentCount, Is.EqualTo(Circulating), "every permit must come back.");
+    }
+
+    /// <summary>
+    /// Issue #3610, at the withholding floor: six configured, five withheld, one
+    /// circulating. Sized from six the share had three slots, so the timer held
+    /// the last permit and never yielded it to a refused sweep drive. Sized from
+    /// what circulates it is a single-slot share, which the timer yields.
+    /// </summary>
+    [Test]
+    public void At_the_withholding_floor_the_timer_yields_the_last_circulating_permit_to_a_refused_sweep_drive()
+    {
+        const int Ceiling = 6;
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(Ceiling, queued: 0);
+        BPlusLeafGrain.SeedWithheldReplayPermitsForTest(Ceiling - 1);
+        using var gate = new SemaphoreSlim(1, Ceiling);
+
+        Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer), Is.True,
+            "precondition: with no sweep refusal outstanding the timer may use the single slot.");
+        Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep), Is.False,
+            "precondition: the timer holds the only circulating permit, so the sweep drive is refused.");
+        BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
+
+        Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer), Is.False,
+            "one permit circulates, so the share is a single slot and the timer must leave it for the refused "
+            + "sweep drive. Sized from the configured ceiling the share had three slots, the yield never "
+            + "applied, and coverage-lag timer drives could hold every permit still in circulation.");
+        Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep), Is.True,
+            "the sweep's retry takes the permit the timer left.");
+        BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
+
+        Assert.That(gate.CurrentCount, Is.EqualTo(1), "every permit must come back.");
+    }
 }

@@ -216,11 +216,15 @@ internal sealed class LatticeSnapshotProvider(
                     continue;
                 }
 
+                // Carry the entry's absolute expiry so a TTL key stays a TTL
+                // key on the peer the snapshot seeds; dropping it installs the
+                // row as durable there.
                 yield return new SnapshotEntry
                 {
                     Key = pair.Key,
                     Value = versioned.Value,
                     Timestamp = versioned.Version,
+                    ExpiresAtTicks = versioned.ExpiresAtTicks,
                 };
             }
         }

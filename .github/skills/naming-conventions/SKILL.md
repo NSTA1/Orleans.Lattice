@@ -5,7 +5,7 @@ description: Canonical Orleans.Lattice naming conventions and a registry of publ
 
 # Naming conventions
 
-Naming rules for every layer of Orleans.Lattice, plus a registry of public API type names per package. The registry is representative, not exhaustive: it names the principal public types of the namespaces listed below, and some namespaces that declare public types have no row yet, so treat the `public` declarations under `src/` as the authoritative set. When you add or rename a public type, grain, namespace, or test, follow the matching row and update the registry below in the same change.
+Naming rules for every layer of Orleans.Lattice, plus a registry of public API type names per package. The registry is representative, not exhaustive: it names the principal public types of the namespaces listed below, and some namespaces that declare public types have no row yet, so treat the `public` declarations under `src/` as the authoritative set. The `Orleans.Lattice.Api.Mcp.RepoContext` row is the exception: it lists every top-level public type of that namespace, and `NamingRegistryRepoContextRowTests` (in `test/lattice.api.mcp.repocontext/`) fails the build when a type is added, renamed, or removed without updating the row. When you add or rename a public type, grain, namespace, or test, follow the matching row and update the registry below in the same change.
 
 | Element | Convention | Example |
 |---|---|---|

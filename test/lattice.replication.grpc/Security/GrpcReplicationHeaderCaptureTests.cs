@@ -143,16 +143,23 @@ public class GrpcReplicationHeaderCaptureTests
         }
     }
 
+    /// <summary>
+    /// The declared origin matches the origin the call credentials below stamp.
+    /// The receiver binds the two, so a push may only declare the caller's own
+    /// origin; this box is what the production sender emits.
+    /// </summary>
     private static ReplicationBatchEnvelopeBox MinimalBox() => new()
     {
         Value = new ReplicationBatchEnvelope
         {
             WireVersion = 1,
             TreeName = "tree",
-            OriginClusterId = "remote",
+            OriginClusterId = StampedOrigin,
             Entries = Array.Empty<WalRecord>(),
         },
     };
+
+    private const string StampedOrigin = "site-z";
 
     [Test]
     public async Task Sender_call_credentials_send_both_secret_and_origin_headers_on_the_wire()
@@ -164,7 +171,7 @@ public class GrpcReplicationHeaderCaptureTests
         var secrets = Substitute.For<IReplicationSecretProvider>();
         secrets.GetOutboundSecretAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<string?>(Secret));
-        var callCreds = GrpcChannelHardening.BuildCallCredentials(secrets, "peer-z", "site-z");
+        var callCreds = GrpcChannelHardening.BuildCallCredentials(secrets, "peer-z", StampedOrigin);
         var invoker = _channel.CreateCallInvoker();
 
         using var call = invoker.AsyncUnaryCall(
@@ -176,6 +183,6 @@ public class GrpcReplicationHeaderCaptureTests
 
         Assert.That(ackBox.Value.Accepted, Is.True);
         Assert.That(_captured.Secret, Is.EqualTo(Secret));
-        Assert.That(_captured.Origin, Is.EqualTo("site-z"));
+        Assert.That(_captured.Origin, Is.EqualTo(StampedOrigin));
     }
 }

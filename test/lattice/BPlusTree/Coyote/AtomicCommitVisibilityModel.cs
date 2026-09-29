@@ -34,6 +34,26 @@ public enum AtomicCommitReaderMode
     /// the sibling still hides it - a split view.
     /// </summary>
     LivePerKeyRead,
+
+    /// <summary>
+    /// The fix under registry call failure injection (issue #3641): the snap1
+    /// fetch, the revision probe, and the disambiguation snapshot can each fail.
+    /// A failed snap1 fans out under the "snapshot unavailable" ambient, where a
+    /// key that still carries a prepare fails the attempt closed instead of
+    /// resolving; an unverifiable post-fan-out check re-runs the fan-out that way
+    /// once. The accept/retry rule is the production
+    /// <see cref="ReaderStabilityGate.Decide"/>. This design admits no certified
+    /// split view.
+    /// </summary>
+    SharedSnapshotUnderRegistryFailures,
+
+    /// <summary>
+    /// The mutation that restores the pre-#3641 fail-open under the same
+    /// failure injection: a failed snap1 leaves each leaf resolving its prepare
+    /// live at its own moment, and a failed probe or disambiguation snapshot is
+    /// treated as stable. Coyote must find a certified torn read.
+    /// </summary>
+    SharedSnapshotUnderRegistryFailuresFailOpen,
 }
 
 /// <summary>
@@ -115,7 +135,152 @@ public sealed class AtomicCommitVisibilityModel : ICoyoteModel
             return;
         }
 
+        if (_mode is AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailures
+            or AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailuresFailOpen)
+        {
+            RunUnderRegistryFailures(runtime, txid, core, drained, MaybeCommit, MaybeDrain);
+            return;
+        }
+
         RunSharedSnapshot(txid, core, drained, MaybeCommit, MaybeDrain);
+    }
+
+    /// <summary>
+    /// Bound on reader attempts under failure injection, standing in for
+    /// <see cref="LatticeOptions.MaxScanRetries"/> so exploration terminates.
+    /// Exhaustion is the typed exception: nothing is certified.
+    /// </summary>
+    private const int MaxReaderAttempts = 3;
+
+    /// <summary>
+    /// The multi-key reader with registry call failures injected on snap1, the
+    /// revision probe, and the disambiguation snapshot (issue #3641), mirroring
+    /// the production <c>LatticeGrain</c> read loop: fail-closed in
+    /// <see cref="AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailures"/>,
+    /// the restored fail-open in
+    /// <see cref="AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailuresFailOpen"/>.
+    /// </summary>
+    private void RunUnderRegistryFailures(
+        ICoyoteRuntime runtime,
+        Guid txid,
+        TxRegistryDecisionCore core,
+        bool[] drained,
+        Action maybeCommit,
+        Action<int> maybeDrain)
+    {
+        var failOpen = _mode == AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailuresFailOpen;
+
+        for (var attempt = 0; attempt < MaxReaderAttempts; attempt++)
+        {
+            // snap1 fetch, which may fail in transport.
+            TxDecisionSnapshot? snap1 = runtime.RandomBoolean() ? null : core.Snapshot();
+            var strict = snap1 is null && !failOpen;
+
+            for (var pass = 0; pass < 2; pass++)
+            {
+                var observedPost = new bool[_keyCount];
+                var reachedUnresolvablePrepare = false;
+                for (var i = 0; i < _keyCount; i++)
+                {
+                    maybeCommit();
+                    maybeDrain(i);
+                    if (drained[i])
+                    {
+                        // A drained leaf holds no prepare and serves post-saga.
+                        observedPost[i] = true;
+                        continue;
+                    }
+
+                    if (strict)
+                    {
+                        // The "snapshot unavailable" ambient: the leaf reaches a
+                        // prepared key and throws rather than resolve it.
+                        reachedUnresolvablePrepare = true;
+                        break;
+                    }
+
+                    // Under snap1, or - fail-open with no snap1 - each leaf
+                    // resolving its own prepare live at its own moment.
+                    var view = snap1 is { } s
+                        ? new TxDecisionView(s.Decisions)
+                        : new TxDecisionView(core.Snapshot().Decisions);
+                    observedPost[i] = ObserveKey(i, view, txid, drained);
+                }
+
+                if (reachedUnresolvablePrepare)
+                {
+                    break;
+                }
+
+                ReaderStabilityVerdict verdict;
+                if (strict)
+                {
+                    verdict = ReaderStabilityVerdict.Unverifiable;
+                }
+                else if (snap1 is not { } captured)
+                {
+                    // Fail-open only: no snap1 to verify against; the legacy
+                    // code certified this attempt.
+                    verdict = ReaderStabilityVerdict.Stable;
+                }
+                else
+                {
+                    verdict = ClassifyAfterFanOut(runtime, core, captured);
+                    if (failOpen && verdict == ReaderStabilityVerdict.Unverifiable)
+                    {
+                        verdict = ReaderStabilityVerdict.Stable;
+                    }
+                }
+
+                if (ReaderStabilityGate.Decide(verdict, resolvedPreparedKey: !strict) == ReaderAttemptDecision.Accept)
+                {
+                    AssertAllOrNothing(observedPost);
+                    return;
+                }
+
+                if (verdict == ReaderStabilityVerdict.Unverifiable && !strict)
+                {
+                    strict = true;
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        // Retry budget exhausted: the read throws the typed exception and
+        // certifies nothing.
+    }
+
+    /// <summary>
+    /// The post-fan-out stability check with transport failure injected on the
+    /// revision probe and on the disambiguation snapshot; a failure of either is
+    /// <see cref="ReaderStabilityVerdict.Unverifiable"/>, exactly as
+    /// <c>LatticeGrain.ClassifySnap2Async</c> reports it.
+    /// </summary>
+    private static ReaderStabilityVerdict ClassifyAfterFanOut(
+        ICoyoteRuntime runtime,
+        TxRegistryDecisionCore core,
+        TxDecisionSnapshot snap1)
+    {
+        if (runtime.RandomBoolean())
+        {
+            return ReaderStabilityVerdict.Unverifiable;
+        }
+
+        if (ReaderStabilityGate.IsRevisionStable(snap1.Revision, core.Revision))
+        {
+            return ReaderStabilityVerdict.Stable;
+        }
+
+        if (runtime.RandomBoolean())
+        {
+            return ReaderStabilityVerdict.Unverifiable;
+        }
+
+        return ReaderStabilityGate.ClassifySnapshot(
+            new Dictionary<Guid, TxStatus>(snap1.Decisions),
+            new Dictionary<Guid, TxStatus>(core.Snapshot().Decisions));
     }
 
     /// <summary>

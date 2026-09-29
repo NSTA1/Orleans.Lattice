@@ -111,7 +111,12 @@ internal sealed partial class LatticeDataApi
         }
 
         var set = await tree.OrSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
-        return [.. set.Elements()];
+        // SnapshotElements, not [.. set.Elements()]: Elements() is a yield-return
+        // iterator, so the collection expression cannot size its destination and
+        // builds the whole projection through a segment chain before copying it
+        // once more. The snapshot runs the same survivor scan once and fills one
+        // exactly-sized array.
+        return set.SnapshotElements();
     }
 
     /// <inheritdoc />
@@ -263,7 +268,10 @@ internal sealed partial class LatticeDataApi
         }
 
         var set = await tree.RwSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
-        return [.. set.Elements()];
+        // SnapshotElements, not [.. set.Elements()]: one remove/tombstone survivor
+        // scan feeding one exactly-sized array, instead of the hidden-count
+        // iterator the collection expression has to build through.
+        return set.SnapshotElements();
     }
 
     /// <inheritdoc />
@@ -442,11 +450,15 @@ internal sealed partial class LatticeDataApi
         }
 
         var map = await tree.OrMap<string, MvRegister>(key).GetAsync(cancellationToken).ConfigureAwait(false);
-        var result = new Dictionary<string, IReadOnlyList<byte[]>>();
-        foreach (var field in map.Keys())
+        // One walk of the map instead of Keys() plus a Get() per key, which
+        // repeated both the lookup and the tombstone probe for every surviving
+        // key, and sorted survivors into an order this dictionary discards. The
+        // exact live count also presizes the result, so it never rehashes.
+        var live = map.SnapshotLiveEntriesUnordered();
+        var result = new Dictionary<string, IReadOnlyList<byte[]>>(live.Length);
+        foreach (var (field, register) in live)
         {
-            var register = map.Get(field);
-            result[field] = register is null ? Array.Empty<byte[]>() : register.Values();
+            result[field] = register.Values();
         }
 
         return result;

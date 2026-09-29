@@ -403,18 +403,32 @@ internal sealed partial class ShardRootGrain
     /// <c>A_settled_read_is_refused_once_a_surfaced_row_has_expired</c>.
     /// </para>
     /// <para>
-    /// <b>The pair is not exhaustive, and the residue is stated rather than
-    /// implied.</b> A leaf holding uncommitted transactional writes resolves
-    /// each one against the transaction registry while answering, and a
-    /// decision outcome can flip as its tombstone expires by the clock: no
+    /// <b>The pair is still not exhaustive, and the third axis is closed by
+    /// refusal rather than by a horizon.</b> A leaf holding uncommitted
+    /// transactional writes resolves each one against the transaction registry
+    /// while answering, and a decision outcome can flip as its tombstone
+    /// expires by the clock, or change outright as a decision is recorded: no
     /// writer runs, so the cookie holds, and that row was never surfaced, so it
-    /// contributes nothing to the horizon. What bounds it is that the read path
-    /// consults the registry at all only when <c>_pendingTx</c> is non-empty,
-    /// and returns early otherwise, so the residue is confined to leaves with
-    /// an in-flight transaction rather than being general. Closing it needs the
-    /// decision horizon folded in at the same seam; this change does not
-    /// attempt it. Claiming exhaustiveness here would be the same error this
-    /// clause exists to correct, one axis further out.
+    /// contributes nothing to the horizon. Folding a decision horizon in would
+    /// not close it either, because a decision recorded elsewhere has no
+    /// instant this leaf could publish in advance. So such a read is simply not
+    /// reused: the leaf records the cookie at which a range read consulted the
+    /// registry, and this gate refuses a settled read whose issue-time cookie
+    /// is that value. Every add or removal of a pending bucket advances the
+    /// cookie, so the refusal lapses on its own once the pending set drains.
+    /// Issue #2823; see <c>BPlusLeafGrain.PublishLeafTransactionalRead</c> and
+    /// the arm
+    /// <c>A_settled_read_that_resolved_pending_transactions_is_refused_after_a_decision_expires</c>.
+    /// </para>
+    /// <para>
+    /// <b>With that clause the gate covers every input a leaf range read
+    /// consults, and the claim is scoped to exactly that.</b> The answer is a
+    /// function of the leaf's rows (the cookie), the clock as it filters
+    /// surfaced rows (the horizon), and registry decisions for pending writes
+    /// (refused outright). A future read path that consults anything else -
+    /// another grain, another clock-dependent filter - reopens this gate, and
+    /// must add its own clause here rather than assume the existing three
+    /// cover it.
     /// </para>
     /// <para>
     /// Equality, never ordering. The cookie's published contract is that it may
@@ -433,7 +447,9 @@ internal sealed partial class ShardRootGrain
            && BPlusLeafGrain.TryGetLeafRevision(key.LeafId, out var current)
            && current == issued
            && BPlusLeafGrain.TryGetLeafExpiryHorizon(key.LeafId, out var horizon)
-           && DateTimeOffset.UtcNow.Ticks < horizon;
+           && DateTimeOffset.UtcNow.Ticks < horizon
+           && !(BPlusLeafGrain.TryGetLeafTransactionalReadRevision(key.LeafId, out var transactional)
+                && transactional == issued);
 
     private void RegisterScanPageLeafRead(ScanPageLeafReadKey key, ScanPageLeafReadEntry entry)
     {

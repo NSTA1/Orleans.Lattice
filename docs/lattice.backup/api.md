@@ -311,12 +311,13 @@ The self-describing record of one backup.
 The causal cut a backup was taken as of.
 
 - Constructor: `BackupConsistencyCut(long walSequence, long hlcTimestamp, IReadOnlyDictionary<string, long>? perOriginFrontier = null, IReadOnlyDictionary<int, long>? walPartitionOffsets = null)`. Throws `ArgumentOutOfRangeException` when `walSequence` or `hlcTimestamp` is negative.
-- Properties: `long WalSequence`, `long HlcTimestamp`, `IReadOnlyDictionary<string, long>? PerOriginFrontier`, `IReadOnlyDictionary<int, long>? WalPartitionOffsets` (the per-partition resume offsets an incremental layers on).
+- Properties: `long WalSequence`, `long HlcTimestamp`, `IReadOnlyDictionary<string, long>? PerOriginFrontier`, `IReadOnlyDictionary<int, long>? WalPartitionOffsets` (the per-partition resume offsets an incremental layers on). `HlcTimestamp` is the wall-clock component of the highest hybrid-logical-clock stamp the capture read - over the captured entries for a full backup, over the drained delta for an incremental (never below its base's) - and `0` only when the capture (with its whole chain) read nothing, or for a full backup captured by a build that predates this frontier. It is also the frontier an incremental pins the WAL at while it drains forward from its base.
 
 ### `BackupTopologySnapshot`
 
 - Constructor: `BackupTopologySnapshot(int shardCount, int virtualShardCount, IReadOnlyList<string> shardRootDigests)`. Throws `ArgumentOutOfRangeException` when `shardCount` or `virtualShardCount` is not positive, `ArgumentNullException` when `shardRootDigests` is null.
 - Properties: `int ShardCount`, `int VirtualShardCount`, `IReadOnlyList<string> ShardRootDigests`.
+- What a capture records: all three come from the tree's routing map at the capture. `ShardCount` is the number of physical shards the map names, `VirtualShardCount` is the map's slot count (4096 unless the tree was created with a declared virtual shard count), and `ShardRootDigests` holds one digest per physical shard in ascending shard-index order - the digest of the captured range on that shard, or `nodigest-{index}` when the tree does not maintain projection digests. The indices need not be contiguous: a shard consolidation that folds a shard away leaves a gap.
 
 ### `BackupKeyDescriptor`
 

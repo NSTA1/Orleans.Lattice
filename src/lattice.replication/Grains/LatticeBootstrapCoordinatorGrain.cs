@@ -34,9 +34,11 @@ namespace Orleans.Lattice.Replication.Grains;
 /// reactivates the grain on a surviving silo within the keepalive
 /// reminder period; the work-pump resumes from the persisted
 /// <see cref="BootstrapCoordinatorState.Phase"/> and re-opens the
-/// snapshot stream at
-/// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/> rather
-/// than from <see cref="HybridLogicalClock.Zero"/>.
+/// snapshot stream with no upper bound
+/// (<see cref="HybridLogicalClock.Zero"/>), because the export treats a
+/// non-zero <c>asOfHlc</c> as a strict upper bound and would drop every
+/// not-yet-applied entry stamped above
+/// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/>.
 /// </para>
 /// </summary>
 internal sealed class LatticeBootstrapCoordinatorGrain(
@@ -322,13 +324,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <summary>
-    /// Opens (or re-opens, after a crash) the snapshot stream from
-    /// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/>, drains
-    /// every entry through the local apply seam, and transitions to
+    /// Opens (or re-opens, after a crash) the full snapshot stream,
+    /// drains every entry through the local apply seam, and transitions to
     /// <see cref="LatticeBootstrapState.IncrementalHandoff"/> when the
-    /// stream is exhausted. Persists the cursor every
-    /// <see cref="CursorPersistEntryInterval"/> entries so a mid-drain
-    /// crash re-applies at most that many entries on resume.
+    /// stream is exhausted. Persists the
+    /// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/> cursor every
+    /// <see cref="CursorPersistEntryInterval"/> entries for the handoff
+    /// seal; it is never used to narrow a resumed export.
     /// <para>
     /// Wraps the export + apply loop in a bounded transient-retry
     /// policy
@@ -336,10 +338,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// A classified-transient fault (e.g. a gRPC
     /// <c>StatusCode.Unavailable</c> from
     /// <c>RemoteSnapshotProvider</c>) consumes one retry slot and
-    /// re-opens the snapshot from the persisted cursor; the per-origin
-    /// snapshot-pinned floors, recent exact-identity dedupe, and per-key LWW merge
-    /// make the overlap safe, so replay is bounded by
-    /// <see cref="CursorPersistEntryInterval"/> x consumed retries.
+    /// re-opens the full snapshot; per-key LWW reconciliation makes
+    /// re-applying the entries the failed attempt already applied a no-op.
     /// Non-transient faults pivot to <see cref="LatticeBootstrapState.Failed"/>
     /// on the first failure via the catch block in
     /// <see cref="ProcessNextPhaseAsync"/>. Budget exhaustion re-throws
@@ -460,8 +460,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
     /// <summary>
     /// Performs a single attempt of the snapshot export + apply
-    /// drain. Re-opens the snapshot stream from the current
-    /// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/> cursor,
+    /// drain. Re-opens the full snapshot stream (no upper bound),
     /// applies every entry, and transitions to
     /// <see cref="LatticeBootstrapState.IncrementalHandoff"/> on a
     /// clean completion. A throw from this method either re-enters
@@ -492,8 +491,21 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // default interface implementation ignores the argument and
         // delegates to the two-arg overload, so this is a no-op for
         // hosts that do not register a cross-cluster adapter.
+        //
+        // Every attempt - the first, a transient retry, and a resume
+        // after a crash - exports with NO upper bound. The export's
+        // asOfHlc is a strict upper bound, not a resume point, and the
+        // stream arrives in leaf-chain order rather than HLC order, so
+        // LastAppliedHlc (the highest HLC seen so far) says nothing about
+        // which entries are still outstanding. Passing it here dropped
+        // every unapplied entry stamped above it, and nothing afterwards
+        // is guaranteed to redeliver them: the handoff pin seals the
+        // source-origin coordinate at the snapshot's causal-stable cut,
+        // which can sit above them, so the incremental stream dedupes them
+        // as already covered. Re-applying the overlap is a no-op under
+        // per-key LWW.
         var snapshot = await _snapshotProvider
-            .ExportAsync(treeName, sourceClusterId, state.State.LastAppliedHlc, cancellationToken)
+            .ExportAsync(treeName, sourceClusterId, HybridLogicalClock.Zero, cancellationToken)
             .ConfigureAwait(true);
 
         // Update the durable handoff metadata to whatever the latest
@@ -652,10 +664,10 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
                 LatticeTenantLabel.ForTree(treeName));
 
-            // Track the highest source HLC observed so a resume can
-            // re-export from this point. Snapshot-pinned floors, exact-identity
-            // dedupe, and per-key LWW idempotency tolerate a stale cursor, so
-            // persisting in batches is safe.
+            // Track the highest source HLC observed; PinAndCompleteAsync
+            // folds it into the source-origin seal. Persisting it in
+            // batches is safe because a resume re-exports the full stream
+            // and never narrows the export to this cursor.
             if (entry.Timestamp.CompareTo(state.State.LastAppliedHlc) > 0)
             {
                 state.State.LastAppliedHlc = entry.Timestamp;
@@ -704,8 +716,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // trim gap and re-triggers bootstrap on every probe, looping
         // forever (worse under a durable WAL, which never discards the
         // baselines). The snapshot's AsOfHlc cannot be used as the seal:
-        // the export echoes it back from the resume lower-bound (the
-        // receiver's LastAppliedHlc), so it is zero for a cold bootstrap.
+        // the export echoes back the upper bound it was opened with, and the
+        // drain always opens it unbounded, so it is zero.
         // Pinning the snapshot floor for source at the cut restores the
         // invariant that HWM[source] covers every locally-retained
         // source-origin entry and makes incremental entries at or below the

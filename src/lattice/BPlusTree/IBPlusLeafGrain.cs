@@ -511,6 +511,45 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync();
 
     /// <summary>
+    /// Banks this leaf's durable materialiser pin without replaying anything
+    /// (issue #3599): commits any pending checkpoint advance, captures a
+    /// snapshot when a partition's checkpoint has run ahead of its durable
+    /// coverage and the existing no-loss precondition holds, and publishes the
+    /// pin at <c>min(persisted checkpoint, durable snapshot coverage)</c> per
+    /// partition. Called by the WAL GC blocked-leaf sweep as the first tier for
+    /// a floor-holding leaf, before it spends a replay permit on
+    /// <see cref="DriveStarvedCheckpointAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It acquires no replay permit.</b> A leaf whose pin froze below its
+    /// persisted checkpoint - because nothing republished it after a capture
+    /// restamped coverage, or because its last debounced pin mirror never
+    /// landed - is owed only the drive's tail, not its replay. Spending a replay
+    /// permit on such a leaf starves the leaves that genuinely need one.
+    /// </para>
+    /// <para>
+    /// <b>It never loosens the pin.</b> The published offset stays clamped by
+    /// durable snapshot coverage read after the capture's outcome, so a capture
+    /// that is declined, fails, or is not attempted still publishes
+    /// <c>min(persisted, existing coverage)</c>. The pin store merges by
+    /// monotonic maximum, so a redundant call is a no-op.
+    /// </para>
+    /// <para>
+    /// An ordinary turn-based call rather than
+    /// <see cref="AlwaysInterleaveAttribute"/>: it is short, it mutates
+    /// persisted state, and it does no replay whose duration would warrant
+    /// interleaving foreground traffic. It does not wait for the activation
+    /// replay: while one is outstanding, or while a starvation drive or warm
+    /// rescue is in flight on the activation, it returns without work, since
+    /// the replay owns the checkpoint until it latches and the other two end in
+    /// the same publish. The caller grades success by re-reading the durable
+    /// pin, not by a return value, and escalates when it did not move.
+    /// </para>
+    /// </remarks>
+    Task BankDurablePinAsync();
+
+    /// <summary>
     /// Stores a grain reference to the parent internal node so this leaf
     /// can propagate its <see cref="ChildDigestSnapshot"/> upward when
     /// its projection digest changes. Called once by the shard root

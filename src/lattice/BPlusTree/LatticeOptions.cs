@@ -49,7 +49,11 @@ public class LatticeOptions
     /// the <see cref="ILattice"/> write surface (<see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
     /// and its TTL overload, <see cref="ILattice.SetIfVersionAsync"/>,
     /// <see cref="ILattice.GetOrSetAsync"/>, <see cref="ILattice.SetManyAsync"/>,
-    /// and the CRDT delta-apply path). When set, a write whose key is longer
+    /// <see cref="ILattice.SetManyWherePredicateAsync"/>, the single-tree
+    /// atomic batch overloads, guarded atomic batches, the cross-tree
+    /// <see cref="LatticeCrossTreeAtomicWriteExtensions.SetManyAtomicAsync"/>
+    /// extension (every participating tree against its own bound), and the
+    /// CRDT delta-apply path). When set, a write whose key is longer
     /// than this bound is rejected with an <see cref="ArgumentException"/>
     /// before any shard work, so a client cannot drive unbounded heap growth
     /// by writing pathologically large keys (memory-exhaustion DoS).
@@ -1438,7 +1442,9 @@ public class LatticeOptions
     /// forever. Default 7 days. The minimum effective interval is
     /// <see cref="TxDecisionRetention"/> - a pin shorter than the tombstone
     /// retention is silently floored, because the registry's own
-    /// tombstone-prune pass already covers anything shorter.
+    /// tombstone-prune pass already covers anything shorter. A non-positive
+    /// value (for example <see cref="Timeout.InfiniteTimeSpan"/>) disables the
+    /// cap: the pin then does not expire and is released when its cursor closes.
     /// </summary>
     public TimeSpan MaxCursorSnapshotPinTtl { get; set; } = DefaultMaxCursorSnapshotPinTtl;
 
@@ -4105,6 +4111,20 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalDrainLagConsumerFreshness"/> (5 minutes).</summary>
     public static readonly TimeSpan DefaultWalDrainLagConsumerFreshness = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Minimum interval between repeat drain-lag holder warnings while a tree stays
+    /// above <see cref="WalSaturationMaterialiserLagThreshold"/>. Defaults to ten
+    /// minutes; <see langword="null"/> keeps edge-only logging. Each observation
+    /// names up to three eligible consumers with the lowest cursors, outside metrics.
+    /// Recovery clears the per-tree interval so a new crossing logs immediately.
+    /// Read from the global (unnamed) options on each sampler tick; per-tree
+    /// overrides do not apply. Must be positive when set.
+    /// </summary>
+    public TimeSpan? WalDrainLagHolderLogInterval { get; set; } = DefaultWalDrainLagHolderLogInterval;
+
+    /// <summary>Default value for <see cref="WalDrainLagHolderLogInterval"/> (10 minutes).</summary>
+    public static readonly TimeSpan DefaultWalDrainLagHolderLogInterval = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// WAL saturation input that escalates a tree to

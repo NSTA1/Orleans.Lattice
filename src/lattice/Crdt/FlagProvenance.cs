@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Text;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -56,7 +55,14 @@ internal static class FlagProvenance
         {
             new CrdtMemberValue
             {
-                Element = Encoding.UTF8.GetBytes(isEnabled ? "enabled" : "disabled"),
+                // UTF-8 literals: both words are compile-time ASCII constants
+                // baked into the assembly's data section, so the copy is a
+                // memcpy of seven or eight bytes out of static data. Running
+                // the UTF-8 encoder over a string constant on every flag read
+                // recomputed a fixed answer, and the resulting array is the
+                // same length either way, so this is a pure instruction saving
+                // with no change to what is allocated.
+                Element = isEnabled ? "enabled"u8.ToArray() : "disabled"u8.ToArray(),
                 ReplicaId = string.Empty,
                 Ordinal = 0,
             },

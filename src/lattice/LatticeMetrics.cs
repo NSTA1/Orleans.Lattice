@@ -107,7 +107,11 @@ public static class LatticeMetrics
     /// </summary>
     public const string TagPinShard = "pin_shard";
 
-    /// <summary>Tag key for the operation kind (e.g. <c>keys</c> or <c>entries</c> on scan histograms).</summary>
+    /// <summary>
+    /// Tag key for the operation kind (e.g. <c>keys</c> or <c>entries</c> on scan
+    /// histograms; <c>set_many</c> or <c>set_many_where_predicate</c> on the
+    /// shard-root batched-write histograms, see <see cref="OperationSetManyTag"/>).
+    /// </summary>
     public const string TagOperation = "operation";
 
     /// <summary>
@@ -2045,6 +2049,12 @@ public static class LatticeMetrics
     ///     (<see cref="WalGcCursorFloorState.BlockedByUnusablePin"/>).
     ///   </description></item>
     ///   <item><description>
+    ///     <see cref="OutcomeNoPartitions"/> - no partition's pinned provider
+    ///     could be resolved on this silo, so none was visited. Takes precedence
+    ///     over the other non-reclaiming arms; inspect WAL placement and the
+    ///     silo's provider registrations rather than inferring an empty WAL.
+    ///   </description></item>
+    ///   <item><description>
     ///     <see cref="OutcomeNoConsumer"/> - it reclaimed nothing because no
     ///     consumer has ever reported a cursor
     ///     (<see cref="WalGcCursorFloorState.NoCursorReported"/>), so the cursor
@@ -2533,6 +2543,40 @@ public static class LatticeMetrics
             description: "WAL garbage-collection passes that found the configured WalMaxRetainedBytes unreachable against the tree's measured logical working set, tagged by tree.");
 
     /// <summary>
+    /// Counter of WAL garbage-collection passes taken while a tree is in a
+    /// <b>terminal breach</b>, tagged with <see cref="TagTree"/> (issue #3149).
+    /// <para>
+    /// A pass is breaching when it classifies <see cref="OutcomeOverCeiling"/>
+    /// with an <see cref="WalGcCursorFloorState.Available"/> cursor floor and
+    /// reclaims no entry at all. One such pass is unremarkable - a consumer
+    /// lagging for a pass or two produces it - so the scheduler counts the run
+    /// of them per tree and advances this counter by one on every pass once the
+    /// run has reached <c>LatticeWalGcScheduler.TerminalBreachPasses</c>
+    /// consecutive breaching passes. Any pass that reclaims, falls under the
+    /// ceiling or reports a non-available floor ends the run.
+    /// </para>
+    /// <para>
+    /// <b>Why it exists.</b> Before it, a tree could classify hundreds of
+    /// consecutive passes as <c>over_ceiling</c> while reclaiming zero bytes
+    /// and nothing anywhere said that this was no longer a transient: the
+    /// outcome arm advances identically for the first breaching pass and the
+    /// six-hundredth. This counter is flat zero on every tree whose breaches
+    /// resolve, so a non-zero rate is directly alertable. Read it beside
+    /// <see cref="WalGcFloorHeadDistance"/> for the reason: a large distance
+    /// means a floor far behind the head is holding the retained range, while a
+    /// distance near zero means the floor covers nothing and the bytes are
+    /// retained somewhere the trim scan does not reach.
+    /// </para>
+    /// <para>
+    /// Zero-primed per tree beside the pass-outcome arms, with the same tag set
+    /// as the emission, so a flat zero is a measured "not in terminal breach".
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalGcTerminalBreach =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.terminal_breach", unit: "{pass}",
+            description: "WAL garbage-collection passes taken after a tree has spent the terminal-breach threshold of consecutive passes over its byte ceiling with an available floor while reclaiming nothing, tagged by tree.");
+
+    /// <summary>
     /// Counter of WAL garbage-collection passes for which the durable
     /// leaf-materialiser <em>offset</em> floor could not be computed because the
     /// pin store was unreachable, tagged with <see cref="TagTree"/>. Emitted from
@@ -2671,6 +2715,41 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalGcTrimStops =
         Meter.CreateCounter<long>("orleans.lattice.wal.gc.trim_stop", unit: "{scan}",
             description: "WAL GC per-shard trim scans tagged by tree, by shard and by the reason the scan stopped: offset_floor, cursor_floor, causal_frontier, block_pin, durability_unverified, durability_hold, durable_offset_refusal, exhausted or empty.");
+
+    /// <summary>
+    /// Histogram of the floor-to-head distance of each WAL GC per-shard trim
+    /// scan, in WAL offsets, tagged with <see cref="TagTree"/> and with
+    /// <see cref="TagShard"/> carrying the partition (issue #3149).
+    /// <para>
+    /// The value is the span of offsets the scan had to retain: from the first
+    /// entry it met and could not release - the effective trim floor, whichever
+    /// clause set it - through the shard's head offset inclusive. On a dense log
+    /// that is exactly the number of retained entries above the floor. A scan
+    /// that released everything it was offered, or found the shard empty,
+    /// records <c>0</c>, because nothing stands between its floor and the head.
+    /// </para>
+    /// <para>
+    /// <b>Recorded on every scanned shard on every pass, including when it is
+    /// zero.</b> That zero is the reading this instrument was added for. Before
+    /// it, a tree over its byte ceiling with an available floor that reclaimed
+    /// nothing looked identical whether the floor was far behind the head
+    /// holding the whole retained range, or already at the head with nothing
+    /// left to release - the two call for opposite repairs, and only the
+    /// distance separates them. The reclaimable side of the same scan - the
+    /// entries below the floor it released - is
+    /// <see cref="WalEntriesTrimmed"/>, equally shard-attributed.
+    /// </para>
+    /// <para>
+    /// Measured in offsets rather than bytes because byte accounting is per
+    /// tree, not per offset range, so no byte figure for the span exists to
+    /// publish. A shard this silo does not resolve a provider for is not
+    /// scanned and records nothing, exactly as it records no
+    /// <see cref="WalEntriesTrimmed"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalGcFloorHeadDistance =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.gc.floor_head_distance", unit: "{offset}",
+            description: "WAL offsets retained between the trim floor a GC shard scan stopped at and the shard head, per scan, tagged by tree and by shard; zero when the scan released everything it was offered.");
 
     /// <summary>
     /// <see cref="TagReason"/> = <c>exhausted</c> (a trim scan that consumed
@@ -2914,6 +2993,14 @@ public static class LatticeMetrics
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> OutcomeNoConsumer = new(TagOutcome, "no_consumer");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>no_partitions</c>: a WAL GC pass visited no
+    /// partition because none of its pinned provider keys resolved on this silo.
+    /// Unlike <see cref="OutcomeIdle"/>, this makes no claim about eligible WAL.
+    /// Primed at zero per collected tree and diagnostic only.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OutcomeNoPartitions = new(TagOutcome, "no_partitions");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>blocked</c> (a WAL GC pass that reclaimed
@@ -4147,37 +4234,28 @@ public static class LatticeMetrics
     /// Tagged with <see cref="TagTree"/> and <see cref="TagReason"/>:
     /// <see cref="SnapshotLoadFailureResourceExhausted"/> when an
     /// <see cref="OutOfMemoryException"/> appears anywhere in the thrown
-    /// exception's chain, and <see cref="SnapshotLoadFailureFaulted"/>
-    /// otherwise.
+    /// exception's chain, <see cref="SnapshotLoadFailureContiguityExhausted"/>
+    /// when that OOM occurs under sole-occupant hydration admission, and
+    /// <see cref="SnapshotLoadFailureFaulted"/> otherwise.
     /// <para>
-    /// The rehydrate path treats a failed load as best-effort and returns
-    /// "no snapshot", which is correct for availability but made the failure
-    /// <b>indistinguishable from a leaf that genuinely has no snapshot</b>: both
-    /// render as the same declined rehydrate, and the activation then takes the
-    /// <c>-1</c> replay-start override and replays its whole readable WAL
-    /// window. Without this counter the failure population reads as zero at
-    /// every rate of occurrence, so the two arms of "no snapshot" cannot be
-    /// separated at all.
+    /// An unclassified failure retains the best-effort "no snapshot" fallback
+    /// and cold WAL replay. An observed OOM declines activation instead, because
+    /// replay can allocate more than the load that just failed. This counter
+    /// distinguishes a failed load from genuine snapshot absence; it does not
+    /// establish whether the leaf activated successfully.
     /// </para>
     /// <para>
-    /// The <c>resource_exhausted</c> arm exists because that failure arrives
-    /// <b>wearing a storage fault's clothes</b>. Under a container memory limit
-    /// the .NET GC heap hard limit is sized from the cgroup limit, so the
-    /// runtime is not OOM-killed - it throws
-    /// <see cref="OutOfMemoryException"/> inside the provider's deserialise of
-    /// the snapshot blob, and the only line an operator sees is the provider's
-    /// own "Error reading grain state". Nothing in that presentation names
-    /// memory, which is why a deployment can run in this state for a long time
-    /// undiagnosed. It also COMPOUNDS: the failed load forces the cold
-    /// whole-window replay, which costs more memory again, so the same few
-    /// leaves go cold repeatedly. A sustained non-zero <c>resource_exhausted</c>
-    /// rate means the host's memory limit is below the deployment's true
-    /// working set, and is not a storage-provider fault.
+    /// Classification uses only the exception chain visible to the caller.
+    /// A snapshot-grain activation failure can hide the original OOM, so
+    /// <c>unclassified</c> does not rule out memory pressure. Correlate activation
+    /// and storage logs with memory headroom before choosing a remedy. Since
+    /// issue #2404 this value replaces <c>faulted</c>; reason-filtered alerts
+    /// must include both values during rollout.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafSnapshotLoadFailures =
         Meter.CreateCounter<long>("orleans.lattice.leaf.snapshot.load_failures", unit: "{load}",
-            description: "Activation-time leaf-snapshot loads that failed and were swallowed as \"no snapshot\", tagged by tree and reason (resource_exhausted/faulted). A resource_exhausted reading is memory exhaustion presenting as a storage fault, not a provider defect.");
+            description: "Activation-time leaf-snapshot load failures by tree and reason (resource_exhausted/unclassified/contiguity_exhausted). Unclassified means no OOM was observable, not that memory pressure was ruled out; snapshot-grain activation can hide the cause.");
 
     /// <summary>Canonical name of <see cref="LeafSnapshotLoadFailures"/>.</summary>
     public const string LeafSnapshotLoadFailuresName = "orleans.lattice.leaf.snapshot.load_failures";
@@ -4194,17 +4272,16 @@ public static class LatticeMetrics
         new(TagReason, "resource_exhausted");
 
     /// <summary>
-    /// <see cref="TagReason"/> = <c>faulted</c> on
+    /// <see cref="TagReason"/> = <c>unclassified</c> on
     /// <see cref="LeafSnapshotLoadFailures"/>: any load failure with no
     /// <see cref="OutOfMemoryException"/> in its chain (an unreachable store, a
-    /// rejected activation, a deserialisation defect). Kept apart from
-    /// <see cref="SnapshotLoadFailureResourceExhausted"/> because the two call
-    /// for opposite operator responses - raise the memory limit, versus
-    /// investigate the storage provider - and folding them together is exactly
-    /// the conflation this counter exists to undo.
+    /// rejected activation, a deserialisation defect, or an OOM hidden by
+    /// snapshot-grain activation). This does not establish a storage-provider
+    /// fault or exclude memory pressure. The field name is retained for source
+    /// compatibility; the exported value replaces <c>faulted</c> in issue #2404.
     /// </summary>
     public static readonly KeyValuePair<string, object?> SnapshotLoadFailureFaulted =
-        new(TagReason, "faulted");
+        new(TagReason, "unclassified");
 
     /// <summary>
     /// Counter of activation-time leaf-snapshot hydrations that passed through
@@ -7537,27 +7614,26 @@ public static class LatticeMetrics
     /// by <c>BPlusLeafGrain.EnsureUnresolvedPrepareRecorded</c> (issue #2183).
     /// Tagged with <see cref="TagTree"/> and <see cref="TagPartition"/>.
     /// <para>
-    /// This exists for a PROVIDER-DEPENDENT hazard, not for the deployment this
-    /// repository runs. A resident prepare must never be dropped (dropping it
+    /// A resident prepare must never be dropped (dropping it
     /// pins the flush ceiling forever - the #2183 livelock), so past the cap it
     /// is recorded unconditionally and the row is allowed to grow for as long
     /// as a saga leaves a prepare unresolved (registry status InFlight: the
     /// residual population after issue #2190's self-terminalisation, whose
-    /// orphan source is tracked as issue #2304). On the default <c>local</c>
-    /// durability profile that row is backed by SQLite (~1GB BLOB), so the
-    /// growth is a write-amplification cost, not a correctness one. On an
-    /// <c>Orleans.Lattice.Storage.AzureTable</c> deployment the 1MB entity cap
-    /// makes an unbounded row a genuine persist hazard, and that operator has
-    /// no other signal before the write fails. This counter (and the paired
-    /// one-shot warning) is that signal. It is observability ONLY: nothing here
+    /// orphan source is tracked as issue #2304). Persist risk: Azure Table
+    /// rejects writes above its 1MB entity cap, bounding persisted row growth.
+    /// Read risk: the larger SQLite limit on the default <c>local</c> profile
+    /// permits growth that can exhaust memory or the read budget during
+    /// activation, before grain-level repair can run. A successful persist
+    /// is not proof of a safe activation read; write amplification is not the
+    /// only cost. Alert on every profile using this counter and the paired
+    /// one-shot warning. It is observability ONLY: nothing here
     /// caps or drops a prepare - a behavioural cap would reintroduce the exact
-    /// drop-and-freeze defect issue #2183 removes. Do not delete it because it
-    /// reads as dead weight on SQLite; it is dead weight on SQLite by design.
+    /// drop-and-freeze defect issue #2183 removes.
     /// </para>
     /// </summary>
     public static readonly Counter<long> LeafUnresolvedPrepareLedgerBeyondCap =
         Meter.CreateCounter<long>("orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap", unit: "{prepare}",
-            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Provider-dependent persist hazard on Azure Table (1MB entity cap); benign on the SQLite local profile.");
+            description: "Resident unresolved saga prepares recorded beyond the MaxDurableUnresolvedReplayWork cap, tagged by tree and WAL partition. Persist risk: Azure Table rejects writes above its 1MB entity cap, bounding persisted row growth. Read risk: the larger SQLite local-profile limit permits growth that can exhaust memory or the read budget during activation, before grain-level repair can run. Alert on every profile.");
 
     /// <summary>
     /// Durable ledger records refused for deferred terminals (<c>TxCommit</c>,
@@ -8367,11 +8443,21 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Histogram of wall-clock ms spent inside the local-apply path
-    /// of <c>ShardRootGrain.SetManyAsync</c>: from the moment the
-    /// shard-root receives a batch to the moment every per-leaf
-    /// <c>IBPlusLeafGrain.SetManyAsync</c> dispatched by
-    /// <c>SetManyLocalOnlyAsync</c> has returned. Tagged with
-    /// <see cref="TagTree"/>. Includes per-leaf RPC scheduling, leaf
+    /// of a shard-root batched write: from the moment the shard-root
+    /// receives a batch to the moment every per-leaf RPC dispatched by
+    /// its local apply has returned. Recorded by <b>two</b> operations,
+    /// separated by <see cref="TagOperation"/>:
+    /// <c>set_many</c> (<c>ShardRootGrain.SetManyAsync</c> via
+    /// <c>SetManyLocalOnlyAsync</c>, see <see cref="OperationSetManyTag"/>)
+    /// and <c>set_many_where_predicate</c>
+    /// (<c>ShardRootGrain.SetManyWherePredicateAsync</c> via
+    /// <c>SetManyWhereLocalOnlyAsync</c>, see
+    /// <see cref="OperationSetManyWherePredicateTag"/>). Also tagged with
+    /// <see cref="TagTree"/>. Compare an arm only against the envelope of
+    /// the same operation - <see cref="SetManyDuration"/> for
+    /// <c>set_many</c>, <see cref="SetManyWherePredicateDuration"/> for
+    /// <c>set_many_where_predicate</c> - never the untagged sum against
+    /// either. Includes per-leaf RPC scheduling, leaf
     /// turn-queue wait, leaf commit, WAL append, and the WAL provider's
     /// phase-2 commit. Excludes the lattice-grain's per-shard bucket
     /// build and event publish, and excludes the online-resize
@@ -8380,7 +8466,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> ShardRootSetManyLocalApplyDuration =
         Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.local_apply.duration", unit: "ms",
-            description: "Wall-clock ms inside ShardRootGrain.SetManyLocalOnlyAsync (per-leaf fan-out, leaf commit, WAL append + phase 2).");
+            description: "Wall-clock ms inside a shard root's local apply of one batched write (per-leaf fan-out, leaf commit, WAL append + phase 2), tagged operation=set_many (ShardRootGrain.SetManyAsync) or operation=set_many_where_predicate (ShardRootGrain.SetManyWherePredicateAsync).");
 
     /// <summary>
     /// Histogram of wall-clock ms spent awaiting the trailing
@@ -9513,13 +9599,20 @@ public static class LatticeMetrics
     public const string WalSaturationStateGaugeName = "orleans.lattice.wal.saturation.state";
 
     /// <summary>
-    /// Histogram of wall-clock ms for a single per-leaf
-    /// <c>IBPlusLeafGrain.SetManyAsync</c> RPC dispatched from
-    /// <c>ShardRootGrain.SetManyLocalOnlyAsync</c> via
-    /// <c>DispatchLeafBatchWithRetryAsync</c>. Recorded per attempt
-    /// (including retries) and per dispatched leaf, so for a single
-    /// shard-root <c>SetManyAsync(N)</c> there are up to one
-    /// observation per per-leaf bucket. Tagged with <see cref="TagTree"/>.
+    /// Histogram of wall-clock ms for a single per-leaf batched-write
+    /// RPC dispatched from a shard root's local apply. Recorded per
+    /// attempt (including retries) and per dispatched leaf, so for a
+    /// single shard-root batch there are up to one observation per
+    /// per-leaf bucket. Recorded by <b>two</b> operations, separated by
+    /// <see cref="TagOperation"/>: <c>set_many</c>
+    /// (<c>IBPlusLeafGrain.SetManyAsync</c> via
+    /// <c>DispatchLeafBatchWithRetryAsync</c>, see
+    /// <see cref="OperationSetManyTag"/>) and
+    /// <c>set_many_where_predicate</c>
+    /// (<c>IBPlusLeafGrain.SetManyWherePredicateAsync</c> via
+    /// <c>DispatchConditionalLeafBatchWithRetryAsync</c>, see
+    /// <see cref="OperationSetManyWherePredicateTag"/>). Also tagged with
+    /// <see cref="TagTree"/>.
     /// This is the outbound-call view from the shard-root: it includes
     /// Orleans grain-schedule wait, per-leaf turn-queue wait, leaf
     /// commit, WAL append, and WAL phase-2. Combined with the leaf-side
@@ -9528,7 +9621,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> ShardRootSetManyLeafRpcDuration =
         Meter.CreateHistogram<double>("orleans.lattice.shard_root.set_many.leaf_rpc.duration", unit: "ms",
-            description: "Wall-clock ms per per-leaf IBPlusLeafGrain.SetManyAsync RPC dispatched from ShardRootGrain.SetManyLocalOnlyAsync.");
+            description: "Wall-clock ms per per-leaf batched-write RPC dispatched from a shard root's local apply, tagged operation=set_many (IBPlusLeafGrain.SetManyAsync) or operation=set_many_where_predicate (IBPlusLeafGrain.SetManyWherePredicateAsync).");
 
     /// <summary>
     /// Histogram of wall-clock ms inside one call to
@@ -9565,6 +9658,23 @@ public static class LatticeMetrics
     public static readonly Histogram<double> SetManyStageDuration =
         Meter.CreateHistogram<double>("orleans.lattice.set_many.stage.duration", unit: "ms",
             description: "Wall-clock ms inside one sub-stage (gate|route|bucket|fanout|events) of LatticeGrain.SetManyAsync.");
+
+    /// <summary>
+    /// Histogram of wall-clock ms inside one call to
+    /// <c>LatticeGrain.SetManyWherePredicateAsync</c>, the user-facing
+    /// <see cref="ILattice.SetManyWherePredicateAsync"/> conditional
+    /// batched-write entry point. Tagged with <see cref="TagTree"/>.
+    /// End-to-end caller-visible latency of one conditional batched write
+    /// (includes the pre-flight, routing, bucketing, per-shard parallel
+    /// fan-out, and event publish for the written subset). The
+    /// conditional counterpart of <see cref="SetManyDuration"/>, and the
+    /// envelope to compare the <c>operation=set_many_where_predicate</c>
+    /// arm of <see cref="ShardRootSetManyLocalApplyDuration"/> and
+    /// <see cref="ShardRootSetManyLeafRpcDuration"/> against.
+    /// </summary>
+    public static readonly Histogram<double> SetManyWherePredicateDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.set_many_where_predicate.duration", unit: "ms",
+            description: "Wall-clock ms inside one LatticeGrain.SetManyWherePredicateAsync call (caller-visible envelope of the conditional batched write).");
 
     /// <summary>
     /// Histogram of wall-clock ms inside one call to
@@ -9984,6 +10094,25 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagStage"/> = <c>merge</c> (LatticeGrain.GetManyAsync post-fan-out result merge plus snapshot- and topology-stability checks).</summary>
     public static readonly KeyValuePair<string, object?> StageMergeTag = new(TagStage, "merge");
+
+    /// <summary>
+    /// <see cref="TagOperation"/> = <c>set_many</c>: the unconditional batched write
+    /// (<c>ShardRootGrain.SetManyAsync</c>, reached from <see cref="ILattice.SetManyAsync"/>).
+    /// Emitted on <see cref="ShardRootSetManyLocalApplyDuration"/> and
+    /// <see cref="ShardRootSetManyLeafRpcDuration"/>; pairs with the
+    /// <see cref="SetManyDuration"/> envelope.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OperationSetManyTag = new(TagOperation, "set_many");
+
+    /// <summary>
+    /// <see cref="TagOperation"/> = <c>set_many_where_predicate</c>: the conditional
+    /// batched write (<c>ShardRootGrain.SetManyWherePredicateAsync</c>, reached from
+    /// <see cref="ILattice.SetManyWherePredicateAsync"/>). Emitted on
+    /// <see cref="ShardRootSetManyLocalApplyDuration"/> and
+    /// <see cref="ShardRootSetManyLeafRpcDuration"/>; pairs with the
+    /// <see cref="SetManyWherePredicateDuration"/> envelope.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> OperationSetManyWherePredicateTag = new(TagOperation, "set_many_where_predicate");
 
     // --- Auto-trained compression-dictionary instruments -------------------
     //

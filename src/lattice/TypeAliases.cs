@@ -141,6 +141,11 @@ internal static class TypeAliases
     // range scans are routinely driven cross-silo.
     internal const string ScanPageStalled = "ol.spt";
 
+    // A read whose result depends on a saga outcome the per-tree transaction
+    // registry could not be reached to establish (issues 2215, 3641).
+    // Serializable because reads are routinely driven cross-silo.
+    internal const string TransactionOutcomeUnavailable = "ol.tou";
+
     // Online shard consolidation (the inverse of an adaptive split).
     internal const string TreeShardConsolidationState = "ol.cns";
     internal const string ShardConsolidationPhase = "ol.cnp";

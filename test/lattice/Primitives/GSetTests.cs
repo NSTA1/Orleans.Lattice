@@ -306,4 +306,56 @@ public class GSetTests
             Assert.That(GSetDelta.Empty.Adds, Is.Empty);
         });
     }
+
+    [Test]
+    public void SnapshotValues_matches_the_Values_projection_element_for_element()
+    {
+        // The eager snapshot exists only to avoid the iterator's hidden count,
+        // so its sole contract is that it is indistinguishable from the lazy
+        // projection - same order, same bytes, same length.
+        var set = new GSet();
+        set.Add([0x00]);
+        set.Add([0x34]);
+        set.Add([0xFF]);
+        set.Add(B("hello"));
+        set.Add([]);
+
+        var snapshot = set.SnapshotValues();
+
+        Assert.That(snapshot, Is.EqualTo(set.Values().ToList()).AsCollection);
+    }
+
+    [Test]
+    public void SnapshotValues_is_exactly_sized_and_empty_for_an_empty_set()
+    {
+        var empty = new GSet();
+        var populated = new GSet();
+        populated.Add(B("a"));
+        populated.Add(B("b"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(empty.SnapshotValues(), Is.Empty);
+            Assert.That(populated.SnapshotValues(), Has.Length.EqualTo(populated.Count));
+        });
+    }
+
+    [Test]
+    public void SnapshotValues_returns_a_fresh_array_per_call()
+    {
+        // Callers receive the array as their own result, so two reads must not
+        // alias: mutating one must not be observable through the other.
+        var set = new GSet();
+        set.Add(B("a"));
+
+        var first = set.SnapshotValues();
+        var second = set.SnapshotValues();
+        first[0][0] = 0x7F;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.Not.SameAs(first));
+            Assert.That(second[0], Is.EqualTo(B("a")));
+        });
+    }
 }

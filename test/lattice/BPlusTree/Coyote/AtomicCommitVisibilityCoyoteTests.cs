@@ -50,4 +50,30 @@ public sealed class AtomicCommitVisibilityCoyoteTests
         CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
             new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.LivePerKeyRead));
     }
+
+    /// <summary>
+    /// Issue #3641: with registry call failures injected on snap1, the revision
+    /// probe, and the disambiguation snapshot, the fail-closed reader - an
+    /// unverifiable attempt accepted only when no key needed a saga decision -
+    /// still never certifies a split view.
+    /// </summary>
+    [Test]
+    public void Snapshot_reader_under_registry_failures_never_certifies_a_split_view([Values(2, 3)] int keyCount)
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailures));
+    }
+
+    /// <summary>
+    /// The guard for the test above: restoring the pre-#3641 fail-open (a failed
+    /// snap1 lets leaves resolve independently; a failed probe reads as stable)
+    /// under the same failure injection lets Coyote find a certified torn read,
+    /// so the fail-closed rule is load-bearing.
+    /// </summary>
+    [Test]
+    public void Fail_open_reader_under_registry_failures_certifies_a_torn_read([Values(2, 3)] int keyCount)
+    {
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
+            new AtomicCommitVisibilityModel(keyCount, AtomicCommitReaderMode.SharedSnapshotUnderRegistryFailuresFailOpen));
+    }
 }

@@ -47,17 +47,31 @@ internal sealed class TreeDeletionGrain(
     internal IReadOnlyList<TimeSpan> ReminderRegistrationBackoff { get; set; }
         = ReminderServiceReadiness.DefaultRegistrationBackoff;
 
-    public async Task DeleteTreeAsync()
+    public Task DeleteTreeAsync() => SoftDeleteAsync(retainsRegistryEntry: false);
+
+    /// <inheritdoc />
+    public Task DeleteRetiredPhysicalTreeAsync() => SoftDeleteAsync(retainsRegistryEntry: true);
+
+    /// <summary>
+    /// The soft delete shared by <see cref="DeleteTreeAsync"/> and
+    /// <see cref="DeleteRetiredPhysicalTreeAsync"/>.
+    /// </summary>
+    /// <param name="retainsRegistryEntry">
+    /// <see langword="true"/> when this id is also a live logical tree whose
+    /// registry entry and tombstone compaction schedule must survive the
+    /// deletion and its purge; see <see cref="TreeDeletionState.RetainsRegistryEntry"/>.
+    /// </param>
+    private async Task SoftDeleteAsync(bool retainsRegistryEntry)
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
         if (state.State.IsDeleted) return;
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-
-        // Mark all shards as deleted first.
-        var shardCount = resolved.ShardCount;
+        // Mark all shards as deleted first - including every shard an
+        // adaptive split allocated above the pinned ShardCount, which the
+        // routing map can send keys to (see ResolveAllocatedShardCountAsync).
+        var shardCount = await ResolveAllocatedShardCountAsync();
         var tasks = new Task[shardCount];
         for (int i = 0; i < shardCount; i++)
         {
@@ -77,10 +91,12 @@ internal sealed class TreeDeletionGrain(
         // executed are idempotent on retry.
         var isDeletedSnapshot = state.State.IsDeleted;
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
+        var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
 
         // Persist the deletion state.
         state.State.IsDeleted = true;
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow;
+        state.State.RetainsRegistryEntry = retainsRegistryEntry;
         try
         {
             await state.WriteStateAsync();
@@ -89,12 +105,20 @@ internal sealed class TreeDeletionGrain(
         {
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             throw;
         }
 
-        // Unregister the tombstone compaction reminder - no longer needed.
-        var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
-        await compaction.UnregisterReminderAsync();
+        // Unregister the tombstone compaction reminder - no longer needed. A
+        // retired physical copy keeps it: the compaction grain under this id
+        // resolves the logical tree's alias and compacts the live resized
+        // copy, so unregistering it would switch compaction off for a tree
+        // nobody deleted.
+        if (!retainsRegistryEntry)
+        {
+            var compaction = grainFactory.GetGrain<ITombstoneCompactionGrain>(TreeId);
+            await compaction.UnregisterReminderAsync();
+        }
 
         // Register the purge reminder. This reminder is the tree's ONLY purge
         // anchor and it has no natural re-attempt seam: the idempotency guard at
@@ -135,6 +159,7 @@ internal sealed class TreeDeletionGrain(
 
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             try
             {
                 await state.WriteStateAsync();
@@ -192,10 +217,10 @@ internal sealed class TreeDeletionGrain(
         if (state.State.PurgeInProgress)
             throw new InvalidOperationException("Cannot recover a tree while a purge is in progress.");
 
-        // Unmark all shards.
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var tasks = new Task[resolved.ShardCount];
-        for (int i = 0; i < resolved.ShardCount; i++)
+        // Unmark all shards, including split-allocated ones DeleteTreeAsync marked.
+        var shardCount = await ResolveAllocatedShardCountAsync();
+        var tasks = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             tasks[i] = shard.UnmarkDeletedAsync();
@@ -218,8 +243,8 @@ internal sealed class TreeDeletionGrain(
         // operator's retry of RecoverTreeAsync re-runs cleanly. Flipping the
         // flag first would make the retry throw "Cannot recover a tree that has
         // not been deleted" and strand the half-repaired topology.
-        var reseeds = new Task[resolved.ShardCount];
-        for (int i = 0; i < resolved.ShardCount; i++)
+        var reseeds = new Task[shardCount];
+        for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             reseeds[i] = shard.ReseedNodeBindingsAsync();
@@ -232,10 +257,12 @@ internal sealed class TreeDeletionGrain(
         // (in-memory IsDeleted=false while persisted IsDeleted=true).
         var isDeletedSnapshot = state.State.IsDeleted;
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
+        var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
 
         // Clear deletion state.
         state.State.IsDeleted = false;
         state.State.DeletedAtUtc = null;
+        state.State.RetainsRegistryEntry = false;
         try
         {
             await state.WriteStateAsync();
@@ -244,6 +271,7 @@ internal sealed class TreeDeletionGrain(
         {
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
+            state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             throw;
         }
 
@@ -269,8 +297,8 @@ internal sealed class TreeDeletionGrain(
             throw new InvalidOperationException("This tree has already been fully purged.");
 
         // Run purge synchronously shard-by-shard (no timer needed for manual purge).
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        for (int i = 0; i < resolved.ShardCount; i++)
+        var shardCount = await ResolveAllocatedShardCountAsync();
+        for (int i = 0; i < shardCount; i++)
         {
             await PurgeShardAsync(i);
         }
@@ -307,11 +335,7 @@ internal sealed class TreeDeletionGrain(
         // the same (line 250-254) - keep the synchronous PurgeNowAsync path
         // in lockstep so callers of the public PurgeTreeAsync API observe a
         // fully purged tree on return.
-        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            var registry = grainFactory.GetLatticeRegistry();
-            await registry.UnregisterAsync(TreeId);
-        }
+        await UnregisterPurgedTreeAsync();
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
@@ -325,7 +349,9 @@ internal sealed class TreeDeletionGrain(
 
         if (state.State.PurgeComplete)
         {
-            // Already done - unregister all reminders and deactivate.
+            // Already done - unregister all reminders and deactivate. This is the
+            // single teardown guard for both reminders; nothing below it can
+            // observe PurgeComplete == true.
             await UnregisterAllRemindersAsync();
             this.DeactivateOnIdle();
             return;
@@ -341,17 +367,11 @@ internal sealed class TreeDeletionGrain(
             if (_purgeTimer is not null) return;
             await StartPurgeAsync(startFromShard: 0);
         }
-        else if (reminderName == KeepaliveReminderName)
+        else if (reminderName == KeepaliveReminderName
+            && state.State.PurgeInProgress
+            && _purgeTimer is null)
         {
-            if (state.State.PurgeInProgress && _purgeTimer is null)
-            {
-                await StartPurgeAsync(startFromShard: state.State.NextShardIndex);
-            }
-            else if (!state.State.PurgeInProgress && state.State.PurgeComplete)
-            {
-                await UnregisterAllRemindersAsync();
-                this.DeactivateOnIdle();
-            }
+            await StartPurgeAsync(startFromShard: state.State.NextShardIndex);
         }
     }
 
@@ -394,8 +414,7 @@ internal sealed class TreeDeletionGrain(
 
     internal async Task ProcessNextShardAsync()
     {
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var shardCount = resolved.ShardCount;
+        var shardCount = await ResolveAllocatedShardCountAsync();
 
         if (state.State.NextShardIndex >= shardCount)
         {
@@ -439,16 +458,29 @@ internal sealed class TreeDeletionGrain(
         await state.WriteStateAsync();
 
         // Remove the tree from the registry.
-        if (!TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            var registry = grainFactory.GetLatticeRegistry();
-            await registry.UnregisterAsync(TreeId);
-        }
+        await UnregisterPurgedTreeAsync();
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         this.DeactivateOnIdle();
+    }
+
+    /// <summary>
+    /// Unregisters the purged tree from the registry, so
+    /// <c>TreeExistsAsync</c> reports it gone. Skipped for a system tree, and
+    /// for a retired physical copy whose id is also a live logical tree
+    /// (<see cref="TreeDeletionState.RetainsRegistryEntry"/>): that entry holds
+    /// the logical tree's alias to its resized copy and its structural sizing,
+    /// so removing it would make the live tree unreachable.
+    /// </summary>
+    private async Task UnregisterPurgedTreeAsync()
+    {
+        if (state.State.RetainsRegistryEntry) return;
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)) return;
+
+        var registry = grainFactory.GetLatticeRegistry();
+        await registry.UnregisterAsync(TreeId);
     }
 
     private async Task PublishTreeLifecycleEventAsync(LatticeTreeEventKind kind)
@@ -474,6 +506,42 @@ internal sealed class TreeDeletionGrain(
     }
 
     private readonly PublishEventsGate _eventsGate = new();
+
+    /// <summary>
+    /// Returns one past the highest physical shard index this tree has ever
+    /// allocated, so a lifecycle walk over <c>0..result-1</c> reaches every
+    /// shard root that can route a key or hold the tree's state. The pinned
+    /// <c>ShardCount</c> alone is not enough: an adaptive shard split allocates
+    /// its target index above the pin
+    /// (<see cref="ILatticeRegistry.AllocateNextShardIndexAsync"/>) and moves
+    /// slots there without changing the pin, and a consolidation retires a donor
+    /// from the routing map while leaving its leaves in place. Walking only
+    /// <c>0..ShardCount-1</c> left a split-added shard readable and writable
+    /// after <see cref="DeleteTreeAsync"/> and its state behind after a purge.
+    /// The walk is contiguous rather than the map's current physical set so a
+    /// retired donor, or the target of an abandoned split, is purged too.
+    /// </summary>
+    internal async Task<int> ResolveAllocatedShardCountAsync()
+    {
+        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var highest = resolved.ShardCount - 1;
+
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+        if (entry?.NextShardIndex is { } allocated && allocated > highest)
+        {
+            highest = allocated;
+        }
+
+        if (entry?.ShardMap is { } map)
+        {
+            foreach (var index in map.GetPhysicalShardIndices())
+            {
+                if (index > highest) highest = index;
+            }
+        }
+
+        return highest + 1;
+    }
 
     private async Task PurgeShardAsync(int shardIndex)
     {

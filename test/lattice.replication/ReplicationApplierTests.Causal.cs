@@ -231,6 +231,48 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
+    public async Task ApplyAsync_releases_dedupe_reservation_of_entry_evicted_to_dead_letter_queue_so_replay_applies_it()
+    {
+        // Regression: a causal-buffer eviction routed the displaced entry to the
+        // dead-letter queue but kept its shadow-forward cache reservation. An
+        // operator replay then hit the cache, was classified as a shadow-forward
+        // duplicate (Applied=false), and ReplayAsync removed the entry from the
+        // queue - silently losing a write that had never been applied.
+        var options = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            CausalBufferMaxEntries = 1,
+            CausalBufferMaxBytes = 1 << 20,
+        };
+        var h = CreateCausalHarness(options);
+
+        var evictedEntry = SetEntry("k0", Hlc(100)) with { VectorClock = Vector((OriginC, Hlc(99))) };
+        var displacing = SetEntry("k1", Hlc(101)) with { VectorClock = Vector((OriginC, Hlc(99))) };
+        await h.Applier.ApplyAsync(evictedEntry);
+        await h.Applier.ApplyAsync(displacing);
+        await h.Dlq.Received(1).EnqueueAsync(
+            Arg.Is<WalRecord>(e => e.Key == "k0"),
+            Arg.Any<string>(),
+            Arg.Any<int>(),
+            LatticeReplicationMetrics.ReasonHlcSkew,
+            Arg.Any<CancellationToken>());
+
+        // The missing dependency is now satisfied locally; the operator replays k0.
+        h.Vc.Entries[OriginC] = Hlc(99);
+        const long entryId = 7;
+        h.Dlq.TryGetAsync(entryId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DeadLetterEntry?>(new DeadLetterEntry { EntryId = entryId, Entry = evictedEntry }));
+        var deadLetters = new LatticeReplicationDeadLetters(h.Factory, h.Applier);
+
+        var replayed = await deadLetters.ReplayAsync(Tree, entryId);
+
+        Assert.That(replayed, Is.Not.Null);
+        Assert.That(replayed!.Value.Applied, Is.True,
+            "the replayed entry was never applied, so it must not be suppressed as a shadow-forward duplicate");
+        await h.Apply.Received(1).ApplySetAsync("k0", Arg.Any<byte[]>(), Hlc(100), RemoteCluster, null, Arg.Any<long>());
+    }
+
+    [Test]
     public async Task ApplyAsync_drains_chain_of_dependent_entries_in_one_call()
     {
         // Park two entries chained on site-c: k1 needs site-c@30 and

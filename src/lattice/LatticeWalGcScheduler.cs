@@ -191,6 +191,26 @@ internal sealed class LatticeWalGcScheduler(
     private readonly HashSet<string> _primedTrees = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Consecutive terminal-breach candidate passes per tree (issue #3149): a
+    /// pass over the byte ceiling, with an available cursor floor, that
+    /// reclaimed nothing. Absent means a run of zero. Confined to the
+    /// <see cref="ExecuteAsync"/> loop like the fields above, and pruned
+    /// alongside <see cref="_cadence"/>.
+    /// </summary>
+    private readonly Dictionary<string, int> _terminalBreachRuns = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Consecutive breaching passes a tree must accumulate before
+    /// <see cref="LatticeMetrics.WalGcTerminalBreach"/> starts advancing for it
+    /// (issue #3149). A breaching tree polls at the interval floor, so this is
+    /// several minutes of uninterrupted zero-reclaim over-ceiling passes at the
+    /// default floor - long past any consumer that is merely a pass or two
+    /// behind, and far short of the hundreds of passes the condition persisted
+    /// for, unannounced, before the signal existed.
+    /// </summary>
+    internal const int TerminalBreachPasses = 10;
+
+    /// <summary>
     /// Minimum time a tree must have been continuously blocked by the same
     /// consumer before the sweep will reactivate its leaf.
     /// </summary>
@@ -524,8 +544,10 @@ internal sealed class LatticeWalGcScheduler(
     /// <para>
     /// <b>It cannot outlive the condition that justified it.</b> The entry is
     /// replaced by every classifying sweep, dropped when the tree is neither
-    /// breaching its byte ceiling nor holding a retained backlog (issue #3229),
-    /// and dropped when the tree becomes genuinely floor-blocked - at which
+    /// breaching its byte ceiling nor holding a retained backlog (issue #3229) -
+    /// whether or not the pass reclaimed anything, since a pass that trims a
+    /// little behind a still-pinned floor is not healthy (issue #3609) - and
+    /// dropped when the tree becomes genuinely floor-blocked - at which
     /// point the blocked arm's own report is a better answer to the same
     /// question than a sample of it.
     /// </para>
@@ -2449,7 +2471,7 @@ internal sealed class LatticeWalGcScheduler(
 
             RecordPass(
                 1,
-                ClassifyPass(reclaimed, overCeiling, stranded, report.CursorFloorState),
+                ClassifyPass(reclaimed, overCeiling, stranded, report.CursorFloorState, report.ShardsScanned == 0),
                 treeTag,
                 tenantTag);
 
@@ -2478,6 +2500,18 @@ internal sealed class LatticeWalGcScheduler(
             {
                 LatticeMetrics.WalGcCeilingUnsatisfiable.Add(1, treeTag, tenantTag);
             }
+
+            // The terminal-breach verdict (issue #3149): over the ceiling with a
+            // usable floor, reclaiming nothing, for TerminalBreachPasses passes
+            // running. Every existing arm reads that as a transient
+            // (`over_ceiling` backs off and retries); this is what says the
+            // retries have stopped helping. A blocked floor is excluded because
+            // `blocked` already names that tree and its remedy.
+            RecordTerminalBreach(
+                treeId,
+                overCeiling && !reclaimed && report.CursorFloorState == WalGcCursorFloorState.Available,
+                treeTag,
+                tenantTag);
 
             // Self-healing remedy for the blocked condition, not just a label
             // for it (issue #2710 Limitation 2). A blocked tree stays blocked
@@ -2711,10 +2745,10 @@ internal sealed class LatticeWalGcScheduler(
                         }
                     }
                 }
-                else
+                else if (!report.RetainedBacklog)
                 {
-                    // Neither breaching nor stranded, which after issue #3229 is
-                    // the genuinely healthy case and nothing else: the trim scan
+                    // Neither breaching nor holding a backlog, which is the
+                    // genuinely healthy case and nothing else: the trim scan
                     // ran, reclaimed what it was entitled to, and met no WAL it
                     // had to retain. The condition that licensed the sample is
                     // gone and will not be refreshed, so drop it rather than
@@ -2725,6 +2759,23 @@ internal sealed class LatticeWalGcScheduler(
                     // backlog must still retire its sample, or the drive would
                     // spend touches on a healthy tree forever off a classification
                     // no sweep will ever replace.
+                    //
+                    // Keyed on RetainedBacklog rather than on `stranded`
+                    // (issue #3609). `stranded` folds in `!reclaimed`, which is
+                    // right for what it admits to the sweep above and wrong as a
+                    // retirement predicate: trimming something does not imply
+                    // retaining nothing behind a pinned floor. On a partitioned
+                    // WAL one partition trims a little while another stays pinned
+                    // by the very holders this sample names, so the pass reclaims
+                    // AND retains. Retiring there also retired the blocked
+                    // observation below, and with it every consumer's
+                    // FirstObserved, so each re-sample restarted the
+                    // ReactivationMinBlockAge clock. Progress caused the wipe:
+                    // every lift let some partition trim, the episode ended, and
+                    // the holders never aged into eligibility. A pass that
+                    // reclaims while still retaining falls through this chain
+                    // and keeps both the sample and the budgets; it does not
+                    // refresh the sample, which remains the sweep's job.
                     _repairableFloorHolders.Remove(treeId);
                 }
 
@@ -3000,6 +3051,49 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Advances or ends <paramref name="treeId"/>'s run of terminal-breach
+    /// candidate passes, and advances
+    /// <see cref="LatticeMetrics.WalGcTerminalBreach"/> by one once the run has
+    /// reached <see cref="TerminalBreachPasses"/> (issue #3149).
+    /// <para>
+    /// Recorded once per breaching pass, not once per episode, so the rate is
+    /// readable against <c>wal.gc.passes</c> exactly as
+    /// <see cref="LatticeMetrics.WalGcCeilingUnsatisfiable"/> is. The run lives
+    /// only in memory: a silo restart starts it again from zero, which delays
+    /// the signal by at most one threshold's worth of passes and never
+    /// fabricates it.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the pass collected.</param>
+    /// <param name="breaching">Whether this pass was over the ceiling, with an available floor, and reclaimed nothing.</param>
+    /// <param name="treeTag">The pass's tree tag.</param>
+    /// <param name="tenantTag">The pass's tenant tag.</param>
+    private void RecordTerminalBreach(
+        string treeId,
+        bool breaching,
+        in KeyValuePair<string, object?> treeTag,
+        in KeyValuePair<string, object?> tenantTag)
+    {
+        if (!breaching)
+        {
+            _terminalBreachRuns.Remove(treeId);
+            return;
+        }
+
+        _terminalBreachRuns.TryGetValue(treeId, out var run);
+        if (run < TerminalBreachPasses)
+        {
+            run++;
+            _terminalBreachRuns[treeId] = run;
+        }
+
+        if (run >= TerminalBreachPasses)
+        {
+            LatticeMetrics.WalGcTerminalBreach.Add(1, treeTag, tenantTag);
+        }
+    }
+
+    /// <summary>
     /// Emits a one-time zero observation for each WAL-retention series that a
     /// reader must be able to distinguish "measured, never happened" from "not
     /// reporting" on, so the series exists before its first real event.
@@ -3075,6 +3169,7 @@ internal sealed class LatticeWalGcScheduler(
         // reads a measured zero for as long as the partition stays total, which
         // is precisely the assertion it exists to make.
         RecordPass(0, LatticeMetrics.OutcomeNoConsumer, treeTag, tenantTag);
+        RecordPass(0, LatticeMetrics.OutcomeNoPartitions, treeTag, tenantTag);
         RecordPass(0, LatticeMetrics.OutcomeUnclassified, treeTag, tenantTag);
 
         // The third arm split out of `idle` (issue #3119), primed on the same
@@ -3117,6 +3212,12 @@ internal sealed class LatticeWalGcScheduler(
         // from the emitter's mints a second series the emitter can never join,
         // which leaves a permanent zero sitting beside the real value.
         LatticeMetrics.WalGcCeilingUnsatisfiable.Add(0, treeTag, tenantTag);
+
+        // Zero-prime the terminal-breach counter (issue #3149) with the same
+        // (tree, tenant) pair RecordTerminalBreach emits under, so a flat zero
+        // is a measured "this tree is not stuck over its ceiling" rather than
+        // the silence the condition used to sit behind.
+        LatticeMetrics.WalGcTerminalBreach.Add(0, treeTag, tenantTag);
 
         // Zero-prime every blocked-leaf reactivation outcome (issue #2783).
         // Absence on this instrument has already been read as evidence twice on
@@ -3329,6 +3430,12 @@ internal sealed class LatticeWalGcScheduler(
     /// </summary>
     /// <remarks>
     /// <para>
+    /// <paramref name="noPartitions"/> precedes the non-reclaiming floor arms:
+    /// an unresolved provider is not an empty WAL. The collector counts only
+    /// partitions it actually visited, including compaction-only visits on its
+    /// no-predicate return. This classification changes no scheduling policy.
+    /// </para>
+    /// <para>
     /// <paramref name="overCeiling"/> refines the
     /// <see cref="WalGcCursorFloorState.Available"/> arm only, and it is the
     /// third split out of <c>idle</c> (issue #3119). The floor state cannot
@@ -3372,16 +3479,19 @@ internal sealed class LatticeWalGcScheduler(
         bool reclaimed,
         bool overCeiling,
         bool stranded,
-        WalGcCursorFloorState floorState)
+        WalGcCursorFloorState floorState,
+        bool noPartitions)
         => reclaimed
             ? LatticeMetrics.OutcomeReclaimed
-            : floorState != WalGcCursorFloorState.Available
-                ? ClassifyUnreclaimed(floorState)
-                : overCeiling
-                    ? LatticeMetrics.OutcomeOverCeiling
-                    : stranded
-                        ? LatticeMetrics.OutcomeStranded
-                        : ClassifyUnreclaimed(floorState);
+            : noPartitions
+                ? LatticeMetrics.OutcomeNoPartitions
+                : floorState != WalGcCursorFloorState.Available
+                    ? ClassifyUnreclaimed(floorState)
+                    : overCeiling
+                        ? LatticeMetrics.OutcomeOverCeiling
+                        : stranded
+                            ? LatticeMetrics.OutcomeStranded
+                            : ClassifyUnreclaimed(floorState);
 
     /// <summary>
     /// The ceiling the adaptive ladder may relax to while a tree is still holding
@@ -3539,6 +3649,7 @@ internal sealed class LatticeWalGcScheduler(
             {
                 _cadence.Remove(entry.Key);
                 _primedTrees.Remove(entry.Key);
+                _terminalBreachRuns.Remove(entry.Key);
                 _blockedConsumers.Remove(entry.Key);
                 snapshotPins?.Forget(entry.Key);
             }
@@ -3635,7 +3746,11 @@ internal sealed class LatticeWalGcScheduler(
     /// one such leaf would consume the whole pass and starve the other blockers
     /// of the tree - the failing leaf would deny the sweep to the leaves that
     /// might still heal. Issued concurrently, a pass costs the same wall-clock
-    /// as it did when it made a single touch.
+    /// as it did when it made a single touch. The one exception is arm 2's
+    /// head (issue #3610): a pre-classified pass touches the holder nearest the
+    /// floor first and alone, so the free replay permit goes to the floor rather
+    /// than to whichever touch reaches the gate first, and only then launches the
+    /// rest concurrently - at most one touch's worth of extra wall-clock.
     /// </para>
     /// <para>
     /// <b>It is not assumed to work.</b> See <see cref="MaxReactivationAttempts"/>:
@@ -3998,7 +4113,29 @@ internal sealed class LatticeWalGcScheduler(
         _blockedConsumers[treeId] = observation;
 
         var touches = new Task<ReactivationTouchResult>[touching.Count];
-        for (var i = 0; i < touching.Count; i++)
+        var concurrentFrom = 0;
+
+        // Issue #3610: the floor holder is touched first and alone. The
+        // classifier hands arm 2 its holders nearest the floor first, but a
+        // concurrent launch let whichever touch reached the replay gate first
+        // take the free permit, which on the live estate was always a leaf
+        // above the floor. The rest still run concurrently, so a stuck floor
+        // holder costs this pass one extra touch, and MaxReactivationAttempts
+        // bounds how many passes it can do that on.
+        if (preClassified && touching.Count > 1)
+        {
+            touches[0] = TryReactivateBlockedLeafAsync(
+                treeId,
+                touching[0],
+                treeTag,
+                tenantTag,
+                requireOffsetAdvance?.Contains(touching[0]) == true,
+                stoppingToken);
+            await ((Task)touches[0]).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            concurrentFrom = 1;
+        }
+
+        for (var i = concurrentFrom; i < touching.Count; i++)
         {
             touches[i] = TryReactivateBlockedLeafAsync(
                 treeId,
@@ -4724,6 +4861,42 @@ internal sealed class LatticeWalGcScheduler(
             // takes one from, so it neither blocks the leaf's foreground traffic
             // nor escapes the concurrency bound.
             var leaf = factory.GetGrain<IBPlusLeafGrain>(leafGrainId);
+
+            // Issue #3599: the permit-free first tier. A floor holder whose pin
+            // froze below its persisted checkpoint is owed only the drive's
+            // TAIL - flush, capture, publish - not its replay, and the replay is
+            // the part that takes a permit from the per-silo gate. So bank first,
+            // grade it on the same #3185 offset axis, and escalate to the drive
+            // only when this consumer's pin did not move. A bank that faults is
+            // not a verdict on the leaf: it falls through to the drive exactly
+            // as a bank that moved nothing does. Gated on a readable pre-offset
+            // because without one no lift can be proven, and an unprovable lift
+            // must not suppress the drive (fail closed, as the grading below).
+            //
+            // Issue #3649: a lift is graded against the partition head, not
+            // against zero. A dormant leaf can only bank up to its persisted
+            // checkpoint, which may be thousands of entries behind the head, so
+            // a lift of a few entries still leaves it holding the floor. Such a
+            // lift escalates to the drive on this same pass, and the drive is
+            // then graded from the banked offset, so the bank's own lift is
+            // never credited to the drive (issue #3185).
+            if (preOffset is { } bankBefore)
+            {
+                var bank = await TryBankDurablePinAsync(leaf, treeId, blockingConsumerId, bankBefore, stoppingToken)
+                    .ConfigureAwait(false);
+                if (bank.ReachedHead)
+                {
+                    RecordBlockedLeafReactivation(
+                        DriveOutcomeTag(LeafStarvationDriveOutcome.Lifted), treeTag, tenantTag);
+                    return new ReactivationTouchResult(ReactivationOutcome.Completed, OffsetAdvanceOwed: false);
+                }
+
+                if (bank.PostOffset is { } bankedOffset && bankedOffset > bankBefore)
+                {
+                    preOffset = bankedOffset;
+                }
+            }
+
             var drive = await leaf.DriveStarvedCheckpointAsync().ConfigureAwait(false);
 
             // Grade the drive on the axis its admission was granted on (issue
@@ -4961,6 +5134,183 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         return refusal.Message;
+    }
+
+    /// <summary>
+    /// The permit-free first tier of a floor-holder touch (issue #3599): asks
+    /// the leaf to bank its durable pin with
+    /// <see cref="IBPlusLeafGrain.BankDurablePinAsync"/>, then reports
+    /// <paramref name="consumerId"/>'s durable pin offset afterwards and whether
+    /// the bank carried it to the head of its WAL partition (issue #3649).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Graded on the same axis, by the same read, as the drive it precedes
+    /// (issue #3185), so a bank credited here is indistinguishable in effect from
+    /// a drive credited there. It is counted on the same
+    /// <c>drove_lifted</c> arm for that reason, and adds no metric instrument.
+    /// </para>
+    /// <para>
+    /// <b>A lift is graded against the head, not against zero (issue #3649).</b>
+    /// The bank can raise the pin only to
+    /// <c>min(persisted checkpoint, durable coverage)</c>, and a dormant leaf's
+    /// persisted checkpoint is where it stood when it went idle. Measured on a
+    /// live estate, every bank lift on the retaining tree was 50 entries or
+    /// fewer, up to a checkpoint about 2,400 entries behind the head, so the
+    /// consumer still held the floor after the lift while the pass had spent its
+    /// visit on it. "The pin moved" is therefore not the success criterion; "the
+    /// pin reached the head" is, within
+    /// <see cref="BankLiftHeadLagTolerance"/>. A lift that falls short escalates
+    /// to the drive in the same pass, which is the only thing that replays the
+    /// leaf forward.
+    /// </para>
+    /// <para>
+    /// Fail-closed in every direction that matters. A fault from the call, an
+    /// unreadable offset afterwards, or an unreadable head reports
+    /// <see cref="BankResult.ReachedHead"/> false, which escalates to the drive
+    /// - the pre-#3599 behaviour - rather than suppressing it on an unproven
+    /// release. The head is read only after a lift, so a bank that moved nothing
+    /// costs no extra call.
+    /// </para>
+    /// </remarks>
+    /// <param name="leaf">The floor-holding leaf.</param>
+    /// <param name="treeId">The tree the pin belongs to.</param>
+    /// <param name="consumerId">The floor-holding consumer.</param>
+    /// <param name="preOffset">The consumer's durable pin offset read before the bank.</param>
+    /// <param name="stoppingToken">The service's stopping token; a cancellation it caused is rethrown.</param>
+    private async Task<BankResult> TryBankDurablePinAsync(
+        IBPlusLeafGrain leaf, string treeId, string consumerId, long preOffset, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await leaf.BankDurablePinAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not bank the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay; escalating to a starvation drive (issue #3599).",
+                consumerId,
+                treeId);
+
+            return default;
+        }
+
+        var postOffset = await TryReadDurablePinOffsetAsync(treeId, consumerId).ConfigureAwait(false);
+        if (postOffset is not { } after || after <= preOffset)
+        {
+            logger.LogDebug(
+                "WAL GC banked the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay permit: its offset went from {PinOffsetBefore} to {PinOffsetAfter}. The pin did not move, so the sweep escalates to a starvation drive (issue #3599).",
+                consumerId,
+                treeId,
+                preOffset,
+                postOffset);
+
+            return new BankResult(ReachedHead: false, postOffset);
+        }
+
+        var head = await TryReadPartitionHeadAsync(treeId, consumerId, stoppingToken).ConfigureAwait(false);
+        var reachedHead = head is { } next && IsWithinHeadLagTolerance(after, next);
+        logger.LogInformation(
+            "WAL GC banked the durable pin of floor-holding consumer {Consumer} on tree {Tree} without a replay permit: its offset went from {PinOffsetBefore} to {PinOffsetAfter}, against a partition head of {PartitionHead}. {Verdict} (issues #3599, #3649).",
+            consumerId,
+            treeId,
+            preOffset,
+            postOffset,
+            head,
+            reachedHead
+                ? "The pin reached the head, so no starvation drive is spent on it."
+                : "The pin moved but is still behind the head, so the consumer still holds the floor and the sweep escalates to a starvation drive in the same pass.");
+
+        return new BankResult(reachedHead, postOffset);
+    }
+
+    /// <summary>
+    /// How far below the exclusive head of its WAL partition a banked pin may
+    /// sit and still be graded as having released the floor (issue #3649).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A pin is an inclusive offset, so a leaf that has read its whole partition
+    /// sits at <c>head - 1</c>; this is measured from there. It is a tolerance
+    /// rather than zero because the head is read after the pin, so appends that
+    /// land between the two reads would otherwise grade a converged leaf as
+    /// lagging on a written-to tree and spend a permit driving it. It is far
+    /// below the lag the defect was measured at - about 2,400 entries behind the
+    /// head after a lift of 50 or fewer - so it cannot re-admit that shape.
+    /// Erring small is the safe direction: a lift graded as short costs one
+    /// drive, where a lift graded as releasing strands the floor holder for at
+    /// least another pass.
+    /// </para>
+    /// <para>
+    /// Internal so the gate can seed a head exactly at the boundary.
+    /// </para>
+    /// </remarks>
+    internal const long BankLiftHeadLagTolerance = 64;
+
+    /// <summary>
+    /// Whether a banked pin at <paramref name="pinOffset"/> is within
+    /// <see cref="BankLiftHeadLagTolerance"/> of the exclusive partition head
+    /// <paramref name="head"/> (issue #3649).
+    /// </summary>
+    /// <param name="pinOffset">The consumer's inclusive durable pin offset after the bank.</param>
+    /// <param name="head">The next sequence the partition will assign, i.e. its exclusive head.</param>
+    internal static bool IsWithinHeadLagTolerance(long pinOffset, long head)
+        => head - 1 - pinOffset <= BankLiftHeadLagTolerance;
+
+    /// <summary>
+    /// The outcome of the permit-free bank tier (issues #3599, #3649).
+    /// </summary>
+    /// <param name="ReachedHead">
+    /// Whether the bank lifted the consumer's pin to within
+    /// <see cref="BankLiftHeadLagTolerance"/> of its partition head, so no drive
+    /// is owed. False on every unproven case.
+    /// </param>
+    /// <param name="PostOffset">
+    /// The consumer's durable pin offset read after the bank, or null when the
+    /// bank faulted or the offset was unreadable. The drive that follows a short
+    /// lift is graded from this offset, not the pre-bank one, so the bank's own
+    /// lift is never credited to the drive (issue #3185).
+    /// </param>
+    private readonly record struct BankResult(bool ReachedHead, long? PostOffset);
+
+    /// <summary>
+    /// Reads the exclusive head of the WAL partition <paramref name="consumerId"/>
+    /// is pinned on - the next sequence it will assign - or null when it cannot
+    /// be read (issue #3649).
+    /// </summary>
+    /// <remarks>
+    /// Best-effort and fail-closed, as <see cref="TryReadDurablePinOffsetAsync"/>:
+    /// null is read as "the release was not proved", which escalates to the
+    /// drive. The partition comes from the consumer id's suffix, and is 0 on a
+    /// single-partition tree, whose consumer ids carry none.
+    /// </remarks>
+    private async Task<long?> TryReadPartitionHeadAsync(
+        string treeId, string consumerId, CancellationToken stoppingToken)
+    {
+        var factory = grainFactory;
+        if (factory is null || !TryResolveLeafGrainId(treeId, consumerId, out _, out var partition))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await factory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
+                .GetNextSequenceAsync(stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not read the head of WAL partition {Partition} on tree {Tree} while grading the bank of consumer {Consumer}; the bank is graded as not having reached the head and the sweep escalates to a starvation drive (issue #3649).",
+                partition,
+                treeId,
+                consumerId);
+
+            return null;
+        }
     }
 
     /// <summary>

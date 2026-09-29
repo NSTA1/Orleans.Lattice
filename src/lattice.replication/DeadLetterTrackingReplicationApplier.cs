@@ -29,17 +29,43 @@ namespace Orleans.Lattice.Replication;
 /// silo restart usually correlates with the very transient failure
 /// the retry budget is meant to absorb.
 /// </para>
+/// <para>
+/// <b>Inbound contact.</b> The canonical applier records the inbound per-peer
+/// contact in <see cref="ReplicationPeerStats"/> on its batch entry point only. The
+/// branches of <see cref="ApplyBatchAsync"/> that apply entries one at a time -
+/// the single-entry fast path (every one-entry push from a low-rate sender) and
+/// the per-entry slow path - bypass it, so this decorator records the contact
+/// itself on exactly those branches, through the same
+/// <see cref="ReplicationInboundContact"/> rule. The batch fast path is recorded
+/// by the inner applier and is not recorded again here.
+/// </para>
 /// </summary>
 internal sealed class DeadLetterTrackingReplicationApplier(
     IReplicationApplier inner,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
-    ILogger<DeadLetterTrackingReplicationApplier> logger) : IReplicationApplier
+    ILogger<DeadLetterTrackingReplicationApplier> logger,
+    ReplicationPeerStats? peerStats = null) : IReplicationApplier
 {
     private readonly ConcurrentDictionary<RetryKey, int> _failures = new();
 
     /// <inheritdoc />
-    public async Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
+    public Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
+        => ApplyTrackedAsync(entry, recordContact: false, cancellationToken);
+
+    /// <summary>
+    /// Applies one entry under the retry-budget accounting. When
+    /// <paramref name="recordContact"/> is set - on the branches of
+    /// <see cref="ApplyBatchAsync"/> that apply entries one at a time, bypassing
+    /// the inner batch entry point that would otherwise record it - the inbound
+    /// per-peer contact is recorded too: a failure when the inner apply throws
+    /// (whether the entry is then retried or parked), a success otherwise. A
+    /// cancellation is not a contact attempt and records nothing.
+    /// </summary>
+    private async Task<ApplyResult> ApplyTrackedAsync(
+        WalRecord entry,
+        bool recordContact,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -56,12 +82,22 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         }
         catch (Exception ex)
         {
+            if (recordContact)
+            {
+                ReplicationInboundContact.Record(peerStats, options, entry, success: false);
+            }
+
             return await OnFailureAsync(entry, ex, cancellationToken).ConfigureAwait(false);
         }
 
         // Successful apply (or filtered re-delivery) clears any
         // accumulated failure state for the tuple.
         _failures.TryRemove(KeyFor(entry), out _);
+        if (recordContact)
+        {
+            ReplicationInboundContact.Record(peerStats, options, entry, success: true);
+        }
+
         return result;
     }
 
@@ -103,7 +139,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // for low-rate (single-entry per push) deployments.
         if (entries.Count == 1)
         {
-            return await ApplyAsync(entries[0], cancellationToken).ConfigureAwait(false);
+            return await ApplyTrackedAsync(entries[0], recordContact: true, cancellationToken).ConfigureAwait(false);
         }
 
         // Steady-state heuristic: if no entry has any prior failure
@@ -153,7 +189,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         for (var i = 0; i < entries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = await ApplyAsync(entries[i], cancellationToken).ConfigureAwait(false);
+            var result = await ApplyTrackedAsync(entries[i], recordContact: true, cancellationToken).ConfigureAwait(false);
             if (result.Applied)
             {
                 applied = true;

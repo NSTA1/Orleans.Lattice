@@ -35,6 +35,14 @@ live mutations are mirrored to the destination with their original HLCs; LWW
 commutativity guarantees the destination converges to a consistent view of the
 source at the drain's completion instant.
 
+When the snapshot completes, it releases the shadow-forward on every source
+shard before it reports itself complete, so writes to the source after that
+point no longer reach the destination, the destination can be written to or
+deleted independently, and the source can be snapshotted online (or resized)
+again. The shadow-forward that ResizeAsync runs its internal online snapshot
+under is not released here - the resize coordinator carries it on through its
+swap and reject phases and clears it itself.
+
 ## Usage
 
 ```csharp verify
@@ -135,3 +143,8 @@ reuses the entire snapshot infrastructure (crash safety, per-shard drain,
 idempotent operation IDs) and avoids duplicating drain/rebuild logic. See
 [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree)
 for details.
+
+A snapshot of a tree that has been resized copies the tree's live data. The
+coordinator resolves the source tree's alias when the snapshot starts and reads
+the physical tree it points at for the whole run, rather than the shards under
+the logical tree ID, which after a resize hold the retired copy.

@@ -119,7 +119,11 @@ public readonly record struct GSetAccessor
     {
         EnsureInitialised();
         var set = await GetAsync(cancellationToken).ConfigureAwait(false);
-        return [.. set.Values()];
+        // SnapshotValues, not [.. set.Values()]: Values() is a yield-return
+        // iterator, so the collection expression cannot size the destination
+        // and fills pooled segments it must then copy once more. Count is
+        // exact, so the destination can be sized up front instead.
+        return set.SnapshotValues();
     }
 
     /// <summary>
@@ -140,17 +144,7 @@ public readonly record struct GSetAccessor
         Adds = new[] { element },
     };
 
-    private static byte[][] FlattenElements(GSet set)
-    {
-        if (set.Count == 0) return Array.Empty<byte[]>();
-        var result = new byte[set.Count][];
-        var i = 0;
-        foreach (var element in set.Values())
-        {
-            result[i++] = element;
-        }
-        return result;
-    }
+    private static byte[][] FlattenElements(GSet set) => set.SnapshotValues();
 
     private async Task MutateAsync(GSetDelta delta, CancellationToken cancellationToken, int maxAttempts, TimeSpan ttl = default)
     {

@@ -183,16 +183,61 @@ public readonly record struct GrainIndexFingerprint
     /// little-endian <c>int32</c> UTF-8 byte count followed by those bytes, so
     /// two adjacent fields can never run together into the same byte stream as a
     /// different pair.
+    /// <para>
+    /// A name short enough for its worst-case encoding to fit the stack budget
+    /// is transcoded exactly <em>once</em>: the prefix carries the count
+    /// <see cref="Encoding.GetBytes(string, Span{byte})"/> reports, which is by
+    /// definition the number a separate
+    /// <see cref="Encoding.GetByteCount(string)"/> pass would have produced, so
+    /// the emitted bytes are identical to the two-pass form this replaced while
+    /// the string is scanned half as often. Only the worst case is stack-
+    /// allocated rather than a fixed <see cref="StackFeedLimit"/> bytes, so an
+    /// ordinary type or property name no longer zero-fills a quarter-kilobyte of
+    /// stack it never reads - C# zero-fills every <c>stackalloc</c>, and this
+    /// runs four times per descriptor plus twice per projected property.
+    /// </para>
+    /// <para>
+    /// This mirrors the leaf digest's <c>FeedString</c>, which took the same
+    /// shape when the two-pass form was measured there.
+    /// </para>
+    /// <para>
+    /// Internal rather than private so the microbenchmark host can drive it
+    /// against a verbatim copy of the two-pass body. Widening only; no public
+    /// API surface changes.
+    /// </para>
     /// </summary>
-    private static void FeedString(XxHash128 hasher, string value, Span<byte> scratch)
+    internal static void FeedString(XxHash128 hasher, string value, Span<byte> scratch)
     {
+        if (value.Length == 0)
+        {
+            // GetByteCount("") is 0 for every encoding, so the empty case can
+            // skip the transcode entirely and still emit the same prefix.
+            BinaryPrimitives.WriteInt32LittleEndian(scratch, 0);
+            hasher.Append(scratch);
+            return;
+        }
+
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(value.Length);
+        if (maxByteCount <= StackFeedLimit)
+        {
+            // The whole worst case fits, so the exact byte count is not needed
+            // before the transcode: encode once and let the written length be
+            // the prefix.
+            Span<byte> tight = stackalloc byte[maxByteCount];
+            var encoded = Encoding.UTF8.GetBytes(value, tight);
+            BinaryPrimitives.WriteInt32LittleEndian(scratch, encoded);
+            hasher.Append(scratch);
+            hasher.Append(tight[..encoded]);
+            return;
+        }
+
+        // Long name: the worst case overflows the stack budget, so the exact
+        // count has to decide the buffer and the original two-pass shape stands.
+        // Renting for a long-but-mostly-ASCII name would cost more than the
+        // second scan it saves.
         var byteCount = Encoding.UTF8.GetByteCount(value);
         BinaryPrimitives.WriteInt32LittleEndian(scratch, byteCount);
         hasher.Append(scratch);
-        if (byteCount == 0)
-        {
-            return;
-        }
 
         if (byteCount <= StackFeedLimit)
         {

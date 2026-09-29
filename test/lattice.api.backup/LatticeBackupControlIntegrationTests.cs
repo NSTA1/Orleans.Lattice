@@ -108,6 +108,26 @@ public sealed class LatticeBackupControlIntegrationTests
         Assert.That(await restored.GetAsync("k1"), Is.Null);
     }
 
+    [Test]
+    public async Task RestoreBackupAsync_denied_permission_fails_closed_when_the_target_is_unresolvable()
+    {
+        await _fixture.InitializeAsync();
+
+        // The gate used to sit inside `if (targetTreeId is not null)`, so a request
+        // naming no target whose backup id the catalog does not hold skipped the
+        // check entirely and reached the restore engine ungated. The catalog is a
+        // disposable projection over the sink - which is why the rebuild and scrub
+        // paths exist - so that pairing is reachable, not hypothetical.
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.RestoreBackupAsync(
+                new LatticeRestoreRequest("bk-absent-from-catalog", targetTreeId: null)),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>(),
+            "an unresolvable restore target must deny, never skip the gate");
+    }
+
     // ---- Cursor-resumable listing ---------------------------------------
 
     [Test]

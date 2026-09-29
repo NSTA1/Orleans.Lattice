@@ -19,6 +19,7 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
     private readonly IncrementalHash _hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly List<BackupKeyDescriptor> _keyDescriptors = new();
     private readonly Dictionary<string, long> _perOriginHighWater = new(StringComparer.Ordinal);
+    private HybridLogicalClock _highestHlc = HybridLogicalClock.Zero;
     private long _byteLength;
     private int _chunkCount;
     private string? _contentHash;
@@ -29,6 +30,15 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
 
     /// <summary>The per-origin causal high-water of the captured entries.</summary>
     public IReadOnlyDictionary<string, long> PerOriginHighWater => _perOriginHighWater;
+
+    /// <summary>
+    /// The highest hybrid-logical-clock stamp over every captured entry, whatever
+    /// its origin (including locally-authored, unstamped entries), or
+    /// <see cref="HybridLogicalClock.Zero"/> when nothing was captured. The
+    /// full-capture counterpart of the incremental collector's high-water, and the
+    /// source of the manifest cut's HLC frontier.
+    /// </summary>
+    public HybridLogicalClock HighestHlc => _highestHlc;
 
     /// <summary>
     /// The number of captured entries that carried no origin stamp. Non-zero on a
@@ -133,6 +143,11 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
             entry.Key,
             mergeMode,
             origin));
+
+        if (entry.Timestamp > _highestHlc)
+        {
+            _highestHlc = entry.Timestamp;
+        }
 
         if (origin is { } originId)
         {

@@ -211,4 +211,156 @@ public class OrMapProvenanceDecoderTests
         // in the current value.
         Assert.That(members.Select(KeyOf), Is.EqualTo(new[] { "kept" }));
     }
+
+    // ---- tombstone counter index (shared-replica fast path) ----
+    //
+    // Above a threshold a key's membership test switches from a linear scan of
+    // its tombstone list to a sorted counter index, licensed only when every
+    // tombstone for that key carries one replica id. These cover both sides of
+    // that licence plus the shape a counter-only test would get wrong.
+
+    /// <summary>Churns one key past the index threshold, then re-adds it.</summary>
+    private static OrMap<string, OrFlag> ChurnedMap(int cycles)
+    {
+        var map = new OrMap<string, OrFlag>();
+        for (var i = 0; i < cycles; i++)
+        {
+            map.Set("churned", "r1", new OrFlag());
+            map.Remove("churned");
+        }
+
+        map.Set("churned", "r1", new OrFlag());
+        return map;
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_key_yields_only_the_live_dot()
+    {
+        var map = ChurnedMap(cycles: 12);
+
+        var members = Decoder.DecodeCurrentValue(map);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(KeyOf(members[0]), Is.EqualTo("churned"));
+            Assert.That(members[0].ReplicaId, Is.EqualTo("r1"));
+            Assert.That(members[0].Ordinal, Is.EqualTo(13L));
+        });
+    }
+
+    [Test]
+    public void DecodeCurrentValue_indexed_key_fully_removed_yields_nothing()
+    {
+        var map = ChurnedMap(cycles: 12);
+        map.Remove("churned");
+
+        Assert.That(Decoder.DecodeCurrentValue(map), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_keeps_live_dot_whose_counter_collides_across_replicas()
+    {
+        // r1's dots 1..10 are all tombstoned; r2's dots 1..5 are live and reuse
+        // the same counters. A counter-only membership test would wrongly bury
+        // them, so the index is licensed only behind a replica-id guard.
+        var churned = new OrMap<string, OrFlag>();
+        for (var i = 0; i < 10; i++) churned.Set("k", "r1", new OrFlag());
+        churned.Remove("k");
+
+        var other = new OrMap<string, OrFlag>();
+        for (var i = 0; i < 5; i++) other.Set("k", "r2", new OrFlag());
+
+        var merged = OrMap<string, OrFlag>.Merge(churned, other);
+
+        var members = Decoder.DecodeCurrentValue(merged);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(KeyOf(members[0]), Is.EqualTo("k"));
+            Assert.That(members[0].ReplicaId, Is.EqualTo("r2"));
+            Assert.That(members[0].Ordinal, Is.EqualTo(5L));
+        });
+    }
+
+    [Test]
+    public void DecodeCurrentValue_multi_replica_tombstones_still_resolve_the_live_dot()
+    {
+        // Two replicas' tombstones merge into one list, so the shared-replica
+        // precondition fails and the linear scan must carry the key.
+        var a = new OrMap<string, OrFlag>();
+        for (var i = 0; i < 6; i++) a.Set("k", "r1", new OrFlag());
+        a.Remove("k");
+
+        var b = new OrMap<string, OrFlag>();
+        for (var i = 0; i < 6; i++) b.Set("k", "r2", new OrFlag());
+        b.Remove("k");
+
+        var merged = OrMap<string, OrFlag>.Merge(a, b);
+        merged.Set("k", "r3", new OrFlag());
+
+        var members = Decoder.DecodeCurrentValue(merged);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].ReplicaId, Is.EqualTo("r3"));
+    }
+
+    // ---- delta key surrogate memo ----
+    //
+    // A dot group for one key encodes that key's surrogate once and shares the
+    // array across the group's events. These pin the element bytes for both the
+    // grouped shape the memo hits and the interleaved shape it must miss.
+
+    [Test]
+    public void DecodeDeltas_grouped_dots_carry_their_own_key_bytes()
+    {
+        var deltas = new[]
+        {
+            new CrdtProvenanceDelta(Delta(
+                adds: new[] { Add("kA", "r1", 1), Add("kA", "r1", 2), Add("kB", "r1", 1) },
+                tombstones: new[] { Tomb("kB", "r1", 1), Tomb("kB", "r2", 1), Tomb("kC", "r1", 1) })),
+        };
+
+        var events = Decoder.DecodeDeltas(deltas);
+
+        Assert.That(events.Select(KeyOf), Is.EqualTo(new[] { "kA", "kA", "kB", "kB", "kB", "kC" }));
+    }
+
+    [Test]
+    public void DecodeDeltas_interleaved_dots_carry_their_own_key_bytes()
+    {
+        var deltas = new[]
+        {
+            new CrdtProvenanceDelta(Delta(
+                adds: new[] { Add("kA", "r1", 1), Add("kB", "r1", 1), Add("kA", "r1", 2), Add("kB", "r1", 2) },
+                tombstones: new[] { Tomb("kC", "r1", 1), Tomb("kD", "r1", 1), Tomb("kC", "r1", 2) })),
+        };
+
+        var events = Decoder.DecodeDeltas(deltas);
+
+        Assert.That(events.Select(KeyOf), Is.EqualTo(new[] { "kA", "kB", "kA", "kB", "kC", "kD", "kC" }));
+    }
+
+    [Test]
+    public void DecodeDeltas_shared_key_bytes_are_never_carried_across_keys()
+    {
+        var deltas = new[]
+        {
+            new CrdtProvenanceDelta(Delta(adds: new[]
+            {
+                Add("short", "r1", 1),
+                Add("a-much-longer-key", "r1", 1),
+                Add("short", "r1", 2),
+            })),
+        };
+
+        var events = Decoder.DecodeDeltas(deltas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(events.Select(KeyOf), Is.EqualTo(new[] { "short", "a-much-longer-key", "short" }));
+            Assert.That(events[0].Element, Is.Not.SameAs(events[1].Element));
+        });
+    }
 }

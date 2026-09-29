@@ -1426,16 +1426,27 @@ internal sealed class LatticeStateQuery(
             return TreeStructureResult.Found(request.TreeId, roots, budget.AnyTruncated);
         }
 
-        var shardCount = await ResolveShardCountAsync(registry, bindTreeId).ConfigureAwait(false);
-
-        var startShard = request.ShardIndex ?? 0;
-        var endShard = request.ShardIndex.HasValue ? request.ShardIndex.Value + 1 : shardCount;
+        // Enumerate the physical shards the routing map actually sends keys to -
+        // the same one-call source GetPhysicalShardCountAsync reads. The pinned
+        // ShardCount is not that set: an adaptive split moves slots to a shard
+        // index above the pin without changing it, so walking 0..ShardCount-1
+        // left the split target out of the structure entirely.
+        IReadOnlyList<int> shardIndices;
+        if (request.ShardIndex is { } requestedShard)
+        {
+            shardIndices = [requestedShard];
+        }
+        else
+        {
+            var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            shardIndices = routing.Map.GetPhysicalShardIndices();
+        }
 
         // One root summary per scanned shard (budget permitting), so the scanned
-        // shard span is a tight upper bound on the result - pre-size to it.
-        var rootNodes = new List<NodeStateSummary>(Math.Max(0, endShard - startShard));
+        // shard set is a tight upper bound on the result - pre-size to it.
+        var rootNodes = new List<NodeStateSummary>(shardIndices.Count);
 
-        for (var shardIndex = startShard; shardIndex < endShard; shardIndex++)
+        foreach (var shardIndex in shardIndices)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1808,10 +1819,16 @@ internal sealed class LatticeStateQuery(
             ?? CrdtProvenanceDecoderRegistry.Default;
 
         var records = new List<EntryRevisionRecord>(page.Revisions.Count);
+        // Every CRDT-delta revision on this page hands its single delta to the
+        // decoder as a one-element list. The decoders are pure functions over
+        // the list they are handed (they iterate it and retain nothing), so one
+        // page-scoped buffer carries every revision instead of minting a fresh
+        // single-element array per row.
+        var deltaBuffer = shapeRegistry is null ? null : new CrdtProvenanceDelta[1];
         for (var i = 0; i < page.Revisions.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            records.Add(MapRevision(effectiveTreeId, page.Revisions[i], previewBudget, shapeRegistry, decoderRegistry));
+            records.Add(MapRevision(effectiveTreeId, page.Revisions[i], previewBudget, shapeRegistry, decoderRegistry, deltaBuffer));
         }
 
         if (request.Reverse)
@@ -1846,12 +1863,18 @@ internal sealed class LatticeStateQuery(
     /// and decodes the CRDT member changes when the revision retained its bytes
     /// in full.
     /// </summary>
+    /// <param name="deltaBuffer">
+    /// A page-scoped one-element scratch buffer reused for every CRDT-delta
+    /// revision on the page, or <see langword="null"/> when no shape registry is
+    /// available and no decode can occur.
+    /// </param>
     private static EntryRevisionRecord MapRevision(
         string treeId,
         in EntryRevision revision,
         int previewBudget,
         CrdtShapeRegistry? shapeRegistry,
-        CrdtProvenanceDecoderRegistry decoderRegistry)
+        CrdtProvenanceDecoderRegistry decoderRegistry,
+        CrdtProvenanceDelta[]? deltaBuffer)
     {
         var truncated = revision.ValueTruncated;
 
@@ -1869,7 +1892,7 @@ internal sealed class LatticeStateQuery(
             truncated = true;
         }
 
-        var memberChanges = DecodeMemberChanges(treeId, revision, shapeRegistry, decoderRegistry);
+        var memberChanges = DecodeMemberChanges(treeId, revision, shapeRegistry, decoderRegistry, deltaBuffer);
 
         return new EntryRevisionRecord
         {
@@ -1901,12 +1924,17 @@ internal sealed class LatticeStateQuery(
     /// metadata-only or truncated CRDT revision, or an unregistered shape. A
     /// decode failure (e.g. a forward-incompatible delta) is swallowed and
     /// yields no member changes rather than failing the whole history read.
+    /// <paramref name="deltaBuffer"/> is a page-scoped one-element scratch array
+    /// reused across the page's revisions; it is safe because
+    /// <see cref="ICrdtProvenanceDecoder.DecodeDeltas"/> is a pure function over
+    /// the list it is handed and never retains it beyond the call.
     /// </summary>
-    private static IReadOnlyList<CrdtMemberChange> DecodeMemberChanges(
+    internal static IReadOnlyList<CrdtMemberChange> DecodeMemberChanges(
         string treeId,
         in EntryRevision revision,
         CrdtShapeRegistry? shapeRegistry,
-        CrdtProvenanceDecoderRegistry decoderRegistry)
+        CrdtProvenanceDecoderRegistry decoderRegistry,
+        CrdtProvenanceDelta[]? deltaBuffer)
     {
         if (revision.Mode == LatticeMergeMode.LwwRegister
             || shapeRegistry is null
@@ -1927,7 +1955,9 @@ internal sealed class LatticeStateQuery(
             if (revision.Kind == HistoryRowKind.CrdtDelta && revision.Delta is { } deltaBytes)
             {
                 var delta = shape.DeserializeDelta(deltaBytes);
-                return decoder.DecodeDeltas(new[] { new CrdtProvenanceDelta(delta, revision.Hlc) });
+                var batch = deltaBuffer ?? new CrdtProvenanceDelta[1];
+                batch[0] = new CrdtProvenanceDelta(delta, revision.Hlc);
+                return decoder.DecodeDeltas(batch);
             }
 
             if (revision.Kind == HistoryRowKind.Set && revision.ValuePreview is { } valueBytes)
@@ -2433,12 +2463,6 @@ internal sealed class LatticeStateQuery(
         _ when requested > _apiOptions.MaxScanValuePreviewBytes => _apiOptions.MaxScanValuePreviewBytes,
         _ => requested,
     };
-
-    private async Task<int> ResolveShardCountAsync(ILatticeRegistry registry, string treeId)
-    {
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
-        return entry?.ShardCount ?? LatticeConstants.DefaultShardCount;
-    }
 
     private sealed class NodeBudget
     {

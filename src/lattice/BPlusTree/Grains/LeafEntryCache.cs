@@ -167,8 +167,23 @@ internal sealed partial class LeafEntryCache
     internal static long EntryBytes(string key, byte[]? value)
         => System.Text.Encoding.UTF8.GetByteCount(key) + (value?.Length ?? 0);
 
+    /// <summary>
+    /// <see cref="EntryBytes(string, byte[])"/> for a caller that already knows
+    /// the key's UTF-8 byte length exactly - a snapshot decode, which read the
+    /// key as a length-prefixed UTF-8 slice of the frame. Re-encoding the
+    /// decoded string to recover that length would re-scan every key byte to
+    /// recompute a figure the frame already stated.
+    /// </summary>
+    /// <param name="keyUtf8Length">The key's UTF-8 byte length.</param>
+    /// <param name="value">The stored value, or <see langword="null"/> for a tombstone.</param>
+    internal static long EntryBytes(int keyUtf8Length, byte[]? value)
+        => keyUtf8Length + (value?.Length ?? 0);
+
     private static long RowBytes(string key, in LwwValue<byte[]> row)
         => EntryBytes(key, row.IsTombstone ? null : row.Value);
+
+    private static long RowBytes(int keyUtf8Length, in LwwValue<byte[]> row)
+        => EntryBytes(keyUtf8Length, row.IsTombstone ? null : row.Value);
 
     /// <summary>
     /// Per-entry <see cref="StateBytes"/> contribution that accounts for a
@@ -318,6 +333,36 @@ internal sealed partial class LeafEntryCache
     {
         ArgumentNullException.ThrowIfNull(key);
         return _rows.ContainsKey(key) || IsUnhydratedSnapshotKey(key);
+    }
+
+    /// <summary>
+    /// Reports whether any current key sorts at or above <paramref name="bound"/>,
+    /// including tombstones and expired rows, without hydrating snapshot blocks
+    /// or materialising deferred payloads.
+    /// </summary>
+    internal bool HasKeyAtOrAboveWithoutHydrating(string bound)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        var source = _hydration;
+        if (source is not null)
+        {
+            var first = LowerBound(source, bound);
+            if (first < source.RowCount)
+            {
+                // Remove pins its hydrated block, so only unhydrated blocks
+                // still have an authoritative frame index. Later blocks also
+                // qualify because the frame is strictly ascending.
+                for (var block = LeafSnapshotHydrationSource.BlockOf(first); block < source.BlockCount; block++)
+                {
+                    if (!source.IsHydrated(block))
+                        return true;
+                }
+            }
+        }
+
+        foreach (var _ in new RangeRows(_rows, bound, null))
+            return true;
+        return false;
     }
 
     /// <summary>
@@ -897,7 +942,7 @@ internal sealed partial class LeafEntryCache
         var keys = source.BeginHydrate(block);
         for (var i = start; i < end; i++)
         {
-            if (!source.TryReadRowAt(i, out var row))
+            if (!source.TryReadRowAt(i, out var row, out var keyUtf8Length))
             {
                 // Unreachable for an installed source: the frame passed
                 // Validate before it was attached and a validated frame decodes
@@ -910,7 +955,7 @@ internal sealed partial class LeafEntryCache
             }
 
             keys[i - start] = row.Key;
-            InsertHydratedRow(row);
+            InsertHydratedRow(row, keyUtf8Length);
         }
 
         source.CommitHydrated(block);
@@ -933,9 +978,12 @@ internal sealed partial class LeafEntryCache
     // Moves one snapshot row from the residual aggregates into the resident
     // dictionary. Deliberately not StoreRow: a hydrated row is not a mutation,
     // so it must not evict a typed shadow, clear a merge mode, or pin anything.
-    private void InsertHydratedRow(in LeafSnapshotRow row)
+    // The key's UTF-8 length comes from the decoder, which read the key as a
+    // length-prefixed slice of the frame, so the accounting never re-encodes a
+    // string that was just built from bytes of exactly that length.
+    private void InsertHydratedRow(in LeafSnapshotRow row, int keyUtf8Length)
     {
-        var bytes = RowBytes(row.Key, row.Value);
+        var bytes = RowBytes(keyUtf8Length, row.Value);
         _rows[row.Key] = row.Value;
         _stateBytes += bytes;
         _residualStateBytes -= bytes;
@@ -1050,11 +1098,27 @@ internal sealed partial class LeafEntryCache
         /// <summary>Returns a struct enumerator over the bounded rows.</summary>
         public Enumerator GetEnumerator() => new(rows, startInclusive, endExclusive);
 
-        /// <summary>Struct enumerator over a <see cref="RangeRows"/>.</summary>
+        /// <summary>
+        /// Struct enumerator over a <see cref="RangeRows"/>.
+        /// <para>
+        /// The lower bound is retired the moment it is first satisfied. The
+        /// backing dictionary is ordered by <see cref="StringComparer.Ordinal"/>
+        /// - the cache's documented construction invariant - so its keys are
+        /// yielded ascending, and once one key sorts at or above
+        /// <c>startInclusive</c> every later key does too. Re-testing it would
+        /// spend a second ordinal comparison per row on an answer that can no
+        /// longer change, and the in-range span is the part of the walk a range
+        /// read actually pays for.
+        /// </para>
+        /// </summary>
         public struct Enumerator(
             SortedDictionary<string, LwwValue<byte[]>> rows, string? startInclusive, string? endExclusive)
         {
             private SortedDictionary<string, LwwValue<byte[]>>.Enumerator _inner = rows.GetEnumerator();
+
+            // Set once the walk has reached the lower bound (or immediately,
+            // when the range is unbounded below).
+            private bool _atOrAboveStart = startInclusive is null;
 
             /// <summary>The row most recently yielded by <see cref="MoveNext"/>.</summary>
             public KeyValuePair<string, LwwValue<byte[]>> Current { get; private set; }
@@ -1065,10 +1129,14 @@ internal sealed partial class LeafEntryCache
                 while (_inner.MoveNext())
                 {
                     var candidate = _inner.Current;
-                    if (startInclusive is not null
-                        && string.CompareOrdinal(candidate.Key, startInclusive) < 0)
+                    if (!_atOrAboveStart)
                     {
-                        continue;
+                        if (string.CompareOrdinal(candidate.Key, startInclusive) < 0)
+                        {
+                            continue;
+                        }
+
+                        _atOrAboveStart = true;
                     }
 
                     if (endExclusive is not null

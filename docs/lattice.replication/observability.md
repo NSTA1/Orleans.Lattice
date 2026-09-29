@@ -9,7 +9,7 @@
 
 These four shapes are the headline families, not the full set: the [instrument index](#instrument-index) at the end of this page lists every instrument on the meter with its kind, unit, and tags, and points at the page that documents it.
 
-Every instrument also carries the repository-wide derived `tenant` tag (`LatticeTenantLabel.TagTenant`), computed from the `tree` value, or fixed to the platform sentinel `_platform_` on the instruments that carry no `tree` tag. The two `wire_version.*` gauges are the exception: they carry only `tree` and `peer`. The Tags columns on this page list the replication-specific dimensions and leave `tenant` implicit.
+Every instrument also carries the repository-wide derived `tenant` tag (`LatticeTenantLabel.TagTenant`), computed from the `tree` value, or fixed to the platform sentinel `_platform_` on the instruments that carry no `tree` tag. The Tags columns on this page list the replication-specific dimensions and leave `tenant` implicit.
 
 ## Replication-lag histogram (`apply.lag`)
 
@@ -370,8 +370,8 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.peer.ship_in_flight` | `ObservableGauge<long>` | `{batch}` | `tree`, `peer` | [Pipelining depth](#sender-side-pipelining-depth-peership_in_flight) |
 | `orleans.lattice.replication.peer.consecutive_errors` | `ObservableGauge<long>` | `{error}` | `tree`, `peer`, `direction` | [Bidirectional contact gauges](#bidirectional-peerlast_contact_seconds-and-the-liveness-probe) |
 | `orleans.lattice.replication.peer.last_contact_seconds` | `ObservableGauge<double>` | `s` | `tree`, `peer`, `direction` | [Bidirectional contact gauges](#bidirectional-peerlast_contact_seconds-and-the-liveness-probe) |
-| `orleans.lattice.replication.wire_version.negotiated` | `ObservableGauge<long>` | `{version}` | `tree`, `peer` (no `tenant`) | [Wire-version negotiation](wire-format.md#wire-version-capability-negotiation) |
-| `orleans.lattice.replication.wire_version.downgrade_active` | `ObservableGauge<long>` | `{bool}` | `tree`, `peer` (no `tenant`) | [Wire-version negotiation](wire-format.md#wire-version-capability-negotiation) |
+| `orleans.lattice.replication.wire_version.negotiated` | `ObservableGauge<long>` | `{version}` | `tree`, `peer` | [Wire-version negotiation](wire-format.md#wire-version-capability-negotiation) |
+| `orleans.lattice.replication.wire_version.downgrade_active` | `ObservableGauge<long>` | `{bool}` | `tree`, `peer` | [Wire-version negotiation](wire-format.md#wire-version-capability-negotiation) |
 | `orleans.lattice.replication.digest_remediation.disabled` | `ObservableGauge<long>` | `{state}` | `tree`, `peer`, `reason` | [Remediation guards](anti-entropy-remediation-guards.md#observability) |
 | `orleans.lattice.replication.ship.duration` | `Histogram<double>` | `ms` | `tree`, `peer`, `outcome` | [Ship duration](#ship-duration-shipduration) |
 | `orleans.lattice.replication.wal.entries_shipped` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Ship-rate](#ship-rate-walentries_shipped) |

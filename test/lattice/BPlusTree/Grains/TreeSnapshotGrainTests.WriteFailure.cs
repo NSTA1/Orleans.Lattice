@@ -55,6 +55,7 @@ public partial class TreeSnapshotGrainTests
             Assert.That(state.State.MaxLeafKeys, Is.Null);
             Assert.That(state.State.MaxInternalChildren, Is.Null);
             Assert.That(state.State.LogicalTreeId, Is.EqualTo(""));
+            Assert.That(state.State.ReleasesShadowForwardOnCompletion, Is.False);
         });
     }
 

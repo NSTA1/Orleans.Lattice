@@ -444,7 +444,7 @@ public partial class BPlusLeafGrainTests
         await ActivateAsync(grain);
 
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(1));
-        // Checkpoint clamped to MinUnresolvedPrepareOffset - 1 = 3 - 1 = 2.
+        // Checkpoint clamped to MinUnresolvedPrepareOffsetForPartition(0) - 1 = 3 - 1 = 2.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(2));
     }
 
@@ -751,7 +751,7 @@ public partial class BPlusLeafGrainTests
         // LatticeApplyOffsetContext.BeginScope(entry.Offset). The
         // observable consequence is that prepared-Set entries land in
         // pending-tx with their WAL offset attached, which surfaces
-        // through the MinUnresolvedPrepareOffset clamp on the
+        // through the MinUnresolvedPrepareOffsetForPartition clamp on the
         // checkpoint. Replay a prepared set at offset 42 with no
         // committed entries; the persisted checkpoint must be 41
         // (= 42 - 1), proving the offset was stamped during Apply.
@@ -777,7 +777,7 @@ public partial class BPlusLeafGrainTests
         Assert.That(grain.PendingTransactionCount, Is.EqualTo(1));
         // If the offset stamp was missing the clamp would default to
         // some other value; an offset-stamped pending tx clamps the
-        // checkpoint to MinUnresolvedPrepareOffset - 1 = 41.
+        // checkpoint to MinUnresolvedPrepareOffsetForPartition(0) - 1 = 41.
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(41));
     }
 

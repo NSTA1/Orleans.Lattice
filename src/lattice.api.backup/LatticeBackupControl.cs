@@ -436,8 +436,9 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
 
         // Derive the target scope to authorize: the explicit target tree when
         // supplied, else the tree the backup was captured from. When neither can
-        // be resolved (an unknown backup id and no target) the restore engine's
-        // own fail-closed validation refuses it without touching data.
+        // be resolved the gate is NOT skipped - see
+        // ResolveRestoreAuthorizationScope, which falls back to the reserved
+        // catalog tree so the check stays total.
         //
         // MIXED SITE - the two branches are NOT equivalent. An explicit
         // TargetTreeId is a caller-supplied, tenant-local name and is composed
@@ -462,16 +463,10 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             targetTreeId = manifest?.Scope.TreeId;
         }
 
-        if (targetTreeId is not null)
-        {
-            // Only the sub-region shape (kind and key / prefix) is taken from the
-            // caller's scope; its own tree id is ignored by the restore engine, so
-            // the authorized scope is always rooted at the resolved target.
-            var scope = request.Scope is { } sub
-                ? new BackupScopeSelector(sub.Kind, targetTreeId, sub.KeyOrPrefix)
-                : BackupScopeSelector.WholeTree(targetTreeId);
-            await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
-        }
+        await _authorizer
+            .AuthorizeRestoreAsync(
+                ResolveRestoreAuthorizationScope(targetTreeId, request.Scope), cancellationToken)
+            .ConfigureAwait(false);
 
         return await _restore.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
     }
@@ -486,8 +481,9 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         // Derive the target scope to authorize from the SINK, not the catalog: a
         // cold restore runs precisely when the catalog may be gone, so the target
         // tree is resolved from the explicit request or the sink-held manifest. When
-        // neither resolves (an unknown backup id and no target) the cold-restore
-        // engine's own fail-closed validation refuses it without touching data.
+        // neither resolves the gate is NOT skipped - see
+        // ResolveRestoreAuthorizationScope, which falls back to the reserved catalog
+        // tree so the check stays total.
         //
         // MIXED SITE, exactly as RestoreBackupAsync: the caller-supplied target is
         // composed, the sink-manifest-derived one is already effective and is left
@@ -508,15 +504,51 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             targetTreeId = manifest?.Scope.TreeId;
         }
 
-        if (targetTreeId is not null)
-        {
-            var scope = request.Scope is { } sub
-                ? new BackupScopeSelector(sub.Kind, targetTreeId, sub.KeyOrPrefix)
-                : BackupScopeSelector.WholeTree(targetTreeId);
-            await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
-        }
+        await _authorizer
+            .AuthorizeRestoreAsync(
+                ResolveRestoreAuthorizationScope(targetTreeId, request.Scope), cancellationToken)
+            .ConfigureAwait(false);
 
         return await _coldRestore.ColdRestoreAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the scope a restore is authorized at, so the gate is <b>total</b>:
+    /// every call authorizes exactly one scope and no input can skip the check.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When the target tree resolved, only the sub-region shape (kind and key /
+    /// prefix) is taken from the caller's scope; its own tree id is ignored by the
+    /// restore engine, so the authorized scope is always rooted at the resolved
+    /// target.
+    /// </para>
+    /// <para>
+    /// When it did not - no explicit target and a backup id the manifest lookup
+    /// missed - the scope falls back to the reserved catalog tree, carrying the same
+    /// cluster-wide <see cref="LatticeOperation.Restore"/> authority
+    /// <see cref="RebuildCatalogFromSinkAsync"/> and
+    /// <see cref="ScrubCatalogAgainstSinkAsync"/> require. Previously the gate was
+    /// simply skipped on that branch, which is a bypass rather than a deferral: the
+    /// catalog is a disposable projection over the sink - which is exactly why the
+    /// rebuild and scrub paths exist - so a sink-resident, catalog-absent backup id
+    /// combined with a null target reached the restore engine having cleared no
+    /// check at all. The catalog tree is a platform-owned constant, not a
+    /// caller-supplied name, so it is never tenant-composed.
+    /// </para>
+    /// </remarks>
+    private static BackupScopeSelector ResolveRestoreAuthorizationScope(
+        string? targetTreeId,
+        BackupScopeSelector? requestedScope)
+    {
+        if (targetTreeId is null)
+        {
+            return BackupScopeSelector.WholeTree(BackupConstants.CatalogTree);
+        }
+
+        return requestedScope is { } sub
+            ? new BackupScopeSelector(sub.Kind, targetTreeId, sub.KeyOrPrefix)
+            : BackupScopeSelector.WholeTree(targetTreeId);
     }
 
     /// <inheritdoc />

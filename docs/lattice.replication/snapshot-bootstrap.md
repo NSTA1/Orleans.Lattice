@@ -452,17 +452,21 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   within the keepalive reminder period and the phase pump resumes
   from the persisted phase. During `ApplyingSnapshot` the cursor
   (the highest source HLC applied so far) is persisted every 100
-  entries. On resume the coordinator re-opens the export with
-  `LastAppliedHlc` as the export's `asOfHlc`, which
-  `ISnapshotProvider.ExportAsync` treats as a strict upper bound, not
-  as a resume point: the re-opened stream re-yields the entries stamped
-  at or below the cursor and excludes those stamped above it. Re-applying
-  the former is a correctness no-op, because the receiver-side LWW
+  entries. On resume the coordinator re-opens the export with no upper
+  bound (`HybridLogicalClock.Zero`), exactly as a fresh drain does. The
+  cursor is never passed as the export's `asOfHlc`:
+  `ISnapshotProvider.ExportAsync` treats that argument as a strict upper
+  bound, not as a resume point, and emits entries in leaf-chain order
+  rather than HLC order, so a resume bounded at the cursor would silently
+  drop every not-yet-applied entry stamped above it. The cursor feeds only
+  the source-origin seal pinned at the handoff. Re-applying the entries the
+  interrupted drain already applied is a correctness no-op, because the
+  receiver-side LWW
   reconciliation on each leaf grain (plus the per-leaf recently-terminal
   short-circuit and the per-tx registry no-op described under "Bootstrap
   drain bypasses the pinned-floor gate and the high-water-mark advance"
   below) absorbs it. A fresh `BootstrapAsync` kickoff resets the cursor
-  to `Zero`, which disables the bound.
+  to `Zero`.
 - **`Failed` is restartable.** On any thrown exception inside the
   phase pump the state transitions to `Failed` (persisted) and
   the pump tears down. A subsequent `BootstrapAsync` call
@@ -477,11 +481,11 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   `Unavailable`, `DeadlineExceeded`, or `Aborted`), the coordinator
   retries the drain in-place using a bounded exponential backoff
   (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
-  `500 ms`, capped at `30 s`). Each retry re-opens the export with
-  the current apply cursor as its `asOfHlc` upper bound (the resume rule
-  above); the drain applies without the pinned-floor gate, and
-  receiver-side LWW reconciliation is what makes re-applying the entries
-  at or below the cursor a correctness no-op. Every retry increments
+  `500 ms`, capped at `30 s`). Each retry re-opens the export with no
+  upper bound (the resume rule above); the drain applies without the
+  pinned-floor gate, and receiver-side LWW reconciliation is what makes
+  re-applying the entries the failed attempt already applied a
+  correctness no-op. Every retry increments
   the `orleans.lattice.replication.bootstrap.transient_retries`
   counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
   operators can dashboard the rate. Non-transient faults still pivot
@@ -712,7 +716,9 @@ producer's per-tree transaction-registry decisions:
    recorded as `Aborted` are dropped; sagas still `InFlight` (or
    `Indeterminate`) against
    the snapshot are hidden from the committed scan because the
-   prepared rows pass above has already shipped them. The wrapper
+   prepared rows pass above has already shipped them. Each emitted row
+   carries the key's value, commit-time HLC, and absolute
+   `ExpiresAtTicks` from the same per-key version read. The wrapper
    matters here because the export is long-running and latency-prone:
    a per-key version read and a (potentially proxied, cross-cluster)
    stream write interleave between pulls, so the source grain

@@ -46,6 +46,40 @@ public sealed class LatticeReplicationSecurityOptions
     public bool RequireAuthentication { get; set; } = true;
 
     /// <summary>
+    /// When <see langword="true"/>, an authenticated inbound call must additionally
+    /// present the secret this cluster would itself use to call the origin cluster
+    /// it claims, resolved through
+    /// <see cref="ILatticeReplicationSecretSource.GetOutboundSecretAsync"/>. Calls
+    /// that claim no origin, or that claim one whose configured secret is absent or
+    /// does not match the presented credential, are rejected as
+    /// <c>PermissionDenied</c>. Defaults to <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This closes the gap that
+    /// <see cref="ILatticeReplicationSecretSource.GetAcceptedSecretsAsync"/> leaves
+    /// open by construction: the accepted set is a flat list of secrets with no peer
+    /// attribution, so matching against it establishes only that the caller holds
+    /// <i>some</i> accepted secret, never that it is the cluster it claims to be.
+    /// Every receiver-side origin check is therefore comparing values the caller
+    /// chose, and in a shared-secret estate any authenticated peer can act under a
+    /// third cluster's identity - advancing that cluster's durable high-water mark,
+    /// which suppresses anti-entropy repair for it, or reading back its replication
+    /// cursor.
+    /// </para>
+    /// <para>
+    /// It is opt-in because it is only meaningful when secrets are partitioned per
+    /// peer and the estate is symmetric (the secret this cluster sends to peer
+    /// <c>X</c> is the one <c>X</c> presents back). Under a single cluster-wide
+    /// secret every peer resolves the same value, so the check passes for every
+    /// origin and binds nothing - enabling it there costs a resolution per call and
+    /// buys no isolation. Operators running an asymmetric per-peer scheme must leave
+    /// it off, as the presented secret is not the one this cluster would send.
+    /// </para>
+    /// </remarks>
+    public bool BindCredentialToOriginCluster { get; set; }
+
+    /// <summary>
     /// How long the auth-credential cache retains a snapshot of
     /// <see cref="ILatticeReplicationSecretSource.GetAcceptedSecretsAsync"/>
     /// before re-reading it. Shorter intervals make operator rotations

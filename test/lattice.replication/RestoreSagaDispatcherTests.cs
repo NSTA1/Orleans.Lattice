@@ -161,6 +161,31 @@ public class RestoreSagaDispatcherTests
     }
 
     [Test]
+    public void TryDispatchAsync_infeasible_target_message_discloses_no_stored_size_or_topology()
+    {
+        var h = CreateHarness(canHost: false);
+        h.Engine.ProbeByteLength = 987_654_321;
+        h.Engine.ProbeShardCount = 4_242;
+        var request = new LatticeRestoreRequest(BackupId, targetTreeId: TargetTree, mode: LatticeRestoreMode.ShadowCutover);
+
+        // The byte length and shard count are the target tree's stored size and
+        // topology. A caller refused at admission has no entitlement to read them,
+        // so the refusal names itself and nothing else; the measurements are logged
+        // for an operator instead.
+        var message = Assert.ThrowsAsync<LatticeRestoreValidationException>(
+            async () => await h.Dispatcher.TryDispatchAsync(request))!.Message;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(message, Does.Not.Contain("987654321"));
+            Assert.That(message, Does.Not.Contain("987,654,321"));
+            Assert.That(message, Does.Not.Contain("4242"));
+            Assert.That(message, Does.Not.Contain("4,242"));
+            Assert.That(message, Does.Contain(BackupId), "the refusal still names what was refused");
+        });
+    }
+
+    [Test]
     public void TryDispatchAsync_unreachable_peer_refuses_before_saga()
     {
         var h = CreateHarness(unreachablePeer: Peer);

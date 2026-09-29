@@ -27,6 +27,8 @@ services:
       dockerfile: apps/embedding/Dockerfile
       # The ONNX flavour argument means nothing to this image.
       args: !reset {}
+      # Nor does the ONNX image's cgroup-reader named context.
+      additional_contexts: !reset {}
     environment:
       # The ONNX image selects its accelerator with this variable; the Onyx image
       # does not read it. Reset so it cannot look like live configuration.

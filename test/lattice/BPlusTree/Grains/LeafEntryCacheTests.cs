@@ -600,4 +600,75 @@ public sealed class LeafEntryCacheTests
         Assert.That(cache.StateBytes, Is.Zero);
         Assert.That(cache.TryPeekRow("k", out _, out _), Is.False);
     }
+
+    [Test]
+    public void EnumerateRange_yields_exactly_the_half_open_window()
+    {
+        // The enumerator retires the lower bound the first time it is
+        // satisfied, which is sound only because the backing store is
+        // ordinally sorted. Every window shape is asserted against an
+        // independently computed expectation so a bound retired one row too
+        // early would be caught rather than merely suspected.
+        var backing = NewBackingStore();
+        var keys = Enumerable.Range(0, 64).Select(i => $"k{i:D3}").ToArray();
+        foreach (var key in keys)
+        {
+            backing[key] = Row([1]);
+        }
+
+        var cache = new LeafEntryCache(backing);
+
+        (string? Start, string? End)[] windows =
+        [
+            (null, null),
+            ("k000", null),
+            (null, "k010"),
+            ("k010", "k020"),
+            ("k000", "k001"),
+            ("k063", null),
+            ("k020", "k020"),
+            ("k090", null),
+            ("aaa", "k005"),
+            ("k060", "zzz"),
+        ];
+
+        foreach (var (start, end) in windows)
+        {
+            var expected = keys
+                .Where(k => start is null || string.CompareOrdinal(k, start) >= 0)
+                .Where(k => end is null || string.CompareOrdinal(k, end) < 0)
+                .ToList();
+
+            var actual = new List<string>();
+            foreach (var row in cache.EnumerateRange(start, end))
+            {
+                actual.Add(row.Key);
+            }
+
+            Assert.That(actual, Is.EqualTo(expected), $"window [{start}, {end})");
+        }
+    }
+
+    [Test]
+    public void EnumerateRange_retires_the_lower_bound_only_after_it_is_met()
+    {
+        // A key that sorts below the lower bound but appears after an
+        // admitted key cannot exist in an ordinally sorted store, so the
+        // retirement is safe. What must still hold is that the skip itself
+        // is exact at the boundary: the start key is inclusive and its
+        // immediate predecessor is not.
+        var backing = NewBackingStore();
+        backing["a"] = Row([1]);
+        backing["b"] = Row([2]);
+        backing["c"] = Row([3]);
+        var cache = new LeafEntryCache(backing);
+
+        var admitted = new List<string>();
+        foreach (var row in cache.EnumerateRange("b", null))
+        {
+            admitted.Add(row.Key);
+        }
+
+        Assert.That(admitted, Is.EqualTo(new[] { "b", "c" }));
+    }
 }

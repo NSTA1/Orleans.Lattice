@@ -197,4 +197,92 @@ public class OrSetDotCompactionTests
             Assert.That(OrSetDotCompaction.AnyLive(empty, dots), Is.False);
         });
     }
+    // ---- collapsed-cover path (cover list above the collapse threshold) ----
+
+    private const int AboveCollapseThreshold = 12;
+
+    private static List<OrSetDot> SingleReplicaCover(string replica, long from, int count)
+    {
+        var list = new List<OrSetDot>(count);
+        for (var i = 0; i < count; i++) list.Add(Dot(replica, from + i));
+        return list;
+    }
+
+    [Test]
+    public void CountLive_collapsed_cover_agrees_with_the_linear_scan()
+    {
+        var cover = SingleReplicaCover("A", 1, AboveCollapseThreshold);
+        var dots = Dots(("A", 3), ("A", 11), ("A", 12), ("A", 13), ("A", 40));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(OrSetDotCompaction.CountLive(dots, cover), Is.EqualTo(2),
+                "Only the dots above the cover's highest counter (12) survive.");
+            Assert.That(OrSetDotCompaction.AnyLive(dots, cover), Is.True);
+        });
+    }
+
+    [Test]
+    public void CountLive_collapsed_cover_reports_none_live_when_every_dot_is_covered()
+    {
+        var cover = SingleReplicaCover("A", 1, AboveCollapseThreshold);
+        var dots = Dots(("A", 1), ("A", 6), ("A", 12), ("A", 2), ("A", 9));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(OrSetDotCompaction.CountLive(dots, cover), Is.Zero);
+            Assert.That(OrSetDotCompaction.AnyLive(dots, cover), Is.False);
+        });
+    }
+
+    [Test]
+    public void CountLive_collapsed_cover_does_not_cancel_a_dot_from_another_replica()
+    {
+        var cover = SingleReplicaCover("A", 1, AboveCollapseThreshold);
+        var dots = Dots(("B", 1), ("B", 5), ("A", 5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(OrSetDotCompaction.CountLive(dots, cover), Is.EqualTo(2),
+                "A counter-only test would wrongly cancel replica B's dots.");
+            Assert.That(OrSetDotCompaction.AnyLive(dots, cover), Is.True);
+        });
+    }
+
+    [Test]
+    public void CountLive_keeps_the_scan_when_the_cover_spans_several_replicas()
+    {
+        var cover = SingleReplicaCover("A", 1, AboveCollapseThreshold);
+        cover.Add(Dot("B", 50));
+        var dots = Dots(("A", 20), ("B", 20), ("B", 51));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(OrSetDotCompaction.CountLive(dots, cover), Is.EqualTo(2),
+                "A multi-replica cover keeps the per-dot scan semantics.");
+            Assert.That(OrSetDotCompaction.AnyLive(dots, cover), Is.True);
+        });
+    }
+
+    [Test]
+    public void CountLive_below_the_collapse_threshold_still_agrees_with_the_scan()
+    {
+        var cover = SingleReplicaCover("A", 1, 3);
+        var dots = Dots(("A", 2), ("A", 4), ("B", 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(OrSetDotCompaction.CountLive(dots, cover), Is.EqualTo(2));
+            Assert.That(OrSetDotCompaction.AnyLive(dots, cover), Is.True);
+        });
+    }
+
+    [Test]
+    public void AnyLive_collapsed_cover_short_circuits_on_the_first_survivor()
+    {
+        var cover = SingleReplicaCover("A", 1, AboveCollapseThreshold);
+        var dots = Dots(("A", 99), ("A", 1), ("A", 2));
+
+        Assert.That(OrSetDotCompaction.AnyLive(dots, cover), Is.True);
+    }
 }

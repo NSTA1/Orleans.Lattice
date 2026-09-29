@@ -31,4 +31,18 @@ internal sealed class TreeDeletionState
 
     /// <summary>Whether the purge has fully completed (all grains cleared).</summary>
     [Id(5)] public bool PurgeComplete { get; set; }
+
+    /// <summary>
+    /// Whether this deletion retires a physical tree whose id is also the id of
+    /// a live logical tree, set by
+    /// <see cref="ITreeDeletionGrain.DeleteRetiredPhysicalTreeAsync"/>. A tree's
+    /// first resize retires its original physical copy, which carries the
+    /// logical id, while the logical tree lives on through an alias to the
+    /// resized copy. The registry entry and the tombstone compaction schedule
+    /// under that id belong to the live logical tree, so a retirement leaves
+    /// both in place and its purge reclaims only the retired shards. Cleared by
+    /// a successful recovery. Legacy persisted state decodes the missing slot to
+    /// <see langword="false"/>, the behaviour of an ordinary deletion.
+    /// </summary>
+    [Id(6)] public bool RetainsRegistryEntry { get; set; }
 }

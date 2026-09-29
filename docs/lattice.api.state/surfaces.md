@@ -58,7 +58,7 @@ Because these three span many trees, they present no single target tree to a hos
 
 ## Structure
 
-`GetTreeStructureAsync` returns the structural node graph of a tree as a `StructureResponse`. `Roots` holds one `NodeStateSummary` per shard root; each node reports its kind (leaf or internal), child fan-out, and `SubtreeKeyCount` - the live-key count under that subtree. Summing the roots' subtree counts gives the tree's total live-key count. An unknown tree is part of the typed contract, not a fault: the response carries `Status = TreeNotFound` with empty `Roots` rather than raising a gRPC `NotFound`, matching the found/absent convention `GetEntryAsync` uses.
+`GetTreeStructureAsync` returns the structural node graph of a tree as a `StructureResponse`. `Roots` holds one `NodeStateSummary` per shard root the tree's shard map routes keys to - including a shard an adaptive split added above the pinned shard count - unless `ShardIndex` names a single shard to read; each node reports its kind (leaf or internal), child fan-out, and `SubtreeKeyCount` - the live-key count under that subtree. Summing the roots' subtree counts gives the tree's total live-key count. An unknown tree is part of the typed contract, not a fault: the response carries `Status = TreeNotFound` with empty `Roots` rather than raising a gRPC `NotFound`, matching the found/absent convention `GetEntryAsync` uses.
 
 ```csharp verify
 using Grpc.Net.Client;

@@ -190,7 +190,7 @@ The fail-fast posture described under [Why a versioned envelope](#why-a-versione
    - and the genuinely-unsupported hard error (`NotSupportedException`) when the peer advertises a version strictly below the configured `MinimumSupportedWireVersion` - the one case where fail-fast is preserved, because the sender cannot down-encode that far.
 
    When the negotiated target is below the sender's current version the shipper threads it through `WireVersionDownEncoder` onto the framing header it stamps; when the target equals the current version the verbatim pre-encoded entry hot path is preserved with zero re-encode cost (a true same-version no-op).
-3. **Operators can see a mixed-version fleet.** The shipper records the negotiated target version and a downgrade signal to two observable gauges - `orleans.lattice.replication.wire_version.negotiated{tree,peer}` and `orleans.lattice.replication.wire_version.downgrade_active{tree,peer}` (the latter reports `1` while the negotiated target is below the sender's current version, else `0`) - backed by the `WireVersionNegotiationState` singleton.
+3. **Operators can see a mixed-version fleet.** The shipper records the negotiated target version and a downgrade signal to two observable gauges - `orleans.lattice.replication.wire_version.negotiated{tree,peer,tenant}` and `orleans.lattice.replication.wire_version.downgrade_active{tree,peer,tenant}` (the latter reports `1` while the negotiated target is below the sender's current version, else `0`) - backed by the `WireVersionNegotiationState` singleton.
 
 ```csharp verify
 var result = WireVersionNegotiation.Negotiate(

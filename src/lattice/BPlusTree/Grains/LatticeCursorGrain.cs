@@ -130,7 +130,7 @@ internal sealed partial class LatticeCursorGrain(
         // does not retain a snapshot for a cursor that has gone
         // silent. A failure here only delays pin release until its
         // own TTL elapses on the registry side.
-        await ReleasePointInTimePinAsync(rethrow: false);
+        await ReleasePointInTimePinAsync();
         await TryUnregisterSnapshotPinAsync();
 
         // Delete the per-shard frozen baselines captured for this cursor so
@@ -625,7 +625,7 @@ internal sealed partial class LatticeCursorGrain(
         // outage at least drops the local cursor cleanly. A failed
         // unpin only leaks until the pin's TTL elapses on the
         // registry side; it does not block close.
-        await ReleasePointInTimePinAsync(rethrow: false);
+        await ReleasePointInTimePinAsync();
 
         // Release the WAL retention pin held by a snapshot cursor (if
         // any). Mirrors the registry-side pin release above so a
@@ -797,15 +797,16 @@ internal sealed partial class LatticeCursorGrain(
 
     /// <summary>
     /// Best-effort release of the registry-side pin held by this
-    /// cursor (if any). Called from <see cref="CloseAsync"/>,
-    /// <see cref="OnTtlExpiredAsync"/>, and the snapshot-expiry
-    /// fallback so a cursor never leaks tombstone-retention beyond
-    /// its own lifetime. A failure on the registry side is logged
-    /// and swallowed when <paramref name="rethrow"/> is
-    /// <see langword="false"/> - the pin will fall out on its own
-    /// TTL.
+    /// cursor (if any). Called from <see cref="CloseAsync"/> and
+    /// <see cref="OnTtlExpiredAsync"/> so a cursor never leaks
+    /// tombstone-retention beyond its own lifetime. A failure on the
+    /// registry side is always logged and swallowed, never propagated,
+    /// so neither caller's remaining cleanup is skipped - the pin will
+    /// fall out on its own TTL. An evicted pin needs no release:
+    /// <see cref="RefreshPointInTimePinAsync"/> clears
+    /// <c>SnapshotPinId</c> itself before it throws.
     /// </summary>
-    private async Task ReleasePointInTimePinAsync(bool rethrow)
+    private async Task ReleasePointInTimePinAsync()
     {
         var pinId = state.State.SnapshotPinId;
         if (pinId == Guid.Empty) return;
@@ -817,7 +818,6 @@ internal sealed partial class LatticeCursorGrain(
         }
         catch (Exception ex)
         {
-            if (rethrow) throw;
             Logger.LogWarning(ex,
                 "Cursor {CursorKey}: failed to release point-in-time snapshot pin {PinId}; " +
                 "pin will expire via its own TTL.",

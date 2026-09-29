@@ -36,12 +36,13 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <b>There are two mechanisms for "repository-wide", and conflating them is what made
 /// the original sentence false.</b> Most of these gates resolve the repository root and
 /// enumerate all of <c>src/</c>. <see cref="RecordedNonScanningDocumentedGates"/> names
-/// the exceptions: <c>DashboardJsonTests</c> and <c>MetricDocArmArityTests</c> are
-/// repository-wide by <i>reflection</i> over
-/// the live meters and contain no <c>src</c> path at all. A gate that computed only
-/// source scanners and compared that set to the table would report it as missing on
-/// every run, forever. It is therefore recorded rather than detected, and the record is
-/// itself checked below.
+/// the exceptions: <c>MetricDocArmArityTests</c> is repository-wide by <i>reflection</i>
+/// over the live meters and contains no <c>src</c> path at all, and
+/// <c>DashboardHistogramQuantileTests</c> reads <c>src/</c> only through a shared
+/// registry, by a delegation the detector does not attribute. A gate that computed only
+/// source scanners and compared that set to the table would report them as missing on
+/// every run, forever. They are therefore recorded rather than detected, and the record
+/// is itself checked below.
 /// </para>
 /// <para>
 /// <b>Why a recorded set is not the defect this issue is about.</b> A hand-authored list
@@ -113,6 +114,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "grain fixture; two replay-slice partials read option defaults out of src, not instruments",
             ["DuplicateXmlSummaryHygieneTests"] =
                 "asserts no member in src carries two consecutive XML summary elements, not instrument declarations",
+            ["FrameworkNamespaceShadowingHygieneTests"] =
+                "asserts no namespace in src or test shadows an Orleans framework namespace, not instrument declarations",
             ["LatticeOptionsResolverPropagationGuardTests"] =
                 "asserts options-resolver propagation across packages, not instrument declarations",
             ["PackageReleasePlumbingTests"] =
@@ -132,15 +135,25 @@ public sealed class RepositoryWideGateEnrolmentTests
         };
 
     /// <summary>
-    /// Documented gates that are repository-wide by a mechanism other than scanning
-    /// <c>src/</c>, and so are invisible to the detector by construction rather than by
-    /// omission.
+    /// Documented gates that are repository-wide by a mechanism the detector cannot see -
+    /// reflection rather than a source scan, or a source scan reached through a delegation
+    /// the one-hop closure does not attribute - and so are invisible to it by construction
+    /// rather than by omission.
     /// </summary>
+    /// <remarks>
+    /// <c>DashboardJsonTests</c> was recorded here as reflection-only until issue #3260
+    /// moved the instrument registry into <c>test/shared</c> and made that fixture read it.
+    /// The detector then found it scanning <c>src/</c> through the delegation closure, so
+    /// its record was contradicted and removed - which is this list working as intended.
+    /// </remarks>
     private static readonly IReadOnlyDictionary<string, string> RecordedNonScanningDocumentedGates =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["DashboardJsonTests"] =
-                "repository-wide by reflection over the live meters; contains no src path at all",
+            ["DashboardHistogramQuantileTests"] =
+                "reads src/ only through the shared DeclaredInstruments registry in test/shared "
+                    + "(issue #3260) and never resolves the repository root itself, so the "
+                    + "one-hop delegation closure, which requires the caller to resolve the "
+                    + "real root, does not attribute the scan to it",
             ["MetricDocArmArityTests"] =
                 "repository-wide by reflection over the live meters' published descriptions; contains no src path at all",
         };
@@ -362,11 +375,14 @@ public sealed class RepositoryWideGateEnrolmentTests
                     + "is the witness for keying the population by type rather than by file: "
                     + "file-keyed identity attributes the scan to a file that declares no "
                     + "fixture and drops it silently.",
-            ["DashboardHistogramQuantileTests"] =
+            ["DashboardPanelTagDomainTests"] =
                 "It lives in test/lattice.dashboards/, so it is the witness that enumeration "
                     + "is not confined to test/lattice/. That project is outside the "
                     + "Formal|Hygiene|Docs content-gate filter, which is the reason its rows "
-                    + "belong in the table at all. Named as a string because it is in another "
+                    + "belong in the table at all. It scans src/ directly, so it witnesses "
+                    + "enumeration alone rather than enumeration plus the delegation closure. "
+                    + "It replaced DashboardHistogramQuantileTests, whose scan moved into the "
+                    + "shared registry in issue #3260. Named as a string because it is in another "
                     + "assembly this project does not reference; that is safe here because an "
                     + "anchor is asserted present, so a rename fails this test loudly rather "
                     + "than unanchoring the rule in silence.",
@@ -1094,8 +1110,9 @@ public sealed class RepositoryWideGateEnrolmentTests
     /// fail on seven correct rows today. The direction that is checkable is the one that
     /// misleads - describing a gate as reading <c>src/</c> when it does not. That is
     /// exactly the confusion that made the original prose false about
-    /// <c>DashboardJsonTests</c>, which is repository-wide by reflection over the live
-    /// meters and reads no source at all.
+    /// <c>DashboardJsonTests</c>, which at the time was repository-wide by reflection over
+    /// the live meters and read no source at all (it has read the shared source registry
+    /// since issue #3260).
     /// </remarks>
     [Test]
     public void Enrolment_column_source_claims_match_the_computed_scanner_population()

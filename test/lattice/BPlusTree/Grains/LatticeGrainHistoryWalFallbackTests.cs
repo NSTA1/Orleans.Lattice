@@ -218,6 +218,57 @@ public sealed class LatticeGrainHistoryWalFallbackTests
     }
 
     [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_continuation_page_reports_the_trim_point_floor()
+    {
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1 }, 10));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 2 }, 20));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 3 }, 30));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 4 }, 40));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 5 }, 50));
+        // Offsets [0, 2) are trimmed: the oldest still-readable entry is wall 30.
+        reader.TrimBefore(TreeId, 0, 2);
+        var grain = CreateGrain(ServicesWith(reader));
+
+        var first = await grain.ScanEntryHistoryAsync("k", null, null, 1, null);
+        var second = await grain.ScanEntryHistoryAsync("k", null, null, 1, first.Continuation);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.EarliestAvailable.WallClockTicks, Is.EqualTo(30));
+            Assert.That(second.Revisions.Select(r => r.Hlc.WallClockTicks), Is.EqualTo(new long[] { 40 }));
+            Assert.That(second.Truncated, Is.True);
+            Assert.That(second.EarliestAvailable.WallClockTicks, Is.EqualTo(30),
+                "a continuation page resumes past the trim point, but history was trimmed at the oldest readable entry, not at this page's first entry");
+        });
+    }
+
+    [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_empty_continuation_page_still_reports_the_trim_point_floor()
+    {
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1 }, 10));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 2 }, 20));
+        reader.Append(TreeId, 0, Set("k", new byte[] { 3 }, 30));
+        reader.TrimBefore(TreeId, 0, 1);
+        var grain = CreateGrain(ServicesWith(reader));
+
+        // The first page fills its limit on the last retained entry, so the
+        // continuation page that follows reads nothing at all.
+        var first = await grain.ScanEntryHistoryAsync("k", null, null, 2, null);
+        var second = await grain.ScanEntryHistoryAsync("k", null, null, 2, first.Continuation);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Continuation, Is.Not.Null);
+            Assert.That(second.Revisions, Is.Empty);
+            Assert.That(second.Truncated, Is.True);
+            Assert.That(second.EarliestAvailable.WallClockTicks, Is.EqualTo(20),
+                "a truncated page must name the trim point even when it returns no revisions");
+        });
+    }
+
+    [Test]
     public async Task ScanEntryHistoryAsync_wal_fallback_pages_through_continuation()
     {
         var reader = new FakeCommitLogReader();

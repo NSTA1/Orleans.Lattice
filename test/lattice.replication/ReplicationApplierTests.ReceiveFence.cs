@@ -84,4 +84,55 @@ public partial class ReplicationApplierTests
         Assert.That(result.Deferred, Is.False);
         Assert.That(result.Applied, Is.True);
     }
+
+    private static (LatticeReplicationDeadLetters Seam, IReplicationDeadLetterGrain Queue, IReplicationApplyGrain Apply, ToggleReceiveGate Gate)
+        CreateGatedDeadLetterSeam(long entryId, WalRecord parkedEntry)
+    {
+        var (applier, apply, gate) = CreateGatedApplier();
+        var queue = Substitute.For<IReplicationDeadLetterGrain>();
+        queue.TryGetAsync(entryId, Arg.Any<CancellationToken>())
+            .Returns(new DeadLetterEntry { EntryId = entryId, Entry = parkedEntry, FailureReason = "parked" });
+        queue.RemoveReplayedAsync(entryId, Arg.Any<CancellationToken>()).Returns(true);
+        var queueFactory = Substitute.For<IGrainFactory>();
+        queueFactory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(queue);
+        return (new LatticeReplicationDeadLetters(queueFactory, applier), queue, apply, gate);
+    }
+
+    [Test]
+    public async Task DeadLetterReplayAsync_leaves_the_entry_parked_when_the_receive_fence_defers_it()
+    {
+        // Nothing re-ships a parked entry once the fence lifts, so a replay the
+        // fence deferred must not remove it: removing it drops the write.
+        var (seam, queue, apply, _) = CreateGatedDeadLetterSeam(7, SetEntry("k", Hlc(10)));
+
+        var result = await seam.ReplayAsync(Tree, 7);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result!.Value.Deferred, Is.True);
+            Assert.That(result.Value.Applied, Is.False);
+        });
+        await queue.DidNotReceive().RemoveReplayedAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+        await apply.DidNotReceiveWithAnyArgs()
+            .ApplySetAsync(default!, default!, default, default!, default, default);
+    }
+
+    [Test]
+    public async Task DeadLetterReplayAsync_applies_and_removes_the_entry_once_the_receive_fence_lifts()
+    {
+        var (seam, queue, _, gate) = CreateGatedDeadLetterSeam(7, SetEntry("k", Hlc(10)));
+
+        var deferred = await seam.ReplayAsync(Tree, 7);
+        gate.Paused = false;
+        var replayed = await seam.ReplayAsync(Tree, 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deferred!.Value.Deferred, Is.True);
+            Assert.That(replayed!.Value.Deferred, Is.False);
+            Assert.That(replayed.Value.Applied, Is.True);
+        });
+        await queue.Received(1).RemoveReplayedAsync(7, Arg.Any<CancellationToken>());
+    }
 }

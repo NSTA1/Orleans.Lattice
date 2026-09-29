@@ -594,12 +594,41 @@ public static class PromQlMetricExtractor
         return word.SequenceEqual("by") || word.SequenceEqual("without");
     }
 
+    /// <summary>
+    /// Skips the parenthesised label list that opens at <paramref name="openIndex"/>,
+    /// returning the index just past its matching <c>)</c>, or the end of the
+    /// expression when the list is never closed.
+    /// </summary>
+    /// <remarks>
+    /// The walk honours <c>#</c> comments and quoted strings exactly as the main
+    /// scan does. It must: Prometheus's lexer discards a comment and reads a quoted
+    /// string as one token before the grammar ever sees a parenthesis, so a bare
+    /// depth count over the raw text disagrees with Prometheus about where the list
+    /// ends. An unmatched <c>(</c> inside a comment - <c>sum by (job # (</c> - or
+    /// inside a quoted label name - <c>sum by ("(")</c> - would leave the depth
+    /// permanently above zero, and the skip would swallow the whole remainder of
+    /// the expression, hiding the aggregand's metric selector from the deny-all
+    /// gate while the backend evaluated it normally.
+    /// </remarks>
     private static int SkipBalancedParens(string text, int openIndex)
     {
         var depth = 0;
-        for (var i = openIndex; i < text.Length; i++)
+        var i = openIndex;
+        while (i < text.Length)
         {
             var c = text[i];
+            if (c == '#')
+            {
+                i = SkipLineComment(text, i);
+                continue;
+            }
+
+            if (IsQuote(c))
+            {
+                i = SkipString(text, i);
+                continue;
+            }
+
             if (c == '(')
             {
                 depth++;
@@ -612,6 +641,8 @@ public static class PromQlMetricExtractor
                     return i + 1;
                 }
             }
+
+            i++;
         }
 
         return text.Length;

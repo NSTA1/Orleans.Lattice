@@ -28,8 +28,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// <b>The fix, and the fixture per change.</b> (1) The teardown persist's tail
-/// publishes the pin through the awaited batched flush as its first step,
-/// coverage-gated from the PERSISTED checkpoint (#3476). (2) The two trailing
+/// publishes the pin through the awaited batched flush ahead of its cursor
+/// report, coverage-gated from the PERSISTED checkpoint (#3476), and after the
+/// tail's own snapshot recheck so it publishes post-capture coverage (#3599). (2) The two trailing
 /// barriers skip, counted under their existing reason, instead of throwing on
 /// a torn-down activation; the catch is narrow. (3) Durability work runs before
 /// the digest publish. Each test below names the change it pins and goes red
@@ -88,6 +89,9 @@ public partial class BPlusLeafGrainTests
         /// <summary>Runs inside the parent's digest hop.</summary>
         public Action? OnParentDigest;
 
+        /// <summary>Runs inside the awaited batched pin flush, once per call.</summary>
+        public Action? OnPinFlush;
+
         public IEnumerable<FinalAdvancePin> Batched =>
             Published.Where(p => p.Channel == FinalAdvancePinChannel.Batched);
 
@@ -138,7 +142,8 @@ public partial class BPlusLeafGrainTests
 
     private static FinalAdvanceLeaf CreateFinalAdvanceLeaf(
         ILeafReplayCoordinatorGrain coordinator,
-        int digestCoalescingWindowMs)
+        int digestCoalescingWindowMs,
+        int reclassifyEveryNCheckpoints = 1000)
     {
         var leaf = new FinalAdvanceLeaf();
 
@@ -182,6 +187,7 @@ public partial class BPlusLeafGrainTests
                     leaf.Calls.Add($"pin:{report.CheckpointOffset}");
                 }
 
+                leaf.OnPinFlush?.Invoke();
                 return Task.CompletedTask;
             });
         reporter
@@ -229,7 +235,7 @@ public partial class BPlusLeafGrainTests
                 MaterialiserCheckpointInterval = TimeSpan.FromHours(1),
                 MaterialiserCheckpointEntries = 1_000_000,
                 WalPartitions = 1,
-                LeafSnapshotReClassifyEveryNCheckpoints = 1000,
+                LeafSnapshotReClassifyEveryNCheckpoints = reclassifyEveryNCheckpoints,
                 DigestCoalescingWindowMs = digestCoalescingWindowMs,
                 MaintainProjectionDigest = true,
             },

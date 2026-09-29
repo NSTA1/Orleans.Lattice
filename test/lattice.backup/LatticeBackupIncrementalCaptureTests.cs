@@ -143,6 +143,36 @@ public sealed class LatticeBackupIncrementalCaptureTests
         });
     }
 
+    [Test]
+    public async Task CaptureIncrementalAsync_on_a_full_base_pins_the_wal_at_the_base_frontier_and_carries_it_forward()
+    {
+        // A full base cut used to record HLC 0, so the first increment on it took
+        // no WAL pin while it drained and an empty increment carried the 0 forward.
+        await _fixture.InitializeAsync();
+        var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
+        await tree.SetAsync("k1", Bytes("v1"));
+        await tree.SetAsync("k2", Bytes("v1"));
+
+        var baseBackup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("base", BackupScopeSelector.WholeTree(Tree)));
+
+        var increment = await _fixture.Incremental.CaptureIncrementalAsync(
+            new LatticeBackupIncrementalCaptureRequest("inc-empty", BackupScopeSelector.WholeTree(Tree), baseBackup.BackupId));
+
+        var cursors = await _fixture.SiloServices.GetRequiredService<IWalCursorRegistry>().SnapshotAsync(Tree);
+        var backupPin = cursors.SingleOrDefault(c => c.ConsumerId == $"backup:{Tree}");
+        var baseFrontier = baseBackup.Manifest.ConsistencyCut.HlcTimestamp;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(baseFrontier, Is.GreaterThan(0));
+            Assert.That(increment.Manifest.ConsistencyCut.HlcTimestamp, Is.EqualTo(baseFrontier));
+            Assert.That(backupPin.ConsumerId, Is.EqualTo($"backup:{Tree}"),
+                "the increment must register its WAL pin at the base frontier while it drains");
+            Assert.That(backupPin.Cursor.WallClockTicks, Is.EqualTo(baseFrontier));
+        });
+    }
+
     // ---- WAL fall-off falls back to a full -------------------------------
 
     [Test]

@@ -509,8 +509,13 @@ public interface ILattice : IGrainWithStringKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the number of live (non-tombstoned) keys in each shard as an ordered list.
-    /// The list index corresponds to the shard index (0-based).
+    /// Returns the number of live (non-tombstoned) keys in each physical shard as
+    /// an ordered list: one count per shard, in ascending physical shard-index
+    /// order - the order of <see cref="ShardMap.GetPhysicalShardIndices"/>. A list
+    /// position is a physical shard index only while those indices run
+    /// contiguously from <c>0</c>, which an adaptive split preserves but a shard
+    /// consolidation that folds a shard away does not; read the indices from
+    /// <see cref="GetRoutingAsync(CancellationToken)"/> to address a shard.
     /// Useful for diagnostics and load-balancing analysis.
     /// </summary>
     Task<IReadOnlyList<int>> CountPerShardAsync(CancellationToken cancellationToken = default);

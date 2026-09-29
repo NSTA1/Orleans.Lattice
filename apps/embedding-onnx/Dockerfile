@@ -20,13 +20,24 @@
 #     swapping the image leaves already-stored embeddings valid.
 #
 # Build context is THIS DIRECTORY (the server has no ProjectReference into
-# src/), which keeps the context tiny:
+# src/), which keeps the context tiny. The one thing it shares with the core
+# library - the container cgroup readers, src/lattice/Internal/Cgroups, which
+# depend on the base class library alone - arrives as a second, BuildKit NAMED
+# context called `cgroups`, so the image compiles the canonical source rather
+# than a copy of it (issue #2817). Run from the repository root:
 #
-#   docker build -t orleans-lattice-embedding-onnx:local apps/embedding-onnx
+#   docker build --build-context cgroups=src/lattice/Internal/Cgroups \
+#     -t orleans-lattice-embedding-onnx:local apps/embedding-onnx
+#
+# Omitting --build-context fails the publish loudly, with an error naming the
+# missing context (the csproj's EnsureCgroupSources target). The compose files
+# under samples/RepoContextContainer declare the same context as
+# `additional_contexts`, so `docker compose build` needs no extra flag.
 #
 # For an NVIDIA host, build the cuda flavour and run with --gpus all:
 #
 #   docker build --build-arg ONNX_FLAVOR=cuda \
+#     --build-context cgroups=src/lattice/Internal/Cgroups \
 #     -t orleans-lattice-embedding-onnx:cuda apps/embedding-onnx
 #   docker run --gpus all -e EMBED_PROVIDER=cuda orleans-lattice-embedding-onnx:cuda
 #
@@ -34,6 +45,7 @@
 # NuGet.Config with the same BuildKit secret convention the other images use:
 #
 #   docker build -t orleans-lattice-embedding-onnx:local \
+#     --build-context cgroups=src/lattice/Internal/Cgroups \
 #     --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config apps/embedding-onnx
 # ---------------------------------------------------------------------------
 
@@ -55,6 +67,14 @@ RUN set -eux; \
       "https://huggingface.co/${MODEL_REPO}/resolve/${MODEL_REVISION}/onnx/model.onnx"; \
     echo "${MODEL_SHA256}  model.onnx" | sha256sum -c -
 
+# --- Shared source -----------------------------------------------------------
+# A deliberately EMPTY placeholder for the `cgroups` named context. A
+# --build-context of the same name replaces this stage. Declaring it means an
+# omitted context resolves to nothing - and the csproj then fails with a clear
+# message - instead of `COPY --from=cgroups` being read as an image reference
+# and pulled from a registry.
+FROM scratch AS cgroups
+
 # --- Build stage -----------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -75,6 +95,10 @@ ARG TARGET_RID=linux-x64
 
 COPY . .
 
+# The canonical container cgroup readers, from the `cgroups` named context (see
+# the header). The csproj compiles shared-cgroups/*.cs when src/ is not beside
+# it, which is exactly the situation inside this build stage.
+COPY --from=cgroups *.cs ./shared-cgroups/
 RUN --mount=type=secret,id=nugetcfg \
     if [ -f /run/secrets/nugetcfg ]; then set -- --configfile /run/secrets/nugetcfg; fi && \
     dotnet restore Orleans.Lattice.Embedding.Onnx.Host.csproj \

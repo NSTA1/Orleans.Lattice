@@ -1,7 +1,9 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -39,6 +41,30 @@ namespace Orleans.Lattice;
 /// injective as the key's <see cref="object.ToString()"/>. The element is a
 /// presentation/identity surrogate for the key, not a round-trippable encoding
 /// of it.
+/// </para>
+/// <para>
+/// <strong>Why every dot scan here walks a span.</strong> A key's add and
+/// tombstone dots live in a <see cref="List{T}"/> of
+/// <see cref="OrSetDot"/>, a struct, so reading one through the list indexer
+/// copies the whole struct, bounds-checks the access and re-reads the list's
+/// mutable <c>Count</c> on every iteration of the loop condition. Taking
+/// <see cref="CollectionsMarshal.AsSpan{T}(List{T})"/> once removes the
+/// <c>Count</c> re-read and lets the bounds check hoist. The invariant that
+/// licenses it: no scan in this type may change a scanned list's length while
+/// its span is alive - every one of them is read-only, appending only to the
+/// caller's sink.
+/// </para>
+/// <para>
+/// <strong>Why only some of them hold a <c>ref readonly</c>.</strong> Reading
+/// the element through <c>ref readonly</c> also removes the struct copy, but
+/// only pays where the loop body makes no call. A byref into the span that is
+/// live across a call is an interior pointer the JIT must report to the GC, so
+/// it is pinned to a tracked stack slot instead of being enregistered. Measured
+/// on the benchmark suite that arbitrated this change, holding one across the
+/// emit loops' <c>sink.Add</c> cost more than the 16-byte copy it saved. So the
+/// pure scans (<see cref="SingleReplica"/>, <see cref="IsEntryTombstoned"/>,
+/// the counter-index fill) read through <c>ref readonly</c>, and every loop
+/// whose body calls out copies the element instead.
 /// </para>
 /// </summary>
 public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
@@ -110,7 +136,9 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         var result = new List<CrdtMemberChange>();
         emitter(state, result);
         if (result.Count == 0) return Array.Empty<CrdtMemberChange>();
-        result.Sort(ElementOrderComparer.Instance);
+        // No global sort: the emitter already walks the map's keys in surrogate
+        // order and orders each key's own events causally, which is exactly the
+        // total order the old whole-list sort produced. See EmitStateTyped.
         return result;
     }
 
@@ -153,18 +181,78 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
     {
         var map = (OrMap<TKey, TValue>)boxed;
 
+        // At most one member per key, so the add-map's free O(1) count is an
+        // exact upper bound - taking it up front means the sink never grows.
+        sink.EnsureCapacity(sink.Count + map.Adds.Count);
+
+        // A key that has churned accumulates tombstones, and testing each of
+        // its live dots by linear scan over that list is O(adds x tombstones)
+        // per key. Within one key's tombstone list the dots overwhelmingly
+        // share a replica id (the same observation OrSetDot.Equals is ordered
+        // around), and when they do the membership test reduces to a counter
+        // lookup: a dot whose replica differs from the shared one cannot be in
+        // the list at all, and one that matches is in it exactly when its
+        // counter is. Above a threshold that lookup is served by sorting the
+        // key's counters into a scratch buffer once and binary-searching it,
+        // making the test O(T log T + A log T) with no hashing and no
+        // allocation. Hashing is deliberately avoided: an index over OrSetDot
+        // hashes its replica id, which costs far more than the counter
+        // comparison the linear scan leads with, and measured slower than the
+        // scan it replaced. A key whose tombstones span several replicas or
+        // whose list is short keeps the scan.
+        //
+        // The buffer is rented lazily, on the first key that qualifies, rather
+        // than taken up front: a quiet map qualifies no key at all, and an
+        // unconditional stack buffer charges every such call for zeroing a
+        // scratch it never reads.
+        long[]? rented = null;
+
         foreach (var (key, entries) in map.Adds)
         {
             if (entries.Count == 0) continue;
             map.Tombstones.TryGetValue(key, out var tomb);
 
+            string? sharedReplica = null;
+            var counters = Span<long>.Empty;
+            if (tomb is not null
+                && tomb.Count > TombstoneIndexThreshold
+                && entries.Count > 1)
+            {
+                sharedReplica = SingleReplica(tomb);
+                if (sharedReplica is not null)
+                {
+                    if (rented is null || rented.Length < tomb.Count)
+                    {
+                        if (rented is not null) ArrayPool<long>.Shared.Return(rented);
+                        rented = ArrayPool<long>.Shared.Rent(tomb.Count);
+                    }
+
+                    counters = rented.AsSpan(0, tomb.Count);
+                    // Span walk - see the type remarks on why every dot scan
+                    // here takes one. The gate above puts this list above the
+                    // index threshold and the body only reads.
+                    var tombSpan = CollectionsMarshal.AsSpan(tomb);
+                    for (var i = 0; i < tombSpan.Length; i++) counters[i] = tombSpan[i].Counter;
+                    counters.Sort();
+                }
+            }
+
             var hasLive = false;
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
-            for (var i = 0; i < entries.Count; i++)
+            // Span walk: the body only reads, but it can call into
+            // BinarySearch or IsEntryTombstoned, so the element is copied
+            // rather than held by reference (a byref into the span live across
+            // a call is pinned to a GC-tracked stack slot).
+            var entrySpan = CollectionsMarshal.AsSpan(entries);
+            for (var i = 0; i < entrySpan.Length; i++)
             {
-                var entry = entries[i];
-                if (IsEntryTombstoned(tomb, entry.ReplicaId, entry.Counter)) continue;
+                var entry = entrySpan[i];
+                var tombstoned = sharedReplica is not null
+                    ? string.Equals(entry.ReplicaId, sharedReplica, StringComparison.Ordinal)
+                        && counters.BinarySearch(entry.Counter) >= 0
+                    : IsEntryTombstoned(tomb, entry.ReplicaId, entry.Counter);
+                if (tombstoned) continue;
                 if (!hasLive
                     || entry.Counter > bestCounter
                     || (entry.Counter == bestCounter && string.CompareOrdinal(entry.ReplicaId, bestReplica) > 0))
@@ -183,14 +271,69 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
                 Ordinal = bestCounter,
             });
         }
+
+        if (rented is not null) ArrayPool<long>.Shared.Return(rented);
     }
 
-    private static bool IsEntryTombstoned(List<OrSetDot>? tombstones, string replicaId, long counter)
+    /// <summary>
+    /// The single replica id every dot in <paramref name="tombstones"/> carries,
+    /// or <see langword="null"/> when the list spans more than one replica (or
+    /// is empty). One pass, comparing ordinally and short-circuiting on the
+    /// reference the list overwhelmingly repeats.
+    /// <para>
+    /// Internal rather than private only so the benchmark host can A/B the
+    /// shipped scan against its pre-span baseline directly.
+    /// </para>
+    /// </summary>
+    internal static string? SingleReplica(List<OrSetDot> tombstones)
+    {
+        if (tombstones.Count == 0) return null;
+        // Span walk - see the type remarks. Callers gate this on a list longer
+        // than TombstoneIndexThreshold, and the body only reads.
+        var span = CollectionsMarshal.AsSpan(tombstones);
+        var first = span[0].ReplicaId;
+        for (var i = 1; i < span.Length; i++)
+        {
+            ref readonly var dot = ref span[i];
+            var candidate = dot.ReplicaId;
+            if (!ReferenceEquals(candidate, first)
+                && !string.Equals(candidate, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return first;
+    }
+
+    /// <summary>
+    /// Tombstone count above which a key's membership test switches from a
+    /// linear scan to a sorted counter index. Below it the scan wins: sorting
+    /// and binary-searching has a fixed cost that a handful of counter-first
+    /// comparisons does not repay.
+    /// </summary>
+    private const int TombstoneIndexThreshold = 8;
+
+    /// <summary>
+    /// Whether <paramref name="tombstones"/> contains the exact
+    /// <c>(replicaId, counter)</c> dot. The inner scan of the per-key
+    /// membership test, so it runs once per add dot on every key whose
+    /// tombstone list misses the counter index.
+    /// <para>
+    /// Internal rather than private only so the benchmark host can A/B the
+    /// shipped scan against its pre-span baseline directly.
+    /// </para>
+    /// </summary>
+    internal static bool IsEntryTombstoned(List<OrSetDot>? tombstones, string replicaId, long counter)
     {
         if (tombstones is null) return false;
-        for (var i = 0; i < tombstones.Count; i++)
+        // Span walk - this is the inner scan of the per-key membership test, so
+        // it runs once per add dot on every key that misses the counter index.
+        // The body only reads.
+        var span = CollectionsMarshal.AsSpan(tombstones);
+        for (var i = 0; i < span.Length; i++)
         {
-            var t = tombstones[i];
+            ref readonly var t = ref span[i];
             if (t.Counter == counter && string.Equals(t.ReplicaId, replicaId, StringComparison.Ordinal))
             {
                 return true;
@@ -245,12 +388,30 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
 
         if (addCount > 0)
         {
+            // A delta's dots arrive grouped by key - a single mutation ships
+            // every dot it authored for one key together - so encoding the key
+            // surrogate per dot re-runs the same UTF-8 encode (and mints the
+            // same array) for every dot after the first in a group. A one-slot
+            // memo over the previous key collapses a group to one encode and
+            // one array, and degrades to the prior cost when no two adjacent
+            // dots share a key. EmitStateTyped already hoists per key; this is
+            // the same hoist expressed for a flat, key-carrying list.
+            TKey? memoKey = default;
+            byte[]? memoBytes = null;
+            var comparer = EqualityComparer<TKey>.Default;
+
             for (var i = 0; i < adds!.Count; i++)
             {
                 var add = adds[i];
+                if (memoBytes is null || !comparer.Equals(memoKey!, add.Key))
+                {
+                    memoKey = add.Key;
+                    memoBytes = KeyToBytes(add.Key);
+                }
+
                 sink.Add(new CrdtMemberChange
                 {
-                    Element = KeyToBytes(add.Key),
+                    Element = memoBytes,
                     Kind = CrdtMemberChangeKind.Added,
                     ReplicaId = add.ReplicaId,
                     Ordinal = add.Counter,
@@ -261,12 +422,22 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
 
         if (tombCount > 0)
         {
+            TKey? memoKey = default;
+            byte[]? memoBytes = null;
+            var comparer = EqualityComparer<TKey>.Default;
+
             for (var i = 0; i < tombstones!.Count; i++)
             {
                 var tomb = tombstones[i];
+                if (memoBytes is null || !comparer.Equals(memoKey!, tomb.Key))
+                {
+                    memoKey = tomb.Key;
+                    memoBytes = KeyToBytes(tomb.Key);
+                }
+
                 sink.Add(new CrdtMemberChange
                 {
-                    Element = KeyToBytes(tomb.Key),
+                    Element = memoBytes,
                     Kind = CrdtMemberChangeKind.Removed,
                     ReplicaId = tomb.ReplicaId,
                     Ordinal = tomb.Counter,
@@ -281,76 +452,198 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         where TValue : ICrdt<TValue>, new()
     {
         var map = (OrMap<TKey, TValue>)boxed;
+        var adds = map.Adds;
+        var tombstones = map.Tombstones;
 
-        foreach (var (key, entries) in map.Adds)
+        // Emitted in key order so the caller needs no global re-sort.
+        //
+        // The dictionaries yield their keys in no meaningful order, so this
+        // used to emit in whatever order they enumerated and leave DecodeState
+        // to sort the WHOLE event list with a comparator whose first term walks
+        // the two key surrogates byte by byte. That is O(N log N) byte-array
+        // walks over N events. Sorting the KEYS instead is O(K log K) over the
+        // distinct keys - always no more than N and, on the churned maps this
+        // decoder actually sees, far fewer, because a key's whole dot history
+        // is one key but many events. Once the keys are ordered, every event
+        // for a key is emitted contiguously and only needs ordering against its
+        // own group, which the causal comparator does with no byte compares at
+        // all. This is the shape the OR-set and RW-set twins already use.
+        //
+        // The resulting total order is identical to the global sort's: the old
+        // comparator ordered by key surrogate first and fell back to the causal
+        // comparator, and within a group every event carries the same surrogate
+        // so the first term was always zero.
+        //
+        // The scratch is rented rather than allocated: it is strictly
+        // call-scoped, dies before the method returns, and would otherwise be
+        // the one allocation this emitter adds on a map whose keys carry a
+        // single dot each - the shape where the ordering work it buys is
+        // smallest. A slot is the surrogate and the key it came from, and
+        // nothing wider: the array is sorted, so every extra reference in a
+        // slot is another GC write barrier on every swap the sort makes.
+        var capacity = adds.Count + tombstones.Count;
+        var pool = ArrayPool<KeyRef<TValue>>.Shared;
+        var keys = pool.Rent(capacity);
+        var keyCount = 0;
+        var total = 0;
+        try
         {
-            if (entries.Count == 0) continue;
-            var element = KeyToBytes(key);
-            for (var i = 0; i < entries.Count; i++)
+            foreach (var (key, entries) in adds)
             {
-                var e = entries[i];
-                sink.Add(new CrdtMemberChange
+                if (entries.Count == 0) continue;
+                total += entries.Count;
+
+                // A key carrying both adds and tombstones is emitted once, from
+                // a single key-surrogate encode. The global-sort shape encoded
+                // it twice and minted two equal-content arrays for it.
+                List<OrSetDot>? paired = null;
+                if (tombstones.TryGetValue(key, out var dots) && dots.Count > 0)
                 {
-                    Element = element,
-                    Kind = CrdtMemberChangeKind.Added,
-                    ReplicaId = e.ReplicaId,
-                    Ordinal = e.Counter,
-                    WallClock = null,
-                });
+                    paired = dots;
+                    total += dots.Count;
+                }
+
+                keys[keyCount++] = new KeyRef<TValue>(KeyToBytes(key), entries, paired);
             }
+
+            foreach (var (key, dots) in tombstones)
+            {
+                if (dots.Count == 0) continue;
+
+                // Already carried above, alongside the same key's adds.
+                if (adds.TryGetValue(key, out var addEntries) && addEntries.Count > 0) continue;
+
+                total += dots.Count;
+                keys[keyCount++] = new KeyRef<TValue>(KeyToBytes(key), null, dots);
+            }
+            if (total == 0) return;
+
+            Array.Sort(keys, 0, keyCount, KeyRefComparer<TValue>.Instance);
+
+            // Exact, not a lower bound: every event is accounted for above, so
+            // the sink never climbs a doubling chain.
+            sink.EnsureCapacity(sink.Count + total);
+
+            var groupStart = sink.Count;
+            byte[]? groupElement = null;
+            for (var k = 0; k < keyCount; k++)
+            {
+                var group = keys[k];
+                var element = group.Element;
+
+                // Two DISTINCT keys can share a surrogate (the key-to-bytes
+                // projection is not injective - see the type remarks), and the
+                // global sort treated them as one group. Closing a group only
+                // when the surrogate actually changes preserves that exactly.
+                if (groupElement is not null && CompareElementBytes(groupElement, element) != 0)
+                {
+                    SortGroup(sink, groupStart);
+                    groupStart = sink.Count;
+                }
+                groupElement = element;
+
+                if (group.Adds is { } entries)
+                {
+                    // Span walk: the loop appends to sink, never to entries, so
+                    // the scanned list's length cannot change while the span is
+                    // alive. The element is copied rather than held by
+                    // reference because the body calls into sink.Add, and a
+                    // byref into the span held live across a call is pinned to
+                    // a GC-tracked stack slot.
+                    var entrySpan = CollectionsMarshal.AsSpan(entries);
+                    for (var i = 0; i < entrySpan.Length; i++)
+                    {
+                        var e = entrySpan[i];
+                        sink.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Added,
+                            ReplicaId = e.ReplicaId,
+                            Ordinal = e.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+
+                if (group.Tombstones is { } dots)
+                {
+                    var dotSpan = CollectionsMarshal.AsSpan(dots);
+                    for (var i = 0; i < dotSpan.Length; i++)
+                    {
+                        var dot = dotSpan[i];
+                        sink.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Removed,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+            }
+
+            SortGroup(sink, groupStart);
         }
-
-        foreach (var (key, dots) in map.Tombstones)
+        finally
         {
-            if (dots.Count == 0) continue;
-            var element = KeyToBytes(key);
-            for (var i = 0; i < dots.Count; i++)
-            {
-                var dot = dots[i];
-                sink.Add(new CrdtMemberChange
-                {
-                    Element = element,
-                    Kind = CrdtMemberChangeKind.Removed,
-                    ReplicaId = dot.ReplicaId,
-                    Ordinal = dot.Counter,
-                    WallClock = null,
-                });
-            }
+            // Only the written prefix is cleared: the slots hold references
+            // into the decoded map, and a rented array is not re-zeroed for the
+            // next tenant, so leaving them in place would root the map's entry
+            // lists for as long as the pool holds the buffer.
+            keys.AsSpan(0, keyCount).Clear();
+            pool.Return(keys);
         }
     }
 
+    /// <summary>
+    /// Orders one surrogate-equal run of the sink in place, causally.
+    /// </summary>
+    /// <remarks>
+    /// A run of one is already ordered, and skipping the call matters: on a map
+    /// whose keys carry a single dot each, every run is a run of one, so this
+    /// is called once per key and would otherwise be the emitter's dominant
+    /// per-key cost for no reordering at all.
+    /// </remarks>
+    private static void SortGroup(List<CrdtMemberChange> sink, int groupStart)
+    {
+        var count = sink.Count - groupStart;
+        if (count > 1) sink.Sort(groupStart, count, CrdtMemberChangeCausalComparer.Instance);
+    }
+
+    /// <summary>
+    /// One key's contribution to the ordered emission: its surrogate bytes and
+    /// the two entry lists that key owns, resolved once during the build pass
+    /// so the emit walk probes neither dictionary.
+    /// </summary>
+    private readonly struct KeyRef<TValue>(
+        byte[] element,
+        List<OrMapEntry<TValue>>? adds,
+        List<OrSetDot>? tombstones)
+        where TValue : ICrdt<TValue>, new()
+    {
+        public byte[] Element { get; } = element;
+
+        public List<OrMapEntry<TValue>>? Adds { get; } = adds;
+
+        public List<OrSetDot>? Tombstones { get; } = tombstones;
+    }
+
+    /// <summary>
+    /// Orders key references by surrogate bytes, which is the first term of the
+    /// total order the pre-trim whole-list sort produced.
+    /// </summary>
+    private sealed class KeyRefComparer<TValue> : IComparer<KeyRef<TValue>>
+        where TValue : ICrdt<TValue>, new()
+    {
+        public static KeyRefComparer<TValue> Instance { get; } = new();
+
+        public int Compare(KeyRef<TValue> x, KeyRef<TValue> y)
+            => CompareElementBytes(x.Element, y.Element);
+    }
     private static byte[] KeyToBytes<TKey>(TKey key)
     {
         var text = key as string ?? Convert.ToString(key, CultureInfo.InvariantCulture) ?? string.Empty;
         return text.Length == 0 ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(text);
-    }
-
-    /// <summary>
-    /// Orders OR-map member-change events deterministically by key surrogate
-    /// (the decoded <see cref="CrdtMemberChange.Element"/> bytes) first, then by
-    /// replica, causal ordinal, and kind, so the folded-state projection is
-    /// grouped per key and stable across replicas.
-    /// </summary>
-    private sealed class ElementOrderComparer : IComparer<CrdtMemberChange>
-    {
-        public static ElementOrderComparer Instance { get; } = new();
-
-        public int Compare(CrdtMemberChange x, CrdtMemberChange y)
-        {
-            var byElement = CompareBytes(x.Element, y.Element);
-            if (byElement != 0) return byElement;
-            return CrdtMemberChangeCausalComparer.Instance.Compare(x, y);
-        }
-
-        private static int CompareBytes(byte[] a, byte[] b)
-        {
-            var min = Math.Min(a.Length, b.Length);
-            for (var i = 0; i < min; i++)
-            {
-                var c = a[i].CompareTo(b[i]);
-                if (c != 0) return c;
-            }
-            return a.Length.CompareTo(b.Length);
-        }
     }
 }
