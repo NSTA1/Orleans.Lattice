@@ -23,6 +23,13 @@
 .lt-shell {
   position: relative;
   display: grid;
+  /*
+   * One column that is exactly the Shell's width. The implicit column is sized to the
+   * widest row's min-content - the header's unwrappable brand at 360px - which widened
+   * the whole page past a phone's viewport; content wider than the column scrolls in
+   * its own frame instead.
+   */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 100vh;
   min-height: 100dvh;

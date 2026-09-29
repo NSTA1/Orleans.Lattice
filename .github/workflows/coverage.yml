@@ -188,9 +188,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
+          key: playwright-all-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
 
-      - name: Install Playwright chromium
+      # Chromium, Firefox and WebKit: the suite's apps shard runs the frame isolation
+      # tests in all three engines, as ui-tests.yml does.
+      - name: Install Playwright browsers
         run: |
           set -euo pipefail
           script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit 2>/dev/null || true)"
@@ -199,9 +201,9 @@ jobs:
             exit 1
           fi
           if [ "${{ steps.pwcache.outputs.cache-hit }}" = "true" ]; then
-            pwsh "$script" install-deps chromium
+            pwsh "$script" install-deps chromium firefox webkit
           else
-            pwsh "$script" install chromium --with-deps
+            pwsh "$script" install chromium firefox webkit --with-deps
           fi
 
       - name: Wait for Azurite
@@ -400,13 +402,13 @@ jobs:
               # out after thirty seconds waiting for .lx-root[data-lx-measured].
               # A separate process per shard restores one head per shard.
               #
-              # The three shards cover the whole project, so nothing is skipped by
+              # The shards cover the whole project, so nothing is skipped by
               # not running it unfiltered as well: every filter selects
               # TestCategory=UI, and UiCategoryHygieneTests fails the build if any
               # [TestFixture] in this assembly lacks [Category("UI")] (with a
               # vacuity guard, so it cannot pass by scanning nothing). Within that,
-              # structure takes the non-Journeys fixtures and journeys-a/journeys-b
-              # partition the Journeys ones by complement.
+              # accessibility, journeys and apps take their namespaces, journeys-b is
+              # the complement of journeys-a, and structure the complement of all three.
               while IFS=$'\t' read -r shard filter; do
                 runSuiteWithRetry "$proj" "$name" "$shard" "$filter" || ok=false
               done < <(jq -r '.[] | [.shard, .filter] | @tsv' .github/workflows/ui-test-shards.json)
