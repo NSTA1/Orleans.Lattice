@@ -168,6 +168,39 @@
   margin: var(--lt-space-5) 0 0;
 }
 
+/* 4a. A tenant's regions: the allowed set and the residency as two labelled parts. */
+.lt-tenancy-part {
+  margin: var(--lt-space-5) 0 0;
+}
+
+.lt-tenancy-part > .lt-tenancy-subtitle {
+  margin-top: 0;
+}
+
+.lt-tenancy-part .lt-tenancy-allowed {
+  margin-top: var(--lt-space-4);
+}
+
+.lt-tenancy-meaning {
+  display: block;
+  max-width: 32rem;
+  margin: var(--lt-space-1) 0 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-tenancy-warning {
+  max-width: 48rem;
+  margin: 0 0 var(--lt-space-4);
+  padding: var(--lt-space-3) var(--lt-space-4);
+  border: 1px solid var(--lt-rule-strong);
+  color: var(--lt-ink);
+}
+
+.lt-tenancy-consequence {
+  font-weight: var(--lt-weight-label);
+}
+
 .lt-tenancy-actions {
   display: flex;
   flex-wrap: wrap;

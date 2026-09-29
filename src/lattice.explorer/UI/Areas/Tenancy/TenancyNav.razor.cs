@@ -58,4 +58,8 @@ public partial class TenancyNav
 
     private string? CurrentFor(string? section) =>
         string.Equals(Current, section, StringComparison.Ordinal) ? "page" : null;
+
+    // My tenant's Regions tab is the visible control of the palette's "Change residency" command.
+    private string? CommandFor(string? section) =>
+        Own && string.Equals(section, TenancyRoutes.RegionsSegment, StringComparison.Ordinal) ? TenancyArea.ChangeResidencyCommandId : null;
 }

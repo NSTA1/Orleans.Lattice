@@ -29,6 +29,26 @@ internal sealed class TenancyResidencyPlan
     /// <summary>The regions the plan keeps or adds, in the cluster's order.</summary>
     public IReadOnlyList<string> Planned => [.. _regions.Where(region => _planned.Contains(region.RegionId)).Select(region => region.RegionId)];
 
+    /// <summary>The regions the plan adds to the committed residency, in the cluster's order.</summary>
+    public IReadOnlyList<string> Added => [.. Rows.Where(row => row.IsPlanned && !row.IsResident).Select(row => row.RegionId)];
+
+    /// <summary>The regions the plan removes from the committed residency, in the cluster's order.</summary>
+    public IReadOnlyList<string> Removed => [.. Rows.Where(row => !row.IsPlanned && row.IsResident).Select(row => row.RegionId)];
+
+    /// <summary>Whether the committed residency holds any region; with none set the tenant is served in every region.</summary>
+    public bool HasResidency => Rows.Any(row => row.IsResident);
+
+    /// <summary>
+    /// Whether applying the plan would leave the tenant with residency and no
+    /// Online region. A region the plan adds starts Provisioning and stays there
+    /// until an operator of the hosting deployment promotes it, and a tenant with
+    /// any residency is served only in Online regions, so such a plan stops (or
+    /// keeps stopped) serving the tenant.
+    /// </summary>
+    public bool LeavesNoOnlineRegion =>
+        _planned.Count > 0
+        && !_regions.Any(region => _planned.Contains(region.RegionId) && region.Status == TenantRegionLifecycleStatus.Online);
+
     /// <summary>Replaces the plan with the cluster's reading, discarding any edit.</summary>
     /// <param name="regions">The per-region status.</param>
     public void Reset(IReadOnlyList<TenantRegionStatusDescriptor> regions)

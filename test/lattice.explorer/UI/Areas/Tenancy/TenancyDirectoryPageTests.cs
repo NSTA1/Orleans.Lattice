@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class TenancyDirectoryPageTests : TenancyTestContext
+public sealed partial class TenancyDirectoryPageTests : TenancyTestContext
 {
     [Test]
     public void Every_tenant_is_listed_with_its_state_quota_use_residency_and_apps()
@@ -49,8 +49,9 @@ public sealed class TenancyDirectoryPageTests : TenancyTestContext
         {
             Assert.That(cut.FindAll("tbody tr[aria-current]").Select(row => row.QuerySelector("th")!.TextContent.Trim()), Is.EqualTo(new[] { "acme" }));
             var links = cut.FindAll("tbody tr")[1].QuerySelectorAll("td a").Select(link => link.GetAttribute("href")).ToArray();
-            Assert.That(links, Is.EqualTo(new[] { "t/globex/apps", "t/globex/tenancy" }));
-            Assert.That(cut.FindAll("tbody tr")[0].QuerySelector("td a")!.GetAttribute("aria-label"), Is.EqualTo("2 apps installed for tenant acme"));
+            Assert.That(links, Is.EqualTo(new[] { "tenancy/globex/regions", "t/globex/apps", "t/globex/tenancy" }));
+            Assert.That(cut.FindAll("tbody tr")[0].QuerySelector("td a[href='t/acme/apps']")!.GetAttribute("aria-label"), Is.EqualTo("2 apps installed for tenant acme"));
+            Assert.That(cut.FindAll("tbody tr")[0].QuerySelector("td a[href='tenancy/acme/regions']")!.GetAttribute("aria-label"), Is.EqualTo("Resident in eu-west; open the regions of tenant acme"));
         });
     }
 
@@ -268,7 +269,7 @@ public sealed class TenancyDirectoryPageTests : TenancyTestContext
 
         cut.Find(".lt-table-list__open").Click();
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog .lt-dialog__actions a").Select(link => link.GetAttribute("href")),
-            Is.EqualTo(new[] { "tenancy/acme", "t/acme/tenancy", "t/acme/apps" })));
+            Is.EqualTo(new[] { "tenancy/acme", "tenancy/acme/regions", "t/acme/tenancy", "t/acme/apps" })));
 
         cut.FindAll("button").Single(button => button.TextContent == "New tenant").Click();
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog").Any(dialog => dialog.ClassList.Contains("lt-dialog--end")), Is.True));

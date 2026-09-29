@@ -38,6 +38,12 @@ internal static class TenancyRoutes
     /// <summary>The value of <see cref="NewQuery"/> that opens the form.</summary>
     public const string NewValue = "true";
 
+    /// <summary>
+    /// The query key that opens the directory's "Set a tenant's regions" picker,
+    /// used by the palette's command; its value is <see cref="NewValue"/>.
+    /// </summary>
+    public const string SetRegionsQuery = "set-regions";
+
     /// <summary>The tenant directory.</summary>
     public static ExplorerAddress Directory { get; } = ExplorerAddress.ForArea(AreaKey);
 

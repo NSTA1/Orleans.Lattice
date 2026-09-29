@@ -31,7 +31,11 @@ internal sealed class ConsoleCircuit : IAsyncDisposable
 
     private ConsoleCircuit(AsyncServiceScope scope) => _scope = scope;
 
-    private IServiceProvider Services => _scope.ServiceProvider;
+    /// <summary>
+    /// The circuit's own services, as its Blazor components resolve them: a
+    /// component rendered over them sees the cluster as this circuit does.
+    /// </summary>
+    public IServiceProvider Services => _scope.ServiceProvider;
 
     /// <summary>The Explorer's apps facade for this circuit.</summary>
     public ILatticeAppsControl Apps => Services.GetRequiredKeyedService<ILatticeAppsControl>(FacadeKey);

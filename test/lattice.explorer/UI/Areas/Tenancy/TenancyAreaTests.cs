@@ -300,6 +300,40 @@ public sealed class TenancyAreaTests : TenancyTestContext
     }
 
     [Test]
+    public async Task The_residency_survey_is_remembered_only_for_the_identity_that_read_it()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions.Clear();
+        var first = await Catalog.GetResidencySurveyAsync(CancellationToken.None);
+        await Catalog.GetResidencySurveyAsync(CancellationToken.None);
+        Assert.That(Cluster.Calls.Count(call => call == nameof(FakeTenancyCluster.GetTenantAsync)), Is.EqualTo(1), "remembered");
+
+        Auth.SignIn("someone-else@example.com");
+        var second = await Catalog.GetResidencySurveyAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(new TenancyResidencySurvey(1, false)));
+            Assert.That(second, Is.EqualTo(first));
+            Assert.That(Cluster.Calls.Count(call => call == nameof(FakeTenancyCluster.GetTenantAsync)), Is.EqualTo(2), "read again for another identity");
+        });
+    }
+
+    [Test]
+    public async Task A_cancelled_residency_survey_propagates_and_is_not_remembered()
+    {
+        UseTenancyAs(isOperator: true);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        Cluster.Fail(nameof(FakeTenancyCluster.GetTenantAsync), new OperationCanceledException(cancelled.Token));
+
+        Assert.ThrowsAsync<OperationCanceledException>(() => Catalog.GetResidencySurveyAsync(CancellationToken.None));
+
+        Cluster.Heal(nameof(FakeTenancyCluster.GetTenantAsync));
+        Assert.That(await Catalog.GetResidencySurveyAsync(CancellationToken.None), Is.EqualTo(new TenancyResidencySurvey(0, false)));
+    }
+
+    [Test]
     public async Task The_verdict_is_remembered_until_the_identity_changes()
     {
         UseTenancyAs(isOperator: false);
@@ -317,7 +351,7 @@ public sealed class TenancyAreaTests : TenancyTestContext
     }
 
     [Test]
-    public async Task An_operator_is_offered_both_commands_and_a_tenant_admin_only_the_offer()
+    public async Task An_operator_is_offered_every_command_and_a_tenant_admin_only_the_scoped_tenants()
     {
         UseTenancyAs(isOperator: true);
         var area = CreateArea();
@@ -327,15 +361,25 @@ public sealed class TenancyAreaTests : TenancyTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[] { TenancyArea.CreateTenantCommandId, TenancyArea.OfferGrantCommandId }));
-            Assert.That(area.Commands.Select(command => command.Target!.Format()), Is.EqualTo(new[] { "/tenancy?new=true", "/t/acme/tenancy/sharing?new=true" }));
+            Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[]
+            {
+                TenancyArea.CreateTenantCommandId, TenancyArea.SetRegionsCommandId, TenancyArea.ChangeResidencyCommandId, TenancyArea.OfferGrantCommandId,
+            }));
+            Assert.That(area.Commands.Select(command => command.Title), Is.EqualTo(new[]
+            {
+                "Create a tenant", "Set a tenant's regions", "Change residency", "Offer a cross-tenant grant",
+            }));
+            Assert.That(area.Commands.Select(command => command.Target!.Format()), Is.EqualTo(new[]
+            {
+                "/tenancy?new=true", "/tenancy?set-regions=true", "/t/acme/tenancy/regions", "/t/acme/tenancy/sharing?new=true",
+            }));
         });
 
         Catalog.InvalidateStanding();
         Switcher!.IsOperatorAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<bool>(false));
         await Catalog.GetStandingAsync(CancellationToken.None);
 
-        Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[] { TenancyArea.OfferGrantCommandId }));
+        Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[] { TenancyArea.ChangeResidencyCommandId, TenancyArea.OfferGrantCommandId }));
     }
 
     [Test]
@@ -349,7 +393,70 @@ public sealed class TenancyAreaTests : TenancyTestContext
 
         await area.GetAvailabilityAsync(CancellationToken.None);
 
-        Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[] { TenancyArea.CreateTenantCommandId }));
+        Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[] { TenancyArea.CreateTenantCommandId, TenancyArea.SetRegionsCommandId }));
+    }
+
+    [Test]
+    public async Task Home_counts_the_tenants_with_no_residency_set_for_an_operator()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.WithTenant("globex").WithTenant("initech", TenantLifecycleStatus.Suspended);
+        Cluster.Tenants["globex"].Regions[0] = Cluster.Tenants["globex"].Regions[0] with { Status = TenantRegionLifecycleStatus.None };
+        Cluster.Tenants["initech"].Regions.Clear();
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("3 tenants, 1 suspended, 2 with no residency set."));
+    }
+
+    [Test]
+    public async Task Home_reads_the_residency_of_at_most_the_survey_limit_and_says_the_count_is_a_lower_bound()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions.Clear();
+        for (var i = 0; i < TenancyCatalog.ResidencySurveyLimit; i++)
+        {
+            Cluster.WithTenant($"t{i:D3}");
+        }
+
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        var status = await area.GetHomeStatusAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo("51 tenants, at least 1 with no residency set."));
+            Assert.That(Cluster.Calls.Count(call => call == nameof(FakeTenancyCluster.GetTenantAsync)), Is.EqualTo(TenancyCatalog.ResidencySurveyLimit));
+        });
+    }
+
+    [Test]
+    public async Task Home_remembers_the_survey_until_the_catalogue_is_invalidated_and_skips_an_unreadable_tenant()
+    {
+        UseTenancyAs(isOperator: true);
+        Cluster.Tenants["acme"].Regions.Clear();
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant, 1 with no residency set."));
+        Cluster.Fail(nameof(FakeTenancyCluster.GetTenantAsync), new TimeoutException());
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant, 1 with no residency set."), "remembered");
+
+        Catalog.Invalidate();
+
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 tenant."), "a tenant that cannot be read is not counted");
+    }
+
+    [Test]
+    public async Task Home_tells_a_tenant_admin_their_tenant_has_no_residency_set()
+    {
+        UseTenancyAs(isOperator: false);
+        Cluster.Tenants["acme"].Regions.Clear();
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("You administer tenant acme. It has no residency set."));
     }
 
     [Test]

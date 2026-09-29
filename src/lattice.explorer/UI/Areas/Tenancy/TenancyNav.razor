@@ -9,7 +9,7 @@
     <ul class="lt-tenancy-nav__list">
         @foreach (var item in Items)
         {
-            <li><a class="lt-tenancy-nav__link" href="@Href(item.Address)" aria-current="@CurrentFor(item.Section)">@item.Text</a></li>
+            <li><a class="lt-tenancy-nav__link" href="@Href(item.Address)" aria-current="@CurrentFor(item.Section)" data-lt-command="@CommandFor(item.Section)">@item.Text</a></li>
         }
     </ul>
 </nav>

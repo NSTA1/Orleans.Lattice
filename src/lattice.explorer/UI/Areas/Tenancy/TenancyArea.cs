@@ -38,6 +38,12 @@ internal sealed class TenancyArea : IExplorerArea
     /// <summary>The id of the "Offer a cross-tenant grant" command.</summary>
     public const string OfferGrantCommandId = "tenancy.offer-grant";
 
+    /// <summary>The id of the operator's "Set a tenant's regions" command.</summary>
+    public const string SetRegionsCommandId = "tenancy.set-regions";
+
+    /// <summary>The id of the "Change residency" command, for whoever administers the scoped tenant.</summary>
+    public const string ChangeResidencyCommandId = "tenancy.change-residency";
+
     private readonly TenancyCatalog _catalog;
     private (bool Authenticated, string? User, string? Active, AreaAvailability Availability)? _verdict;
 
@@ -66,9 +72,10 @@ internal sealed class TenancyArea : IExplorerArea
     public IAddressCompletionSource? Completions { get; }
 
     /// <summary>
-    /// The commands the caller's standing admits: creating a tenant for an
-    /// operator, and offering a grant from the scoped tenant for whoever
-    /// administers it. None until the standing is proven.
+    /// The commands the caller's standing admits: creating a tenant and setting a
+    /// tenant's regions for an operator, and changing the scoped tenant's
+    /// residency and offering a grant from it for whoever administers it. None
+    /// until the standing is proven.
     /// </summary>
     public IReadOnlyList<ExplorerCommand> Commands
     {
@@ -79,7 +86,7 @@ internal sealed class TenancyArea : IExplorerArea
                 return [];
             }
 
-            var commands = new List<ExplorerCommand>(2);
+            var commands = new List<ExplorerCommand>(4);
             if (standing.IsOperator)
             {
                 commands.Add(new ExplorerCommand(CreateTenantCommandId, "Create a tenant")
@@ -87,10 +94,20 @@ internal sealed class TenancyArea : IExplorerArea
                     Target = TenancyRoutes.Directory.WithQuery(TenancyRoutes.NewQuery, TenancyRoutes.NewValue),
                     Detail = "A new tenant with its first admin subjects",
                 });
+                commands.Add(new ExplorerCommand(SetRegionsCommandId, "Set a tenant's regions")
+                {
+                    Target = TenancyRoutes.Directory.WithQuery(TenancyRoutes.SetRegionsQuery, TenancyRoutes.NewValue),
+                    Detail = "Choose a tenant, then the regions it is allowed and resident in",
+                });
             }
 
             if (!string.Equals(standing.Workspace, TenantId.DefaultId, StringComparison.Ordinal))
             {
+                commands.Add(new ExplorerCommand(ChangeResidencyCommandId, "Change residency")
+                {
+                    Target = TenancyRoutes.MyTenant(standing.Workspace, TenancyRoutes.RegionsSegment),
+                    Detail = $"Where tenant {standing.Workspace}'s data is kept, within its allowed regions",
+                });
                 commands.Add(new ExplorerCommand(OfferGrantCommandId, "Offer a cross-tenant grant")
                 {
                     Target = TenancyRoutes.MyTenant(standing.Workspace, TenancyRoutes.SharingSegment)
@@ -159,13 +176,28 @@ internal sealed class TenancyArea : IExplorerArea
 
         if (!standing.IsOperator)
         {
-            return $"You administer tenant {standing.Workspace}.";
+            var own = $"You administer tenant {standing.Workspace}.";
+            return await _catalog.HasResidencySetAsync(standing.Workspace, cancellationToken).ConfigureAwait(true) == false
+                ? own + " It has no residency set."
+                : own;
         }
 
         var tenants = await _catalog.GetTenantsAsync(cancellationToken).ConfigureAwait(true);
         var suspended = tenants.Count(tenant => tenant.Status == TenantLifecycleStatus.Suspended);
         var count = tenants.Count == 1 ? "1 tenant" : $"{TenancyFormat.Count(tenants.Count)} tenants";
-        return suspended == 0 ? count + "." : $"{count}, {TenancyFormat.Count(suspended)} suspended.";
+        var parts = new List<string>(3) { count };
+        if (suspended > 0)
+        {
+            parts.Add($"{TenancyFormat.Count(suspended)} suspended");
+        }
+
+        var survey = await _catalog.GetResidencySurveyAsync(cancellationToken).ConfigureAwait(true);
+        if (survey.Unset > 0)
+        {
+            parts.Add($"{(survey.IsPartial ? "at least " : string.Empty)}{TenancyFormat.Count(survey.Unset)} with no residency set");
+        }
+
+        return string.Join(", ", parts) + ".";
     }
 
     /// <inheritdoc />
