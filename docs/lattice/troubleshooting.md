@@ -311,15 +311,15 @@ Two things this is *not*:
 - **Admission control caps total growth, not row size.** `MaxLiveKeys` and
   `MaxEstimatedBytes` make the tree refuse the write calls that check them -
   `SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`,
-  `SetManyWherePredicateAsync`, `ApplyCrdtDeltaAsync` and
-  `ApplyCrdtDeltaManyAsync` - with a
+  `SetManyWherePredicateAsync`, the single-tree atomic batches,
+  `ApplyCrdtDeltaAsync` and `ApplyCrdtDeltaManyAsync` - with a
   typed, actionable `LatticeQuotaExceededException` once the whole tree
   reaches a ceiling, and the non-enforcing `AdmissionAdvisoryLiveKeys` /
   `AdmissionAdvisoryBytes` dry-run ceilings help you size them; see
   [Configuration](configuration.md#maxestimatedbytes). They bound the tree's
-  total footprint, not any single row, and the atomic batches, the bulk-load
-  paths and `MergeAsync` do not check them, so they complement the fixes above
-  rather than replace them.
+  total footprint, not any single row, and the cross-tree atomic batches, the
+  bulk-load paths and `MergeAsync` do not check them, so they complement the
+  fixes above rather than replace them.
 
 ---
 

@@ -2837,6 +2837,12 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
 
+        // The saga applies each leg under the prepared scope, which bypasses
+        // admission control by design, so the public entry is the only place
+        // the write-size bounds and admission caps can be applied - and the only
+        // place an oversized leg can be refused before the saga starts.
+        ValidateEntriesWriteSize(entries);
+        EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
@@ -2887,6 +2893,8 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
 
+        ValidateEntriesWriteSize(entries);
+        EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
@@ -2948,6 +2956,15 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (upserts.Count == 0 && deletes.Count == 0) return;
 
+        // Deletes can only shrink the tree, so - like DeleteAsync - a
+        // delete-only batch is not admission-checked and stays admitted at the
+        // cap; any upsert leg takes the same bounds and caps as SetManyAsync.
+        if (upserts.Count > 0)
+        {
+            ValidateEntriesWriteSize(upserts);
+            EnforceAdmissionControl();
+        }
+
         // Authorize every leg up front: upserts as Write, deletes as Delete. Any
         // denied key throws before the batch is unioned or dispatched, so the
         // atomic saga never sees a partially authorized batch and nothing persists.
@@ -3004,6 +3021,11 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
+        // Checked before the precondition, as SetManyWherePredicateAsync does: a
+        // guarded saga that aborts on a precondition miss never writes a leg, so
+        // an oversized leg would otherwise go unreported.
+        ValidateEntriesWriteSize(entries);
+        EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
@@ -3036,6 +3058,8 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
+        ValidateEntriesWriteSize(entries);
+        EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)

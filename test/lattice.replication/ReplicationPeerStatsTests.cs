@@ -374,6 +374,47 @@ public class WireVersionNegotiationStateTests
             m.Tags.Any(t => t.Key == "peer" && (string?)t.Value == "peer-a")));
     }
 
+    // Regression: the two wire_version gauges were the only replication
+    // instruments without the derived tenant tag, so a tenant-scoped telemetry
+    // query could never see a mixed-version fleet on its own trees.
+    [TestCase("t/acme/orders")]
+    [TestCase("orders")]
+    public void Negotiated_gauge_carries_the_tenant_tag_derived_from_the_tree(string tree)
+    {
+        var state = new WireVersionNegotiationState();
+        state.Record(tree, "peer-a", Result(4, downgrade: true, known: true));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.WireVersionNegotiatedName);
+
+        collector.RecordObservableInstruments();
+
+        var expectedTenant = LatticeTenantLabel.Resolve(tree);
+        Assert.That(collector.Measurements, Has.Some.Matches<RecordedMeasurement<long>>(m =>
+            m.Tags.Any(t => t.Key == "tree" && (string?)t.Value == tree) &&
+            m.Tags.Any(t => t.Key == LatticeTenantLabel.TagTenant && (string?)t.Value == expectedTenant)));
+    }
+
+    [TestCase("t/acme/orders")]
+    [TestCase("orders")]
+    public void Downgrade_gauge_carries_the_tenant_tag_derived_from_the_tree(string tree)
+    {
+        var state = new WireVersionNegotiationState();
+        state.Record(tree, "peer-a", Result(3, downgrade: true, known: true));
+
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.WireVersionDowngradeActiveName);
+
+        collector.RecordObservableInstruments();
+
+        var expectedTenant = LatticeTenantLabel.Resolve(tree);
+        Assert.That(collector.Measurements, Has.Some.Matches<RecordedMeasurement<long>>(m =>
+            m.Tags.Any(t => t.Key == "tree" && (string?)t.Value == tree) &&
+            m.Tags.Any(t => t.Key == LatticeTenantLabel.TagTenant && (string?)t.Value == expectedTenant)));
+    }
+
     [Test]
     public void Downgrade_gauge_emits_one_when_downgrade_active_else_zero()
     {
