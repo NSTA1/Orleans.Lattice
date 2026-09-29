@@ -149,16 +149,24 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         // add dot and every tombstone dot yields one event and nothing else is
         // appended. A COMPACTED set breaks that, because each tombstone whose dot
         // no longer survives in the add list synthesizes a second event (see the
-        // Added branch below) - so the list overflows its presize and grows by
-        // doubling, one reallocate-and-copy per doubling, and for a large set
-        // those copies land on the large object heap.
+        // Added branch below) - so the list overflows its presize and grows.
         //
-        // The widening is deliberately LAZY rather than folded into the presize
-        // above. Presizing eagerly to the worst case would over-allocate by the
-        // whole tombstone dot count on every uncompacted decode, which is the
-        // common path; widening on the first synthesized event instead leaves
-        // that path byte-for-byte as it was and pays exactly one growth, to a
-        // capacity that provably suffices, on the path that needs it.
+        // Natural growth is what costs here, and the cost is NOT a chain of
+        // doublings: the ceiling is total + tombstoneDots, which never exceeds
+        // 2 * total, so the list grows exactly once either way. What it grows TO
+        // is the difference. List<T> doubles, taking a 2 * total array; the
+        // ceiling is total + tombstoneDots, which is smaller by the add-dot
+        // count. Assigning Capacity reallocates to exactly that instead, so a
+        // compacted decode of a mostly-add set stops over-reserving an array
+        // nearly the size of the whole result - and for a large set that array
+        // is on the large object heap.
+        //
+        // The widening is LAZY rather than folded into the presize above.
+        // Reserving the ceiling eagerly would over-allocate by the whole
+        // tombstone dot count on every uncompacted decode, which is the common
+        // path; widening on the first synthesized event leaves that path
+        // byte-for-byte as it was and pays exactly one exact-size growth on the
+        // path that needs it.
         var result = new List<CrdtMemberChange>(total);
         var widened = false;
         foreach (var key in keys)
@@ -206,11 +214,11 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
                         if (!widened)
                         {
                             // First synthesized event proves this set is
-                            // compacted. total + tombstoneDots is the ceiling:
-                            // every tombstone dot can synthesize at most one
-                            // extra event, so one growth here is the last.
+                            // compacted. total + tombstoneDots is the ceiling -
+                            // every tombstone dot synthesizes at most one extra
+                            // event - so this exact-size growth is the last one.
                             widened = true;
-                            result.EnsureCapacity(total + tombstoneDots);
+                            result.Capacity = total + tombstoneDots;
                         }
 
                         result.Add(new CrdtMemberChange
