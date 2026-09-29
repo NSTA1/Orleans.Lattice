@@ -44,4 +44,13 @@ internal enum AppInstallStage
 
     /// <summary>A step failed; the flow can return to the stage it failed from.</summary>
     Failed,
+
+    /// <summary>
+    /// Changing the installed version's role bindings: the operator compares each role's
+    /// recorded and proposed group and confirms before anything is applied.
+    /// </summary>
+    ConfirmBindings,
+
+    /// <summary>The installed version's role bindings were changed.</summary>
+    Rebound,
 }
