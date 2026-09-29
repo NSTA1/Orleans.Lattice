@@ -190,6 +190,71 @@ public sealed class CookieCredentialStoreSecurityTests
         Assert.That(await boundStore.GetAsync(), Is.Null);
     }
 
+    [Test]
+    public async Task An_endpoint_named_only_by_the_first_run_seed_still_round_trips()
+    {
+        // A launcher-configured head names its endpoint by environment variable and
+        // never writes the configuration document, so the persisted store legitimately
+        // loads null. Resolving from the store alone would name no endpoint there,
+        // stamp nothing on write, and then fail closed on read - refusing a credential
+        // the very same head had just minted, and breaking sign-in outright. The
+        // fallback mirrors ExplorerSession.InitializeAsync, which loads in this order.
+        var accessor = Substitute.For<IHttpContextAccessor>();
+        var config = Substitute.For<IExplorerConfigStore>();
+        config.LoadAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ExplorerConfiguration?>(null));
+
+        var seed = Substitute.For<IExplorerConfigurationSeed>();
+        seed.TrySeed().Returns(new ExplorerConfiguration { Endpoint = Endpoint });
+
+        var store = new CookieCredentialStore(
+            accessor, new EphemeralDataProtectionProvider(), config, seed);
+
+        var writeContext = new DefaultHttpContext();
+        accessor.HttpContext.Returns(writeContext);
+        await store.SetAsync(new StoredCredential("alice", "hunter2"));
+
+        var replay = new DefaultHttpContext();
+        replay.Request.Headers.Cookie = $"{CookieName}={PayloadFrom(writeContext)}";
+        accessor.HttpContext.Returns(replay);
+
+        var credential = await store.GetAsync();
+
+        Assert.That(credential, Is.Not.Null);
+        Assert.That(credential!.Password, Is.EqualTo("hunter2"));
+    }
+
+    [Test]
+    public async Task The_persisted_configuration_wins_over_the_first_run_seed()
+    {
+        // The seed is a first-run fallback only: once an endpoint is persisted, the
+        // binding must follow the document, or repointing the console through the cog
+        // would leave the credential bound to whatever the launcher once seeded.
+        var accessor = Substitute.For<IHttpContextAccessor>();
+        var config = ConfigStore(Endpoint);
+        var seed = Substitute.For<IExplorerConfigurationSeed>();
+        seed.TrySeed().Returns(new ExplorerConfiguration { Endpoint = "https://stale.example:30000" });
+
+        var store = new CookieCredentialStore(
+            accessor, new EphemeralDataProtectionProvider(), config, seed);
+
+        var writeContext = new DefaultHttpContext();
+        accessor.HttpContext.Returns(writeContext);
+        await store.SetAsync(new StoredCredential("alice", "hunter2"));
+        var payload = PayloadFrom(writeContext);
+
+        // Only the seed now names the old address; the document names the new one.
+        config.LoadAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ExplorerConfiguration?>(
+                new ExplorerConfiguration { Endpoint = "https://elsewhere.example:30000" }));
+
+        var replay = new DefaultHttpContext();
+        replay.Request.Headers.Cookie = $"{CookieName}={payload}";
+        accessor.HttpContext.Returns(replay);
+
+        Assert.That(await store.GetAsync(), Is.Null);
+    }
+
     private static IExplorerConfigStore ConfigStore(string endpoint)
     {
         var store = Substitute.For<IExplorerConfigStore>();

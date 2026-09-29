@@ -64,6 +64,7 @@ public sealed class CookieCredentialStore : ICredentialStore
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IDataProtector _protector;
     private readonly IExplorerConfigStore? _configStore;
+    private readonly IExplorerConfigurationSeed? _configurationSeed;
 
     // Cookie values whose credential has been revoked by ClearAsync. Keyed by a
     // SHA-256 digest of the value rather than the value itself, so the revocation
@@ -96,16 +97,24 @@ public sealed class CookieCredentialStore : ICredentialStore
     /// register a store. It is a singleton, as this store is, so reading it here
     /// captures no per-circuit state.
     /// </param>
+    /// <param name="configurationSeed">
+    /// The first-run seed consulted when nothing is persisted yet, mirroring the
+    /// order <c>ExplorerSession</c> itself loads in. Without it an endpoint supplied
+    /// by environment variable would resolve as absent, and the fail-closed read
+    /// below would refuse every credential on a launcher-configured head.
+    /// </param>
     public CookieCredentialStore(
         IHttpContextAccessor httpContextAccessor,
         IDataProtectionProvider dataProtectionProvider,
-        IExplorerConfigStore? configStore)
+        IExplorerConfigStore? configStore,
+        IExplorerConfigurationSeed? configurationSeed = null)
     {
         ArgumentNullException.ThrowIfNull(httpContextAccessor);
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
         _httpContextAccessor = httpContextAccessor;
         _protector = dataProtectionProvider.CreateProtector(Purpose);
         _configStore = configStore;
+        _configurationSeed = configurationSeed;
     }
 
     /// <inheritdoc />
@@ -323,10 +332,10 @@ public sealed class CookieCredentialStore : ICredentialStore
             return null;
         }
 
+        ExplorerConfiguration? configuration;
         try
         {
-            var configuration = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-            return configuration?.Endpoint;
+            configuration = await _configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -334,6 +343,15 @@ public sealed class CookieCredentialStore : ICredentialStore
             // unresolvable endpoint refuses the credential rather than replaying it.
             return null;
         }
+
+        // Nothing persisted yet: fall back to the first-run seed, in the same order
+        // ExplorerSession.InitializeAsync loads in. A launcher-configured head names
+        // its endpoint by environment variable and never writes the document, so
+        // consulting only the store would resolve no endpoint there and refuse every
+        // credential the head itself had just minted.
+        configuration ??= _configurationSeed?.TrySeed();
+
+        return configuration?.Endpoint;
     }
 
     /// <summary>
