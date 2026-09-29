@@ -184,13 +184,25 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
     /// cluster-wide grant.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <see cref="LatticeOperation.Telemetry"/> addresses no single tree - the
     /// telemetry facade authorizes it over <see cref="LatticeScope.ClusterWideTreeId"/>,
     /// and <see cref="LatticeScope"/> documents that a data-plane rule on a tree
     /// "can never grant the scopeless capability". Discovery must honour the same
     /// rule or it advertises a capability the caller does not hold.
+    /// </para>
+    /// <para>
+    /// <see cref="LatticeOperation.AppInstall"/> is the other scopeless capability
+    /// and is listed for exactly the same reason: <c>AppInstallAuthorizer</c>
+    /// authorizes it over <see cref="LatticeScope.ClusterWideTreeId"/>, and
+    /// <c>LatticeAuthOperations</c> excludes it from the whole-data-plane set so no
+    /// tree-scoped grant confers it. Both scopeless capabilities must be masked
+    /// here; listing only one lets a tree-scoped rule carrying the other satisfy a
+    /// per-tool minimum it does not confer.
+    /// </para>
     /// </remarks>
-    private const LatticeOperation ClusterWideOnlyOperations = LatticeOperation.Telemetry;
+    private const LatticeOperation ClusterWideOnlyOperations =
+        LatticeOperation.Telemetry | LatticeOperation.AppInstall;
 
     /// <summary>
     /// The operations an Allow rule contributes, with any cluster-wide-only bit

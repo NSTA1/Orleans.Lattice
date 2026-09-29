@@ -161,7 +161,7 @@ public sealed class TelemetryGrpcTenantNeutralityTests
         // *carry* an assertion (StampActiveTenant), never decide one.
         string[] forbiddenMarkers = ["ResolveTenant", "DeriveTenant", "EffectiveTenant", "DefaultTenant"];
 
-        var offenders = typeof(LatticeTelemetryApiGrpcClient).Assembly
+        var members = typeof(LatticeTelemetryApiGrpcClient).Assembly
             .GetTypes()
             .SelectMany(type => type
                 .GetMembers(System.Reflection.BindingFlags.Public
@@ -170,6 +170,17 @@ public sealed class TelemetryGrpcTenantNeutralityTests
                     | System.Reflection.BindingFlags.Static
                     | System.Reflection.BindingFlags.DeclaredOnly)
                 .Select(member => (Type: type, Member: member)))
+            .ToArray();
+
+        // The sole assertion is that the offender set is empty, which an empty
+        // member set satisfies just as readily as a clean binding. Without this
+        // floor, retargeting the assembly (or a reflection failure that yielded no
+        // types) would read as proof that no tenant is derived here.
+        Assert.That(members, Is.Not.Empty,
+            "The scan walked no members at all, so the assertion below proved nothing about the "
+            + "binding. Fix the scan; do not delete this floor.");
+
+        var offenders = members
             .Where(x => forbiddenMarkers.Any(marker =>
                 x.Member.Name.Contains(marker, StringComparison.OrdinalIgnoreCase)))
             .Select(x => $"{x.Type.Name}.{x.Member.Name}")
