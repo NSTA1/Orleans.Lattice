@@ -41,6 +41,18 @@ public sealed class TelemetryRateWindowTests
     }
 
     [Test]
+    public void For_step_clamps_a_step_too_large_to_multiply_to_the_widest_ladder_entry()
+    {
+        // Four of these steps are not representable as a TimeSpan, so a derivation that
+        // multiplies before it compares throws instead of clamping.
+        Assert.Multiple(() =>
+        {
+            Assert.That(TelemetryRateWindow.ForStep(TimeSpan.MaxValue), Is.EqualTo("24h"));
+            Assert.That(TelemetryRateWindow.ForStep(TimeSpan.MaxValue / 4 + TimeSpan.FromTicks(1)), Is.EqualTo("24h"));
+        });
+    }
+
+    [Test]
     public void For_step_is_a_pure_function_of_its_input()
     {
         var step = TimeSpan.FromSeconds(45);

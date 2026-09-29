@@ -47,7 +47,9 @@ public class LatticeTelemetryOptions
 
     /// <summary>
     /// The per-request timeout for a backend call. Defaults to 30 seconds. Must
-    /// be strictly positive.
+    /// be strictly positive and no longer than <see cref="int.MaxValue"/>
+    /// milliseconds (about 24.8 days), the longest finite timeout
+    /// <see cref="System.Net.Http.HttpClient"/> accepts.
     /// </summary>
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
