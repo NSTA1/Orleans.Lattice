@@ -16,16 +16,17 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// tree to a new physical tree with the desired sizing. The source tree remains
 /// fully available for reads and writes; every accepted mutation except a typed
 /// CRDT delta apply or a bulk append is shadow-forwarded to the destination.
-/// The snapshot's index-for-index shard copy and its shard-map limit are
-/// described on <see cref="TreeSnapshotGrain"/>.</description></item>
+/// The snapshot's routing-map-driven shard copy is described on
+/// <see cref="TreeSnapshotGrain"/>.</description></item>
 /// <item><description><see cref="ResizePhase.Swap"/> - set alias so the logical tree ID
-/// points to the new physical tree.</description></item>
-/// <item><description><see cref="ResizePhase.Reject"/> - transition shards <c>0</c> to
-/// <c>ShardCount - 1</c> of the old physical tree to the Rejecting phase so any
-/// lingering client request that reaches one of them throws
-/// <see cref="StaleTreeRoutingException"/> and retries against the new alias
-/// target. A shard at or above the pinned count, one a split added, never enters
-/// it.</description></item>
+/// points to the new physical tree, carrying over the routing map the copy
+/// followed.</description></item>
+/// <item><description><see cref="ResizePhase.Reject"/> - transition every shard of the
+/// old physical tree the snapshot shadow-forwarded - the pinned range and every
+/// shard the routing map names, including one an adaptive split allocated above
+/// the pinned count - to the Rejecting phase so any lingering client request
+/// that reaches one of them throws <see cref="StaleTreeRoutingException"/> and
+/// retries against the new alias target.</description></item>
 /// <item><description><see cref="ResizePhase.Cleanup"/> - soft-delete the old physical
 /// tree to reclaim storage.</description></item>
 /// </list>
@@ -59,6 +60,13 @@ internal sealed class TreeResizeGrain(
 
     /// <inheritdoc />
     protected override string LogContext => $"tree {TreeId}";
+
+    /// <summary>
+    /// The old physical tree's shards this resize shadow-forwards, rejects, and
+    /// releases (see <see cref="TreeResizeState.ShardIndices"/>).
+    /// </summary>
+    private int[] OldShardIndices =>
+        RoutedShardIndices.OrContiguous(state.State.ShardIndices, state.State.ShardCount);
 
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
@@ -199,6 +207,16 @@ internal sealed class TreeResizeGrain(
         // Capture the old registry entry so UndoResizeAsync can restore it.
         var oldEntry = await registry.GetEntryAsync(TreeId);
 
+        // The old physical shards the snapshot will shadow-forward, and so the
+        // set this resize rejects and, on undo, releases. Computed exactly as
+        // the snapshot computes it - the old physical tree's pinned count and
+        // the logical tree's routing map - so the two coordinators address the
+        // same shards, including any an adaptive split allocated above the pin.
+        var physicalShardCount = string.Equals(currentPhysical, TreeId, StringComparison.Ordinal)
+            ? resolved.ShardCount
+            : (await optionsResolver.ResolveAsync(currentPhysical)).ShardCount;
+        var shardIndices = RoutedShardIndices.Resolve(physicalShardCount, oldEntry?.ShardMap);
+
         // Snapshot every field this method writes so a transient
         // WriteStateAsync failure cannot leak in-memory mutations past the
         // ResizeAsync InProgress idempotency guard.
@@ -212,6 +230,7 @@ internal sealed class TreeResizeGrain(
         var prevSnapshotTreeId = state.State.SnapshotTreeId;
         var prevOldPhysicalTreeId = state.State.OldPhysicalTreeId;
         var prevOldRegistryEntry = state.State.OldRegistryEntry;
+        var prevShardIndices = state.State.ShardIndices;
 
         // Persist intent BEFORE any external side effects.
         state.State.InProgress = true;
@@ -224,6 +243,7 @@ internal sealed class TreeResizeGrain(
         state.State.SnapshotTreeId = snapshotTreeId;
         state.State.OldPhysicalTreeId = currentPhysical;
         state.State.OldRegistryEntry = oldEntry;
+        state.State.ShardIndices = shardIndices;
         try
         {
             await state.WriteStateAsync();
@@ -240,6 +260,7 @@ internal sealed class TreeResizeGrain(
             state.State.SnapshotTreeId = prevSnapshotTreeId;
             state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
             state.State.OldRegistryEntry = prevOldRegistryEntry;
+            state.State.ShardIndices = prevShardIndices;
             throw;
         }
 
@@ -333,7 +354,7 @@ internal sealed class TreeResizeGrain(
         var oldPhysical = state.State.OldPhysicalTreeId;
         var snapshotTreeId = state.State.SnapshotTreeId;
         var opId = state.State.OperationId!;
-        var shardCount = state.State.ShardCount;
+        var shardIndices = OldShardIndices;
 
         // Drain-window undo applies only while Phase == Snapshot. Phases Swap,
         // Reject, and Cleanup all occur after the alias flip, and must follow
@@ -360,10 +381,10 @@ internal sealed class TreeResizeGrain(
             await snapshot.AbortAsync(opId);
 
             // No alias was ever set so no recovery or alias removal needed.
-            var clearTasks = new Task[shardCount];
-            for (int i = 0; i < shardCount; i++)
+            var clearTasks = new Task[shardIndices.Length];
+            for (int i = 0; i < shardIndices.Length; i++)
             {
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{i}");
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
                 clearTasks[i] = shard.ClearShadowForwardAsync(opId);
             }
             await Task.WhenAll(clearTasks);
@@ -429,10 +450,10 @@ internal sealed class TreeResizeGrain(
 
         // 2. Clear shadow-forward on every old-tree shard so the tree becomes
         //    writable again (lifts the Rejecting phase).
-        var undoTasks = new Task[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var undoTasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
             undoTasks[i] = shard.ClearShadowForwardAsync(opId);
         }
         await Task.WhenAll(undoTasks);
@@ -560,20 +581,37 @@ internal sealed class TreeResizeGrain(
         // scratch, so the tree's own configuration - PublishEvents, projection
         // digest maintenance and its latch, history retention, and the cache
         // and WAL retention ceilings, all set against the logical id - survives
-        // the resize. Only the fields that describe the retired physical tree's
-        // layout are dropped, since the resized copy carries its own. The
+        // the resize. Only the retired physical tree's WAL layout is dropped,
+        // since the resized copy carries its own. The
         // current alias is kept too, so a second resize never briefly routes the
         // logical tree back to its long-retired first physical copy between
         // this write and the alias flip below.
+        //
+        // The routing map and split allocation high-water mark are taken from
+        // the resized copy's own entry, which the snapshot registered with the
+        // map its index-for-index copy followed. Dropping them - as this swap
+        // once did, for a destination registered without a map - would route
+        // every slot an adaptive split had moved above the pinned count back to
+        // a shard the copy never populated (issue 3880). The map is re-stamped
+        // above the logical tree's current version so every cached router sees
+        // the topology change.
         var oldEntry = state.State.OldRegistryEntry;
         var current = await registry.GetEntryAsync(TreeId) ?? oldEntry ?? new TreeRegistryEntry();
+        var resized = await registry.GetEntryAsync(state.State.SnapshotTreeId!);
+        var resizedMap = resized?.ShardMap is { } map
+            ? new ShardMap
+            {
+                Slots = (int[])map.Slots.Clone(),
+                Version = Math.Max(current.ShardMap?.Version ?? 0L, map.Version) + 1,
+            }
+            : null;
         var entry = current with
         {
             MaxLeafKeys = state.State.NewMaxLeafKeys,
             MaxInternalChildren = state.State.NewMaxInternalChildren,
             ShardCount = oldEntry?.ShardCount ?? state.State.ShardCount,
-            ShardMap = null,
-            NextShardIndex = null,
+            ShardMap = resizedMap,
+            NextShardIndex = resized?.NextShardIndex,
             WalPartitions = null,
             WalPlacement = null,
         };
@@ -602,9 +640,10 @@ internal sealed class TreeResizeGrain(
     }
 
     /// <summary>
-    /// Transitions shards <c>0</c> to <c>ShardCount - 1</c> of the old physical
-    /// tree to <c>ShadowForwardPhase.Rejecting</c> (a shard at or above the
-    /// pinned count, one a split added, is not transitioned). Any lingering
+    /// Transitions every old physical shard the resize's snapshot
+    /// shadow-forwarded (see <see cref="TreeResizeState.ShardIndices"/>,
+    /// including any shard an adaptive split allocated above the pinned count)
+    /// to <c>ShadowForwardPhase.Rejecting</c>. Any lingering
     /// client request that reaches one of those shards after this point throws
     /// <see cref="StaleTreeRoutingException"/>, which the stateless
     /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> routing tier handles by refreshing its
@@ -615,11 +654,11 @@ internal sealed class TreeResizeGrain(
     {
         var oldPhysical = state.State.OldPhysicalTreeId!;
         var opId = state.State.OperationId!;
-        var shardCount = state.State.ShardCount;
-        var tasks = new Task[shardCount];
-        for (int i = 0; i < shardCount; i++)
+        var shardIndices = OldShardIndices;
+        var tasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{i}");
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
             tasks[i] = shard.EnterRejectingAsync(opId);
         }
         await Task.WhenAll(tasks);
@@ -662,8 +701,35 @@ internal sealed class TreeResizeGrain(
         }
         else
         {
+            await AdoptRetiredRoutingAsync(oldPhysical);
             await deletion.DeleteDerivedPhysicalTreeAsync();
         }
+    }
+
+    /// <summary>
+    /// Records on a derived old physical tree's own registry entry the routing
+    /// map and split allocation high-water mark the logical tree carried when
+    /// this resize started. Adaptive splits write those to the logical entry,
+    /// never to the physical copy an alias points at, so the copy's entry still
+    /// describes the topology from when it was created; the deletion walk reads
+    /// it, and would otherwise leave a shard a later split allocated (and the
+    /// keys it held) out of the delete, the purge, and an undo's recovery.
+    /// Idempotent.
+    /// </summary>
+    private async Task AdoptRetiredRoutingAsync(string oldPhysical)
+    {
+        var routing = state.State.OldRegistryEntry;
+        if (routing?.ShardMap is null && routing?.NextShardIndex is null) return;
+
+        var registry = grainFactory.GetLatticeRegistry();
+        var physicalEntry = await registry.GetEntryAsync(oldPhysical);
+        if (physicalEntry is null) return;
+
+        await registry.UpdateAsync(oldPhysical, physicalEntry with
+        {
+            ShardMap = routing!.ShardMap,
+            NextShardIndex = routing.NextShardIndex,
+        });
     }
 
     internal async Task CompleteResizeAsync()

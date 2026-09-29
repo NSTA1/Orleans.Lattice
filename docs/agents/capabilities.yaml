@@ -2268,7 +2268,7 @@ capabilities:
         source: "docs/lattice/tree-sizing.md"
       - statement: "Reads and writes remain available throughout an online resize."
         source: "docs/lattice/tree-sizing.md"
-      - statement: "The destination tree is registered with the source ShardCount and receives copied entries for shard indices 0 through ShardCount - 1 rather than inheriting the source shard map."
+      - statement: "The destination tree is registered with the source ShardCount and inherits the source shard map, and receives copied entries for every shard index that map routes to, including shards an adaptive split allocated above the pinned count."
         source: "docs/lattice/tree-sizing.md"
       - statement: "The alias swap carries the logical tree's configuration overrides onto the live resized copy."
         source: "docs/lattice/tree-sizing.md"

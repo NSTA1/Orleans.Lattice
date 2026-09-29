@@ -204,7 +204,7 @@ Deletion, recovery and purge keep one deletion record per tree ID. Three situati
 
 ### Retiring a resized tree's original copy
 
-A populated tree's first `ResizeAsync` copies the tree into a new physical tree - its shards `0` to `ShardCount - 1`, within the limits [Tree Sizing](tree-sizing.md#how-it-works) describes - and aliases the tree's ID to it, which leaves the original copy under the tree's own ID. The resize's cleanup phase retires that copy through the same soft delete and deferred purge as `DeleteTreeAsync`, with two differences, because the registry entry and the compaction schedule under that ID now belong to the live, resized tree:
+A populated tree's first `ResizeAsync` copies the tree into a new physical tree - every shard its shard map routes to, as [Tree Sizing](tree-sizing.md#how-it-works) describes - and aliases the tree's ID to it, which leaves the original copy under the tree's own ID. The resize's cleanup phase retires that copy through the same soft delete and deferred purge as `DeleteTreeAsync`, with two differences, because the registry entry and the compaction schedule under that ID now belong to the live, resized tree:
 
 - The retirement leaves the [tombstone compaction](tombstone-compaction.md) reminder registered; the compaction pass resolves the alias and compacts the resized copy.
 - The purge that follows clears the retired shards but never removes the tree's registry entry, so the alias and the tree's sizing survive and `TreeExistsAsync` keeps returning `true`.
@@ -213,7 +213,7 @@ The retirement is physical maintenance, not a logical delete: it publishes no `T
 
 A later resize retires the previous resized copy, whose ID is its own, with the same silent soft delete but without keeping its registry entry, so that copy is unregistered when its purge completes.
 
-The alias swap has already dropped the retired copy's shard map and split allocation mark from the tree's registry entry by the time the retirement runs, so the retirement walks only shards `0` through the pinned shard count less one: a shard an [adaptive shard split](shard-splitting.md) had added to the retired copy is neither marked deleted nor purged, and because the resize did not copy it either, the keys it holds stay in storage, reachable through the tree again only if the resize is undone.
+The alias swap carries the shard map and split allocation mark onto the tree's registry entry, and before a later resize retires the previous copy it records the tree's current shard map and split allocation mark on that copy's own entry, so either retirement walks every shard an [adaptive shard split](shard-splitting.md) had added to the retired copy, and marks it deleted and purges it with the rest.
 
 ### Deleting an aliased tree
 

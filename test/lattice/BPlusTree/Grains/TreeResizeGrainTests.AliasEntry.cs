@@ -62,7 +62,7 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
-    public async Task SwapAlias_drops_the_retired_physical_trees_layout()
+    public async Task SwapAlias_drops_the_retired_physical_trees_wal_layout_and_routes_by_the_resized_copy()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         PrepareSwap(state, $"{TreeId}/resized/op1");
@@ -77,13 +77,47 @@ public partial class TreeResizeGrainTests
 
         await grain.SwapAliasAsync();
 
-        // The shard map, split high-water mark and WAL layout describe the
-        // retired copy; the resized copy carries its own.
+        // The WAL layout describes the retired copy. The routing is the resized
+        // copy's, which here was registered without a map (an unsplit source).
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
             e.ShardMap == null
             && e.NextShardIndex == null
             && e.WalPartitions == null
             && e.WalPlacement == null));
+    }
+
+    [Test]
+    public async Task SwapAlias_carries_the_resized_copys_split_routing_onto_the_logical_tree()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var snapshotTreeId = $"{TreeId}/resized/op1";
+        PrepareSwap(state, snapshotTreeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var slots = (int[])ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, ShardCount).Slots.Clone();
+        slots[0] = 3;
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry
+        {
+            ShardCount = ShardCount,
+            ShardMap = new ShardMap { Slots = slots, Version = 7 },
+            NextShardIndex = 3,
+        }));
+        registry.GetEntryAsync(snapshotTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry
+        {
+            ShardCount = ShardCount,
+            ShardMap = new ShardMap { Slots = (int[])slots.Clone(), Version = 7 },
+            NextShardIndex = 3,
+        }));
+
+        await grain.SwapAliasAsync();
+
+        // Dropping the map would route the split slot back to shard 0 of the
+        // resized copy, which the copy never populated for it (issue 3880).
+        await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
+            e.ShardMap != null
+            && e.ShardMap.Slots[0] == 3
+            && e.ShardMap.Slots.SequenceEqual(slots)
+            && e.ShardMap.Version == 8
+            && e.NextShardIndex == 3));
     }
 
     [Test]
