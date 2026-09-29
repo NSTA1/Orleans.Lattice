@@ -114,6 +114,14 @@ internal sealed partial class BPlusLeafGrain
             && _replayAdmissionPhase == ReplayAdmissionPhase.RefusedAdmission;
 
     /// <summary>
+    /// The <c>arm</c> tag value of this activation's most recent replay-admission
+    /// refusal (issue #3921): <c>wait_exceeded</c> or <c>no_progress</c>, or
+    /// <see langword="null"/> before any. Always one of the frozen tag strings on
+    /// <see cref="LatticeMetrics"/>, so recording it allocates nothing.
+    /// </summary>
+    private string? _replayAdmissionRefusalArm;
+
+    /// <summary>
     /// Counts a replay-admission refusal into the silo tally and, at most once per
     /// <see cref="ReplayAdmissionRefusalLogInterval"/>, writes the summary line.
     /// Never throws: it runs on the terminal path of the replay barrier, where an
@@ -132,16 +140,23 @@ internal sealed partial class BPlusLeafGrain
 
             logger.LogWarning(
                 "WAL replay admission refused {Refusals} leaf replay(s) on this silo since the previous line "
-                + "({SincePreviousSeconds}s ago; 0 means the first), most recently leaf {GrainId} on tree {TreeId}. "
-                + "Gate: {Ceiling} permit(s), {QueuedWaiters} admitted waiter(s). Expected backpressure, not a "
-                + "fault: the request fails with a retryable LatticeSaturatedException and the next data "
-                + "operation re-arms the replay. Exact count: orleans.lattice.saturation.refusals "
-                + "(source replay_permit_admission). At most one line per {IntervalSeconds}s. See "
-                + "docs/lattice/configuration.md#walreplaypermitqueuedepthperpermit.",
+                + "({SincePreviousSeconds}s ago; 0 means the first), most recently leaf {GrainId} on tree {TreeId} "
+                + "on the {Arm} arm. Gate: {Ceiling} permit(s), {QueuedWaiters} admitted waiter(s). Expected "
+                + "backpressure, not a fault: the request fails with a retryable LatticeSaturatedException and "
+                + "the next data operation re-arms the replay. The arms have opposite remedies: wait_exceeded "
+                + "means queued waits are completing slowly, so too much is queued; no_progress means no permit "
+                + "has been released to the queue for WalReplayPermitMaxQueueWait, so the replays holding the "
+                + "permits are slow (read orleans.lattice.wal.replay.permit_hold against "
+                + "orleans.lattice.wal.replay.permits_served), and raising WalMaterialiserMaxConcurrentReplays "
+                + "on a store-bound silo makes it worse. Exact count per arm: "
+                + "orleans.lattice.saturation.refusals (source replay_permit_admission, tag arm). At most one "
+                + "line per {IntervalSeconds}s. See docs/lattice/configuration.md#walreplaypermitqueuedepthperpermit "
+                + "and #walmaterialisermaxconcurrentreplays.",
                 refusals,
                 (long)since.TotalSeconds,
                 context.GrainId,
                 treeId,
+                _replayAdmissionRefusalArm ?? "unknown",
                 Volatile.Read(ref _replayConcurrencyCeiling),
                 Volatile.Read(ref _queuedReplayPermitWaiters),
                 (long)ReplayAdmissionRefusalLogInterval.TotalSeconds);
