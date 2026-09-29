@@ -14,9 +14,12 @@ namespace Orleans.Lattice.Api.Apps;
 /// <remarks>
 /// <para>
 /// <b>Gate.</b> Every verb evaluates the caller through the shared <see cref="AppRoleGrantEvaluator"/> - the
-/// evaluation that gates the app MCP tools - against the install recorded in the current registry snapshot,
-/// and serves nothing unless the caller holds at least one role of that enabled install. The evaluation
-/// happens before any source is read.
+/// evaluation that gates the app MCP tools and that the app bridge's grants are built from - against the install
+/// recorded in the current registry snapshot, and serves nothing unless the caller holds at least one role of
+/// that enabled install. One rule: a binding grants the role - the caller is a member of a group the install binds
+/// to it - and the access gate can only take it away, when it explicitly denies the caller the role. Rights the
+/// caller holds of its own never add a role, so the roles reported to the app's frame are exactly the ones the
+/// bridge honours. The evaluation happens before any source is read.
 /// </para>
 /// <para>
 /// <b>Fail closed, and a denial looks like absence.</b> A missing membership context, a missing collaborator, a

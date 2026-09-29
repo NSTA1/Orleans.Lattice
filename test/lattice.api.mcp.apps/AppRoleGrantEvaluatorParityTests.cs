@@ -7,9 +7,10 @@ using Orleans.Lattice.Auth;
 namespace Orleans.Lattice.Api.Mcp.Apps.Tests;
 
 /// <summary>
-/// Regression coverage for the extraction of the shared app-role evaluation: the app MCP tool surface offers a
-/// tool exactly when <see cref="AppRoleGrantEvaluator"/> reports the caller holds the tool's role, across a
-/// grant matrix, so the tool gate and the app workspace cannot drift apart.
+/// Parity between the surfaces that answer "does this caller hold app role R?": the app MCP tool surface offers
+/// a tool exactly when <see cref="AppRoleGrantEvaluator"/> - the evaluation the app workspace reports - says the
+/// caller holds the tool's role, across a binding matrix. Every case also gives the caller broad rights of its
+/// own, which must never add a role (#3902).
 /// </summary>
 [TestFixture]
 public sealed class AppRoleGrantEvaluatorParityTests
@@ -35,39 +36,53 @@ public sealed class AppRoleGrantEvaluatorParityTests
         ["notes_edit"] = "editor",
     };
 
-    private static readonly string[] GrantMatrix =
+    private static readonly object[] BindingMatrix =
     [
-        "none", "read-notes", "write-notes", "read-write-notes", "read-write-drafts", "other-subject", "filtered-everywhere",
+        new object[] { "none", Array.Empty<string>() },
+        new object[] { "reader", new[] { "reader" } },
+        new object[] { "writer", new[] { "writer" } },
+        new object[] { "editor", new[] { "editor" } },
+        new object[] { "reader-and-editor", new[] { "reader", "editor" } },
+        new object[] { "another-subject-bound", Array.Empty<string>() },
     ];
 
-    private static void Apply(string grantCase, GrantingAccessGate gate)
+    private static void Apply(string bindingCase, IEnumerable<string> roles, AppMcpTestHost host)
     {
-        switch (grantCase)
-        {
-            case "read-notes": gate.Grant("alice", "a/notes/notes", LatticeOperation.Read); break;
-            case "write-notes": gate.Grant("alice", "a/notes/notes", LatticeOperation.Write); break;
-            case "read-write-notes": gate.Grant("alice", "a/notes/notes", LatticeOperation.Read | LatticeOperation.Write); break;
-            case "read-write-drafts": gate.Grant("alice", "a/notes/drafts", LatticeOperation.Read | LatticeOperation.Write); break;
-            case "other-subject": gate.Grant("bob", "a/notes/notes", LatticeOperation.Read | LatticeOperation.Write); break;
-            case "filtered-everywhere": gate.Override = static _ => LatticeAccessDecision.Filtered(static _ => false); break;
-        }
+        // Broad rights of the caller's own on every tree the app declares: capability that confers no role.
+        host.Gate
+            .Grant("alice", "a/notes/notes", LatticeOperation.Read | LatticeOperation.Write)
+            .Grant("alice", "a/notes/drafts", LatticeOperation.Read | LatticeOperation.Write);
+        host.Membership.Join("alice", "cluster-admins");
+        if (bindingCase == "another-subject-bound")
+            host.Bind("bob", "editor");
+        foreach (var role in roles)
+            host.Bind("alice", role);
     }
-    [TestCaseSource(nameof(GrantMatrix))]
-    public async Task The_tool_gate_offers_exactly_the_tools_of_the_roles_the_evaluator_reports_held(string grantCase)
+
+    [TestCaseSource(nameof(BindingMatrix))]
+    public async Task The_tool_gate_offers_exactly_the_tools_of_the_roles_the_evaluator_reports_held(string bindingCase, string[] bound)
     {
         var host = new AppMcpTestHost()
             .Provide(Notes, AppMcpTestData.Tool("read"), AppMcpTestData.Tool("write"), AppMcpTestData.Tool("edit"))
             .Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1));
         host.Source.Add(ThreeRoleManifest());
-        Apply(grantCase, host.Gate);
+        Apply(bindingCase, bound, host);
 
         var advertised = (await host.AdvertisedAsync()).Where(ToolRoles.ContainsKey).Select(t => ToolRoles[t]).ToHashSet();
         var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source, host.Gate);
-        var evaluation = await evaluator.EvaluateAsync(TenantId.Default, Notes, new LatticeSubject("alice"), CancellationToken.None);
+        using var credential = LatticeCredentialContext.With(new LatticeCredential("t", principalId: "alice"));
+        var alice = await host.Membership.ResolveCurrentAsync();
+        var evaluation = await evaluator.EvaluateAsync(TenantId.Default, Notes, alice, CancellationToken.None);
 
-        Assert.That(evaluation, Is.Not.Null);
-        Assert.That(evaluation!.HeldRoles, Is.EquivalentTo(advertised));
-        Assert.That(evaluation.HasGrant, Is.EqualTo(advertised.Count > 0));
+        Assert.Multiple(() =>
+        {
+            Assert.That(evaluation, Is.Not.Null);
+            Assert.That(evaluation!.HeldRoles, Is.EquivalentTo(advertised));
+            Assert.That(evaluation.HeldRoles, Is.EquivalentTo(bound), "a role is held exactly when the caller is bound to it");
+            Assert.That(evaluation.HasGrant, Is.EqualTo(advertised.Count > 0));
+            Assert.That(host.Gate.Requests.Count == 0, Is.EqualTo(bound.Length == 0),
+                "the gate is asked only once the binding holds, so the caller's own rights never add a role");
+        });
     }
 
     [Test]
@@ -77,12 +92,12 @@ public sealed class AppRoleGrantEvaluatorParityTests
             .Provide(Notes, AppMcpTestData.Tool("read"))
             .Publish(1, AppMcpTestData.Record(TenantId.Default, Notes, AppMcpTestData.V1, AppRegistryLifecycleState.Disabled));
         host.Source.Add(ThreeRoleManifest());
-        host.Gate.Grant("alice", "a/notes/notes", LatticeOperation.Read);
+        host.Bind("alice");
 
         var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source, host.Gate);
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
-        Assert.That(await evaluator.EvaluateAsync(TenantId.Default, Notes, new LatticeSubject("alice"), CancellationToken.None), Is.Null);
+        Assert.That(await evaluator.EvaluateAsync(TenantId.Default, Notes, new LatticeSubject("alice", ["g-reader"]), CancellationToken.None), Is.Null);
     }
 
     [Test]

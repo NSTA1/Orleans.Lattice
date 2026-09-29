@@ -12,8 +12,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.App;
 /// <summary>
 /// A deterministic, in-memory composition of the MCP discovery core around a caller-supplied
 /// repository-context registration: a fixed credential for <see cref="Principal"/>, a fixed
-/// group access set, a settable app registry projection, the real in-image app source, and a
-/// granting access gate, all behind the real <see cref="LatticeApiMcpSessionConfigurator"/>
+/// group access set, a settable app registry projection, the real in-image app source, a
+/// membership context whose groups grant app roles by binding, and an access gate that can
+/// only take a bound role away, all behind the real <see cref="LatticeApiMcpSessionConfigurator"/>
 /// fed exactly the tool groups and app tool sources the container resolves.
 /// </summary>
 internal sealed class RepoContextAppTestHost
@@ -38,7 +39,7 @@ internal sealed class RepoContextAppTestHost
             .AddSingleton<IAppRegistryProjection>(Projection)
             .AddSingleton<IAppSource, InImageAppSource>()
             .AddSingleton<ILatticeAccessGate>(Gate)
-            .AddSingleton<ILatticeMembershipContext, RepoContextAppMembershipContext>()
+            .AddSingleton<ILatticeMembershipContext>(Membership)
             .AddSingleton<ITenantContextResolver, RepoContextAppTenantResolver>();
         register(services);
         Services = services.BuildServiceProvider();
@@ -46,11 +47,28 @@ internal sealed class RepoContextAppTestHost
 
     public RepoContextAppRegistryProjection Projection { get; } = new();
 
-    public RepoContextAppGrantingGate Gate { get; } = new();
+    /// <summary>The group <see cref="Record"/> binds to the app's reader role.</summary>
+    public const string ReadersGroup = "g-repo-context-readers";
+
+    /// <summary>
+    /// The access gate: the whole policy, including the install's compiled app rules. It allows by default (the
+    /// app rules are live and nothing denies), so a fixture removes a bound role with an explicit deny.
+    /// </summary>
+    public RepoContextAppGrantingGate Gate { get; } = new() { AllowByDefault = true };
+
+    /// <summary>The membership the host resolves callers through; join a caller to a bound group to give it a role.</summary>
+    public RepoContextAppMembershipContext Membership { get; } = new();
+
+    /// <summary>Joins <see cref="Principal"/> to <see cref="ReadersGroup"/>, which <see cref="Record"/> binds to the reader role.</summary>
+    public RepoContextAppTestHost BindReader()
+    {
+        Membership.Join(Principal, ReadersGroup);
+        return this;
+    }
 
     public ServiceProvider Services { get; }
 
-    /// <summary>A registry record for the repository-context app at the manifest's version.</summary>
+    /// <summary>A registry record for the repository-context app at the manifest's version, binding its reader role to <see cref="ReadersGroup"/>.</summary>
     public static AppRegistryRecord Record(AppRegistryLifecycleState state = AppRegistryLifecycleState.Enabled)
     {
         var version = RepoContextAppManifest.Load().Manifest!.Identity.Version;
@@ -62,6 +80,7 @@ internal sealed class RepoContextAppTestHost
             Provenance = new AppProvenance(),
             Ceiling = AppCapabilityCeiling.Structural(LatticeOperation.Read | LatticeOperation.RangeRead),
             CeilingVersion = version,
+            RoleBindings = [AppRoleBinding.Create("reader", ReadersGroup)],
             State = state,
             Revision = 1,
         };

@@ -52,7 +52,7 @@ public sealed class LatticeAppWorkspaceTests
     [Test]
     public async Task A_role_held_only_in_another_tenant_grants_nothing_in_the_active_tenant()
     {
-        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record(tenant: AppsControlHarness.Acme)).GrantReader(AppsControlHarness.Acme);
+        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record(tenant: AppsControlHarness.Acme)).GrantReader();
         harness.Tenants.Tenant = TenantId.Default;
 
         await AssertIndistinguishableFromAbsentAsync(harness);
@@ -61,7 +61,7 @@ public sealed class LatticeAppWorkspaceTests
     [Test]
     public async Task A_role_in_the_active_tenant_is_honoured_for_that_tenant()
     {
-        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record(tenant: AppsControlHarness.Acme)).GrantReader(AppsControlHarness.Acme);
+        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record(tenant: AppsControlHarness.Acme)).GrantReader();
         harness.Tenants.Tenant = AppsControlHarness.Acme;
 
         Assert.That((await harness.Workspace.ListMyAppsAsync()).Single().Slug, Is.EqualTo(AppsControlHarness.Slug));
@@ -129,6 +129,90 @@ public sealed class LatticeAppWorkspaceTests
         var noSources = new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, harness.Sources, harness.Gate), null, harness.Tenants, harness.Membership);
         Assert.That(await noSources.GetIconAsync(AppsControlHarness.Slug), Is.Null);
     }
+
+    /// <summary>
+    /// #3902: the workspace reports the roles a caller is bound to, never the roles its other memberships or
+    /// rights would amount to. A caller bound only to the reader role holds reader only, whatever else it
+    /// belongs to - the roles the frame is told are the ones the bridge honours.
+    /// </summary>
+    [Test]
+    public async Task A_caller_bound_only_to_one_role_is_reported_holding_that_role_only()
+    {
+        var harness = new WorkspaceHarness().Publish(TwoBindingRecord()).GrantReader();
+        harness.AliceMembership.Join("cluster-admins");
+
+        var workspace = harness.Workspace;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "reader" }));
+            Assert.That((await workspace.DescribeMyAppAsync(AppsControlHarness.Slug))!.Roles.Select(r => r.Name), Is.EqualTo(new[] { "reader" }));
+        });
+    }
+
+    /// <summary>
+    /// Coordinator review of #3902: one rule on every surface - a binding grants the role, and a deny can only
+    /// take it away. A bound writer with an explicit deny on the role's tree is not reported as writer, so the UI
+    /// never shows it controls the bridge refuses; its undenied reader binding still stands.
+    /// </summary>
+    [Test]
+    public async Task A_bound_member_with_an_explicit_deny_is_not_reported_holding_the_denied_role()
+    {
+        var harness = new WorkspaceHarness().Publish(TwoBindingRecord()).GrantReader();
+        harness.AliceMembership.Join("g-writers");
+        harness.Gate.Deny(WorkspaceHarness.Alice, WorkspaceHarness.AppsTreeId(TenantId.Default, "contacts"), LatticeOperation.Write);
+
+        var workspace = harness.Workspace;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "reader" }));
+            Assert.That((await workspace.DescribeMyAppAsync(AppsControlHarness.Slug))!.Roles.Select(r => r.Name), Is.EqualTo(new[] { "reader" }));
+        });
+    }
+
+    [Test]
+    public async Task A_bound_member_denied_every_role_sees_nothing()
+    {
+        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record()).GrantReader();
+        foreach (var tree in new[] { "a/crm/contacts", "a/billing/ledger" })
+        {
+            harness.Gate.Deny(WorkspaceHarness.Alice, tree, LatticeOperation.Read);
+        }
+
+        await AssertIndistinguishableFromAbsentAsync(harness);
+    }
+
+    [Test]
+    public async Task A_caller_bound_to_the_writer_role_holds_writer()
+    {
+        var harness = new WorkspaceHarness().Publish(TwoBindingRecord());
+        harness.AliceMembership.Join("g-writers");
+
+        Assert.That((await harness.Workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "writer" }));
+    }
+
+    [Test]
+    public async Task Re_binding_a_role_moves_it_on_the_next_evaluation()
+    {
+        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record()).GrantReader();
+        var workspace = harness.Workspace;
+        Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "reader" }));
+
+        harness.Publish(WorkspaceHarness.Record() with { Revision = 8, RoleBindings = [AppRoleBinding.Create("reader", "g-new-readers")] });
+
+        Assert.That(await workspace.ListMyAppsAsync(), Is.Empty, "the old group no longer holds the role");
+
+        harness.AliceMembership.Join("g-new-readers");
+
+        Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "reader" }));
+    }
+
+    private static AppRegistryRecord TwoBindingRecord() =>
+        WorkspaceHarness.Record() with
+        {
+            RoleBindings = [AppRoleBinding.Create("reader", WorkspaceHarness.ReadersGroup), AppRoleBinding.Create("writer", "g-writers")],
+        };
 
     [Test]
     public void Constructor_rejects_a_null_evaluator() =>
