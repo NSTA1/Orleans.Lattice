@@ -41,9 +41,11 @@ internal sealed record TreeRegistryEntry
     /// <summary>
     /// Physical tree ID that this logical tree ID maps to, or <c>null</c> if the
     /// logical ID is the physical ID (the default). Used by tree aliasing to redirect
-    /// reads and writes to a different physical tree after a resize operation.
-    /// Only a single level of indirection is supported - a physical tree must not
-    /// itself have a <see cref="PhysicalTreeId"/>.
+    /// reads and writes to a different physical tree after a resize, shadow-cutover
+    /// restore, schema remediation, or explicit alias assignment. Only a single
+    /// level of indirection is supported - a physical tree must not itself have a
+    /// <see cref="PhysicalTreeId"/>. Derived copies record the logical tree they
+    /// were created to back in <see cref="DerivedFrom"/>.
     /// </summary>
     [Id(3)] public string? PhysicalTreeId { get; init; }
 
@@ -250,7 +252,7 @@ internal sealed record TreeRegistryEntry
     /// <summary>
     /// Logical tree id this physical tree was created to back, or <see langword="null"/>
     /// for an independent tree (including entries written before this field existed).
-    /// Stamped at creation by resize, shadow restore, and schema remediation.
+    /// Stamped at creation by resize, shadow-cutover restore, and schema remediation.
     /// Standalone snapshots are independent trees. Restore shadows also retain
     /// <see cref="RestoreShadowOfTreeId"/> for restore-specific classification.
     /// </summary>

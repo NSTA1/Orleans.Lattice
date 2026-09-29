@@ -216,9 +216,9 @@ internal sealed class LatticeSnapshotProvider(
                     continue;
                 }
 
-                // Carry the entry's absolute expiry so a TTL key stays a TTL
-                // key on the peer the snapshot seeds; dropping it installs the
-                // row as durable there.
+                // Carry the entry's absolute expiry. Last-writer-wins receivers
+                // install it verbatim; typed CRDT committed rows currently
+                // merge through a path that writes the resulting key durable.
                 yield return new SnapshotEntry
                 {
                     Key = pair.Key,

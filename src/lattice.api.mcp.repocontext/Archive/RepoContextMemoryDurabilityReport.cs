@@ -140,7 +140,8 @@ public static class RepoContextMemoryDurabilityReport
         RepoContextMemoryArchiveRestoreMode.Off =>
             " (the archive is written but is never imported automatically; restore it by hand)",
         RepoContextMemoryArchiveRestoreMode.Auto =>
-            " (imported at startup only when the memory tree is empty, which is the state a wipe leaves)",
+            " (imported at startup only when the memory tree is empty, which is the state a wipe leaves, "
+            + "or when a restore-state marker says an earlier import was left partial)",
         _ =>
             " (imported at every startup and merged into whatever is already stored; the merge is a "
             + "CRDT join, so a newer live entry is not regressed by an older archived one)",

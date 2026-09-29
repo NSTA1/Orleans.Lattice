@@ -142,6 +142,10 @@ Expired entries are **intentionally preserved** on the replication-layer code pa
 
 This is required for CRDT convergence: two replicas with different views of "now" must still agree on the last-writer-wins value for a key, and that resolution needs access to the entry's HLC timestamp even after its `ExpiresAtTicks` has passed. User-facing read paths apply the expiry filter; the replication layer does not. Read-cache deltas (`StateDelta` from the primary to `LeafCacheGrain`) follow the same rule - the cache receives expired entries verbatim and filters them at read time.
 
+## Cross-cluster replication
+
+A replicated last-writer-wins write carries the absolute expiry the source resolved rather than a relative TTL, so inter-cluster clock skew cannot shift it on the receiving cluster, as for a replicated CRDT delta (see [Replication and cold rebuild](#replication-and-cold-rebuild)). A peer seeded by a whole-tree [snapshot bootstrap](../lattice.replication/snapshot-bootstrap.md#semantics), or repaired by the [anti-entropy bootstrap fallback](../lattice.replication/anti-entropy-bootstrap-fallback.md), likewise receives each copied key with the source entry's absolute expiry (`0` for a durable key), so a key with a TTL on the source keeps its expiry instant on the peer.
+
 ## Bulk load
 
 `BulkLoadAsync` and the streaming bulk-load overloads do not currently accept a TTL. Entries loaded via bulk load have no expiry. Follow-on `SetAsync(..., TimeSpan)` calls can introduce a TTL on specific keys if needed.

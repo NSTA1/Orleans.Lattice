@@ -962,7 +962,7 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
                 new KeyValuePair<string, object?>(PhaseTagKey, PhaseOpeningTag),
                 new KeyValuePair<string, object?>(ProgressTagKey, ProgressFaultedTag));
 
-            // The five 'cause' values are deliberately NOT pre-minted, and that is
+            // The seven 'cause' values are deliberately NOT pre-minted, and that is
             // the one place this reporter departs from "prime everything". They
             // partition 'faulted' rather than the whole population, so a zero on a
             // cause is only interpretable once 'faulted' is itself non-zero - at
@@ -982,10 +982,11 @@ internal sealed class RepoContextAnnBuildSliceReporter : IDisposable
     /// against the progress reported by the previous step.
     /// </summary>
     /// <param name="previous">
-    /// Progress after the previous step of this activation, or the default value
-    /// before any step has been taken. The default is the correct baseline: it
-    /// names phase <see cref="VectorIndexBuildPhase.NotStarted"/> and zero of
-    /// everything, which is precisely what a build that has not stepped holds.
+    /// Progress reading to compare the current step against, normally the reading
+    /// after this activation's previous step, or the default value before any step
+    /// has been taken. The default is the correct baseline: it names phase
+    /// <see cref="VectorIndexBuildPhase.NotStarted"/> and zero of everything,
+    /// which is precisely what a build that has not stepped holds.
     /// </param>
     /// <param name="current">Progress after the step being classified.</param>
     /// <returns>What the step did.</returns>

@@ -76,10 +76,12 @@ the root-of-trust that seeds the first rules and performs break-glass operations
 
 Policy propagation is **eventually consistent** by default: a rule change takes
 effect once the destination's compiled snapshot rebuilds off the updated policy
-tree, which happens continuously in the background. A tree that needs a caller to
-observe a policy change before its next operation can opt into a **strict epoch
-fence** by naming the tree in the strict-consistency set; strict behaviour is
-opt-in and off by default. The trade-offs are covered in the
+tree, which happens continuously in the background. A tree whose writes must not
+run ahead of a policy change can opt into a **strict epoch fence** by naming the
+tree in the strict-consistency set: a user write to it is then rejected while this
+cluster's compiled policy is older than a floor the caller stamped, and reads are
+never fenced. Strict behaviour is opt-in and off by default. The trade-offs are
+covered in the
 [authorization README](../lattice.auth/README.md#consistency-modes).
 
 ## Enforcement on the data path
@@ -94,6 +96,13 @@ narrowed, so a caller never deletes a subset while believing it deleted a range.
 The State API honours the same read-access visibility when membership and
 authorization are registered, so a browsing operator only sees the keys the
 subject may read.
+
+Alias changes carry one further, ownership-based check that caller rights cannot
+override: every alias assignment - resize, restore and remediation included - is
+put to the core `ITreeOwnershipGuard` seam, which allows every alias unless the
+host registers an ownership provider (the [apps package](../lattice.apps/README.md)
+does), and a refusal throws `LatticeTreeOwnershipDeniedException`. See
+[Tree Registry](tree-registry.md#ownership-bounded-aliasing).
 
 ## External surfaces
 

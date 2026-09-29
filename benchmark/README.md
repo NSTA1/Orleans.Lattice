@@ -196,8 +196,12 @@ Per-scenario knobs live in `scenarios/<slug>.env`. The files set these keys (a f
 
 No shipped `.env` sets every knob the stack reads. `docker-compose.yml` and
 `docker-compose.replication.yml` also interpolate `BENCH_*` overrides that only
-the environment supplies - for example `BENCH_TREE_ID`, `BENCH_BATCH_SIZE`,
-`BENCH_FLUSH_INTERVAL`, `BENCH_CHANNEL_CAPACITY`, `BENCH_DROP_ON_FULL`,
+the environment supplies - the Orleans and replication identities
+(`BENCH_CLUSTER_ID`, `BENCH_SERVICE_ID`, `BENCH_REPLICATION_CLUSTER_ID` and the
+replica's `BENCH_REPLICA_CLUSTER_ID`), `BENCH_TREE_ID` (the tree the sink and every
+driver use), the sink's `BENCH_BATCH_SIZE`, `BENCH_FLUSH_INTERVAL`,
+`BENCH_CHANNEL_CAPACITY` and `BENCH_DROP_ON_FULL`, the read driver's keyspace
+sample (`BENCH_READ_KEYSPACE_REFRESH`, `BENCH_READ_KEYSPACE_SAMPLE`),
 `BENCH_SHIP_PHASE_TIMER_MS`, the `BENCH_LATTICE_WAL_*` knobs that
 `benchmark-attribution.ps1` stamps, and the `BENCH_WAL_RETRY_*` Azure Table WAL
 retry budget - each falling back to the compose file's default, where an empty
@@ -239,13 +243,16 @@ The initialisation script:
    - **Throughput plateau** - if `lattice_commits_per_second` grew less than 10 %
      between the previous rung and this one despite the fleet roughly doubling,
      the silo is past the commit-path knee (adding load no longer adds work).
-   - **Commit p99 growth** - if the leaf-commit tail jumped > 2× relative to
+   - **Commit p99 growth** - if the leaf-commit tail jumped > 2x relative to
      the smallest rung, the silo is past the latency knee.
 4. Stops climbing the ladder once the first knee rung is observed (provided at
    least one healthy rung was found below it), then **bisects** between the
    highest healthy rung and the first knee rung until the window narrows to
-   ≤ 250 vehicles. Without bisection, the geometric ladder's 2× step leaves
-   the actual saturation point loose to within a factor of two; bisection
+   at most 250 vehicles (`-BisectMinWindow`) or `-BisectIterations` rungs have
+   run. A bisection rung keeps the drop and p99 tests but swaps the plateau test
+   for a flatness test: it is a knee when its throughput is less than 5 % above
+   the highest healthy rung's. Without bisection, the geometric ladder's 2x step
+   leaves the actual saturation point loose to within a factor of two; bisection
    closes that down to one operating-fleet bucket of resolution.
 5. Picks **65 %** of the saturation knee as the operating fleet size, rounded
    down to the nearest 250 to keep the value tidy. The 65 % safety margin is
@@ -268,9 +275,9 @@ The initialisation script:
    BENCH_FLEET_SIZE=750
    ```
 
-The total wall-clock cost is roughly _(rungs + bisection iterations) ×
+The total wall-clock cost is roughly _(rungs + bisection iterations) x
 (warmup + duration + 60 s docker overhead)_ - the default 6-rung ladder plus
-up to 4 bisection rungs typically completes in 10–15 minutes on commodity
+up to 4 bisection rungs typically completes in 10-15 minutes on commodity
 hardware (often less, because the ladder short-circuits as soon as the first
 knee is observed).
 
@@ -332,7 +339,7 @@ The script:
 1. Reads `scenarios/<slug>.env`, exporting every key as a process env var.
 2. Picks the right compose-file overlay (replication or single-cluster).
 3. Syncs the Orleans.Lattice dashboards from `src/lattice.dashboards/Grafana/`
-   into `benchmark/grafana/dashboards/` (substituting `${DS_PROMETHEUS}` → `prometheus`).
+   into `benchmark/grafana/dashboards/` (substituting `${DS_PROMETHEUS}` -> `prometheus`).
 4. `docker compose up --build -d` (`-NoBuild` drops `--build` to reuse images already built).
 5. Polls `/api/ping/health` until the silo + api are reachable.
 6. Seeds the configured fleet size via `/api/vehicles/batch` and starts every vehicle.
@@ -468,6 +475,10 @@ question without templating-var juggling:
 | `lat-hist-wal-performance` | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Has WAL-append or in-memory Apply latency regressed? The legacy shadow-write tile is retained for backwards comparison; the commit step it reads no longer exists, so it shows no value for any recent run. |
 | `lat-hist-atomic-writes`  | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga-health panels | Has the `SetManyAtomicAsync` saga cost regressed? Hand-maintained, not generated (see below). Its saga-health panels query a raw `orleans_lattice_*` series that the history push never writes, so they render empty; see [`history/README.md`](./history/README.md#dashboards). |
 
+No persona covers the `-azuretable` scenarios, `atomic-write` or
+`atomic-write-replication` (the atomic-writes dashboard reads only the `microbench`
+rows), so their runs reach the history store but no history dashboard plots them.
+
 The Overview dashboard is the recommended landing page: it shows every
 persona's headline KPIs in a single view (one row per persona, scoped to
 that persona's scenarios) so a regression in any workload class is visible
@@ -532,7 +543,9 @@ four meters feed the `results.json` capture and can be queried in Prometheus
 directly. Five of the synced dashboards - Identity & Authorization, Backup &
 Restore, Replication Transport (gRPC), Autoscaling Signal and Per-Tenant
 Observability - bind only to meters the benchmark silo does not export, so they
-render empty on this stack.
+render empty on this stack. The Grain Index and Materialised Views dashboards read
+the exported core meter but stay empty too, because the benchmark silo registers no
+grain index and declares no view.
 
 Prometheus is at <http://localhost:9090> for raw query access.
 
@@ -557,12 +570,16 @@ primitive operations (`PointRead`, `PointWrite`, `PointGetMany`, `BulkLoad`,
 `SetManyAtomic`, etc.) plus their parameterised / deeper-tree / atomic-tree
 variants. Several dozen narrower suites (allocation trims, fan-out collapses,
 replication apply, tag index, tenancy, ...) are opt-in via
-`BENCH_MICROBENCH_SUITE=<name>`; `host/Bench.Microbench/Program.cs` lists the
-recognised names. Scope a run via the `-Workloads` CLI override
-(comma-separated BDN globs, e.g. `-Workloads '*.PointWrite,*.PointRead'`), pick
-the fidelity via `-Fidelity` (`dry` / `quick` / `full`), and opt into per-method
-EventPipe profiling via `-Profile` (`off` / `alloc` / `cpu` / `both`; profiling
-perturbs the measurement, so a profiled run is not a cohort baseline). The
+`BENCH_MICROBENCH_SUITE=<name>` (`--suite <name>` when the harness is run
+directly); the suite dispatch in `host/Bench.Microbench/Program.cs` is the
+authoritative list of recognised names. Scope a run via the `-Workloads` CLI
+override (comma-separated BDN globs, e.g. `-Workloads '*.PointWrite,*.PointRead'`;
+a few opt-in suites that `Program.cs` dispatches before it builds the filter, such
+as `observer`, ignore it), pick the fidelity via `-Fidelity` (`dry` / `quick` /
+`full`), and opt into per-method EventPipe profiling via `-Profile` (`off` /
+`alloc` / `cpu` / `both`; profiling perturbs the measurement, so a profiled run is
+not a cohort baseline, and it needs the in-process toolchain, so the harness
+refuses it at `full` fidelity). The
 fidelity comment in `scenarios/microbench.env` carries the cost / rigour trade-off.
 
 `scenarios/microbench.env` does not set every knob the harness reads; the
@@ -623,21 +640,34 @@ A single invocation:
    `-N` per workload mode (`get-point`, `set-point`, `set-point-mv`, `get-many`,
    `set-many`, `set-many-atomic`, `set-many-atomic-2`, `cross-tree-atomic-2`,
    `cross-tree-atomic-64`) - to produce the sustained-throughput numbers under
-   real Azure Tables latency.
+   real Azure Tables latency. The two read modes are never pre-seeded here: neither
+   this script nor `run-cohort.ps1` passes `BENCH_VEHICLE_COUNT` to the silo, whose
+   default of 0 skips the read-mode seed, and every cohort runs against a fresh tree,
+   so the `get-point` and `get-many` rows time lookups of keys that were never
+   written (the miss path), not reads of stored data.
 4. Aggregates each cohort (median across N runs, default `N=3`) and rewrites the
    `perf-table:layer1` / `perf-table:layer2` marker blocks in
    `docs/lattice/performance-single-silo.md`, plus the `> Measured ...` provenance
    note that immediately follows each table.
-5. Tears the VM down (`az group delete --no-wait`) unless `-KeepVm` was passed.
+5. Tears the VM down (`az group delete --no-wait`) unless `-KeepVm` was passed;
+   a VM reused through `-ReuseVm` is never torn down, because the run did not
+   provision it.
 
 **Layer 3** (multi-silo) is opt-in (`-Layer 3` or `-Layer3`) and runs on its own:
 it provisions an Azure Container Apps rig through
 `azure-throughput/scripts/deploy-aca.ps1` (or reuses one with `-ReuseAca <prefix>`),
 sweeps the same nine workloads across the silo counts in `-SiloCounts` (default
-`1, 2, 4, 6, 8`) with `run-cohort-aca.ps1`, and rewrites the `perf-table:layer3` and
+`1, 2, 4, 6, 8`) with `run-cohort-aca.ps1`, running at least `-N` cohorts (default 3)
+per workload and silo count (unlike Layer 2, its producer seeds the read cohorts'
+keys first), and rewrites the `perf-table:layer3` and
 `perf-chart:layer3` blocks (plus the `> Measured ...` note after the table) of
 [`docs/lattice/performance-multi-silo.md`](../docs/lattice/performance-multi-silo.md)
-rather than the single-silo doc. The rig scripts and their parameters are described in
+rather than the single-silo doc. When the sweep ends it parks the silos at zero and
+tears the rig down, unless `-KeepAca` keeps it or `-ReuseAca` supplied it; `-Resume`
+continues an interrupted sweep from the rig's `state.json`, keeping every cell that
+already holds its cohorts and topping up any that do not. Replay the multi-silo doc
+with the `-Layer3` switch and `-DryRun`: `-Layer 3 -DryRun` falls through to the
+single-silo replay. The rig scripts and their parameters are described in
 [`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps).
 
 The script is the **only** way the published single-silo doc should be refreshed:
@@ -646,12 +676,20 @@ the marker blocks are mechanically managed, and a CI hygiene test
 drifts. Prose around the markers stays hand-editable.
 
 `-NamePrefix <prefix>` forces the run prefix every resource name derives from (at most
-nine characters once lower-cased and stripped of hyphens); without it the script reuses
+nine characters once lower-cased and stripped of hyphens), except that on Layer 3 a
+`-ReuseAca` prefix takes precedence over it; without it the script reuses
 `-ReuseVm`'s (or, for Layer 3, `-ReuseAca`'s) prefix or mints a fresh one. A Layer 3
 sweep can also run against a rig provisioned first with
 `azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>`, as
 `-Layer 3 -ReuseAca <prefix>` (see
 [`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps)).
+`-ReuseVm` and `-ReuseAca` are cleaned the same way, and the script looks the reused
+environment up under the cleaned name, while `azure-throughput/scripts/deploy.ps1` and
+`deploy-aca.ps1` name the resource group, and what a reuse looks up (the VM's public IP,
+the rig's run-context file), from the prefix exactly as given. Deploy an environment you
+mean to reuse under a prefix that cleaning leaves unchanged: `lat-exp` is looked up as
+`latexp` and not found, and a prefix still longer than nine characters once cleaned is
+refused.
 
 ```powershell
 ./benchmark/performance-report.ps1                                  # full sweep (~80-95 min, ~$0.50)

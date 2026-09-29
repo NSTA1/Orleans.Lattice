@@ -46,7 +46,7 @@ quota ceilings.
 
 ## Fail-closed by design
 
-Every administrative operation authorizes the caller **before** it changes
+Every tenant-administration operation authorizes the caller **before** it changes
 anything (the tenant-tier gate reads only the target tenant's record to decide) - the tenant lifecycle and the
 allowed-region set as a cluster-wide administrative operation, the tenant-tier
 operations (residency, admin subjects, cross-tenant grants, usage) for the platform
@@ -58,6 +58,11 @@ caller is refused without learning whether a tenant exists. The reserved default
 tenant can never be suspended, deleted, given quotas, have its admin subjects
 changed, or be named in a cross-tenant grant offer, and a tenant id that shadows a
 reserved namespace is rejected.
+
+`ILatticeTenantScopedTreeAdmin` adds no gate of its own and relies on the facades it
+composes: its tree verbs are authorized by the tree-administration facade, while its
+schema-policy verbs reach the in-process schema admin, which performs no
+authorization.
 
 The add-on is **opt-in**: a cluster that does not register it exposes no tenant
 administration and behaves exactly as before.

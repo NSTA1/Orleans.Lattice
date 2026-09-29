@@ -37,8 +37,9 @@ shadow-forward primitive mirrors the source's live mutations to the destination
 shard with the same index; a last-writer-wins merge on the destination
 reconciles a mirrored write with the drain's copy of the same key. Typed CRDT
 deltas (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync` and the typed accessors
-built on them) are not mirrored, so a delta applied to a source shard after that
-shard has been drained does not reach the destination.
+built on them) and bulk appends (`BulkAppendChunkAsync` and the streaming
+`BulkLoadAsync` extension) are not mirrored, so one that reaches a source shard
+after the copy has read past the key it writes does not reach the destination.
 
 When the snapshot completes, it releases the shadow-forward on every source
 shard before it reports itself complete, so writes to the source after that

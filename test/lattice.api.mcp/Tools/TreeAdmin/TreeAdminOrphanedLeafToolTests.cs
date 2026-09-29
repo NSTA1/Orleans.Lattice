@@ -235,7 +235,7 @@ public sealed class TreeAdminOrphanedLeafToolTests
             Assert.That(description, Does.Contain("bounded batch").IgnoreCase);
             Assert.That(
                 description,
-                Does.Match(@"clean bill of health[^.]*ONLY when complete=true").IgnoreCase,
+                Does.Match(@"clean bill of health[^.]*ONLY when (is)?complete=true").IgnoreCase,
                 "the clean verdict must be conditioned on completeness in the same sentence that offers it");
             Assert.That(
                 description,

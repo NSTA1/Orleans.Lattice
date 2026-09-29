@@ -49,8 +49,9 @@ public class LatticeOptions
     /// the <see cref="ILattice"/> write surface (<see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
     /// and its TTL overload, <see cref="ILattice.SetIfVersionAsync"/>,
     /// <see cref="ILattice.GetOrSetAsync"/>, <see cref="ILattice.SetManyAsync"/>,
-    /// <see cref="ILattice.SetManyWherePredicateAsync"/>,
-    /// and the CRDT delta-apply path). When set, a write whose key is longer
+    /// <see cref="ILattice.SetManyWherePredicateAsync"/>, the single-tree
+    /// atomic batch overloads, guarded atomic batches, and the CRDT
+    /// delta-apply path). When set, a write whose key is longer
     /// than this bound is rejected with an <see cref="ArgumentException"/>
     /// before any shard work, so a client cannot drive unbounded heap growth
     /// by writing pathologically large keys (memory-exhaustion DoS).
@@ -66,9 +67,11 @@ public class LatticeOptions
     /// whose value exceeds this many bytes is rejected with an
     /// <see cref="ArgumentException"/> before any shard work, so a client
     /// cannot drive unbounded heap growth by writing pathologically large
-    /// values (memory-exhaustion DoS). <see langword="null"/> (the default)
-    /// leaves value size unbounded, preserving the historical behaviour. When
-    /// set it must be at least <c>1</c>, enforced by the options validator.
+    /// values (memory-exhaustion DoS). The same checked write surface as
+    /// <see cref="MaxKeyLength"/> is covered. <see langword="null"/> (the
+    /// default) leaves value size unbounded, preserving the historical
+    /// behaviour. When set it must be at least <c>1</c>, enforced by the
+    /// options validator.
     /// </summary>
     public int? MaxValueSizeBytes { get; set; }
 
@@ -89,7 +92,10 @@ public class LatticeOptions
     /// before the aggregate refreshes, and a freshly-activated tree fails open
     /// until its first sample lands. Replication and atomic-write-saga apply
     /// paths bypass the cap so an incoming replicated write is never rejected.
-    /// Resolved per tree via <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeName)</c>.
+    /// Delete-only atomic batches, cross-tree atomic batches, bulk loads and
+    /// merge applies bypass it as well; single-tree atomic batches that include
+    /// an upsert are checked before their saga starts. Resolved per tree via
+    /// <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeName)</c>.
     /// </para>
     /// </summary>
     public long? MaxLiveKeys { get; set; } = DefaultMaxLiveKeys;
@@ -104,8 +110,8 @@ public class LatticeOptions
     /// dimension. <see langword="null"/> (the default) leaves estimated bytes
     /// unbounded; enforcement is strictly opt-in and fail-open. When set it must
     /// be at least <c>1</c>, enforced by the options validator. Shares the
-    /// best-effort / approximate, replication-bypassing semantics of
-    /// <see cref="MaxLiveKeys"/>. Resolved per tree via
+    /// best-effort / approximate, bypass and single-tree atomic-batch
+    /// semantics of <see cref="MaxLiveKeys"/>. Resolved per tree via
     /// <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeName)</c>.
     /// </summary>
     public long? MaxEstimatedBytes { get; set; } = DefaultMaxEstimatedBytes;
@@ -228,7 +234,7 @@ public class LatticeOptions
     /// split is triggered, measured as the leaf's running
     /// <c>StateBytes</c> total (UTF-8 key length plus stored value length per
     /// entry). Complements the structural
-    /// <see cref="BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/> bound: the key count
+    /// <c>MaxLeafKeys</c> bound: the key count
     /// bounds how many entries a leaf holds, and this bounds how large those
     /// entries are allowed to be in aggregate.
     /// <para>
@@ -236,7 +242,7 @@ public class LatticeOptions
     /// values are large (an approximate-nearest-neighbour index storing a
     /// chunk of vectors per key, say) reaches a multi-hundred-megabyte leaf
     /// while still holding fewer keys than
-    /// <see cref="BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/>, so it never splits.
+    /// <c>MaxLeafKeys</c>, so it never splits.
     /// Capturing that leaf's snapshot has to materialise the payload in one
     /// contiguous buffer, which fails with
     /// <see cref="OutOfMemoryException"/> under ambient heap pressure. A failed
@@ -419,10 +425,13 @@ public class LatticeOptions
     /// deleted (reads and writes on them throw
     /// <see cref="InvalidOperationException"/>), but their data still exists in
     /// storage and can be recovered with <see cref="ILattice.RecoverTreeAsync"/>.
-    /// A delete reaches only those shards, so a tree whose id is aliased to another
-    /// physical tree stays readable and writable through the alias (see
-    /// <see cref="ILattice.DeleteTreeAsync"/>).
-    /// After the duration elapses, a grain reminder triggers a full purge that
+    /// A delete acts on the logical tree: when a resize, shadow-cutover restore
+    /// or schema remediation has aliased it to a physical copy, the delete marks
+    /// the live copy the alias targets (see <see cref="ILattice.DeleteTreeAsync"/>).
+    /// A resize uses the same window for the tree's old physical copy, but that
+    /// retirement is silent and <see cref="ILattice.UndoResizeAsync"/> can
+    /// reverse it until the copy is purged. After the duration elapses, a grain
+    /// reminder triggers a full purge that
     /// walks every shard and clears all leaf and internal node state.
     /// Set to <see cref="TimeSpan.Zero"/> to purge on the first reminder tick, one
     /// minute after the delete, because the reminder period is clamped to at least
@@ -1475,10 +1484,12 @@ public class LatticeOptions
 
     /// <summary>
     /// Absolute footprint cap on the union of saga decisions pinned by all
-    /// active <see cref="LatticeCursorSpec.PointInTime"/> cursors against
-    /// the per-tree transaction registry. Opening a new point-in-time cursor
-    /// (a <see cref="LatticeCursorSpec"/> with <c>PointInTime</c> set) whose snapshot would push the
-    /// total pinned-decision footprint over this cap throws
+    /// active <see cref="LatticeCursorSpec.PointInTime"/> cursors against a
+    /// single saga-decision registry shard. With the default single shard this
+    /// is one cap for the tree; with sharding, each touched shard and the
+    /// legacy registry enforce their own cap. Opening a new point-in-time
+    /// cursor (a <see cref="LatticeCursorSpec"/> with <c>PointInTime</c> set) whose snapshot would push a
+    /// touched shard's pinned-decision footprint over this cap throws
     /// <see cref="LatticeCursorRegistryPinExhaustedException"/> rather than
     /// silently degrading or growing unbounded. <c>Next*Async</c> on an
     /// already-open cursor never throws for pin-exhaustion reasons.

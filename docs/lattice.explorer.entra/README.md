@@ -20,7 +20,7 @@ It is the interactive counterpart to [`Orleans.Lattice.Explorer.Entra.Web`](../l
 
 Register the Explorer's auth methods, then add the Entra provider. Supplying the authority (or tenant), the public client (application) id, and at least one scope is required unless the State API advertises them:
 
-```csharp
+```csharp verify
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Entra;

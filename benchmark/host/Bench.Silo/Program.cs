@@ -116,9 +116,9 @@ var grpcPeers = builder.Configuration.GetSection("Replication:GrpcPeers")
 
 // ─── Telemetry sink switch (Telemetry:Sink) ────────────────────────────────────
 //
-//   "fanout"  → simulator default; cross-grain dispatch to IFleetFanOutGrain.
-//   "null"    → simulator-baseline producer baseline / observer-no-peer observer-off control.
-//   "lattice" → current-state-no-replication onward; AddLatticeSink registers the bounded-channel drain loop.
+//   "fanout"  -> simulator default; cross-grain dispatch to IFleetFanOutGrain.
+//   "null"    -> disables telemetry writes for ad-hoc control runs.
+//   "lattice" -> benchmark scenarios; AddLatticeSink registers the bounded-channel drain loop.
 //
 // All three branches register exactly one ITelemetrySink so the consumer (VehicleGrain) hits
 // a single sink - registering a second one would silently double-write and contaminate the

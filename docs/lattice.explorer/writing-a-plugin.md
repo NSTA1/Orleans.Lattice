@@ -226,7 +226,10 @@ Anything your plugin remembers between visits goes through the shell's
 preference contract: declare a key, register it on the catalog, and read and
 write through the contract. Do not call the underlying store directly and do not
 invent a second persistence mechanism. Keys are scoped per user, and per cluster
-where the value names something cluster-specific. See
+where the value names something cluster-specific. The host context's
+`Preferences` store is not that contract: it namespaces a plugin's entries by
+plugin id only, so they are not scoped per user or cluster and `/reset-view`
+neither lists nor clears them. See
 [What the Explorer remembers](what-the-explorer-remembers.md).
 
 If your surface is addressable, its path must be lower case, and its route must

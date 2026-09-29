@@ -226,7 +226,16 @@ more-specific prefix.
 `run-explorer.ps1` launches the explorer pointed at a cluster. It seeds the
 endpoint (and, optionally, a sign-in credential) through the explorer's
 launcher-friendly environment bootstrap, so nothing in your per-user explorer
-config is hand-edited.
+config is hand-edited. Only the Windows desktop head applies a seeded
+credential: the Blazor web head honours the endpoint seed alone (its
+environment credential seed is off by default), so in the web explorer you
+sign in from the explorer itself.
+
+> **Known issue** - the script's default Blazor web head launch currently fails
+> with "Web explorer project not found": it still points at
+> `src/lattice.explorer/Web/Orleans.Lattice.Explorer.Web.csproj`, but the web
+> head project is now `src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj`.
+> The `-Client windows` head is unaffected.
 
 ### Anonymous (default)
 

@@ -50,7 +50,7 @@ services.Configure<RepoContextTtlOptions>("durable-repo", options =>
 
 | Option | Default | Meaning |
 |---|---|---|
-| `DefaultMemoryTtl` | `null` | The TTL applied to a memory entry when the writer supplies none. `null` leaves memory durable unless a TTL is given explicitly. When set it must be a positive, finite duration - the core write path and the paired validator reject a non-positive TTL. |
+| `DefaultMemoryTtl` | `null` | The TTL applied to a memory entry when the writer supplies none. `null` leaves memory durable unless a TTL is given explicitly. When set it must be a positive, finite duration - the paired validator rejects a non-positive TTL. The core multi-value-register write path would not: it writes an entry given a non-positive TTL with no TTL at all, leaving it durable. |
 | `StructuralRecordsNeverExpire` | `true` | A declarative policy flag for code that writes structural records (repo, package, file, symbol): while it is set, such a writer must omit any TTL. No code in the package reads it today, so it enforces nothing - the indexing path simply never writes a structural record with an expiry, so the durable model of the codebase is not reaped alongside ephemeral notes, whatever the flag says. It does not stop `repocontext_forget` with `lapse` from lapsing a structural record deliberately. |
 
 The validator runs when a repository's policy is first resolved - the first memory write that creates an entry for that repository without an explicit `ttlSeconds` - and an invalid policy refuses that write rather than being applied. It is not checked at host startup.

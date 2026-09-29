@@ -10,7 +10,9 @@ clearing cookies:
 1. **The session cookie must be decryptable on the replica that receives the
    request.** ASP.NET Data Protection encrypts the OpenID Connect session cookie
    with a key ring that, by default, is per-instance and ephemeral - so a cookie
-   issued by replica A is undecryptable garbage to replica B.
+   issued by replica A is undecryptable garbage to replica B. The Basic sign-in's
+   credential cookie is encrypted with the same key ring, so a replica that cannot
+   decrypt it treats the operator as signed out.
 2. **A downstream State API token must be obtainable on the new replica.** With
    the [Entra hosted-web provider](../lattice.explorer.entra.web/README.md),
    the on-behalf-of token is acquired from a token cache. A cold replica has an

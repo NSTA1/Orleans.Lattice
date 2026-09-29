@@ -16,7 +16,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 | [AtomicAction](../../samples/AtomicAction/README.md) | `IAtomicActionGrain` saga / TCC coordinator running a Lattice tree write and a custom external effect in one all-or-nothing transaction: a committing plan, a rolling-back plan that restores the tree pre-image and releases the external effect, and an idempotent retry. |
 | [DistributedLock](../../samples/DistributedLock/README.md) | `ILatticeLockGrain` FIFO-fair cluster-wide lock / lease: acquire / renew / release with monotonic fencing tokens, non-blocking try-acquire under contention, and a queued waiter granted the instant the holder releases. |
 | [ConflictFreeMerges](../../samples/ConflictFreeMerges/README.md) | Two CRDT writers converging to the same result regardless of merge order. |
-| [StronglyConsistentScans](../../samples/StronglyConsistentScans/README.md) | `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` returning the exact live key set under concurrent writes. |
+| [StronglyConsistentScans](../../samples/StronglyConsistentScans/README.md) | `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` missing and double-counting no key while concurrent writes land (each shard is read at its own moment), and returning the exact live key set once they settle. |
 | [PredicateOperations](../../samples/PredicateOperations/README.md) | Server-side `Expression<Func<T, bool>>` push-down so only matching keys or values cross the wire. |
 | [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
 | [SnapshotCursors](../../samples/SnapshotCursors/README.md) | Strict snapshot isolation: mid-iteration writes stay invisible to an open snapshot cursor. |
@@ -79,7 +79,7 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 | Sample | What it shows |
 |---|---|
 | [McpServer](../../samples/McpServer/README.md) | A single-silo cluster co-hosted with the Model Context Protocol endpoint from `Orleans.Lattice.Api.Mcp`, exposing the API facades as agent-callable tools. |
-| [McpTelemetry](../../samples/McpTelemetry/README.md) | A single-silo cluster co-hosted with the `Orleans.Lattice.Api.Mcp.Telemetry` add-on, exposing cluster metrics to an agent over a read-only Prometheus-backed proxy. |
+| [McpTelemetry](../../samples/McpTelemetry/README.md) | A single-silo cluster co-hosted with the `Orleans.Lattice.Api.Mcp.Telemetry` add-on, exposing cluster metrics to an agent over a read-only Prometheus-backed proxy. Start the bundled Prometheus with Docker Compose before running it. |
 | [RepoContextContainer](../../samples/RepoContextContainer/README.md) | The RepoContext MCP server run as a single restart-durable container alongside its embedding companion. |
 | [AgentBacklog](../../samples/AgentBacklog/README.md) | A tool-driven walkthrough, run against the RepoContextContainer host, of the claim, lease, fencing, and release surface that makes an agent-operated backlog safe for several agents to drain at once, plus a copyable backlog template. |
 
@@ -134,7 +134,7 @@ Run it with:
 ./samples/MultiSiteManufacturing/run.ps1
 ```
 
-The script builds the host image if needed, starts both clusters (four silos, one Azurite per cluster plus a shared `azurite-backup` account, two Traefik proxies, and a Prometheus + Grafana pair) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs. `-Username` / `-Password` bring the stack up with state-API authentication, `-Backup` enables the backup and restore subsystem, and `-NoBuild` reuses the cached host image.
+The script builds the host image if needed, starts both clusters (four silos, one Azurite per cluster plus a shared `azurite-backup` account, two Traefik proxies, and a Prometheus + Grafana pair) under Docker Compose, and prints the per-cluster URLs - `http://localhost:5001` for `us` and `http://localhost:5002` for `eu`. Use `-Down` to tear everything back down, `-Clean` to wipe state between runs, and `-Logs` to tail silo logs (`-Service` narrows `-Logs` to one compose service). `-Username` / `-Password` bring the stack up with state-API authentication, `-Backup` enables the backup and restore subsystem, and `-NoBuild` reuses the cached host image.
 
 ## VehicleFleetSimulator
 

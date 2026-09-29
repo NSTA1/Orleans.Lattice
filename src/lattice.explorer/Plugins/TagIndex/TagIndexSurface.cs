@@ -100,8 +100,9 @@ internal sealed class TagIndexSurface(
         ArgumentNullException.ThrowIfNull(tag);
 
         // Seed the value drill-down surface's retained filter for the target
-        // tree, then the key to inspect, before selecting it. Owned by the target
-        // tree id so the seed is garbage-collected with it.
+        // tree, then the key to inspect, before selecting it. Tagged with the
+        // target tree id so a caller that runs owner-liveness GC can identify it;
+        // current Explorer startup cleanup is retention-based.
         await _preferences
             .SetAsync(DataTagIndexKey(member.TreeId), indexName, owner: member.TreeId, cancellationToken)
             .ConfigureAwait(false);

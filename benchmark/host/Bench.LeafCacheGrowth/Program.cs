@@ -43,7 +43,7 @@
 //   BENCH_LEAFCACHE_SEED_BATCH        entries per SetManyAsync, default 5000
 //   BENCH_RESULTS_PATH                if set, the JSON report is written here
 //
-// WARNING: the full issue matrix includes 100000 x 65536 = ~6.4 GB of resident
+// WARNING: the full issue matrix includes 100000 x 65536 = ~6.1 GiB of resident
 // cache payload for that single cell. Size the host accordingly or narrow the
 // matrix via the env vars above.
 

@@ -11,7 +11,8 @@ identical to the pre-tenancy behaviour, and zero runtime cost, when
 
 `AddLatticeTenancy()` supplies the durable, conflict-free-mergeable definition of
 every tenant: status, resource quotas and burst allowance, placement binding,
-tenant-admin subjects, and cross-tenant grants. The `ITenantRegistry` dogfoods
+tenant-admin subjects, cross-tenant grants, and its allowed regions and per-region
+residency status. The `ITenantRegistry` dogfoods
 the reserved `sys-tenant-*` Lattice trees under system-origin, converging
 concurrent edits with last-writer-wins register semantics, and those registry
 trees are read-isolated on the control plane so no data-plane grant can scan
@@ -26,10 +27,11 @@ Isolation is achieved by filling in seams that core declares as inert no-ops:
   the caller's own membership, and an unresolvable or unauthorized one fails
   closed with a `LatticeTenantAccessDeniedException` rather than falling back to
   a shared tree.
-- `ITenantEnumerationFilter` prunes every tree-id enumeration to the trees the
-  active tenant owns (platform-owned system ids stay in, governed separately), so a
-  catalog read can never disclose another tenant's tree names - or the tenant
-  roster itself.
+- `ITenantEnumerationFilter` prunes a tree-id enumeration made under an active
+  tenant to the trees that tenant owns (platform-owned system ids stay in, governed
+  separately); a caller asserting no tenant is confined instead by the per-entry
+  authorization check, so a catalog read can never disclose another tenant's tree
+  names - or the tenant roster itself.
 - `ITenantRegionVisibilityResolver` scopes region discovery to the regions a
   tenant is actually authorized into or resident in, so a tenant caller is not
   handed the cluster's whole routing topology.

@@ -17,8 +17,8 @@ This package ships as one of a small family of explorer packages. It depends on
 the shared explorer libraries, which restore automatically for a consumer:
 
 - `Orleans.Lattice.Explorer.UI` - the shared Razor component class library (its
-  static web assets are served automatically at
-  `_content/Orleans.Lattice.Explorer.UI/`).
+  static web assets are served at `_content/Orleans.Lattice.Explorer.UI/`; see
+  Interactivity and static assets below).
 - `Orleans.Lattice.Explorer.Core` - the head-agnostic connection, configuration,
   session, authentication, tenant-scoping, and navigation services.
 - `Orleans.Lattice.Explorer.DesignSystem` - the design tokens, named breakpoints,

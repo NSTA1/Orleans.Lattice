@@ -93,9 +93,9 @@ The callback runs after package defaults are applied. If a host needs to replace
 
 ### `LocalClusterId`
 
-Optional override for the origin metadata header stamped onto outbound calls. Leave it `null` for normal deployments so the binding uses `LatticeReplicationOptions.ClusterId`.
+Optional override for the origin metadata header stamped onto outbound calls. Leave it `null` for normal deployments so the binding uses the cluster-wide `LatticeReplicationOptions.ClusterId`. The header value is fixed when a peer's channel is built, so every tree that talks to that peer sends the same value.
 
-Use this only when an advanced host has a deliberate reason to expose a different transport origin than the replication cluster id. Keep the value stable and unique within the topology.
+A receiver compares this header, when the call carries it, with the origin cluster id the request names, and refuses a live push, a content-manifest exchange, or a peer high-water-mark probe with `PermissionDenied` when the two differ. The request names the sending tree's own `ClusterId`, resolved per tree (for a live push, in the batch envelope), so a tree's calls are refused whenever that value differs from the header: a `LocalClusterId` that differs from `ClusterId`, or a per-tree `ClusterId` override that differs from the cluster-wide value (see [`ClusterId`](../lattice.replication/configuration.md#clusterid)). The receiving saga service's default peer gate also reads this header: a peer admits saga control calls only when its own `Peers` map lists the value. Leave `LocalClusterId` unset, or set it to the same value as `ClusterId`, and give no replicated tree a per-tree `ClusterId` that differs from the cluster-wide value.
 
 ## Relationship to replication options
 

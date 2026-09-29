@@ -264,11 +264,11 @@ A bug class is a hypothesis about a pattern - once you've confirmed the pattern 
    - **Different mechanism but same observable -> separate cycle.** Add a candidate row to the ledger and discharge it in a future cycle.
    - **Not actually an instance -> note why.** Sometimes the pattern is benign at a particular site (e.g. the field is `Interlocked`-guarded). State the local reason it's safe.
 
-2. **Run the relevant test tier scoped to the changed project.** Use the Tier 2 invocation from `.github/instructions/testing.instructions.md`:
+2. **Run the relevant test tier scoped to the changed project.** Use the Tier 2 invocation from `.github/instructions/testing.instructions.md`, wrapped in a hang blame. On the core project that also means excluding `RepositoryWideGateRunnerTests`, which waits on a nested `dotnet test` of `test/lattice` that can outlast the blame and abort a clean run (the master's Tier 4 explains; its core hygiene filter still runs the fixture):
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
-     --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI&TestCategory!=Tlc" `
+     --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI&TestCategory!=Tlc&FullyQualifiedName!~RepositoryWideGateRunnerTests" `
      --nologo --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 

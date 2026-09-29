@@ -2,24 +2,25 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// Configuration for the default <see cref="OnyxEmbeddingProvider"/>: the client
-/// for the companion Onyx model-server embedding container. A host populates
+/// for the companion embedding container. A host populates
 /// these through
 /// <see cref="LatticeMcpRepoContextEmbeddingServiceCollectionExtensions.AddOnyxEmbeddingProvider"/>;
 /// the provider reads them once when it constructs its
 /// <see cref="EmbeddingSpace"/> and on every embed call.
 /// </summary>
 /// <remarks>
-/// The defaults match the model and endpoint baked into the shipped
-/// <c>apps/embedding</c> image (Onyx's <c>nomic-ai/nomic-embed-text-v1</c>
-/// default document encoder, 768-dimensional, 512-token context, L2-normalized).
+/// The defaults match the model and endpoint baked into the shipped companion
+/// images: the sample's <c>apps/embedding-onnx</c> image and the compatible
+/// Onyx <c>apps/embedding</c> image serve <c>nomic-ai/nomic-embed-text-v1</c>,
+/// 768-dimensional vectors, a 512-token context, and L2-normalized output.
 /// Changing <see cref="ModelName"/> or <see cref="Dimension"/> selects a new
 /// embedding space and must be paired with the matching model in the container.
 /// </remarks>
 public sealed class OnyxEmbeddingOptions
 {
     /// <summary>
-    /// The default model id baked into the companion image: Onyx's default
-    /// document encoder, <c>nomic-ai/nomic-embed-text-v1</c>.
+    /// The default model id baked into the companion images:
+    /// <c>nomic-ai/nomic-embed-text-v1</c>.
     /// </summary>
     public const string DefaultModelName = "nomic-ai/nomic-embed-text-v1";
 

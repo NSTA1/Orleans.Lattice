@@ -32,7 +32,8 @@ public enum AppRegistryTransitionError
     /// A tree the app's manifest declares (structural or adopted) cannot be owned by this install:
     /// another install owns it, it is a pre-existing unowned structural tree, a derived copy, or
     /// another tree's alias target. The message names the tree by its app-local name and, when one
-    /// exists, the owning app. Nothing is recorded.
+    /// exists, the owning app. The attempted install or upgrade is rolled back; a fresh install is
+    /// left as an <see cref="AppRegistryLifecycleState.Uninstalled"/> audit record.
     /// </summary>
     TreeOwnershipConflict = 6,
 }

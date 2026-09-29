@@ -33,8 +33,10 @@ this host stays MCP-only and never embeds in-process.
   mutating schema-control verbs disabled, so whole-tree operator verbs such as the
   orphaned-leaf audit and repair are reachable in-process (issue #3287). See
   [MCP tools](../../docs/lattice.api.mcp/tools.md).
-- A durability profile selected by `LATTICE_DURABILITY` (`local` SQLite + file WAL
-  by default; `azure`/`postgres` for shared deployments).
+- A durability profile selected by `LATTICE_DURABILITY`: `local` by default
+  (SQLite grain storage and reminders plus the file WAL); `postgres` moves grain
+  storage and reminders to PostgreSQL, and `azure` moves them, the WAL and
+  cluster membership to Azure Storage.
 - A named-lock lease ceiling of 30 minutes in place of the library's 5-minute
   `LatticeOptions.MaxLockLeaseDuration` default, so a backlog claim taken through
   `repocontext_claim` can outlast a full build-and-test cycle. Set it with
@@ -47,8 +49,16 @@ this host stays MCP-only and never embeds in-process.
 - Compaction on the churn trees, a readiness probe that reports `Draining` on
   SIGTERM, and a data-path guard that fails startup if the mount is not writable.
 
-All wiring lives in `Hosting/RepoContextHostBuilder.cs` so it is unit-testable;
-`Program.cs` is the thin process shell.
+All wiring is composed in `Hosting/RepoContextHostBuilder.cs`, from the helpers
+beside it under `Hosting/`, so it is unit-testable; `Program.cs` is the thin
+process shell, which also answers the image's exec-form `--healthcheck` probe (a
+short HTTP check of the host's own `/health/silo`) without building the host.
+
+The configuration reference - the environment variables, the durability
+profiles, the health endpoints, and the instruments the host publishes on
+`/metrics`, including the SQLite grain-storage lock attribution and its pin-store
+write retry - is the
+[container quickstart](../../docs/lattice.api.mcp.repocontext/container.md).
 
 ## Try it
 

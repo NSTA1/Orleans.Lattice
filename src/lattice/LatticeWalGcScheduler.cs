@@ -3279,13 +3279,11 @@ internal sealed class LatticeWalGcScheduler(
         // absent reads as this build not being deployed. The deployment proof is
         // free and it is the reason not to move this.
         //
-        // Tagged tree-and-tenant, exactly as the leaf grain tags it at the
-        // recording site (it derives the same LatticeTenantLabel.ForTree from the
-        // same tree id). A prime whose tag set differs from the emitter's mints a
-        // series shape the emitter can never match, which is worse than not
-        // priming at all: the primed series stays at zero forever while the real
-        // one appears beside it, so the absence-is-a-deployment-proof reading
-        // above silently stops holding.
+        // Tagged with the raw registry tree id the scheduler is walking and
+        // the tenant derived from that id. On an aliased tree the leaf records
+        // this counter under its logical metric id, so this prime proves only
+        // the scheduler-side raw-id series exists; it does not guarantee the
+        // same series shape as a later leaf-side record.
         LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(0, treeTag, tenantTag);
 
         // The four above are lifecycle events and are named individually because

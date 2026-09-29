@@ -182,7 +182,12 @@ The contract, stated precisely:
 - **A committed state change cannot silently leave the index stale.** A failed
   index write leaves a durable marker that is retried until it lands, and under
   the default `Synchronous` mode a failed write on a state mutation is also
-  surfaced to the caller.
+  surfaced to the caller. The exception is a write whose entries land without
+  the activation confirming them - every write under `Eventual` mode, which the
+  drain applies, or a `Synchronous` write whose confirmation failed. Later writes
+  from the same activation are still diffed against the entries it last
+  confirmed itself, so an entry for a value the grain has since replaced can be
+  left behind.
 - **A grain the backfill has not yet reached is absent**, not stale. Queries
   under-report during an incomplete backfill rather than returning wrong values.
 - **`SnapshotCursor` gives page-to-page stability over the index**, not over

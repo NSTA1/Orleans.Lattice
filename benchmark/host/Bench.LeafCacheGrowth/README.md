@@ -8,7 +8,9 @@ size without violating Orleans semantics).
 
 `LeafCacheGrain._cache` mirrors its primary leaf's live entry set 1:1 and grows
 monotonically over the activation's lifetime. Per-silo per-tree memory therefore
-scales linearly with the touched-leaf entry count, with no operator-side cap.
+scales linearly with the touched-leaf entry count, and when the issue was filed
+there was no operator-side cap (the opt-in budget that has since shipped is
+described under [Baseline result](#baseline-result-headline)).
 The issue wants that footprint bounded, **but only if** an eviction policy can be
 designed that preserves four correctness contracts (delta-refresh cursor,
 pending-key set, moved-away pruning, migrated-entry delegation).

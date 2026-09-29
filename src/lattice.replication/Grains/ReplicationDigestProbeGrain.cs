@@ -697,7 +697,8 @@ internal sealed class ReplicationDigestProbeGrain(
     /// resolution) so the localisation pass can address shard-root and
     /// internal-node grains directly. Resolved fresh on every localisation pass
     /// rather than cached for the activation: a registry alias swap (shadow-
-    /// cutover restore, resize, reshard) can repoint the logical tree to a new
+    /// cutover restore, resize, schema remediation, or operator alias change)
+    /// can repoint the logical tree to a new
     /// physical tree underneath a live probe, and a cached physical id would
     /// leave the Merkle walk descending the retired tree's frozen structure.
     /// The read is read-only and cheap relative to the walk it precedes.

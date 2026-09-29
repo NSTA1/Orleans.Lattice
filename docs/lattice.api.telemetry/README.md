@@ -66,10 +66,13 @@ and the backend-side credential are two independent halves of the trust boundary
 
 `AddLatticeTelemetryApi()` registers no options validation - the host owns binding
 and validating the options. Register `LatticeTelemetryOptionsValidator` as an
-`IValidateOptions<LatticeTelemetryOptions>` to enforce the rules above (an absolute
-backend address, the credential member each static auth mode needs, strictly
-positive timeout and guardrails, and a non-empty allow-list with no blank entry under
-`DenyAllExceptAllowed`) when the options are first resolved.
+`IValidateOptions<LatticeTelemetryOptions>` to enforce the rules above (a supplied,
+absolute backend address, defined `AuthMode` and `MetricAccess` values, the
+credential member each static auth mode needs, strictly positive timeout and
+guardrails, and a non-empty allow-list with no blank entry under
+`DenyAllExceptAllowed`) when the options are first resolved. Under the validator an
+unset `BackendAddress` fails that resolution rather than degrading to the empty
+catalogue.
 
 ## The allow-list is enforced on extracted names, not on the raw string
 
@@ -80,8 +83,10 @@ extracted from its PromQL by `PromQlMetricExtractor` and checked against
 
 The extractor is **deliberately conservative rather than a full PromQL parser**:
 it recognises an identifier as a metric name only where one may legally appear -
-not when followed by `(`, not inside a string or a numeric/duration literal, and
-not inside a `{...}` label matcher unless it is the reserved `__name__` label. A
+not when followed by `(`, not inside a string or a numeric/duration literal, not
+inside the parenthesised label list of a grouping modifier (`by`, `without`, `on`,
+`ignoring`, `group_left`, `group_right`), and not inside a `{...}` label matcher
+unless it is the reserved `__name__` label. A
 keyword is skipped only where Prometheus reads it as one: Prometheus also accepts
 the aggregation operators, `and` / `or` / `unless`, `by`, `without`, `offset`,
 `start`, and `end` as a bare metric name wherever an operand is expected, so
@@ -90,7 +95,7 @@ referenced name. Erring towards extracting more,
 rather than fewer, names is what keeps it fail-closed: a name it cannot resolve
 is refused, not admitted.
 
-Three rules are load-bearing, because the extractor and the backend must agree
+These rules are load-bearing, because the extractor and the backend must agree
 about what will be evaluated:
 
 - a `#` comment is discarded as whitespace exactly as Prometheus's own lexer
@@ -98,6 +103,10 @@ about what will be evaluated:
   had no rule for `#`, so a quote opened inside a comment was scanned as a string
   opener and swallowed the rest of the query - hiding a metric name from the
   allow-list that the backend then evaluated anyway;
+- a grouping modifier's label list is skipped with the same comment and string
+  awareness, so an unmatched `(` inside a comment (`sum by (job # (`) or inside a
+  quoted label (`sum by ("(")`) cannot stretch the skip over the rest of the query
+  and hide the aggregated metric selector from the allow-list;
 - an exact `__name__="up"` matcher contributes its value as a referenced name,
   while a regex (`__name__=~`) or negative (`__name__!=`, `__name__!~`) matcher
   cannot be reduced to a fixed set, so it sets
@@ -133,11 +142,16 @@ registers:
   `RequestTimeout` and stamps the configured backend credential; it is registered only when the host has not
   registered its own `IPrometheusQueryClient` first.
 
-Two public helpers let such a binding enforce the same rules the facade applies:
+Public helpers let such a binding enforce the same rules the facade applies:
+`TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync` runs the cluster-wide `Telemetry` capability check
+the facade opens every query with, throwing `LatticeAuthorizationDeniedException` when it is not granted;
 `TelemetryQueryAuthorizer.TryAuthorizeQuery(policy, query, out denialMessage)` gates a PromQL expression against
-the allow-list with the extractor rules above (admitting without scanning under `ReadAll`), and
+the allow-list with the extractor rules above (admitting without scanning under `ReadAll`); and
 `TelemetryRangeGuardrails.TryValidateRange(options, start, end, step, out violationMessage)` applies the
-deployment-wide `MaxRange` / `MaxStep` guardrails.
+deployment-wide `MaxRange` / `MaxStep` guardrails. `AddLatticeTelemetryBackend()` does not register the
+capability check, so a binding that evaluates caller-supplied PromQL registers `TelemetryAccessAuthorizer`
+itself and runs it before any backend call, as the MCP tool group does. The allow-list only narrows what an
+authorized caller may read and is no substitute for the capability: its `ReadAll` default admits every metric.
 
 ## The curated catalogue
 
@@ -178,7 +192,10 @@ logical tree id and stays the same across a resize, a shadow-cutover restore or 
 schema remediation (see [The `tree` dimension across
 aliasing](../lattice/metrics.md#the-tree-dimension-across-aliasing)), so a query
 filtered on a tree keeps returning that tree's series after its data moves to a
-new physical copy. Each entry also declares `TelemetryQueryBounds`: a requested step is
+new physical copy. The filter is matched verbatim: the facade does not compose an
+unqualified name into the caller's tenant namespace, so on a tenancy cluster a
+tenant's tree is filtered by its full `t/{tenant}/{name}` id, the value its `tree`
+label carries. Each entry also declares `TelemetryQueryBounds`: a requested step is
 clamped into the entry's step budget, but a window outside the entry's bounds -
 or outside the deployment-wide `MaxRange` / `MaxStep` guardrails - is refused
 with `TelemetryQueryBoundsException` rather than silently narrowed.
@@ -217,6 +234,12 @@ response's `Scope` (a `TelemetryTenantScope`) reports what actually happened:
 
 A caller-supplied tenant id is never trusted. A non-operator asking for a
 different tenant is pinned to its own, and the answer is marked downgraded.
+
+Platform-operator validation asks the registered access gate for `Admin` on the
+reserved authorization policy tree. Without the authorization add-on, the core
+no-op gate that `AddLattice` registers allows that for every caller, so a widening
+request is honoured; a host with no access gate registered at all never validates
+one, so the request degrades.
 
 ## Failure surface
 

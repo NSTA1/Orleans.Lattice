@@ -104,9 +104,9 @@ Only after **every** sub-issue is integrated and the integration branch builds c
 
 1. **Full verification (your job, not the sub-agents').** Run the gates the sub-agents were forbidden from running - every 6b hygiene gate and, exclusively yours, the **non-chaos suite including all integration-category tests**:
    - every 6b hygiene gate from `feature-dev.agent.md` (type-alias, logger-category, docs-snippet, em-dash, mojibake, integration-category) across every test project the epic touched;
-   - the **full non-chaos suite** (which includes every `TestCategory=Integration` fixture), cross-solution, with blame-hang:
+   - the **full non-chaos suite** (which includes every `TestCategory=Integration` fixture), cross-solution, with blame-hang. The filter excludes `RepositoryWideGateRunnerTests`, which waits on a nested `dotnet test` of `test/lattice` that can outlast the hang blame and abort a clean run; run that fixture through the core hygiene filter in Tier 4 of `.github/instructions/testing.instructions.md`, which carries no hang blame:
      ```powershell
-     dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" --blame-hang --blame-hang-timeout 3m
+     dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator&FullyQualifiedName!~RepositoryWideGateRunnerTests" --blame-hang --blame-hang-timeout 3m
      ```
    Paste the `Failed:`/`Passed:`/`Total:` summary. Any red means stop, fix (or send the owning sub-issue back), re-integrate, and re-run from the top of this step.
 2. **Author the epic documentation yourself.** Write/refresh the topic docs under the relevant `docs/<package>/` for every capability the epic shipped (following the `documentation` skill and the docs layout), update `docs/**/api.md`, `configuration.md`, `architecture.md` as affected, update the public API type-name registry in `.github/skills/naming-conventions/SKILL.md` and, where affected, the `Existing Primitives` / `Grain Key Conventions` tables under `.github/instructions/` (`.github/copilot-instructions.md` itself carries no tables), and add any new package's `README.md`. Use the byte-level markdown-editing technique for long files.
@@ -120,7 +120,7 @@ Only after **every** sub-issue is integrated and the integration branch builds c
 
 ### Phase 7 - Raise the PR to main
 
-1. Ensure NSTA1 is the active `gh` account (principle 9).
+1. Select NSTA1 for each `gh` call by putting its token on the command, not by switching the active account (principle 9).
 2. **Confirm the single epic changelog entry is present.** Before committing, verify `CHANGELOG.md` `## Unreleased` contains **exactly one** entry for this epic - a single-word-prefixed heading plus prose totalling **300 characters or fewer**, giving a high-level, user-facing description of the epic, linking **the epic issue only** (`#<epic>`), with no per-sub-issue lines and no sub-issue links, and closing with the package list (Phase 6 step 6, and the "Entry style" rules in [`docs/RELEASING.md`](../../docs/RELEASING.md)). This entry is mandatory: the PR does not go out without it. If it is missing, over-granular, unprefixed, untagged, or has grown past the cap, fix it (and re-run the doc hygiene gates) before proceeding.
 3. **Confirm any new package is registered in the release plumbing** (Phase 6 step 4). For every **new** packable `src/<package>/` the epic introduced, verify its tag glob is in `.github/workflows/publish.yml`'s `on.push.tags` list and it has a row in **both** `docs/RELEASING.md` tables. A new package missing from these surfaces silently never ships to NuGet, so this is a hard pre-PR gate - fix it before committing if absent.
 4. Commit the integrated work with a conventional message (`feat: <epic title>`), push `<type>/epic/<epic-slug>`. The changelog entry is part of this commit.

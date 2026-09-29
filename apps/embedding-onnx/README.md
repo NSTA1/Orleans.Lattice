@@ -122,12 +122,15 @@ client never sends, so "no prefix" is the reference behaviour for this caller.
 An unknown `EMBED_PROVIDER`, or an unparseable `EMBED_PORT`, `EMBED_DEVICE_ID`, or
 `EMBED_MAX_CONTEXT_LENGTH`, falls back to the default rather than aborting
 startup: a container that boots on the CPU is strictly more useful than one that
-refuses to boot. Two things **are** fatal. A missing or unreadable model or
+refuses to boot. Some things **are** fatal. A missing or unreadable model or
 vocabulary is, because serving wrong vectors is worse than serving none. So is an
 `EMBED_INTRA_THREADS` set to a non-blank value that is neither `auto` nor a
 non-negative integer (issue #2887; a blank value derives, exactly like an unset
 one): that knob selects an operating mode, and deriving silently from a typo
-would be indistinguishable from leaving it unpinned on purpose.
+would be indistinguishable from leaving it unpinned on purpose. And so is a
+recognised accelerator that cannot be bound, such as `cuda` on a host without the
+NVIDIA toolkit or device reservation: only an unknown value falls back to the
+CPU, so a selected provider that fails to bind stops the server at startup.
 
 ### Why the intra-op thread count is not left to ONNX Runtime
 
@@ -227,6 +230,12 @@ docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
 Nothing else changes either way: same service name, same port, so
 `LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000` is untouched, and because the
 vectors are identical an existing `/data` volume stays valid across the switch.
+
+Those commands suit the untuned sample stack. A deployment that also layers the
+sample's `docker-compose.tuning.yml` must keep it in both commands, before the
+Onyx file, or the switch silently drops the tuning; the
+[local deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#rolling-back-the-embedder)
+gives the three-file form.
 
 ## Offline cold start
 

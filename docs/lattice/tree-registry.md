@@ -4,11 +4,11 @@ Lattice maintains an internal **tree registry** - a Lattice tree (`_lattice_tree
 
 ## How It Works
 
-The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, and bookkeeping - the pinned WAL partition count and WAL placement, the highest physical shard index adaptive splits have allocated, the projection-digest permanent-disable latch, and, on a restore's shadow tree, the tree it was restored for.
+The registry is itself a Lattice tree with the reserved ID `_lattice_trees`. Each key in the registry is a user tree ID, and each value is that tree's JSON-serialized registry entry: its structural sizing pins, an optional physical-tree alias and shard map, optional per-tree runtime overrides of `LatticeOptions` settings, an optional per-tree durable-history retention policy, and bookkeeping - the pinned WAL partition count and WAL placement, the highest physical shard index adaptive splits have allocated, the projection-digest permanent-disable latch, and two provenance markers: on a physical copy created to back a logical tree, the logical tree it backs (see [Provenance](#provenance-derivedfrom)), and on a restore's shadow tree, the tree it was restored for.
 
 ### Automatic registration
 
-Trees are automatically registered on first use - not only on the first write. The first time anything resolves a tree's options it seeds any missing structural pin, which registers the tree, and the first operation of any kind (a read included) that reaches one of the tree's shard roots creates that shard's root leaf. When a shard root creates its first root leaf node, it registers the tree in the registry **before** persisting the root pointer. This ensures:
+Trees are automatically registered on first use - not only on the first write. The first time anything resolves the options of a tree that has no registry entry, it registers the tree with the default structural pins, and the first operation of any kind (a read included) that reaches one of the tree's shard roots creates that shard's root leaf. When a shard root creates its first root leaf node, it registers the tree in the registry **before** persisting the root pointer. This ensures:
 
 1. The tree is discoverable before any data exists.
 2. The registry write must succeed before the data write proceeds - registration is **not** best-effort.
@@ -36,7 +36,7 @@ The `sys-`, `t/`, and `*` guards are enforced only on the data-mutation surface 
 
 Structural sizing and runtime settings resolve differently:
 
-- **Structural sizing** (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) comes only from the registry entry. A missing pin is seeded from the hardcoded defaults - `MaxLeafKeys = 128`, `MaxInternalChildren = 128`, `ShardCount = 64` - the first time the tree's options are resolved. `IOptionsMonitor` plays no part (`LatticeOptions` does not expose these properties), and the pins change only through `ResizeAsync` and `ReshardAsync` (see [Tree Sizing](tree-sizing.md)).
+- **Structural sizing** (`MaxLeafKeys`, `MaxInternalChildren`, `ShardCount`) comes only from the registry entry. A new tree's entry is seeded with the hardcoded defaults - `MaxLeafKeys = 128`, `MaxInternalChildren = 128`, `ShardCount = 64` - for any pin its registration does not supply; an existing entry is never rewritten, so a pin it lacks resolves to the default. `IOptionsMonitor` plays no part (`LatticeOptions` does not expose these properties), and the pins change only through `ResizeAsync` and `ReshardAsync` (see [Tree Sizing](tree-sizing.md)).
 - **Runtime settings** resolve in priority order:
   1. **Registry override** - a per-tree override on the registry entry, for the settings that have one (for example the WAL partition pin, publish-events, projection-digest maintenance, `MaxCacheValueBytes`, and `WalMaxRetainedBytes`).
   2. **`IOptionsMonitor` named options** - per-tree overrides registered via `ConfigureLattice("tree-name", ...)` at silo startup.
@@ -59,7 +59,7 @@ var allIds = await tree.GetAllTreeIdsAsync();
 
 ## Tree Existence Check
 
-Use `TreeExistsAsync` to check whether a specific tree is registered. A caller without whole-tree read access to the tree gets `false`, exactly as for an unregistered tree:
+Use `TreeExistsAsync` to check whether a specific tree is registered. A caller the access gate denies any read of the tree gets `false`, exactly as for an unregistered tree; a caller allowed to read even part of it gets the real answer:
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
@@ -141,15 +141,15 @@ public sealed class SingleOwnerGuard : ITreeOwnershipGuard
 
 A logical purge removes the backing tree's state and unregisters both the backing tree and the logical tree, so `TreeExistsAsync` then reports the tree gone. A resize's retirement of its old copy is physical maintenance: it is not a logical delete, the live tree does not read as deleted during the retirement window, and a public `RecoverTreeAsync` on a live resized tree is refused.
 
-Alias-changing operations and logical deletion never overlap. Resize (and its undo), shadow-cutover restore and revert, and schema remediation each hold a durable reservation, keyed by an operation id, on the tree for the duration of their alias change; a delete refuses while one is held, and an alias change refuses while the tree is logically deleted or a delete is pending. Reservations never expire by time: each is released by the owning operation, by the matching id, and releasing an absent or different id is a no-op.
+Alias-changing operations and logical deletion never overlap. Resize (and its undo), shadow-cutover restore and revert, and schema remediation each hold a durable reservation, keyed by an operation id, on the tree while they run - a restore from before it writes its restore copy; a delete, and any of these operations under a different operation id, refuses while one is held, and an alias change refuses while the tree is logically deleted or a delete is pending. An administrative alias change takes no reservation and is not refused by one. Reservations never expire by time: each is released by the owning operation, by the matching id, and releasing an absent or different id is a no-op. A shadow-cutover restore or revert releases its reservation only when it completes, so one that fails part-way leaves the tree reserved until it is retried to completion or, for a restore, its unfinished restore copy is deleted - see [Deleting an aliased tree](tree-deletion.md#deleting-an-aliased-tree).
 
 ### Identity seen by observers and metrics
 
-Routing through an alias does not change the tree identity reported to observers. [Mutation observers](api.md#mutation-observers) receive the logical tree id in `LatticeMutation.TreeId` across resize, restore and remediation, and the per-tree `tree` dimension on [metrics](metrics.md#tag-conventions) stays the logical id too. The WAL itself records the physical tree it belongs to.
+Routing through an alias does not change the tree identity reported to observers. [Mutation observers](api.md#mutation-observers) receive the logical tree id in `LatticeMutation.TreeId` for every write routed through the logical tree, across resize, restore and remediation; a write that reaches a physical copy by another path - such as a write an online resize mirrors into the new copy while it fills it - is reported under that copy's own id. The per-tree `tree` dimension on [metrics](metrics.md#tag-conventions) stays the logical id too. The WAL itself records the physical tree it belongs to.
 
 ## Shard Map
 
-A tree's registry entry can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a virtual space of as many slots as the tree's shard map holds, and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards. That is 4096 slots unless the tree was created by an installed app whose manifest declares a `virtualShardCount` (`AppTreeDeclaration.VirtualShardCount`): the tree's first registration persists a map with the declared slot count, which lasts until a resize drops the map or a reshard of the still-empty tree rebuilds it with 4096 slots.
+A tree's registry entry can also carry a per-tree `ShardMap` that maps virtual shard slots to physical shard indices. The shard map decouples logical key routing from the physical shard count: keys hash into a virtual space of as many slots as the tree's shard map holds, and the `ShardMap.Slots` array collapses ranges of virtual slots onto physical shards. That is 4096 slots unless the tree was created by an installed app whose manifest declares a `virtualShardCount` (`AppTreeDeclaration.VirtualShardCount`): the tree's first registration persists a map with the declared slot count, which a resize carries over to the resized copy and which lasts until a reshard of the still-empty tree rebuilds it with 4096 slots.
 
 When no shard map is persisted (the default state for newly created trees), the router materialises an identity map (`slot[i] = i % shardCount`), which routes exactly as the legacy `XxHash32(key) % shardCount` did whenever the virtual slot count is a whole multiple of the shard count, as it is for the default 64 shards. Custom shard maps are written by topology-changing operations - adaptive shard splits (including those an online reshard drives), shard consolidation, and an empty-tree reshard's re-pin - and by an installed app's tree registration when its declaration pins the virtual slot count; they are cached by the router, which drops its copy when a shard reports stale shard routing (a split or consolidation has moved slots) and, together with the physical-tree-ID cache, when a shard signals a stale alias.
 

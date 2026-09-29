@@ -113,7 +113,11 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// not in the writer's context survive the next merge.
     /// </summary>
     /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
-    /// <param name="value">The value bytes to store. Must not be <c>null</c>.</param>
+    /// <param name="value">
+    /// The value bytes to store. Must not be <c>null</c>. Stored by reference:
+    /// <c>Set</c> is a hand-off, so the register takes ownership of the array
+    /// and the caller must not mutate it afterwards.
+    /// </param>
     public void Set(string replicaId, byte[] value)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
