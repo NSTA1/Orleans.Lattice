@@ -173,6 +173,44 @@ public class LeafSnapshotFrameTrimBenchmarks
         AssertSeekEquivalence();
         AssertKeyCompareEquivalence();
         AssertAccountingEquivalence();
+        AssertInlineRootEquivalence();
+    }
+
+    /// <summary>
+    /// The group (6) pair differs ONLY by an inlining attribute, so the two
+    /// sides must agree on every frame - including a deliberately corrupted one,
+    /// since Validate is a corruption gate and a baseline that stopped rejecting
+    /// malformed input would look fast for the wrong reason.
+    /// </summary>
+    private void AssertInlineRootEquivalence()
+    {
+        foreach (var (frame, label) in new[] { (_frame, "primary frame"), (_tinyFrame, "two-row frame") })
+        {
+            if (BaselineValidate(frame) != LeafSnapshotCodec.Validate(frame)
+                || PinnedValidate(frame) != LeafSnapshotCodec.Validate(frame))
+            {
+                throw new InvalidOperationException(
+                    $"Validate lanes disagree over the {label}; the comparison would be void.");
+            }
+
+            var baselineOk = BaselineTryComputeStateBytes(frame, out var baselineBytes);
+            var shippedOk = LeafSnapshotCodec.TryComputeStateBytes(frame, out var shippedBytes);
+            if (baselineOk != shippedOk || baselineBytes != shippedBytes)
+            {
+                throw new InvalidOperationException(
+                    $"State-bytes lanes disagree over the {label}; the comparison would be void.");
+            }
+        }
+
+        // Positive proof that both sides still REJECT corruption, rather than
+        // both happening to accept everything.
+        var corrupt = (byte[])_frame.Clone();
+        corrupt[LeafSnapshotCodec.HeaderLength + 1] ^= 0xFF;
+        if (BaselineValidate(corrupt) || PinnedValidate(corrupt) || LeafSnapshotCodec.Validate(corrupt))
+        {
+            throw new InvalidOperationException(
+                "A corrupted frame validated; the validation lanes are not gating anything.");
+        }
     }
 
     // ---------------------------------------------------------------- group 1
@@ -446,8 +484,64 @@ public class LeafSnapshotFrameTrimBenchmarks
     public long AccountingSingle_Optimised()
         => LeafEntryCache.EntryBytes(_accountingKeyUtf8Lengths[0], _accountingValues[0]);
 
-    // ------------------------------------------------------------- equivalence
+    // ---------------------------------------------------------------- group 6
+    //
+    // The inline-root sweep. Group (1) established that an outer walker whose
+    // speed comes from the JIT inlining its per-row callee MUST itself stay the
+    // inline root: once the walker is small enough to be inlined into ITS
+    // caller, the caller's inline budget is spent on the walk body and the
+    // per-row parser degrades to a real call per row. Validate and
+    // TryComputeStateBytes are the two remaining walkers of that exact shape.
+    //
+    // Unlike the AggregatesOnly lane - which could only be A/B'd across runs -
+    // this pair is measurable WITHIN one run, because the baseline is a verbatim
+    // copy of the shipped body held here WITHOUT the attribute. The copies below
+    // are byte-for-byte the pre-change methods; only the attribute differs, so
+    // the delta is attributable to inlining and nothing else.
 
+    /// <summary>Footprint accounting walk, with the walker left inlinable.</summary>
+    [Benchmark(Description = "(6) state-bytes walk - baseline (walker inlinable)")]
+    public long StateBytes_Baseline() => BaselineTryComputeStateBytes(_frame, out var b) ? b : -1;
+
+    /// <summary>Footprint accounting walk, with the walker pinned as the inline root.</summary>
+    [Benchmark(Description = "(6) state-bytes walk - optimised (walker pinned as inline root)")]
+    public long StateBytes_Optimised()
+        => LeafSnapshotCodec.TryComputeStateBytes(_frame, out var b) ? b : -1;
+
+    /// <summary>
+    /// Control: a two-row frame. The inline-root effect is per-row, so a frame
+    /// with almost no rows must show no meaningful separation - if this control
+    /// moved as much as the primary lanes, the delta would not be the inlining.
+    /// </summary>
+    [Benchmark(Description = "(6) control - state-bytes over a 2-row frame - baseline")]
+    public long StateBytesTiny_Baseline() => BaselineTryComputeStateBytes(_tinyFrame, out var b) ? b : -1;
+
+    /// <summary>Control: a two-row frame, optimised side.</summary>
+    [Benchmark(Description = "(6) control - state-bytes over a 2-row frame - optimised")]
+    public long StateBytesTiny_Optimised()
+        => LeafSnapshotCodec.TryComputeStateBytes(_tinyFrame, out var b) ? b : -1;
+
+    // The Validate pair below is a FALSIFICATION probe, not a shipped trim, and
+    // both sides are local copies on purpose. Validate has the same outer-walker
+    // shape as the state-bytes walk, so the sweep tried it too - and it did not
+    // benefit (-1.8%, inside noise), because its body carries the frame hash
+    // check inline and is already over the inline budget. The attribute was
+    // therefore NOT shipped on Validate.
+    //
+    // Keeping the probe as two LOCAL copies is what stops it rotting into a
+    // duplicate lane: pointing the "pinned" side at the shipped method would
+    // make both lanes the same code the moment the attribute is absent, and the
+    // pair would read as a null result while actually measuring nothing.
+
+    /// <summary>Falsification probe: structural validation, walker inlinable.</summary>
+    [Benchmark(Description = "(6) probe - structural validate - inlinable (not shipped)")]
+    public bool Validate_Inlinable() => BaselineValidate(_frame);
+
+    /// <summary>Falsification probe: structural validation, walker pinned.</summary>
+    [Benchmark(Description = "(6) probe - structural validate - pinned (not shipped)")]
+    public bool Validate_Pinned() => PinnedValidate(_frame);
+
+    // ------------------------------------------------------------- equivalence
     private void AssertAdmissionEquivalence()
     {
         foreach (var (frame, label) in new[] { (_frame, "primary frame"), (_tinyFrame, "two-row frame") })
@@ -645,8 +739,94 @@ public class LeafSnapshotFrameTrimBenchmarks
     /// The ascending-order check as it stood: the header read once up front,
     /// and then again inside every per-row key probe.
     /// </summary>
-    private static bool BaselineIsAscendingByKey(ReadOnlySpan<byte> frame)
+    /// <summary>
+    /// The pinned half of the group (6) Validate falsification probe: the same
+    /// body as <see cref="BaselineValidate"/>, differing only by
+    /// <c>[MethodImpl(NoInlining)]</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool PinnedValidate(ReadOnlySpan<byte> frame) => ValidateBody(frame);
+
+    /// <summary>
+    /// Verbatim copy of <c>LeafSnapshotCodec.Validate</c>, left inlinable. Paired
+    /// with <see cref="PinnedValidate"/> to A/B the inlining attribute alone.
+    /// </summary>
+    private static bool BaselineValidate(ReadOnlySpan<byte> frame) => ValidateBody(frame);
+
+    /// <summary>
+    /// Shared body for the two Validate probe lanes, so the pair cannot drift
+    /// apart and start measuring something other than the attribute. Forcibly
+    /// inlined into both wrappers, which makes each wrapper's own inlining
+    /// attribute the only variable between them.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ValidateBody(ReadOnlySpan<byte> frame)
     {
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return false;
+        }
+
+        var bodyLength = frame.Length - LeafSnapshotCodec.TrailerLength;
+        var expected = BinaryPrimitives.ReadUInt64LittleEndian(frame[bodyLength..]);
+        if (XxHash64.HashToUInt64(frame[..bodyLength]) != expected)
+        {
+            return false;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        for (var i = 0; i < rowCount; i++)
+        {
+            var declared = BinaryPrimitives.ReadInt32LittleEndian(frame[(indexOffset + (i * sizeof(int)))..]);
+            if (declared != pos)
+            {
+                return false;
+            }
+
+            if (!LeafSnapshotCodec.TrySkipRow(frame, indexOffset, ref pos))
+            {
+                return false;
+            }
+        }
+
+        return pos == indexOffset;
+    }
+
+    /// <summary>
+    /// Verbatim copy of <c>LeafSnapshotCodec.TryComputeStateBytes</c> as it stood
+    /// before the inline-root sweep - identical body, WITHOUT
+    /// <c>[MethodImpl(NoInlining)]</c>.
+    /// </summary>
+    private static bool BaselineTryComputeStateBytes(ReadOnlySpan<byte> frame, out long stateBytes)
+    {
+        stateBytes = 0;
+        if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return false;
+        }
+
+        var pos = LeafSnapshotCodec.HeaderLength;
+        long total = 0;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!LeafSnapshotCodec.TryMeasureRowFootprint(frame, indexOffset, ref pos, out var rowBytes, out _))
+            {
+                return false;
+            }
+
+            total += rowBytes;
+        }
+
+        if (pos != indexOffset)
+        {
+            return false;
+        }
+
+        stateBytes = total;
+        return true;
+    }
+
+    private static bool BaselineIsAscendingByKey(ReadOnlySpan<byte> frame)    {
         if (!LeafSnapshotCodec.TryReadHeader(frame, out var rowCount, out _))
         {
             return false;
