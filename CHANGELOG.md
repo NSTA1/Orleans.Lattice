@@ -178,6 +178,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Security - A metric allow-list admitted names it was not written for.** Wildcard entries anchored with `$` and matched with `Singleline`, so a caller-supplied name carrying a newline satisfied a deny-all pattern. Entries now anchor with `\z`, reject newlines, and match without backtracking. ([#3929](https://github.com/NSTA1/Orleans.Lattice/pull/3929)) (`Orleans.Lattice.Api.Telemetry`)
+
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - A single-key allow certified a whole prefix.** An app role scoped to a key prefix probed its key filter with the prefix string, which resolves on the exact-key tier, so a policy allowing only the key equal to that prefix held the role prefix-wide. Filtered decisions now fail closed. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp.Apps`)

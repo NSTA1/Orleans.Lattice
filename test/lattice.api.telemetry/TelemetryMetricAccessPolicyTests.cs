@@ -139,6 +139,46 @@ public sealed class TelemetryMetricAccessPolicyTests
     }
 
     [Test]
+    public void A_wildcard_does_not_admit_a_name_with_a_trailing_newline()
+    {
+        // Regression: the tail anchor must be '\z', not '$'. '$' also matches
+        // immediately before a trailing newline, so "^lattice_wal_.*$" admitted
+        // "lattice_wal_append_total\n" - a name the operator never allow-listed
+        // slipping through a deny-all posture.
+        var policy = DenyAll("lattice_wal_*");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.IsAdmitted("lattice_wal_append_total"), Is.True);
+            Assert.That(policy.IsAdmitted("lattice_wal_append_total\n"), Is.False);
+            Assert.That(policy.IsAdmitted("lattice_wal_append_total\r\n"), Is.False);
+        });
+    }
+
+    [Test]
+    public void An_exact_pattern_does_not_admit_a_name_with_a_trailing_newline()
+    {
+        // The same anchor defect, on a pattern with no wildcard tail at all.
+        var policy = DenyAll("lattice_*_total");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.IsAdmitted("lattice_wal_total"), Is.True);
+            Assert.That(policy.IsAdmitted("lattice_wal_total\n"), Is.False);
+        });
+    }
+
+    [Test]
+    public void A_wildcard_does_not_span_an_embedded_newline()
+    {
+        // Regression: RegexOptions.Singleline made '.' match a newline, so a single
+        // wildcard spanned one and a name could carry an unrelated second name
+        // through the allow-list. A metric name never contains a newline.
+        var policy = DenyAll("lattice_wal_*");
+        Assert.That(policy.IsAdmitted("lattice_wal_ok\nlattice_secret_total"), Is.False);
+    }
+
+    [Test]
     public void A_null_options_is_rejected()
         => Assert.Throws<ArgumentNullException>(() => new TelemetryMetricAccessPolicy(options: null!));
 
