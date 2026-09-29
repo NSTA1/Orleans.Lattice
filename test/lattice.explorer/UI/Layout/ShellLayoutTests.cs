@@ -94,7 +94,13 @@ public sealed class ShellLayoutTests : ShellLayoutTestContext
         cut.FindAll(".lt-shell-skip__link")[0].Click();
         cut.FindAll(".lt-shell-skip__link")[1].Click();
 
-        Assert.That(JSInterop.Invocations.Count(invocation => invocation.Identifier.EndsWith("focus", StringComparison.Ordinal)), Is.GreaterThanOrEqualTo(3));
+        // Content and directory focus their landmarks directly; the address skip goes
+        // through the chrome module, which focuses only an element still in the document.
+        Assert.Multiple(() =>
+        {
+            Assert.That(JSInterop.Invocations.Count(invocation => invocation.Identifier.EndsWith("focus", StringComparison.Ordinal)), Is.GreaterThanOrEqualTo(2));
+            Assert.That(JSInterop.Invocations.Count(invocation => invocation.Identifier == "focusElement"), Is.GreaterThanOrEqualTo(1));
+        });
     }
 
     [Test]
