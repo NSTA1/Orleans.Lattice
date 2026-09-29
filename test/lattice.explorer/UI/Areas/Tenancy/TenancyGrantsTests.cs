@@ -1,5 +1,7 @@
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -72,7 +74,7 @@ public sealed class TenancyGrantsTests : TenancyTestContext
         {
             var grant = Cluster.GrantList.Single();
             Assert.That((grant.GranterTenantId, grant.GranteeTenantId, grant.Scope, grant.Operations, grant.State),
-                Is.EqualTo(("acme", "globex", "orders/", TenantGrantAccess.ReadWrite, TenantGrantLifecycleState.Pending)));
+                Is.EqualTo(("acme", "globex", "t/acme/orders/", TenantGrantAccess.ReadWrite, TenantGrantLifecycleState.Pending)), "a tenant-local name is qualified into the granting tenant's namespace, which the tenant gate matches");
             Assert.That(cut.FindAll("form.lt-tenancy-form"), Is.Empty);
             Assert.That(cut.FindAll("table")[1].QuerySelector("tbody th")!.TextContent.Trim(), Is.EqualTo("globex"));
             Assert.That(Services.GetToasts().Last().Message, Is.EqualTo("Offered orders/ to tenant globex. It takes effect once tenant globex approves."));
@@ -103,7 +105,7 @@ public sealed class TenancyGrantsTests : TenancyTestContext
     [Test]
     public void The_clusters_refusal_of_an_offer_is_shown_in_the_form()
     {
-        Cluster.WithTenant("globex").WithGrant("acme", "globex", "orders", TenantGrantLifecycleState.Active);
+        Cluster.WithTenant("globex").WithGrant("acme", "globex", "t/acme/orders", TenantGrantLifecycleState.Active);
         var cut = OpenOffer();
 
         TenancyForms.Type(cut, "To tenant", "globex");
@@ -251,6 +253,53 @@ public sealed class TenancyGrantsTests : TenancyTestContext
 
     private IRenderedComponent<TenancyGrants> RenderGrants(LtBreakpoint? band = null) =>
         RenderSection<TenancyGrants>(parameters => parameters.Add(grants => grants.TenantId, "acme"), band);
+
+    [Test]
+    public void An_already_qualified_scope_is_offered_as_typed()
+    {
+        Cluster.WithTenant("globex");
+        var cut = OpenOffer();
+
+        TenancyForms.Type(cut, "To tenant", "globex");
+        TenancyForms.Type(cut, "Scope", "t/acme/archive/");
+        cut.Find("form.lt-tenancy-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(Cluster.GrantList.Single().Scope, Is.EqualTo("t/acme/archive/")));
+    }
+
+    [Test]
+    public async Task Approving_a_grant_in_the_same_circuit_refreshes_the_trees_shared_with_the_tenant()
+    {
+        UseTenancyAs("acme");
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Tenancy.IExplorerTenantView>(new Data.FakeTenantView("acme"));
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Connection.ILatticeStateClient>(new Data.FakeStateClient().WithTree("t/acme/stock"));
+        Cluster.WithTenant("globex").WithGrant("globex", "acme", "t/globex/orders", TenantGrantLifecycleState.Pending);
+        var directory = Services.GetRequiredService<DataDirectory>();
+        var before = await directory.LoadAsync();
+        var cut = RenderGrants();
+        cut.WaitUntil(() => TenancyForms.Button(cut, "Approve"));
+
+        TenancyForms.Button(cut, "Approve").Click();
+
+        cut.WaitUntil(() => Assert.That(directory.Loaded, Is.Null, "the approval forgot the directory"));
+        var after = await directory.LoadAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Select(entry => entry.LogicalId), Is.EqualTo(new[] { "stock" }));
+            Assert.That(after.Select(entry => (entry.LogicalId, entry.SharedBy)), Is.EqualTo(new[] { ("stock", (string?)null), ("t/globex/orders", "globex") }));
+        });
+    }
+
+    [Test]
+    public void The_scope_to_offer_is_qualified_into_the_granting_tenant_unless_it_already_is()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyGrants.QualifyScope("acme", "orders"), Is.EqualTo("t/acme/orders"));
+            Assert.That(TenancyGrants.QualifyScope("acme", "a/crm/"), Is.EqualTo("t/acme/a/crm/"));
+            Assert.That(TenancyGrants.QualifyScope("acme", "t/acme/orders"), Is.EqualTo("t/acme/orders"));
+        });
+    }
 
     private IRenderedComponent<TenancyGrants> OpenOffer()
     {

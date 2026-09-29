@@ -129,8 +129,9 @@ internal sealed class DataCompletionSource : IAddressCompletionSource
                 return;
             }
 
-            if (entry.LogicalId.StartsWith(text, StringComparison.OrdinalIgnoreCase)
-                || (entry.ViewName is { } view && view.StartsWith(text, StringComparison.OrdinalIgnoreCase)))
+            if (entry.Kind != DataTreeKind.Prefix
+                && (entry.LogicalId.StartsWith(text, StringComparison.OrdinalIgnoreCase)
+                    || (entry.ViewName is { } view && view.StartsWith(text, StringComparison.OrdinalIgnoreCase))))
             {
                 results.Add(new AddressCompletion(entry.LogicalId, entry.Address, Describe(entry)));
             }
@@ -177,7 +178,9 @@ internal sealed class DataCompletionSource : IAddressCompletionSource
         }
     }
 
-    private static string Describe(DataTreeEntry entry) => entry.AppSlug is { } slug
-        ? $"{entry.KindText} of app {slug}"
-        : entry.KindText;
+    private static string Describe(DataTreeEntry entry) => entry.SharedBy is { } owner
+        ? $"{entry.KindText} from tenant {owner}, {entry.AccessText!.ToLowerInvariant()}"
+        : entry.AppSlug is { } slug
+            ? $"{entry.KindText} of app {slug}"
+            : entry.KindText;
 }

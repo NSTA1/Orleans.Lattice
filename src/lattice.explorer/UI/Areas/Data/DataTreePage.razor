@@ -36,8 +36,17 @@ else
         {
             <LtStatusPill Text="@($"app: {slug}")" />
         }
+        @if (_tree.SharedText is { } sharedBy)
+        {
+            <LtStatusPill Text="@sharedBy" />
+            <LtStatusPill Text="@_tree.AccessText" />
+        }
     </div>
     <p class="lt-data-meta">
+        @if (_tree.SharedBy is { } sharer)
+        {
+            <span>Tenant <span class="lt-shell-mono">@sharer</span> shares this tree through a grant this tenant approved. The grant allows @_tree.AccessText!.ToLowerInvariant() access, so administration is not offered here.</span>
+        }
         @if (_tree.AppSlug is { } owner)
         {
             <span>Owned by app <a class="lt-shell-mono" href="@_workspace.Href(ExplorerAddress.ForArea(DataArea.AppsAreaKey, owner))">@owner</a></span>

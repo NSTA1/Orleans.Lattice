@@ -101,9 +101,24 @@ internal sealed class DataArea : IExplorerArea
     public async ValueTask<string?> GetHomeStatusAsync(CancellationToken cancellationToken)
     {
         var entries = await _directory.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var views = entries.Count(entry => entry.Kind == DataTreeKind.View);
-        var trees = entries.Count - views;
-        return string.Create(CultureInfo.InvariantCulture, $"{Plural(trees, "tree")} and {Plural(views, "view")}.");
+        var views = 0;
+        var shared = 0;
+        foreach (var entry in entries)
+        {
+            if (entry.IsShared)
+            {
+                shared++;
+            }
+            else if (entry.Kind == DataTreeKind.View)
+            {
+                views++;
+            }
+        }
+
+        var trees = entries.Count - views - shared;
+        return shared == 0
+            ? string.Create(CultureInfo.InvariantCulture, $"{Plural(trees, "tree")} and {Plural(views, "view")}.")
+            : string.Create(CultureInfo.InvariantCulture, $"{Plural(trees, "tree")} and {Plural(views, "view")}, and {shared:N0} shared with this tenant.");
     }
 
     internal static string Plural(long count, string noun) =>

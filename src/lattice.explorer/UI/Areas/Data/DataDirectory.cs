@@ -1,8 +1,11 @@
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -44,6 +47,8 @@ internal sealed class DataDirectory : IDisposable
     private Task<bool>? _probe;
     private IReadOnlyList<DataTreeEntry>? _entries;
     private Dictionary<string, DataTreeEntry>? _byStateId;
+    private string? _sharingNote;
+    private int _generation;
     private (bool Authenticated, string? User, string? Endpoint, string? Tenant) _caller;
 
     /// <summary>Creates the directory.</summary>
@@ -62,6 +67,14 @@ internal sealed class DataDirectory : IDisposable
 
     /// <summary>The loaded entries, or <see langword="null"/> before the first load completes.</summary>
     public IReadOnlyList<DataTreeEntry>? Loaded => _entries;
+
+    /// <summary>
+    /// Why the loaded entries hold no tree, or not every tree, other tenants share
+    /// with this one - the caller cannot list the tenant's grants, or a grant names
+    /// a scope that shares nothing - or <see langword="null"/> when nothing is
+    /// missing.
+    /// </summary>
+    public string? SharingNote => _entries is null ? null : _sharingNote;
 
     /// <summary>
     /// Whether the caller can read the catalogue at all: resolves the reader and
@@ -120,14 +133,7 @@ internal sealed class DataDirectory : IDisposable
     /// <param name="cancellationToken">Stops waiting; the load itself continues.</param>
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        lock (_gate)
-        {
-            _load = null;
-            _probe = null;
-            _entries = null;
-            _byStateId = null;
-        }
-
+        Forget();
         Changed?.Invoke();
         try
         {
@@ -137,6 +143,18 @@ internal sealed class DataDirectory : IDisposable
         {
             Changed?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Forgets the loaded entries without reading them again, so the next reader
+    /// loads afresh, and raises <see cref="Changed"/>. The Tenancy area calls it
+    /// when a grant this circuit approved, rejected or revoked changes which trees
+    /// are shared with the tenant.
+    /// </summary>
+    public void Invalidate()
+    {
+        Forget();
+        Changed?.Invoke();
     }
 
     /// <summary>
@@ -158,14 +176,20 @@ internal sealed class DataDirectory : IDisposable
         var tenant = _tenancy.IsActive ? address.Tenant ?? _tenancy.ActiveTenant : null;
         foreach (var entry in entries)
         {
-            if (string.Equals(entry.LogicalId, logical, StringComparison.Ordinal)
+            if (entry.Kind != DataTreeKind.Prefix
+                && string.Equals(entry.LogicalId, logical, StringComparison.Ordinal)
                 && string.Equals(entry.Tenant, tenant, StringComparison.Ordinal))
             {
                 return entry;
             }
         }
 
-        return null;
+        // A tree under a shared prefix (or below a shared tree) is not listed,
+        // because another tenant's trees cannot be enumerated, but the grant makes
+        // it readable: resolve it against the grant that covers it.
+        return tenant is null
+            ? null
+            : DataSharedTrees.Cover(entries.Where(entry => string.Equals(entry.Tenant, tenant, StringComparison.Ordinal)), logical);
     }
 
     /// <summary>Finds a loaded entry by the id the state API answered with.</summary>
@@ -218,10 +242,25 @@ internal sealed class DataDirectory : IDisposable
             }
 
             _caller = caller;
+            _generation++;
             _load = null;
             _probe = null;
             _entries = null;
             _byStateId = null;
+            _sharingNote = null;
+        }
+    }
+
+    private void Forget()
+    {
+        lock (_gate)
+        {
+            _generation++;
+            _load = null;
+            _probe = null;
+            _entries = null;
+            _byStateId = null;
+            _sharingNote = null;
         }
     }
 
@@ -267,19 +306,29 @@ internal sealed class DataDirectory : IDisposable
     private async Task<IReadOnlyList<DataTreeEntry>> RunLoadAsync()
     {
         var caller = _caller;
+        var generation = _generation;
+
+        // Every call this load makes asserts the tenant the load began in, even if
+        // the circuit moves to another tenant meanwhile; such a load is returned
+        // to its own waiters but never remembered.
+        using var pin = PinAssertedTenant();
         try
         {
             var reader = TryGetReader() ?? throw new InvalidOperationException("No state API is configured for this Explorer.");
             var trees = await ReadAllAsync(reader, CatalogKind.Trees).ConfigureAwait(false);
             var views = await ReadViewsAsync(reader).ConfigureAwait(false);
-            var entries = Build(trees, views);
+            var owned = Build(trees, views);
+            var (shared, note) = await ReadSharedAsync(caller.Tenant, owned).ConfigureAwait(false);
+            DataTreeEntry[] entries = shared.Count == 0 ? owned : [.. owned, .. shared];
             lock (_gate)
             {
-                // A load that finished for a caller who has since changed is
-                // returned to its own waiters but never remembered.
-                if (caller == _caller)
+                // A load that finished for a caller who has since changed, or
+                // after the directory was invalidated, is returned to its own
+                // waiters but never remembered.
+                if (caller == _caller && generation == _generation)
                 {
                     _entries = entries;
+                    _sharingNote = note;
                     _byStateId = entries.ToDictionary(entry => entry.StateId, StringComparer.Ordinal);
                 }
             }
@@ -290,11 +339,75 @@ internal sealed class DataDirectory : IDisposable
         {
             lock (_gate)
             {
-                _load = null;
+                if (generation == _generation)
+                {
+                    _load = null;
+                }
             }
 
             throw;
         }
+    }
+
+    private IDisposable? PinAssertedTenant() =>
+        _services.GetService(typeof(ShellAssertedTenant)) is ShellAssertedTenant asserted
+            ? asserted.Pin(asserted.AssertedTenant)
+            : null;
+
+    /// <summary>
+    /// Reads the trees other tenants share with <paramref name="tenant"/> through
+    /// grants it approved, with the caller's own authority. Any failure - no grant
+    /// facade, a refusal, a fault - fails closed to the owned trees alone and says
+    /// so in the note; it never fails the directory.
+    /// </summary>
+    private async Task<(IReadOnlyList<DataTreeEntry> Shared, string? Note)> ReadSharedAsync(string? tenant, DataTreeEntry[] owned)
+    {
+        // Grants are tenant to tenant, and the reserved default tenant takes no
+        // part in them: without tenancy, or at the default tenant, nothing is shared.
+        if (!_tenancy.IsActive
+            || string.IsNullOrEmpty(tenant)
+            || string.Equals(tenant, ExplorerTenantTrees.DefaultTenantId, StringComparison.Ordinal))
+        {
+            return ([], null);
+        }
+
+        ILatticeTenantGrantAdmin? grants;
+        try
+        {
+            grants = _services.GetShellFacade<ILatticeTenantGrantAdmin>();
+        }
+        catch (InvalidOperationException)
+        {
+            grants = null;
+        }
+
+        if (grants is null)
+        {
+            return ([], DataSharedTrees.NotOfferedNote(tenant));
+        }
+
+        TenantGrantReport report;
+        try
+        {
+            report = await grants.ListGrantsAsync(tenant, _lifetime.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return ([], DataSharedTrees.NoteFor(exception, tenant));
+        }
+
+        var ownedIds = new HashSet<string>(owned.Length, StringComparer.Ordinal);
+        foreach (var entry in owned)
+        {
+            ownedIds.Add(entry.LogicalId);
+        }
+
+        var result = DataSharedTrees.Build(report, tenant, ownedIds);
+        return (result.Entries, result.Unreadable == 0 ? null : DataSharedTrees.UnreadableNote(result.Unreadable));
     }
 
     private async Task<IReadOnlyList<CatalogItem>> ReadViewsAsync(ICatalogReader reader)

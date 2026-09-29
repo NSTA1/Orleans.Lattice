@@ -10,10 +10,13 @@ namespace Orleans.Lattice.Explorer.UI.Suggestions;
 /// offers a tree the caller cannot see and never pays for the catalogue twice.
 /// </summary>
 /// <remarks>
-/// With tenancy on, only the active tenant's trees are offered. The projection
+/// With tenancy on, only the active tenant's trees are offered, together with the
+/// trees other tenants share with it through a grant it approved (marked with
+/// their owner and access). The projection
 /// onto suggestions is remembered per loaded catalogue and tenant, so typing
 /// matches a ready list and allocates only the bounded answer. Views are left out:
-/// every field that names a tree acts on a tree.
+/// every field that names a tree acts on a tree, and so are shared prefixes, which
+/// name no tree.
 /// </remarks>
 /// <param name="directory">The circuit's tree catalogue.</param>
 /// <param name="tenancy">Whether, and to which tenant, the Explorer is scoped.</param>
@@ -64,7 +67,9 @@ internal sealed class TreeSuggestionSource(DataDirectory directory, ExplorerTena
             if (entry.Kind == DataTreeKind.Tree
                 && (!scoped || (tenant is not null && string.Equals(entry.Tenant, tenant, StringComparison.Ordinal))))
             {
-                values.Add(new LtSuggestion(entry.LogicalId, entry.KindText));
+                values.Add(new LtSuggestion(entry.LogicalId, entry.IsShared
+                    ? $"{entry.SharedText}, {entry.AccessText!.ToLowerInvariant()}"
+                    : entry.KindText));
             }
         }
 
