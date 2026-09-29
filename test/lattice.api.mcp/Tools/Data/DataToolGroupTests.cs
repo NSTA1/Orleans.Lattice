@@ -49,6 +49,58 @@ public sealed class DataToolGroupTests
         Assert.That(group.Group, Is.EqualTo(LatticeApiMcpGroup.Data));
     }
 
+    /// <summary>
+    /// Security regression. The per-tool minimum is what keeps a mutating tool out
+    /// of the advertised set on a bare read grant. The group mask is deliberately
+    /// coarse - any data-plane operation admits the whole group - so without the
+    /// override the session filter's minimum check is a structural no-op and every
+    /// destructive data tool is listed to (and therefore callable by) a read-only
+    /// caller.
+    /// </summary>
+    [Test]
+    public void Mutating_tools_require_a_mutating_operation()
+    {
+        var group = new DataToolGroup(enableWrites: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in WriteToolNames)
+            {
+                var required = group.RequiredOperationsFor(name);
+                Assert.That(
+                    required & LatticeOperation.Read,
+                    Is.EqualTo(LatticeOperation.None),
+                    $"{name} must not be reachable on a bare read grant.");
+                Assert.That(required, Is.Not.EqualTo(LatticeOperation.None), name);
+            }
+        });
+    }
+
+    [Test]
+    public void Read_tools_keep_the_group_minimum()
+    {
+        var group = new DataToolGroup(enableWrites: true);
+        var groupMask = LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Data);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in ReadToolNames)
+            {
+                Assert.That(group.RequiredOperationsFor(name), Is.EqualTo(groupMask), name);
+            }
+        });
+    }
+
+    [Test]
+    public void An_unknown_tool_name_falls_back_to_the_group_minimum()
+    {
+        var group = new DataToolGroup(enableWrites: true);
+
+        Assert.That(
+            group.RequiredOperationsFor("lattice_data_not_a_tool"),
+            Is.EqualTo(LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Data)));
+    }
+
     [Test]
     public void Writes_disabled_offers_only_the_read_tools()
     {

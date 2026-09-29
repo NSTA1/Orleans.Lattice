@@ -38,12 +38,28 @@ public sealed class LatticeBackupRestoreServiceUnitTests
     public void OneTimeTearDown() => _services.Dispose();
 
     private (LatticeBackupRestoreService Service, ILatticeBackupCatalogStore Catalog, ILatticeBackupSink Sink)
-        CreateServiceWithCatalog(IRestoreSagaDispatcher dispatcher)
+        CreateServiceWithCatalog(IRestoreSagaDispatcher dispatcher) =>
+        CreateServiceWithCatalog(dispatcher, setMembers: null);
+
+    private (LatticeBackupRestoreService Service, ILatticeBackupCatalogStore Catalog, ILatticeBackupSink Sink)
+        CreateServiceWithCatalog(
+            IRestoreSagaDispatcher dispatcher,
+            IReadOnlyList<BackupSetMember>? setMembers)
     {
         var serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(IRestoreSagaDispatcher)).Returns(dispatcher);
 
+        // The set path resolves its members before dispatching, so every member's
+        // target can be authorized first; a unit harness therefore has to stand the
+        // read seam up even when the dispatcher is a stub.
+        var resolver = Substitute.For<ILatticeBackupSetResolver>();
+        resolver.ResolveMembersAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(setMembers ?? []));
+        serviceProvider.GetService(typeof(ILatticeBackupSetResolver)).Returns(resolver);
+
         var gate = Substitute.For<ILatticeAccessGate>();
+        gate.AuthorizeAsync(Arg.Any<LatticeAccessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow()));
         var catalog = Substitute.For<ILatticeBackupCatalogStore>();
         var sink = Substitute.For<ILatticeBackupSink>();
         var authorizer = new BackupAccessAuthorizer(gate);
@@ -62,14 +78,13 @@ public sealed class LatticeBackupRestoreServiceUnitTests
         return (service, catalog, sink);
     }
 
-    private LatticeBackupRestoreService CreateService(IRestoreSagaDispatcher dispatcher) =>
-        CreateServiceWithCatalog(dispatcher).Service;
-
     [Test]
     public async Task RestoreAsync_returns_dispatched_result_when_dispatcher_handles_it()
     {
-        // Line 58: when TryDispatchAsync returns a non-null LatticeRestoreResult
-        // the service returns it immediately without entering the local restore path.
+        // When TryDispatchAsync returns a non-null LatticeRestoreResult the service
+        // returns it immediately without entering the local restore path. Dispatch
+        // is reached only after the manifest resolves and the caller clears the
+        // restore gate, so the harness has to supply a manifest.
         var expected = new LatticeRestoreResult(
             "backup-id", "orders", LatticeRestoreMode.InPlace, "op-1",
             new[] { "backup-id" }, 0);
@@ -78,7 +93,10 @@ public sealed class LatticeBackupRestoreServiceUnitTests
         dispatcher.TryDispatchAsync(Arg.Any<LatticeRestoreRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<LatticeRestoreResult?>(expected));
 
-        var service = CreateService(dispatcher);
+        var (service, catalog, _) = CreateServiceWithCatalog(dispatcher);
+        catalog.GetAsync("backup-id", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BackupManifest?>(BackupManifestModelTests.Sample(id: "backup-id")));
+
         var request = new LatticeRestoreRequest("backup-id");
 
         var result = await service.RestoreAsync(request);
@@ -89,8 +107,9 @@ public sealed class LatticeBackupRestoreServiceUnitTests
     [Test]
     public async Task RestoreSetAsync_returns_dispatched_result_when_dispatcher_handles_it()
     {
-        // Line 163: when TryDispatchSetAsync returns a non-null list the service
-        // returns it immediately without entering the local set-restore path.
+        // When TryDispatchSetAsync returns a non-null list the service returns it
+        // immediately without entering the local set-restore path. Dispatch is
+        // reached only after every resolved member target clears the restore gate.
         var expected = new LatticeRestoreResult(
             "backup-id", "orders", LatticeRestoreMode.ShadowCutover, "op-2",
             new[] { "backup-id" }, 0);
@@ -100,7 +119,8 @@ public sealed class LatticeBackupRestoreServiceUnitTests
         dispatcher.TryDispatchSetAsync(Arg.Any<string>(), Arg.Any<LatticeRestoreMode>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<LatticeRestoreResult>?>(dispatchedList));
 
-        var service = CreateService(dispatcher);
+        var service = CreateServiceWithCatalog(
+            dispatcher, [new BackupSetMember("backup-id", "orders")]).Service;
 
         var result = await service.RestoreSetAsync("set-id");
 

@@ -302,4 +302,46 @@ public sealed partial class PromQlMetricExtractorTests
             Assert.That(references.HasUnresolvableNameMatcher, Is.False);
         });
     }
+
+    // ---- Grouping-list scanning honours comments and strings ----
+    //
+    // The transport-side mirror of the allow-list bypass: an unmatched '(' inside a
+    // comment or a quoted label name once held the grouping-list scanner's depth
+    // above zero, so it consumed the rest of the expression and the aggregand's
+    // metric selector never reached the gate. Prometheus strips comments before it
+    // lexes, so it evaluated the hidden selector normally. These are the tool-facing
+    // twins of the extractor tests, pinned here because these tools take raw
+    // caller-supplied PromQL.
+
+    [Test]
+    public void An_unmatched_paren_in_a_comment_does_not_hide_the_aggregand_metric()
+    {
+        var references = Refs("up + sum by (job # (\n) (hidden_metric)");
+        Assert.That(references.Names, Does.Contain("hidden_metric"));
+    }
+
+    [Test]
+    public void An_unmatched_paren_in_a_quoted_label_name_does_not_hide_the_aggregand_metric()
+    {
+        var references = Refs("up + sum by (\"jo(b\") (hidden_metric)");
+        Assert.That(references.Names, Does.Contain("hidden_metric"));
+    }
+
+    [Test]
+    public void A_comment_in_a_grouping_list_leaves_a_well_formed_query_unchanged()
+    {
+        // Over-correction guard: comment-awareness must not start consuming the
+        // grouping list's own closing paren.
+        var references = Refs("sum by (job # a comment\n) (well_formed_metric)");
+        Assert.That(references.Names, Does.Contain("well_formed_metric"));
+    }
+
+    [Test]
+    public void A_closing_paren_in_a_quoted_label_name_does_not_end_the_grouping_list()
+    {
+        // Over-correction guard: a ')' inside a quoted label name is data, so the
+        // list continues and the aggregand is still the metric that follows it.
+        var references = Refs("sum by (\"jo)b\", instance) (quoted_metric)");
+        Assert.That(references.Names, Does.Contain("quoted_metric"));
+    }
 }

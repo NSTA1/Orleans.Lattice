@@ -88,6 +88,17 @@ public class LatticeViewConfigurationTests
     }
 
     [Test]
+    public void Validator_rejects_a_NaN_throttled_ratio()
+    {
+        // NaN compares false against both bounds, so a range check alone admits
+        // it; the backpressure scaler then drains one entry per throttled pass.
+        var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()
+            .Validate(null, new LatticeViewOptions { ThrottledBatchRatio = double.NaN });
+
+        Assert.That(result.Failed, Is.True);
+    }
+
+    [Test]
     public void Validator_rejects_non_positive_saturated_batch_size()
     {
         var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()

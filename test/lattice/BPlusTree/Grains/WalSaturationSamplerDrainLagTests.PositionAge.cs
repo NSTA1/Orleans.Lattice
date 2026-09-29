@@ -22,7 +22,7 @@ public partial class WalSaturationSamplerDrainLagTests
 
     private sealed class CapturingLogger : ILogger<WalSaturationSampler>
     {
-        public List<(LogLevel Level, string Message)> Lines { get; } = new();
+        public List<(LogLevel Level, string Message, IReadOnlyDictionary<string, object?> Fields)> Lines { get; } = new();
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -37,7 +37,8 @@ public partial class WalSaturationSamplerDrainLagTests
         {
             lock (Lines)
             {
-                Lines.Add((logLevel, formatter(state, exception)));
+                var fields = ((IEnumerable<KeyValuePair<string, object?>>)(object)state!).ToDictionary();
+                Lines.Add((logLevel, formatter(state, exception), fields));
             }
         }
     }
@@ -164,7 +165,7 @@ public partial class WalSaturationSamplerDrainLagTests
     }
 
     [Test]
-    public async Task Min_holder_warning_is_logged_once_per_threshold_crossing()
+    public async Task Min_holder_warning_is_not_repeated_on_each_tick_within_the_interval()
     {
         var registry = new InMemoryWalCursorRegistry();
         var start = DateTimeOffset.UtcNow;
@@ -189,7 +190,7 @@ public partial class WalSaturationSamplerDrainLagTests
             Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
                 "precondition: the tree stayed over threshold for every tick");
             Assert.That(logger.Lines.Count(l => l.Level == LogLevel.Warning && l.Message.Contains(draining)), Is.EqualTo(1),
-                "a standing over-threshold tree must log its min-holder on the crossing tick only, not on every tick");
+                "a standing over-threshold tree must not log on every tick within the interval");
         });
     }
 }

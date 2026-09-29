@@ -252,4 +252,56 @@ public sealed class TelemetryQueryAuthorizerTests
     public void A_null_query_is_rejected()
         => Assert.Throws<ArgumentNullException>(
             () => TelemetryQueryAuthorizer.TryAuthorizeQuery(ReadAll(), null!, out _));
+
+    [Test]
+    public void Deny_all_rejects_a_denied_metric_hidden_behind_a_commented_paren_in_a_grouping_list()
+    {
+        // The grouping-list skip counted parentheses over raw text, so the '('
+        // inside the '#' comment held the depth above zero and the skip swallowed
+        // the aggregand. The gate saw only the allow-listed 'up' and admitted,
+        // while Prometheus - which discards the comment - evaluated
+        // 'up + sum by (job) (secret_metric)' and returned the denied series.
+        var admitted = TelemetryQueryAuthorizer.TryAuthorizeQuery(
+            DenyAll("up"),
+            "up + sum by (job # (\n) (secret_metric)",
+            out var denial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
+            Assert.That(denial, Is.EqualTo(TelemetryQueryAuthorizer.DeniedMessage("secret_metric")));
+        });
+    }
+
+    [Test]
+    public void Deny_all_rejects_a_denied_metric_hidden_behind_a_quoted_paren_in_a_grouping_list()
+    {
+        // The same bypass through a quoted label name, which Prometheus reads as
+        // one token rather than as an open parenthesis.
+        var admitted = TelemetryQueryAuthorizer.TryAuthorizeQuery(
+            DenyAll("up"),
+            "up + sum by (\"(\") (secret_metric)",
+            out var denial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
+            Assert.That(denial, Is.EqualTo(TelemetryQueryAuthorizer.DeniedMessage("secret_metric")));
+        });
+    }
+
+    [Test]
+    public void Deny_all_still_admits_a_well_formed_grouping_list_carrying_a_comment()
+    {
+        var admitted = TelemetryQueryAuthorizer.TryAuthorizeQuery(
+            DenyAll("up"),
+            "sum by (job # group by job\n) (up)",
+            out var denial);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.True);
+            Assert.That(denial, Is.Null);
+        });
+    }
 }

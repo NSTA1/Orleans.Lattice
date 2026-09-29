@@ -91,17 +91,12 @@ public sealed class DashboardJsonTests
         new HashSet<string>(StringComparer.Ordinal)
         {
             // orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap (issue
-            // #2183) is a provider-conditional safety counter. It fires only
-            // when a leaf's durable UnresolvedReplayWork row grows past the
-            // MaxDurableUnresolvedReplayWork cap, which is a persist hazard only
-            // on an Azure Table deployment (1MB entity cap) and is benign on the
-            // default `local` SQLite profile the bundled dashboards target -
-            // where it sits flat at zero. A bundled panel would therefore show
-            // every default-deployment operator a permanently-empty graph; the
-            // signal belongs in an Azure-Table alert rule keyed off the metric
-            // name, which docs/lattice/metrics.md and the panel-map row both
-            // direct operators to. Documented in both reference docs; left off
-            // the bundled panels deliberately.
+            // #2183) remains alert-only rather than a bundled trend panel.
+            // Alert on every profile: Azure Table bounds persisted growth by
+            // rejecting oversized writes; SQLite permits larger rows that can
+            // exhaust the activation read budget or memory before repair runs.
+            // A normally quiet series does not make that read risk harmless.
+            // Both reference docs prescribe an alert keyed off this metric.
             "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap",
 
             // The three registry fan-in gate state histograms (issue #3266) are
@@ -209,95 +204,46 @@ public sealed class DashboardJsonTests
 
     private static void AddInstrumentForms(Dictionary<string, string> map, string instrumentName, string meterName)
     {
-        // OpenTelemetry's Prometheus exporter translates '.' to '_' and
-        // preserves any underscores already present in the .NET name.
-        var underscored = instrumentName.Replace('.', '_');
-
-        // Only a Histogram<T> ever exports bucket series; every other instrument
-        // kind exports a single sample per series under every exporter. Registering
-        // a "_bucket" form for a counter would assert that a form exists without
-        // establishing that anything can produce it, which is exactly how a panel
-        // reading buckets off a counter used to pass this name check silently.
-        // DashboardHistogramQuantileTests states that invariant directly and is
-        // where such a panel is now reported; narrowing here stops this map from
-        // vouching for a series no exporter emits.
+        // Exactly the series .AddPrometheusExporter() emits, derived from the
+        // instrument's declared unit and kind (issue #3260). There is no
+        // alternative spelling to fall back on: the repository-context
+        // container's unsuffixed exposition is not what these dashboards target,
+        // and a map that also vouched for its spelling certified 22 panel queries
+        // naming series the targeted exporter never emits. Nor are unit words
+        // synthesized regardless of unit - a "_milliseconds_bucket" form exists
+        // only for an instrument that declares "ms".
         //
-        // An instrument absent from the source registry stays permissive: the
-        // histogram gate reports an unresolvable bucket token itself, with a
-        // message naming the real cause, and duplicating it here would only
-        // obscure that.
-        var bucketed = !DeclaredInstruments.ByDottedName.TryGetValue(instrumentName, out var declaredKind)
-            || declaredKind == DeclaredInstrumentKind.Histogram;
-
-        // Counter: name + "_total"
-        map[underscored + "_total"] = meterName;
-
-        // KNOWN-INCOMPLETE RETENTION - see issue #3260.
-        //
-        // The repo-context container's in-house Prometheus exposition does NOT
-        // append a unit segment for "ms" or "s" either: it records the unit in HELP
-        // text, exactly as it does for "By". Measured on that live scrape (440 families):
-        //
-        //   # HELP orleans_lattice_atomic_write_duration ... (unit: ms)
-        //   # TYPE orleans_lattice_atomic_write_duration summary
-        //
-        // so the instrument `orleans.lattice.atomic.write.duration` produces a
-        // BARE family name, and there are zero `_duration_milliseconds` families
-        // anywhere in that scrape.
-        //
-        // The six synthesized forms below are therefore forms the exporter never
-        // emits, and they are retained DELIBERATELY rather than because they are
-        // believed correct. Removing them today turns this gate red on 60
-        // dashboard tokens that are already dead (57 `_milliseconds_bucket`, 2
-        // bare `_milliseconds`, 1 `_seconds_bucket`). Those 60 are not repaired
-        // here because their correct target spelling is not yet determined: the
-        // same scrape shows these instruments exporting as Prometheus `summary`
-        // with ZERO `_bucket` lines, so a `_bucket` panel is dead however it is
-        // named. That shape question is issue #3261 and blocks #3260.
-        //
-        // So: this gate's green is PARTIAL. It covers the byte-unit class
-        // completely (issue #3259) and does not cover the ms/s class at all.
-        // Closing #3260 means deleting the six lines below.
-        map[underscored + "_milliseconds_bucket"] = meterName;
-        map[underscored + "_milliseconds_count"] = meterName;
-        map[underscored + "_milliseconds_sum"] = meterName;
-        map[underscored + "_seconds_bucket"] = meterName;
-        map[underscored + "_seconds_count"] = meterName;
-        map[underscored + "_seconds_sum"] = meterName;
-
-        // Histogram with no explicit unit: the exporter appends the suffix
-        // directly to the underscored name without inserting a unit segment.
-        //
-        // This arm is deliberately not illustrated with a name that merely
-        // looks unit-bearing. A .NET name ending in a unit alias (say "_ms")
-        // does not mean the declaration omitted the unit, and the exporter
-        // keys its suppression on the mapped form ("milliseconds"), never on
-        // the alias - so such a name takes the unit-segment arm above and
-        // doubles (issue #2920), rather than this one.
-        if (bucketed)
+        // An instrument the source registry cannot place contributes no form at
+        // all, so a panel reading it fails to resolve.
+        // Every_enrolled_instrument_has_a_declared_unit_and_kind reports that
+        // case directly, naming the instrument rather than the token.
+        if (!TryGetExporterSeriesNames(instrumentName, out var series))
         {
-            map[underscored + "_bucket"] = meterName;
+            return;
         }
 
-        map[underscored + "_count"] = meterName;
-        map[underscored + "_sum"] = meterName;
+        foreach (var name in series)
+        {
+            map[name] = meterName;
+        }
+    }
 
-        // NO byte-unit synthesis. The exporter does not append "_bytes" for a
-        // "By"-unit instrument; it records the unit in HELP text and leaves the
-        // family name bare. Measured on a live scrape:
-        //
-        //   # HELP orleans_lattice_storage_policy_bytes_reclaimed_total ... (unit: By)
-        //   # TYPE orleans_lattice_storage_policy_bytes_reclaimed_total counter
-        //
-        // Synthesizing "_bytes" / "_bytes_total" here previously made BOTH
-        // spellings resolve, so the gate certified a query naming a series that
-        // cannot exist - which renders as an empty graph, indistinguishable from
-        // a real zero. That hole hid six dead panel queries (issue #3259).
-        // Do not reinstate these two forms; an instrument whose name already ends
-        // in "bytes" is covered by the bare name plus "_total" above.
+    /// <summary>
+    /// The exact series names <c>.AddPrometheusExporter()</c> emits for a declared
+    /// instrument, or <see langword="false"/> when the source registry does not
+    /// record both its kind and its unit.
+    /// </summary>
+    internal static bool TryGetExporterSeriesNames(string instrumentName, out IReadOnlyList<string> series)
+    {
+        if (DeclaredInstruments.ByDottedName.TryGetValue(instrumentName, out var kind)
+            && DeclaredInstruments.UnitByDottedName.TryGetValue(instrumentName, out var unit))
+        {
+            series = PrometheusExporterNaming.SeriesNames(instrumentName, unit, PrometheusExporterNaming.FamilyTypeOf(kind));
+            return true;
+        }
 
-        // Gauge / observable / un-suffixed reference (some queries use the bare name)
-        map[underscored] = meterName;
+        series = [];
+        return false;
     }
 
     private static IEnumerable<string> EnumerateDocumentedInstrumentConstants(Type metricsType)
@@ -529,14 +475,7 @@ public sealed class DashboardJsonTests
             $"Dashboard '{kind}' references no orleans_lattice instruments - that is almost certainly a bug, "
             + "and it would make this case vacuous.");
 
-        var unknown = new List<string>();
-        foreach (var token in referencedTokens)
-        {
-            if (!ExpectedTokenToMeter.ContainsKey(token))
-            {
-                unknown.Add(token);
-            }
-        }
+        var unknown = UnresolvedTokens(json);
 
         Assert.That(unknown, Is.Empty,
             $"Dashboard '{kind}' references metric tokens that no instrument declared in src/ can produce "
@@ -854,6 +793,64 @@ public sealed class DashboardJsonTests
 
         rect = new PanelRect(id, title, xi, yi, wi, hi);
         return true;
+    }
+
+    /// <summary>
+    /// The metric tokens a dashboard's queries reference that are not exactly a
+    /// series <c>.AddPrometheusExporter()</c> emits for some declared instrument,
+    /// in ordinal order. This is the resolution check the per-dashboard gate
+    /// applies, exposed so that a perturbation of a real dashboard exercises the
+    /// same code path.
+    /// </summary>
+    internal static IReadOnlyList<string> UnresolvedTokens(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+
+        return [.. ExtractInstrumentTokens(json)
+            .Where(static token => !ExpectedTokenToMeter.ContainsKey(token))
+            .OrderBy(static token => token, StringComparer.Ordinal)];
+    }
+
+    /// <summary>Whether a token is exactly a series some declared instrument is exported as.</summary>
+    internal static bool Resolves(string token) => ExpectedTokenToMeter.ContainsKey(token);
+
+    /// <summary>
+    /// Every instrument this fixture enrols, from all three of its sources: the
+    /// <c>src/</c> declaration scan, the live listener, and the documented name
+    /// constants.
+    /// </summary>
+    internal static IReadOnlyList<string> EnrolledInstrumentNames()
+    {
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (name, _) in EnumerateSourceDeclaredInstruments()) names.Add(name);
+        foreach (var (name, _) in EnumerateLiveInstruments()) names.Add(name);
+        foreach (var name in EnumerateDocumentedInstrumentConstants(typeof(LatticeMetrics))) names.Add(name);
+        foreach (var name in EnumerateDocumentedInstrumentConstants(typeof(LatticeReplicationMetrics))) names.Add(name);
+        return [.. names];
+    }
+
+    /// <summary>
+    /// Every instrument this fixture enrols has a declared kind and unit, so the
+    /// exact series it is exported as can be derived.
+    /// </summary>
+    /// <remarks>
+    /// Resolution is exact (issue #3260), so an instrument the source registry
+    /// cannot place contributes no series at all. Without this test that would
+    /// surface only as an unresolvable dashboard token or an unpaneled instrument,
+    /// neither of which names the real cause.
+    /// </remarks>
+    [Test]
+    public void Every_enrolled_instrument_has_a_declared_unit_and_kind()
+    {
+        var enrolled = EnrolledInstrumentNames();
+        Assert.That(enrolled, Has.Count.AtLeast(MinimumSourceDeclaredInstruments),
+            "The enrolled population is implausibly small, so an empty result below would be vacuous.");
+
+        var unplaced = enrolled.Where(static name => !TryGetExporterSeriesNames(name, out _)).ToList();
+        Assert.That(unplaced, Is.Empty,
+            "These enrolled instruments have no declaration in src/ whose kind and unit the registry could read, "
+            + $"so the series they are exported as cannot be derived:{Environment.NewLine}  - "
+            + string.Join(Environment.NewLine + "  - ", unplaced));
     }
 
     private static HashSet<string> ExtractInstrumentTokens(string json)

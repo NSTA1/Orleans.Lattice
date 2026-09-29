@@ -1,12 +1,5 @@
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using NSubstitute;
-using Orleans.Lattice.BPlusTree;
-using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
-using Orleans.Runtime;
-using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -25,33 +18,29 @@ public partial class HotShardMonitorGrainTests
     /// so disk never receives the activation timestamp and the
     /// <see cref="LatticeOptions.AutoSplitMinTreeAge"/> grace clock
     /// effectively restarts on every cluster restart.
+    /// <para>
+    /// Uses the lifecycle harness, which wires a timer registry: the sampling
+    /// timer is armed before the activation-time write (#3713), so without one
+    /// the call would fault at the timer and never reach the write under test.
+    /// </para>
     /// </summary>
     [Test]
     public void EnsureRunningAsync_reverts_ActivationUtc_when_WriteStateAsync_throws()
     {
         var sharedState = new FakePersistentState<HotShardMonitorState>();
-        var opts = new LatticeOptions
-        {
-            AutoSplitEnabled = true,
-            AutoSplitMinTreeAge = TimeSpan.FromMinutes(5),
-            HotShardOpsPerSecondThreshold = 100,
-            MaxConcurrentAutoSplits = 1,
-        };
-
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("monitor", TreeId));
-        var gf = Substitute.For<IGrainFactory>();
-        var om = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        om.Get(Arg.Any<string>()).Returns(opts);
-        var resolver = TestOptionsResolver.ForFactory(gf, opts);
-
-        var grain = new HotShardMonitorGrain(
-            ctx, gf, Substitute.For<IReminderRegistry>(), om, resolver,
-            new LoggerFactory().CreateLogger<HotShardMonitorGrain>(), sharedState);
+        var h = CreateLifecycleGrain(
+            options: new LatticeOptions
+            {
+                AutoSplitEnabled = true,
+                AutoSplitMinTreeAge = TimeSpan.FromMinutes(5),
+                HotShardOpsPerSecondThreshold = 100,
+                MaxConcurrentAutoSplits = 1,
+            },
+            state: sharedState);
 
         sharedState.ThrowOnWrite = new InvalidOperationException("simulated storage failure");
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.EnsureRunningAsync());
+        Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.EnsureRunningAsync());
 
         Assert.That(sharedState.State.ActivationUtc, Is.Null,
             "ActivationUtc must remain null in-memory when WriteStateAsync throws, otherwise the " +

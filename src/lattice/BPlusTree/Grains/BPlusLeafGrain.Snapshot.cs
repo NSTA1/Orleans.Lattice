@@ -1834,10 +1834,11 @@ internal sealed partial class BPlusLeafGrain
             // is recoverable independently of the WAL. Advance the coverage
             // view; the NEXT durable-pin flush will then authorise trimming
             // up to min(checkpoint, coveredOffset) per partition. Advancing
-            // coverage only AFTER the store confirms it KEPT the blob (and the
-            // pin lagging by design - the cursor report precedes this capture
-            // in FlushPendingCheckpointAsync) keeps the pin conservative: it
-            // can never license a trim ahead of durable coverage.
+            // coverage only AFTER the store confirms it KEPT the blob keeps the
+            // pin conservative: it can never license a trim ahead of durable
+            // coverage. The revision bump below is what the checkpoint-persist
+            // tail reads to republish the pin after a capture landed, since its
+            // cursor report ran before this capture (issue #3599).
             RecordDurableSnapshotCoverage(blob);
             _snapshotKeptRevision++;
             captureSucceeded = true;
@@ -2708,6 +2709,17 @@ internal sealed partial class BPlusLeafGrain
     /// path to stamping coverage; it only makes paths that already exist
     /// reachable on a leaf that is never collected.
     /// </para>
+    /// <para>
+    /// Since issue #3599 the recheck runs inside <see cref="BankDurablePinCoreAsync"/>,
+    /// which publishes the durable pin after it when <c>min(persisted, coverage)</c>
+    /// is above what an awaited flush has published. The tick commits a pending
+    /// checkpoint advance only when the coalescing predicate
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> applies says it
+    /// is due (issue #3608), so a tick inside the coalescing window flushes
+    /// nothing; otherwise it banks only what is already persisted. That step
+    /// acquires no replay permit; only the two starvation branches above reach
+    /// one.
+    /// </para>
     /// </summary>
     internal async Task OnCoverageLagTimerTickAsync(CancellationToken cancellationToken)
     {
@@ -2805,8 +2817,36 @@ internal sealed partial class BPlusLeafGrain
         // The capture this reaches is therefore strictly better contained than
         // the one the existing driver reaches, not an additional uncancellable
         // capture.
-        await MaybeRunPeriodicSnapshotRecheckAsync(
-            fromCheckpointPersist: false,
+        //
+        // Issue #3599. The recheck runs inside the permit-free bank step, which
+        // afterwards publishes the pin the recheck made bankable - and the one a
+        // write-idle leaf was already owed. The tick banks what is already
+        // persisted, and commits a pending advance only once the coalescing
+        // window has closed (issue #3608, below). The pin is clamped per partition by min(persisted
+        // checkpoint, durable coverage); on a leaf with no write traffic nothing
+        // else republished it after a capture restamped coverage, or after a
+        // debounced mirror that never landed, so the WAL floor froze below the
+        // checkpoint indefinitely. The step acquires no replay permit and
+        // replays nothing, and never loosens the clamp: a capture that declined,
+        // threw or never ran leaves coverage, and so the pin, where it was.
+        //
+        // Issue #3608. The step DOES commit a residual pending advance once the
+        // coalescing predicate SetCheckpointOffsetAsync applies says it is due -
+        // in practice once MaterialiserCheckpointInterval has elapsed since the
+        // last persist. That predicate was evaluated only as each advance was
+        // recorded, so an advance below MaterialiserCheckpointEntries that
+        // arrived inside the interval (the last partition an activation replay
+        // reconciled, say) stayed pending on a resident, write-idle leaf for as
+        // long as it stayed resident: nothing re-asked the question, so the
+        // durable checkpoint, the pin and the WAL trim floor froze below the
+        // leaf's in-memory position until a teardown persist. The same predicate
+        // is re-evaluated here, so a tick inside the window still flushes
+        // nothing and coalescing is intact. The commit persists only an advance
+        // an apply already banked - no replay, no permit - and the pin it makes
+        // bankable stays clamped by coverage exactly as above.
+        await BankDurablePinCoreAsync(
+            starvationPartitionCount,
+            flushPendingCheckpoint: IsResidualPendingCheckpointPersistDue(resolved),
             cancellationToken);
     }
 
@@ -2815,15 +2855,10 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="OutOfMemoryException"/> - walking <see cref="Exception.InnerException"/>
     /// and every branch of an <see cref="AggregateException"/>.
     /// <para>
-    /// The walk is necessary rather than defensive. The allocation that fails
-    /// is inside the storage provider's deserialiser, several frames below the
-    /// grain call this leaf issues, and it reaches the caller wrapped: Orleans
-    /// surfaces a failure to read a grain's persistent state as an activation
-    /// failure carrying the original as an inner exception. Testing the
-    /// outermost type alone would classify every real occurrence of this fault
-    /// as an ordinary storage fault - that is, it would report the exact wrong
-    /// answer for the one case the classifier exists to catch, rather than
-    /// reporting nothing.
+    /// The walk recognises wrapped failures when the original exception reaches
+    /// this caller. A snapshot-grain activation failure can hide that original
+    /// cause; returning false then means unclassified, not that memory pressure
+    /// was ruled out. Never infer a cause from exception-message text.
     /// </para>
     /// <para>
     /// Cycle-safe by bounded depth: a hand-constructed exception graph can be

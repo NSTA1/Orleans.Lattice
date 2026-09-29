@@ -22,6 +22,14 @@ namespace Orleans.Lattice.Replication;
 /// each leaf''s entries' VC slots in-place via
 /// <see cref="VersionVector.MergeFrom"/> - allocation-free per leaf.
 /// </para>
+/// <para>
+/// The shards walked are the ones the tree's live routing reaches
+/// (<see cref="IShardCountProvider.GetShardRootKeysAsync"/>), not
+/// <c>{treeName}/0..ShardCount-1</c>: a restore or resize swaps the tree
+/// onto a new physical id behind an alias, and an adaptive split moves
+/// slots to a shard above the pinned count, so the pinned range would
+/// seed the frontier from a retired copy and miss the split target.
+/// </para>
 /// </summary>
 internal sealed class LatticeReplicationLocalVcSeeder(
     IGrainFactory grainFactory,
@@ -57,7 +65,7 @@ internal sealed class LatticeReplicationLocalVcSeeder(
                 SeedApplied: false);
         }
 
-        var shardCount = await _shardCounts.GetShardCountAsync(treeName, cancellationToken).ConfigureAwait(false);
+        var shardKeys = await _shardCounts.GetShardRootKeysAsync(treeName, cancellationToken).ConfigureAwait(false);
 
         // Accumulator: pointwise-max across every non-null
         // VectorClock slot encountered during the walk. MergeFrom
@@ -66,11 +74,10 @@ internal sealed class LatticeReplicationLocalVcSeeder(
         var frontier = new VersionVector();
         long entriesScanned = 0;
 
-        for (var shardIndex = 0; shardIndex < shardCount; shardIndex++)
+        foreach (var shardKey in shardKeys)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var shardKey = $"{treeName}/{shardIndex}";
             var shard = _grainFactory.GetGrain<IShardRootGrain>(shardKey);
             var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(false);
 

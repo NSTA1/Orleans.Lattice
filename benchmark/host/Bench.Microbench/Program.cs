@@ -80,11 +80,29 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, tagrowtrims, tagindexbatching, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+if (string.Equals(suite, "leafgetmany", StringComparison.OrdinalIgnoreCase))
+{
+    var leafSummary = BenchmarkRunner.Run<LeafGetManyBenchmarks>(config);
+    return leafSummary.HasCriticalValidationErrors || leafSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "leafrangeread", StringComparison.OrdinalIgnoreCase))
+{
+    var rangeSummary = BenchmarkRunner.Run<LeafRangeReadBenchmarks>(config);
+    return rangeSummary.HasCriticalValidationErrors || rangeSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "leafrangedelete", StringComparison.OrdinalIgnoreCase))
+{
+    var rangeSummary = BenchmarkRunner.Run<LeafRangeDeleteBenchmarks>(config);
+    return rangeSummary.HasCriticalValidationErrors || rangeSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "detachedtransfer", StringComparison.OrdinalIgnoreCase))
@@ -177,6 +195,13 @@ if (string.Equals(suite, "replayadmission", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> replayadmission (ReplayPermitAdmissionBenchmarks)");
     var replayAdmissionSummary = BenchmarkRunner.Run<ReplayPermitAdmissionBenchmarks>(config);
     return replayAdmissionSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "replayownership", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> replayownership (LeafReplayOwnershipBenchmarks)");
+    var replayOwnershipSummary = BenchmarkRunner.Run<LeafReplayOwnershipBenchmarks>(config);
+    return replayOwnershipSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "mergefold", StringComparison.OrdinalIgnoreCase))
@@ -456,6 +481,96 @@ if (string.Equals(suite, "alloctrio", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> alloctrio (HotPathAllocationTrioBenchmarks)");
     var allocTrioSummary = BenchmarkRunner.Run<HotPathAllocationTrioBenchmarks>(config);
     return allocTrioSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "crdtreadtrio", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> crdtreadtrio (CrdtReadPathAllocationTrioBenchmarks)");
+    var crdtReadTrioSummary = BenchmarkRunner.Run<CrdtReadPathAllocationTrioBenchmarks>(config);
+    return crdtReadTrioSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "dataapicrdtreads", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> dataapicrdtreads (DataApiCrdtReadTrimBenchmarks)");
+    var dataApiCrdtReadsSummary = BenchmarkRunner.Run<DataApiCrdtReadTrimBenchmarks>(config);
+    return dataApiCrdtReadsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "crdtprovenancedecode", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> crdtprovenancedecode (CrdtProvenanceDecodeTrimBenchmarks)");
+    var crdtProvenanceDecodeSummary = BenchmarkRunner.Run<CrdtProvenanceDecodeTrimBenchmarks>(config);
+    return crdtProvenanceDecodeSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "historyreadtrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> historyreadtrims (HistoryReadOrderingTrimBenchmarks)");
+    var historyReadTrimsSummary = BenchmarkRunner.Run<HistoryReadOrderingTrimBenchmarks>(config);
+    return historyReadTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "ormapfilterhoisttrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ormapfilterhoisttrims (OrMapDecodeAndFilterHoistTrimBenchmarks)");
+    var orMapFilterHoistSummary = BenchmarkRunner.Run<OrMapDecodeAndFilterHoistTrimBenchmarks>(config);
+    return orMapFilterHoistSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "crdtdotscantrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> crdtdotscantrims (CrdtDotScanTrimsBenchmarks)");
+    var crdtDotScanSummary = BenchmarkRunner.Run<CrdtDotScanTrimsBenchmarks>(config);
+    return crdtDotScanSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "leafdigestscantrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> leafdigestscantrims (LeafDigestScanTrimBenchmarks)");
+    var leafDigestScanSummary = BenchmarkRunner.Run<LeafDigestScanTrimBenchmarks>(config);
+    return leafDigestScanSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "leafboundhoistdotspan", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> leafboundhoistdotspan (LeafBoundHoistAndDotSpanBenchmarks)");
+    var leafBoundHoistSummary = BenchmarkRunner.Run<LeafBoundHoistAndDotSpanBenchmarks>(config);
+    return leafBoundHoistSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "ormapdotspantranscode", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ormapdotspantranscode (OrMapDotSpanAndTranscodeTrimBenchmarks)");
+    var orMapDotSpanSummary = BenchmarkRunner.Run<OrMapDotSpanAndTranscodeTrimBenchmarks>(config);
+    return orMapDotSpanSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "leafsnapshotframetrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> leafsnapshotframetrims (LeafSnapshotFrameTrimBenchmarks)");
+    var leafSnapshotFrameSummary = BenchmarkRunner.Run<LeafSnapshotFrameTrimBenchmarks>(config);
+    return leafSnapshotFrameSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "ormapkeyorderfoldbox", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ormapkeyorderfoldbox (OrMapKeyOrderAndDeltaFoldBoxBenchmarks)");
+    var orMapKeyOrderSummary = BenchmarkRunner.Run<OrMapKeyOrderAndDeltaFoldBoxBenchmarks>(config);
+    return orMapKeyOrderSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+if (string.Equals(suite, "rowtranscodecopytrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> rowtranscodecopytrims (RowTranscodeAndCopyTrimBenchmarks)");
+    var rowTranscodeCopySummary = BenchmarkRunner.Run<RowTranscodeAndCopyTrimBenchmarks>(config);
+    return rowTranscodeCopySummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "crdtcoveragecollapse", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> crdtcoveragecollapse (CrdtDotCoverageCollapseBenchmarks)");
+    var crdtCoverageSummary = BenchmarkRunner.Run<CrdtDotCoverageCollapseBenchmarks>(config);
+    return crdtCoverageSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "tagrowtrims", StringComparison.OrdinalIgnoreCase))

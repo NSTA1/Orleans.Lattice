@@ -171,7 +171,7 @@ internal sealed class TxRegistryState
     /// of <see cref="Decisions"/> bumps the counter, including Aborted
     /// transitions and tombstone-driven physical removals - this is
     /// strictly conservative (the reader's fall-through path re-runs
-    /// the existing <c>IsSnapshotStable</c> check on a freshly fetched
+    /// the existing <c>ClassifySnapshot</c> check on a freshly fetched
     /// snap2, which already filters to Committed transitions).
     /// </para>
     /// <para>

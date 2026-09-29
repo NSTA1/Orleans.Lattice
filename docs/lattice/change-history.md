@@ -119,7 +119,8 @@ The page's bound tells a reader how complete the timeline is:
   `page.Truncated` is always `false`.
 - **Truncated (WAL-window fallback).** On the fallback path, when WAL garbage
   collection has already trimmed older entries, `page.Truncated` is `true` and
-  `page.EarliestAvailable` names the oldest hybrid-logical-clock still readable. A
+  `page.EarliestAvailable` names the oldest hybrid-logical-clock still readable, on
+  every page of the read including continuation pages. A
   partial window is never presented as a full history.
 
 Enable a [history view](history-views.md) when you need a durable, retention-bounded

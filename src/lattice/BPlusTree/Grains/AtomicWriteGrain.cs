@@ -959,10 +959,14 @@ internal sealed class AtomicWriteGrain(
         var guardFailed = false;
         if (state.State.Guard is { } guardNode)
         {
+            // Eligibility is a pure function of the guard tree, and the whole
+            // batch folds against that one tree, so resolve it once instead of
+            // re-walking the tree for every captured pre-value.
+            var guardFastPath = LatticePredicateEvaluator.IsFastPathEligible(guardNode);
             for (int i = 0; i < preValuesArray.Length; i++)
             {
                 var pre = preValuesArray[i];
-                if (!pre.Existed || !LatticePredicateEvaluator.Matches(pre.Value, guardNode))
+                if (!pre.Existed || !LatticePredicateEvaluator.Matches(pre.Value, guardNode, guardFastPath))
                 {
                     guardFailed = true;
                     break;

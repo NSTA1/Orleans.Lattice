@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -42,6 +44,19 @@ namespace Orleans.Lattice;
 /// across replicas, so a concurrent assertion on another replica keeps its own
 /// distinct dot and still wins (or loses) its primitive's tie-break exactly as
 /// before. Add-wins and remove-wins semantics are preserved.
+/// </para>
+/// <para>
+/// <b>Why every scan here walks a span.</b> Each loop below takes
+/// <see cref="CollectionsMarshal.AsSpan{T}(List{T})"/> over the list it reads
+/// rather than indexing the <see cref="List{T}"/>. An <see cref="OrSetDot"/> is
+/// a struct, so <c>list[i]</c> copies it out whole and re-checks bounds on every
+/// access, and <see cref="List{T}.Count"/> is a mutable field the JIT cannot
+/// hoist out of the loop condition. A span fixes its length once, elides the
+/// per-element bounds check, and lets the body read through
+/// <c>ref readonly</c> instead of copying. No loop here changes the list's
+/// length while iterating - <see cref="CompactMaxPerReplica"/> writes survivors
+/// in place and only calls <see cref="List{T}.RemoveRange"/> after the scan -
+/// so the span stays valid throughout and the rewrite is purely mechanical.
 /// </para>
 /// <para>
 /// <b>Allocation.</b> The dominant shape is one or two replicas and a handful of
@@ -130,9 +145,10 @@ internal static class OrSetDotCompaction
     /// <returns><see langword="true"/> when the dot is cancelled.</returns>
     internal static bool Covers(List<OrSetDot> cover, in OrSetDot dot)
     {
-        for (var i = 0; i < cover.Count; i++)
+        var span = CollectionsMarshal.AsSpan(cover);
+        for (var i = 0; i < span.Length; i++)
         {
-            var candidate = cover[i];
+            ref readonly var candidate = ref span[i];
             if (candidate.Counter >= dot.Counter
                 && string.Equals(candidate.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
             {
@@ -158,23 +174,25 @@ internal static class OrSetDotCompaction
             return false;
         }
 
+        var span = CollectionsMarshal.AsSpan(dots);
         var write = 0;
-        for (var read = 0; read < dots.Count; read++)
+        for (var read = 0; read < span.Length; read++)
         {
-            var dot = dots[read];
+            var dot = span[read];
             var superseded = false;
             for (var kept = 0; kept < write; kept++)
             {
-                if (!string.Equals(dots[kept].ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
+                ref var keptDot = ref span[kept];
+                if (!string.Equals(keptDot.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 // Same replica: keep whichever counter is higher, in the slot
                 // the first one already occupies, so replica order is stable.
-                if (dots[kept].Counter < dot.Counter)
+                if (keptDot.Counter < dot.Counter)
                 {
-                    dots[kept] = dot;
+                    keptDot = dot;
                 }
 
                 superseded = true;
@@ -183,7 +201,7 @@ internal static class OrSetDotCompaction
 
             if (!superseded)
             {
-                dots[write++] = dot;
+                span[write++] = dot;
                 if (write > ReplicaScanThreshold)
                 {
                     // Genuinely many replicas: finish through a dictionary so
@@ -194,7 +212,7 @@ internal static class OrSetDotCompaction
             }
         }
 
-        if (write == dots.Count)
+        if (write == span.Length)
         {
             return false;
         }
@@ -213,30 +231,31 @@ internal static class OrSetDotCompaction
     /// <returns><see langword="true"/> when at least one dot was removed.</returns>
     private static bool CompactManyReplicas(List<OrSetDot> dots, int write, int read)
     {
+        var span = CollectionsMarshal.AsSpan(dots);
         var slotByReplica = new Dictionary<string, int>(write, StringComparer.Ordinal);
         for (var i = 0; i < write; i++)
         {
-            slotByReplica[dots[i].ReplicaId] = i;
+            slotByReplica[span[i].ReplicaId] = i;
         }
 
-        for (; read < dots.Count; read++)
+        for (; read < span.Length; read++)
         {
-            var dot = dots[read];
+            var dot = span[read];
             if (slotByReplica.TryGetValue(dot.ReplicaId, out var slot))
             {
-                if (dots[slot].Counter < dot.Counter)
+                if (span[slot].Counter < dot.Counter)
                 {
-                    dots[slot] = dot;
+                    span[slot] = dot;
                 }
 
                 continue;
             }
 
             slotByReplica[dot.ReplicaId] = write;
-            dots[write++] = dot;
+            span[write++] = dot;
         }
 
-        if (write == dots.Count)
+        if (write == span.Length)
         {
             return false;
         }
@@ -266,11 +285,32 @@ internal static class OrSetDotCompaction
             return dots.Count;
         }
 
-        var live = 0;
-        for (var i = 0; i < dots.Count; i++)
+        if (cover.Count > CoverCollapseThreshold && dots.Count > 1)
         {
-            var dot = dots[i];
-            if (!Covers(cover, in dot))
+            var sharedReplica = CollapseCover(cover, out var collapseCounter);
+            if (sharedReplica is not null)
+            {
+                var collapsed = 0;
+                var collapseSpan = CollectionsMarshal.AsSpan(dots);
+                for (var i = 0; i < collapseSpan.Length; i++)
+                {
+                    ref readonly var dot = ref collapseSpan[i];
+                    if (dot.Counter > collapseCounter
+                        || !string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal))
+                    {
+                        collapsed++;
+                    }
+                }
+
+                return collapsed;
+            }
+        }
+
+        var live = 0;
+        var span = CollectionsMarshal.AsSpan(dots);
+        for (var i = 0; i < span.Length; i++)
+        {
+            if (!Covers(cover, in span[i]))
             {
                 live++;
             }
@@ -300,10 +340,30 @@ internal static class OrSetDotCompaction
             return true;
         }
 
-        for (var i = 0; i < dots.Count; i++)
+        if (cover.Count > CoverCollapseThreshold && dots.Count > 1)
         {
-            var dot = dots[i];
-            if (!Covers(cover, in dot))
+            var sharedReplica = CollapseCover(cover, out var collapseCounter);
+            if (sharedReplica is not null)
+            {
+                var collapseSpan = CollectionsMarshal.AsSpan(dots);
+                for (var i = 0; i < collapseSpan.Length; i++)
+                {
+                    ref readonly var dot = ref collapseSpan[i];
+                    if (dot.Counter > collapseCounter
+                        || !string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        var span = CollectionsMarshal.AsSpan(dots);
+        for (var i = 0; i < span.Length; i++)
+        {
+            if (!Covers(cover, in span[i]))
             {
                 return true;
             }
@@ -311,4 +371,63 @@ internal static class OrSetDotCompaction
 
         return false;
     }
+
+    /// <summary>
+    /// Collapses <paramref name="cover"/> to the single replica id every one of
+    /// its dots carries plus that replica's highest counter, or returns
+    /// <see langword="null"/> when the collapse does not apply.
+    /// <para>
+    /// Cancellation is coverage-based, not exact-match (see <see cref="Covers"/>),
+    /// so a cancelling list confined to one replica is fully characterised by
+    /// its maximum counter: a dot is cancelled exactly when it carries that
+    /// replica id and a counter at or below the maximum. Substituting that
+    /// single comparison for the inner scan reduces a liveness read from
+    /// O(dots x cover) to O(dots + cover) with no allocation and no hashing -
+    /// the latter deliberately, because an index keyed on <see cref="OrSetDot"/>
+    /// hashes its replica id, which costs far more than the counter comparison
+    /// the scan already leads with.
+    /// </para>
+    /// <para>
+    /// The shared-replica test is a <b>precondition, not an optimisation</b>: a
+    /// counter-only comparison would wrongly cancel a dot on replica B whose
+    /// counter sits at or below a cancelling counter minted by replica A.
+    /// </para>
+    /// <para>
+    /// The caller gates the call on <see cref="CoverCollapseThreshold"/> rather
+    /// than the gate living here, so a below-threshold read pays two inline
+    /// integer comparisons instead of a call it would immediately abandon.
+    /// </para>
+    /// </summary>
+    /// <param name="cover">The cancelling dots.</param>
+    /// <param name="coverCounter">The collapsed replica's highest counter.</param>
+    /// <returns>The shared replica id, or <see langword="null"/> to keep the scan.</returns>
+    private static string? CollapseCover(List<OrSetDot> cover, out long coverCounter)
+    {
+        coverCounter = long.MinValue;
+        var span = CollectionsMarshal.AsSpan(cover);
+        var first = span[0].ReplicaId;
+        var highest = span[0].Counter;
+        for (var i = 1; i < span.Length; i++)
+        {
+            ref readonly var candidate = ref span[i];
+            if (!ReferenceEquals(candidate.ReplicaId, first)
+                && !string.Equals(candidate.ReplicaId, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (candidate.Counter > highest) highest = candidate.Counter;
+        }
+
+        coverCounter = highest;
+        return first;
+    }
+
+    /// <summary>
+    /// Cover-list length above which a liveness read switches from the inner
+    /// linear scan to the collapsed replica-plus-highest-counter test. Below it
+    /// the scan wins: the collapse pass has a fixed cost that a handful of
+    /// counter-first comparisons does not repay.
+    /// </summary>
+    private const int CoverCollapseThreshold = 8;
 }

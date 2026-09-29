@@ -47,6 +47,11 @@ Usage:
   plan-test-matrix.py --packages FILE --shards FILE --durations FILE
                       [--seeded FILE] [--max-legs N]
                       --output-matrix FILE [--report-file FILE]
+  plan-test-matrix.py --shards FILE --emit-shard-filters PACKAGE
+
+The second form prints one package's shard partition and plans nothing. The
+apps lane in ci.yml uses it to run a covering test project shard by shard, so
+it splits the suite by the same partition as the matrix instead of a copy.
 """
 
 from __future__ import annotations
@@ -118,19 +123,47 @@ DEFAULT_ESTIMATE = {"deterministic": 0.15, "coyote": 0.02, "chaos": 0.05, "all":
 # test discovery - paid even when the filter matches nothing. Added to every
 # item so the bin packing sees the true cost of a leg rather than only its test
 # time, which otherwise makes a leg of twenty trivial items look free.
-PER_ITEM_OVERHEAD = 0.12
+#
+# MEASURED, not guessed: an item whose filter matches no test takes a median
+# 0.04 min (2.4 s) on a CI leg, over 18 such items in each of 49 full fan-outs
+# (2026-09-24 to 2026-09-28). The value was 0.12 before that measurement,
+# three times the real cost, which priced every leg carrying the lattice empty
+# tiers well above what it ran. The rows in test-durations.tsv already include
+# each item's own process start, so for a non-empty item this double-counts
+# about 2 s; that is far inside the rows' own sampling error and keeps an empty
+# (0.0) row from pricing as free.
+PER_ITEM_OVERHEAD = 0.04
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--packages", required=True)
+    parser.add_argument("--packages")
     parser.add_argument("--shards", required=True)
-    parser.add_argument("--durations", required=True)
+    parser.add_argument("--durations")
     parser.add_argument("--seeded", help="Packages seeded directly by the diff.")
     parser.add_argument("--max-legs", type=int, default=10)
-    parser.add_argument("--output-matrix", required=True)
+    parser.add_argument("--output-matrix")
     parser.add_argument("--report-file")
-    return parser.parse_args()
+    parser.add_argument(
+        "--emit-shard-filters",
+        metavar="PACKAGE",
+        help="Print PACKAGE's shard partition as JSON ([{shard, filter}], or [] when "
+             "the package is unsharded) and exit. Lanes that run a package's tests "
+             "outside the matrix use this so they split the suite by exactly the "
+             "partition the matrix uses, rather than by a second copy of it.",
+    )
+    args = parser.parse_args()
+    if args.emit_shard_filters is None:
+        missing = [
+            flag for flag, value in (
+                ("--packages", args.packages),
+                ("--durations", args.durations),
+                ("--output-matrix", args.output_matrix),
+            ) if not value
+        ]
+        if missing:
+            parser.error("the following arguments are required to plan a matrix: " + ", ".join(missing))
+    return args
 
 
 def read_lines(path: str) -> list[str]:
@@ -336,19 +369,26 @@ def write_report(handle, legs: list[dict], items: list[dict], packages: list[str
 def main() -> int:
     args = parse_args()
 
-    packages = read_lines(args.packages)
-    if not packages:
-        print("::error::The planner was given an empty package selection.", file=sys.stderr)
-        return 1
-
-    seeded = set(read_lines(args.seeded)) if args.seeded and os.path.exists(args.seeded) else set()
-
     with open(args.shards, encoding="utf-8") as handle:
         shard_config = {
             key: value
             for key, value in json.load(handle).items()
             if not key.startswith("_")
         }
+
+    if args.emit_shard_filters is not None:
+        config = shard_config.get(args.emit_shard_filters)
+        partition = build_shard_filters(config) if config is not None else []
+        json.dump(partition, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 0
+
+    packages = read_lines(args.packages)
+    if not packages:
+        print("::error::The planner was given an empty package selection.", file=sys.stderr)
+        return 1
+
+    seeded = set(read_lines(args.seeded)) if args.seeded and os.path.exists(args.seeded) else set()
 
     durations = load_durations(args.durations)
     items = make_items(packages, shard_config, durations, seeded)

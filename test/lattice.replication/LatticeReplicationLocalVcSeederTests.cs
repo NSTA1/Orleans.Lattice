@@ -63,6 +63,9 @@ public partial class LatticeReplicationLocalVcSeederTests
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(shards?.Count ?? 1));
+        IReadOnlyList<string> shardKeys = [.. Enumerable.Range(0, shards?.Count ?? 1).Select(s => $"{Tree}/{s}")];
+        shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(shardKeys));
 
         // HWM grain: pinned with the computed frontier. Returns an
         // empty vector by default.
@@ -206,8 +209,9 @@ public partial class LatticeReplicationLocalVcSeederTests
             Assert.That(report.EntriesScanned, Is.Zero);
         });
         resolver.Received(1).Resolve(Tree);
-        // No leaf walk, no shard count lookup, no HWM pin.
+        // No leaf walk, no shard lookup, no HWM pin.
         await shardCounts.DidNotReceive().GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await shardCounts.DidNotReceive().GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());
     }

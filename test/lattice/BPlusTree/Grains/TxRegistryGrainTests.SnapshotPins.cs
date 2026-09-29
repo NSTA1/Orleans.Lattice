@@ -87,6 +87,93 @@ public partial class TxRegistryGrainTests
             Is.EqualTo(start + TimeSpan.FromMinutes(10)));
     }
 
+    [Test]
+    public async Task PinSnapshotAsync_with_infinite_cap_records_a_pin_that_does_not_expire()
+    {
+        // Regression: Timeout.InfiniteTimeSpan is the documented way to disable the
+        // cap, and the cursor passes the cap itself as the requested TTL. The clamp
+        // used to floor that non-positive TTL to TxDecisionRetention (60 s), so an
+        // "uncapped" point-in-time cursor idle for a minute lost its snapshot.
+        var start = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(start);
+        var options = new LatticeOptions
+        {
+            MaxCursorSnapshotPinTtl = Timeout.InfiniteTimeSpan,
+            MaxPinnedSagaDecisions = 100,
+        };
+        var (grain, state) = CreateGrain(timeProvider: clock, options: options);
+
+        var pinId = Guid.NewGuid();
+        await grain.PinSnapshotAsync(pinId, new[] { Guid.NewGuid() }, options.MaxCursorSnapshotPinTtl);
+
+        Assert.That(state.State.SnapshotPins[pinId].ExpiresAt, Is.EqualTo(DateTimeOffset.MaxValue));
+
+        clock.Advance(TimeSpan.FromHours(1));
+        Assert.That(await grain.GetPinnedDecisionCountAsync(), Is.EqualTo(1),
+            "an uncapped pin must still hold its decision long after TxDecisionRetention");
+        Assert.That(await grain.RefreshPinAsync(pinId, options.MaxCursorSnapshotPinTtl), Is.True);
+        Assert.That(state.State.SnapshotPins[pinId].ExpiresAt, Is.EqualTo(DateTimeOffset.MaxValue));
+    }
+
+    [Test]
+    public async Task PinSnapshotAsync_with_disabled_cap_and_disabled_retention_records_a_live_pin()
+    {
+        // Regression: with retention disabled there was no floor to fall back to, so a
+        // non-positive cap produced a pin that had already expired when it was
+        // recorded and the cursor's first refresh failed.
+        var start = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(start);
+        var options = new LatticeOptions
+        {
+            MaxCursorSnapshotPinTtl = TimeSpan.Zero,
+            TxDecisionRetention = TimeSpan.Zero,
+            MaxPinnedSagaDecisions = 100,
+        };
+        var (grain, _) = CreateGrain(timeProvider: clock, options: options);
+
+        var pinId = Guid.NewGuid();
+        await grain.PinSnapshotAsync(pinId, new[] { Guid.NewGuid() }, options.MaxCursorSnapshotPinTtl);
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.That(await grain.RefreshPinAsync(pinId, options.MaxCursorSnapshotPinTtl), Is.True);
+    }
+
+    [Test]
+    public async Task PinSnapshotAsync_with_disabled_cap_honours_a_finite_requested_ttl()
+    {
+        var start = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(start);
+        var options = new LatticeOptions
+        {
+            MaxCursorSnapshotPinTtl = Timeout.InfiniteTimeSpan,
+            MaxPinnedSagaDecisions = 100,
+        };
+        var (grain, state) = CreateGrain(timeProvider: clock, options: options);
+
+        var pinId = Guid.NewGuid();
+        await grain.PinSnapshotAsync(pinId, new[] { Guid.NewGuid() }, TimeSpan.FromDays(30));
+
+        Assert.That(state.State.SnapshotPins[pinId].ExpiresAt, Is.EqualTo(start + TimeSpan.FromDays(30)));
+    }
+
+    [Test]
+    public async Task PinSnapshotAsync_with_disabled_cap_saturates_an_expiry_past_the_calendar_limit()
+    {
+        var start = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(start);
+        var options = new LatticeOptions
+        {
+            MaxCursorSnapshotPinTtl = Timeout.InfiniteTimeSpan,
+            MaxPinnedSagaDecisions = 100,
+        };
+        var (grain, state) = CreateGrain(timeProvider: clock, options: options);
+
+        var pinId = Guid.NewGuid();
+        await grain.PinSnapshotAsync(pinId, new[] { Guid.NewGuid() }, TimeSpan.MaxValue);
+
+        Assert.That(state.State.SnapshotPins[pinId].ExpiresAt, Is.EqualTo(DateTimeOffset.MaxValue));
+    }
+
     // --- RefreshPinAsync ---
 
     [Test]

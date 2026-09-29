@@ -401,7 +401,7 @@ public partial class TxRegistryGrainTests
         // with no decision-map mutation to bump the raw revision, so the
         // composite token's live-expired term is the only thing that can carry
         // it - and it has to, because the reader fast path never consults
-        // IsSnapshotStable.
+        // ClassifySnapshot.
         clock.Advance(TimeSpan.FromMinutes(4));
         var after = await grain.GetDecisionsRevisionAsync();
 

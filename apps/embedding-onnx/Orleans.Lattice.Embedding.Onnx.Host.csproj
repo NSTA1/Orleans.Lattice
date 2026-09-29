@@ -61,6 +61,38 @@
     <EmbeddedResource Remove="tests/**" />
   </ItemGroup>
 
+  <!-- The container cgroup readers (ContainerCpuGrant and its siblings) are NOT
+       copied into this app. They are compiled from the one canonical folder,
+       src/lattice/Internal/Cgroups, which depends on the base class library
+       alone so it builds here without a ProjectReference into src/ (issue
+       #2817 retired the byte-identical mirror and its drift guard).
+
+       Two ways that folder arrives:
+         - in a repository checkout (local builds, CI's apps lane) it is read in
+           place through the relative path below;
+         - in the container image, whose build context is this directory, the
+           Dockerfile copies the BuildKit named context `cgroups` into
+           shared-cgroups/ beside this csproj. Pass that context to docker build
+           (build-context flag: cgroups=src/lattice/Internal/Cgroups), or build
+           through the compose files, which declare it as additional_contexts.
+
+       A build that finds neither fails loudly (EnsureCgroupSources below)
+       rather than compiling without the reader. -->
+  <PropertyGroup>
+    <CgroupSourcesDir Condition="'$(CgroupSourcesDir)' == '' and Exists('$(MSBuildThisFileDirectory)../../src/lattice/Internal/Cgroups/ContainerCpuGrant.cs')">$(MSBuildThisFileDirectory)../../src/lattice/Internal/Cgroups/</CgroupSourcesDir>
+    <CgroupSourcesDir Condition="'$(CgroupSourcesDir)' == ''">$(MSBuildThisFileDirectory)shared-cgroups/</CgroupSourcesDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="shared-cgroups/**" />
+    <Compile Include="$(CgroupSourcesDir)*.cs" LinkBase="Cgroups" />
+    <Using Include="Orleans.Lattice.Internal.Cgroups" />
+  </ItemGroup>
+
+  <Target Name="EnsureCgroupSources" BeforeTargets="CoreCompile" Condition="!Exists('$(CgroupSourcesDir)ContainerCpuGrant.cs')">
+    <Error Text="The container cgroup readers were not found at '$(CgroupSourcesDir)'. Build from a repository checkout, or pass the canonical folder to docker build as a named context: --build-context cgroups=src/lattice/Internal/Cgroups." />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="FastBertTokenizer" Version="1.0.28" />
   </ItemGroup>

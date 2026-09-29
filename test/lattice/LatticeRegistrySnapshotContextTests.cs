@@ -184,4 +184,75 @@ public class LatticeRegistrySnapshotContextTests
             RequestContext.Remove(LatticeEventConstants.RegistrySnapshotRequestContextKey);
         }
     }
+
+    // ---- "snapshot unavailable" marker (issue #3641) ----
+
+    [Test]
+    public void IsUnavailable_is_false_and_IsScoped_false_when_nothing_is_set()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeRegistrySnapshotContext.IsUnavailable, Is.False);
+            Assert.That(LatticeRegistrySnapshotContext.IsScoped, Is.False);
+        });
+    }
+
+    [Test]
+    public void BeginUnavailableScope_marks_unavailable_clears_the_snapshot_and_restores_on_dispose()
+    {
+        var snapshot = new Dictionary<Guid, TxStatus>();
+        LatticeRegistrySnapshotContext.Current = snapshot;
+
+        using (LatticeRegistrySnapshotContext.BeginUnavailableScope())
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(LatticeRegistrySnapshotContext.IsUnavailable, Is.True);
+                Assert.That(LatticeRegistrySnapshotContext.Current, Is.Null,
+                    "the marker is distinct from a snapshot and never set alongside one");
+                Assert.That(LatticeRegistrySnapshotContext.IsScoped, Is.True);
+            });
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeRegistrySnapshotContext.IsUnavailable, Is.False);
+            Assert.That(LatticeRegistrySnapshotContext.Current, Is.SameAs(snapshot));
+        });
+    }
+
+    [Test]
+    public void BeginScope_nested_inside_an_unavailable_scope_clears_the_marker_and_restores_it()
+    {
+        var snapshot = new Dictionary<Guid, TxStatus>();
+
+        using (LatticeRegistrySnapshotContext.BeginUnavailableScope())
+        {
+            using (LatticeRegistrySnapshotContext.BeginScope(snapshot))
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(LatticeRegistrySnapshotContext.IsUnavailable, Is.False);
+                    Assert.That(LatticeRegistrySnapshotContext.Current, Is.SameAs(snapshot));
+                });
+            }
+
+            Assert.That(LatticeRegistrySnapshotContext.IsUnavailable, Is.True);
+        }
+
+        Assert.That(LatticeRegistrySnapshotContext.IsScoped, Is.False);
+    }
+
+    [Test]
+    public void BeginUnavailableScope_dispose_is_idempotent()
+    {
+        var scope = LatticeRegistrySnapshotContext.BeginUnavailableScope();
+        scope.Dispose();
+        using (LatticeRegistrySnapshotContext.BeginUnavailableScope())
+        {
+            scope.Dispose();
+            Assert.That(LatticeRegistrySnapshotContext.IsUnavailable, Is.True,
+                "a second dispose of a finished scope must not clobber a later one");
+        }
+    }
 }

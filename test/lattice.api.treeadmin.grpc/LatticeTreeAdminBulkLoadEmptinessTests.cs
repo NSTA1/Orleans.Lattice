@@ -1,3 +1,5 @@
+using Orleans.Lattice.Api.Data;
+
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
 /// <summary>
@@ -70,5 +72,28 @@ public sealed class LatticeTreeAdminBulkLoadEmptinessTests
             Assert.That(session.TreeId, Is.EqualTo(tree));
             Assert.That(session.OperationId, Is.EqualTo(Op));
         });
+    }
+
+    [Test]
+    public async Task BeginBulkLoadAsync_rejects_a_tree_loaded_since_a_cached_empty_probe()
+    {
+        // The first begin probes the empty tree and leaves a deep diagnostic report
+        // saying "empty" in the per-tree cache for DiagnosticsCacheTtl (default 5 s).
+        // A chunk is then grafted, so a second session opened well inside that window
+        // must see the grafted keys rather than the cached zero. Before the fix the
+        // probe was served from the cache and admitted the second session onto the
+        // populated tree.
+        const string tree = "loaded-inside-cache-window";
+
+        await _fixture.Control.BeginBulkLoadAsync(tree, Op);
+        await _fixture.Control.AppendBulkLoadAsync(
+            tree,
+            Op,
+            chunkIndex: 0,
+            [new DataEntry { Key = "a", Value = [1] }, new DataEntry { Key = "b", Value = [2] }]);
+
+        Assert.That(
+            async () => await _fixture.Control.BeginBulkLoadAsync(tree, "second-op"),
+            Throws.TypeOf<TreeNotEmptyException>());
     }
 }

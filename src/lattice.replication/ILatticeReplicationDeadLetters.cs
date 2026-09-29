@@ -39,8 +39,11 @@ public interface ILatticeReplicationDeadLetters
     /// <see cref="ApplyResult.Applied"/> flag - a re-delivery filter is
     /// considered terminal for inspection purposes); replay failures
     /// leave the entry parked so the operator can decide whether to
-    /// retry or discard. Returns <c>null</c> when no entry with that id
-    /// exists.
+    /// retry or discard. A replay the durable receive fence of an
+    /// in-flight restore saga defers (<see cref="ApplyResult.Deferred"/>
+    /// is <see langword="true"/>) applied nothing, so the entry also stays
+    /// parked and can be replayed again once the fence lifts. Returns
+    /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
 }

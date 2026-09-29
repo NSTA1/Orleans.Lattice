@@ -21,6 +21,38 @@ public sealed class AdmissionControlClusterFixture
     /// <summary>Tree with an enforcing live-key cap.</summary>
     public const string EnforcingTreeId = "adm-enforce";
 
+    /// <summary>
+    /// Tree with the same enforcing live-key cap, reserved for the conditional
+    /// batch-write coverage so it never shares a key population with
+    /// <see cref="EnforcingTreeId"/>.
+    /// </summary>
+    public const string ConditionalEnforcingTreeId = "adm-enforce-where";
+
+    /// <summary>
+    /// Tree with the same enforcing live-key cap, reserved for the atomic
+    /// batch-write coverage so it never shares a key population with the other
+    /// enforcing trees.
+    /// </summary>
+    public const string AtomicEnforcingTreeId = "adm-enforce-atomic";
+
+    /// <summary>
+    /// Tree with the same enforcing live-key cap, reserved for the delete-only
+    /// atomic batch coverage, which removes keys the other atomic test reads.
+    /// </summary>
+    public const string AtomicDeleteEnforcingTreeId = "adm-enforce-atomic-delete";
+
+    /// <summary>
+    /// Tree with the same enforcing live-key cap, reserved for the cross-tree
+    /// atomic write coverage.
+    /// </summary>
+    public const string CrossTreeEnforcingTreeId = "adm-enforce-xtree";
+
+    /// <summary>
+    /// Tree with the same enforcing live-key cap, reserved for the delete-only
+    /// cross-tree leg coverage, which removes keys it filled.
+    /// </summary>
+    public const string CrossTreeDeleteEnforcingTreeId = "adm-enforce-xtree-delete";
+
     /// <summary>Tree with only an advisory (non-enforcing) live-key ceiling.</summary>
     public const string AdvisoryTreeId = "adm-advisory";
 
@@ -44,6 +76,31 @@ public sealed class AdmissionControlClusterFixture
 
         var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(EnforcingTreeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = TestShardCount,
+        });
+        await registry.RegisterAsync(ConditionalEnforcingTreeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = TestShardCount,
+        });
+        await registry.RegisterAsync(AtomicEnforcingTreeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = TestShardCount,
+        });
+        await registry.RegisterAsync(AtomicDeleteEnforcingTreeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = TestShardCount,
+        });
+        await registry.RegisterAsync(CrossTreeEnforcingTreeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallMaxLeafKeys,
+            ShardCount = TestShardCount,
+        });
+        await registry.RegisterAsync(CrossTreeDeleteEnforcingTreeId, new TreeRegistryEntry
         {
             MaxLeafKeys = SmallMaxLeafKeys,
             ShardCount = TestShardCount,
@@ -74,6 +131,36 @@ public sealed class AdmissionControlClusterFixture
                 o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
             });
             siloBuilder.ConfigureLattice(EnforcingTreeId, o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
+                o.MaxLiveKeys = MaxLiveKeys;
+            });
+            siloBuilder.ConfigureLattice(ConditionalEnforcingTreeId, o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
+                o.MaxLiveKeys = MaxLiveKeys;
+            });
+            siloBuilder.ConfigureLattice(AtomicEnforcingTreeId, o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
+                o.MaxLiveKeys = MaxLiveKeys;
+            });
+            siloBuilder.ConfigureLattice(AtomicDeleteEnforcingTreeId, o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
+                o.MaxLiveKeys = MaxLiveKeys;
+            });
+            siloBuilder.ConfigureLattice(CrossTreeEnforcingTreeId, o =>
+            {
+                o.DigestCoalescingWindowMs = 0;
+                o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);
+                o.MaxLiveKeys = MaxLiveKeys;
+            });
+            siloBuilder.ConfigureLattice(CrossTreeDeleteEnforcingTreeId, o =>
             {
                 o.DigestCoalescingWindowMs = 0;
                 o.StorageUsageCacheTtl = TimeSpan.FromMilliseconds(100);

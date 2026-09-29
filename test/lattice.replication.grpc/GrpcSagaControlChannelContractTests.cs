@@ -109,7 +109,10 @@ public class GrpcSagaControlChannelContractTests
     {
         var invoker = channel.CreateCallInvoker();
         using var call = invoker.AsyncUnaryCall(
-            method, host: null, options: new CallOptions(), request: new SagaControlRequestBox { Value = request });
+            method,
+            host: null,
+            options: GrpcTestFactories.OriginOptions(request.CoordinatorClusterId),
+            request: new SagaControlRequestBox { Value = request });
         var response = await call.ResponseAsync;
         return response.Value;
     }

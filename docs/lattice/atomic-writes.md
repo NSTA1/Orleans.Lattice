@@ -513,6 +513,56 @@ registry bypass. Read paths never do.
 cluster stays wire-compatible: a node that predates the case takes the
 same conservative branch it already took for `InFlight`.
 
+### When the registry cannot be reached: `LatticeTransactionOutcomeUnavailableException`
+
+`Indeterminate` is the registry *answering* that it no longer knows.
+A registry that does not answer at all - the call times out, its silo
+is unavailable, the message is rejected - is a different condition,
+and a transient one. A read of a key under a prepared mutation then
+throws `LatticeTransactionOutcomeUnavailableException` instead of the
+raw transport exception. The rule, in one line:
+
+- registry says unknown (`Indeterminate`): the key is **hidden**;
+- registry unreachable: **typed, retryable error**;
+- never a guessed value - neither the prepared nor the pre-saga value
+  is served on the strength of a registry that did not answer.
+
+Mapping "unreachable" to hidden was rejected deliberately: it would
+turn a network blip into a silent `Get` of `null` or `Exists` of
+`false`, indistinguishable from the key really being absent.
+
+The exception carries `TreeId`, the `Key` (single-key reads) or
+`KeyCount` (scans), and the unresolved `TransactionIds`. It derives
+from `TimeoutException`, so an existing `catch (TimeoutException)`
+keeps working, and implements `ILatticeDomainFault`. It is raised on
+the first transport failure with no retry inside the leaf - a grain
+call has already spent up to its response timeout by then, so retry
+policy belongs to the caller. Only a transport failure is translated:
+a genuine registry fault propagates as itself, and cancellation is
+never swallowed. A read of a key with no prepared mutation never
+consults the registry, so it is unaffected.
+
+Multi-key reads (`GetManyAsync`, `CountAsync`, `CountPerShardAsync`,
+and the `KeysAsync` / `EntriesAsync` scans) resolve every key against
+one registry snapshot and then verify, after the fan-out, that no saga
+committed while it ran. When the registry cannot be reached for either
+step, the read cannot vouch for that single view, so it **fails closed
+only when its result depends on the registry**:
+
+- if no key the read reached carried a prepared mutation, no value
+  depended on a saga decision and the result is returned;
+- otherwise the attempt is retried under a fresh snapshot, within
+  `LatticeOptions.MaxScanRetries`, and on exhaustion the read throws
+  `LatticeTransactionOutcomeUnavailableException` rather than return a
+  result that could be torn (some keys post-saga, some pre-saga).
+
+A streaming scan whose starting snapshot cannot be fetched keeps going
+until a page reaches a prepared key, which then throws; every page
+already yielded held no prepared key, so what the caller received is
+consistent. Previously each of these failures was treated as "stable",
+which let a registry blip certify exactly the torn read the check
+exists to prevent.
+
 ## Crash-Recovery Timeline
 
 | Crash point | State on reactivation | Recovery path |
@@ -933,7 +983,11 @@ A stable `operationId` is **required** (there is no auto-generated
 overload): a cross-tree saga touches multiple registries, so a stable
 idempotency key is mandatory for safe retry. The `operationId` must not
 contain `/` (reserved as the grain-key separator). Tree ids in the batch
-must be distinct and non-empty.
+must be distinct and non-empty, and each tree's slice must not repeat a
+key - staging a `Set` and a `Delete` for the same key counts as a repeat.
+A batch that breaks either rule throws `ArgumentException` before any
+write is staged or any saga state is persisted, so the `operationId`
+stays free for a corrected retry.
 
 ### Usage
 

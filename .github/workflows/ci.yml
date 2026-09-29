@@ -1756,12 +1756,49 @@ jobs:
             echo "::group::Build $testName"
             dotnet build "$testProj" --configuration Release
             echo "::endgroup::"
-            echo "::group::Test $testName"
-            dotnet test "$testProj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=apps-${testName}.trx"
-            echo "::endgroup::"
+
+            # Run a sharded package shard by shard, using the partition the
+            # gating matrix uses (test-shards.json, read through the planner so
+            # there is one copy of it). Before this, test/lattice.api.mcp.repocontext
+            # ran here as ONE process of ~3,900 tests and ~14 minutes with
+            # multi-minute silent gaps, so the step read as hung, and it was the
+            # only lane in which fixtures from different shards shared a process
+            # (which is how the #3792 listener leak surfaced here and nowhere
+            # else). One `dotnet test` per shard, each in its own log group,
+            # reports progress shard by shard. The partition's trailing
+            # complement means every test still runs exactly once. A project
+            # outside test/<package>/, or a package with no shards, runs whole.
+            baseFilter="TestCategory!=Chaos&TestCategory!=AzureStorageEmulator"
+            package=""
+            case "$testProj" in
+              test/*/*.Tests.csproj) package=$(echo "$testProj" | cut -d/ -f2) ;;
+            esac
+            partition='[]'
+            if [ -n "$package" ]; then
+              partition=$(python3 .github/workflows/plan-test-matrix.py \
+                --shards .github/workflows/test-shards.json \
+                --emit-shard-filters "$package")
+            fi
+
+            if [ "$partition" = "[]" ]; then
+              echo "::group::Test $testName"
+              dotnet test "$testProj" --no-build --configuration Release \
+                --filter "$baseFilter" \
+                --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+                --logger "trx;LogFileName=apps-${testName}.trx"
+              echo "::endgroup::"
+              continue
+            fi
+
+            while IFS=$'\t' read -r shard shardFilter; do
+              echo "::group::Test $testName / shard $shard"
+              dotnet test "$testProj" --no-build --configuration Release \
+                --filter "($shardFilter)&($baseFilter)" \
+                --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+                --logger "trx;LogFileName=apps-${testName}-${shard}.trx"
+              echo "::endgroup::"
+            done < <(printf '%s' "$partition" \
+              | python3 -c 'import json,sys; [print(s["shard"] + "\t" + s["filter"]) for s in json.load(sys.stdin)]')
           done
 
       # Dedicated benchmark-harness lane. Runs independently of the core library

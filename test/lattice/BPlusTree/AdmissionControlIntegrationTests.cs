@@ -73,6 +73,236 @@ public class AdmissionControlIntegrationTests
     }
 
     [Test]
+    public async Task Enforcing_cap_rejects_a_conditional_batch_write_once_the_cap_is_reached()
+    {
+        // Regression: SetManyWherePredicateAsync skipped the admission check that
+        // SetManyAsync performs, so a tree at its cap still accepted conditional
+        // batches. Fill the tree through the unconditional path until the cap
+        // bites, then the conditional write must be refused too.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.ConditionalEnforcingTreeId);
+        var matching = Encoding.UTF8.GetBytes("{\"Score\":1}");
+
+        var capReached = false;
+        var stopwatch = Stopwatch.StartNew();
+        for (var i = 0; i < 500 && stopwatch.Elapsed < TimeSpan.FromSeconds(30); i++)
+        {
+            try
+            {
+                await tree.SetAsync($"k{i}", matching);
+            }
+            catch (LatticeQuotaExceededException)
+            {
+                capReached = true;
+                break;
+            }
+            await Task.Delay(25);
+        }
+        Assert.That(capReached, Is.True, "precondition: the unconditional path must reach the cap");
+
+        // k0 holds a value the predicate admits, so only the cap can refuse this.
+        // Polled because a fresh stateless-worker activation fails open until its
+        // own first aggregate sample lands.
+        var predicate = LatticePredicatePushdown.Compile<Scored>(
+            s => s.Score >= 0, JsonLatticeSerializer<Scored>.Default);
+        var entries = new List<KeyValuePair<string, byte[]>> { new("k0", Encoding.UTF8.GetBytes("{\"Score\":2}")) };
+        LatticeQuotaExceededException? rejection = null;
+        stopwatch.Restart();
+        while (rejection is null && stopwatch.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            try
+            {
+                await tree.SetManyWherePredicateAsync(entries, predicate);
+            }
+            catch (LatticeQuotaExceededException ex)
+            {
+                rejection = ex;
+                break;
+            }
+            await Task.Delay(25);
+        }
+
+        Assert.That(rejection, Is.Not.Null,
+            "a conditional batch write must be refused by an enforcing MaxLiveKeys cap");
+        Assert.Multiple(() =>
+        {
+            Assert.That(rejection!.Dimension, Is.EqualTo(LatticeQuotaExceededException.KeysDimension));
+            Assert.That(rejection.TreeId, Is.EqualTo(AdmissionControlClusterFixture.ConditionalEnforcingTreeId));
+        });
+    }
+
+    private sealed record Scored(int Score);
+
+    [Test]
+    public async Task Enforcing_cap_rejects_every_atomic_batch_write_once_the_cap_is_reached()
+    {
+        // Regression: the single-tree atomic batch writes never checked the
+        // per-tree admission caps. Their saga applies each leg under the prepared
+        // scope, which bypasses admission by design, and the public entry points
+        // skipped the check SetManyAsync performs - so a tree at its cap still
+        // accepted every atomic batch.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.AtomicEnforcingTreeId);
+        var matching = Encoding.UTF8.GetBytes("{\"Score\":1}");
+        Assert.That(await FillUntilCapAsync(tree, matching), Is.True,
+            "precondition: the unconditional path must reach the cap");
+
+        // k0 holds a value the predicate admits, so only the cap can refuse the
+        // guarded variants.
+        var predicate = LatticePredicatePushdown.Compile<Scored>(
+            s => s.Score >= 0, JsonLatticeSerializer<Scored>.Default);
+        var writes = new (string Name, Func<int, Task> Write)[]
+        {
+            ("SetManyAtomicAsync(entries)",
+                i => tree.SetManyAtomicAsync(Batch($"a{i}"))),
+            ("SetManyAtomicAsync(entries, operationId)",
+                i => tree.SetManyAtomicAsync(Batch($"b{i}"), $"op-b{i}")),
+            ("SetManyAtomicAsync(upserts, deletes, operationId)",
+                i => tree.SetManyAtomicAsync(Batch($"c{i}"), Array.Empty<string>(), $"op-c{i}")),
+            ("SetManyAtomicWhereAsync(entries, predicate)",
+                _ => tree.SetManyAtomicWhereAsync(Batch("k0"), predicate)),
+            ("SetManyAtomicWhereAsync(entries, predicate, operationId)",
+                i => tree.SetManyAtomicWhereAsync(Batch("k0"), predicate, $"op-e{i}")),
+        };
+
+        var admitted = new List<string>();
+        foreach (var (name, write) in writes)
+        {
+            // Polled because a fresh stateless-worker activation fails open until
+            // its own first aggregate sample lands.
+            var rejection = await PollForQuotaRejectionAsync(write);
+            if (rejection is null)
+            {
+                admitted.Add(name);
+                continue;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rejection.Dimension, Is.EqualTo(LatticeQuotaExceededException.KeysDimension), name);
+                Assert.That(rejection.TreeId, Is.EqualTo(AdmissionControlClusterFixture.AtomicEnforcingTreeId), name);
+            });
+        }
+
+        Assert.That(admitted, Is.Empty,
+            "every atomic batch write must be refused by an enforcing MaxLiveKeys cap");
+    }
+
+    [Test]
+    public async Task Enforcing_cap_still_admits_a_delete_only_atomic_batch()
+    {
+        // A delete-only atomic batch can only shrink the tree, so the cap must
+        // never stop a caller from getting back under it.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.AtomicDeleteEnforcingTreeId);
+        Assert.That(await FillUntilCapAsync(tree, SmallValue()), Is.True,
+            "precondition: the unconditional path must reach the cap");
+
+        Assert.DoesNotThrowAsync(async () => await tree.SetManyAtomicAsync(
+            new List<KeyValuePair<string, byte[]>>(), new[] { "k0" }, "op-delete-only"));
+        Assert.That(await tree.GetAsync("k0"), Is.Null);
+    }
+
+    [Test]
+    public async Task Enforcing_cap_rejects_a_cross_tree_write_once_a_participating_tree_reaches_it()
+    {
+        // Regression: a cross-tree atomic write never checked the per-tree
+        // admission caps. Its sub-sagas apply every leg under the prepared scope,
+        // which bypasses admission by design, and the coordinator admitted the
+        // batch without the check the single-tree atomic entry points perform -
+        // so a tree at its cap still accepted cross-tree writes.
+        var capped = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.CrossTreeEnforcingTreeId);
+        Assert.That(await FillUntilCapAsync(capped, SmallValue()), Is.True,
+            "precondition: the unconditional path must reach the cap");
+
+        var freeTreeId = $"adm-xtree-free-{Guid.NewGuid():N}";
+        var free = _cluster.GrainFactory.GetGrain<ILattice>(freeTreeId);
+
+        string? rejectedFreeKey = null;
+        var rejection = await PollForQuotaRejectionAsync(async i =>
+        {
+            rejectedFreeKey = $"f{i}";
+            await _cluster.GrainFactory.SetManyAtomicAsync(
+                [
+                    new LatticeTreeBatch(AdmissionControlClusterFixture.CrossTreeEnforcingTreeId, [new($"x{i}", SmallValue())]),
+                    new LatticeTreeBatch(freeTreeId, [new(rejectedFreeKey, SmallValue())]),
+                ],
+                $"op-xtree-cap-{i}-{Guid.NewGuid():N}");
+        });
+
+        Assert.That(rejection, Is.Not.Null,
+            "a cross-tree write touching a tree at its enforcing MaxLiveKeys cap must be refused");
+        Assert.Multiple(() =>
+        {
+            Assert.That(rejection!.Dimension, Is.EqualTo(LatticeQuotaExceededException.KeysDimension));
+            Assert.That(rejection.TreeId, Is.EqualTo(AdmissionControlClusterFixture.CrossTreeEnforcingTreeId));
+        });
+        Assert.That(await free.GetAsync(rejectedFreeKey!), Is.Null,
+            "the refused cross-tree write must not have written the uncapped tree's leg");
+    }
+
+    [Test]
+    public async Task Enforcing_cap_still_admits_a_cross_tree_write_that_only_deletes_on_the_capped_tree()
+    {
+        // A delete-only leg can only shrink the capped tree, so the cap must never
+        // stop a cross-tree write from getting it back under the cap.
+        var capped = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.CrossTreeDeleteEnforcingTreeId);
+        Assert.That(await FillUntilCapAsync(capped, SmallValue()), Is.True,
+            "precondition: the unconditional path must reach the cap");
+
+        var freeTreeId = $"adm-xtree-delete-free-{Guid.NewGuid():N}";
+        var outcome = await _cluster.GrainFactory.SetManyAtomicAsync(
+            [
+                new LatticeTreeBatch(
+                    AdmissionControlClusterFixture.CrossTreeDeleteEnforcingTreeId,
+                    [new("k0", Array.Empty<byte>())],
+                    EntryDeletes: [true]),
+                new LatticeTreeBatch(freeTreeId, [new("f", SmallValue())]),
+            ],
+            $"op-xtree-delete-{Guid.NewGuid():N}");
+
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        Assert.That(await capped.GetAsync("k0"), Is.Null);
+        Assert.That(await _cluster.GrainFactory.GetGrain<ILattice>(freeTreeId).GetAsync("f"), Is.EqualTo(SmallValue()));
+    }
+
+    private static List<KeyValuePair<string, byte[]>> Batch(string key) =>
+        new() { new(key, Encoding.UTF8.GetBytes("{\"Score\":2}")) };
+
+    private static async Task<bool> FillUntilCapAsync(ILattice tree, byte[] value)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        for (var i = 0; i < 500 && stopwatch.Elapsed < TimeSpan.FromSeconds(30); i++)
+        {
+            try
+            {
+                await tree.SetAsync($"k{i}", value);
+            }
+            catch (LatticeQuotaExceededException)
+            {
+                return true;
+            }
+            await Task.Delay(25);
+        }
+        return false;
+    }
+
+    private static async Task<LatticeQuotaExceededException?> PollForQuotaRejectionAsync(Func<int, Task> write)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        for (var i = 0; stopwatch.Elapsed < TimeSpan.FromSeconds(30); i++)
+        {
+            try
+            {
+                await write(i);
+            }
+            catch (LatticeQuotaExceededException ex)
+            {
+                return ex;
+            }
+            await Task.Delay(25);
+        }
+        return null;
+    }
+
+    [Test]
     public async Task Advisory_only_tree_never_rejects_a_write()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(AdmissionControlClusterFixture.AdvisoryTreeId);

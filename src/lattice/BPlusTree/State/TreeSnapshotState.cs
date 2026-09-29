@@ -90,6 +90,37 @@ internal sealed class TreeSnapshotState
     /// </para>
     /// </summary>
     [Id(12)] public string? CopyCursorKey { get; set; }
+
+    /// <summary>
+    /// Whether this snapshot owns the shadow-forward it installs on the source
+    /// shards and must release it (<c>IShardRootGrain.ClearShadowForwardAsync</c>)
+    /// when the copy completes. Set for a standalone online
+    /// <c>SnapshotAsync</c>, whose destination is an independent tree that must
+    /// stop receiving the source's writes once the copy is done. Clear for a
+    /// coordinator-driven snapshot (<c>SnapshotWithOperationIdAsync</c>, used by
+    /// online resize), whose coordinator takes the same shadow-forward on to
+    /// its <c>Rejecting</c> phase and clears it itself.
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to
+    /// <see langword="false"/>, which keeps an in-flight coordinator-driven
+    /// snapshot's shadow-forward intact across an upgrade.
+    /// </para>
+    /// </summary>
+    [Id(13)] public bool ReleasesShadowForwardOnCompletion { get; set; }
+
+    /// <summary>
+    /// The physical tree whose shards this snapshot reads, resolved from the
+    /// registry alias of <c>SourceTreeId</c> when the snapshot starts and
+    /// pinned for its whole run. A tree that has been resized keeps its
+    /// logical id but serves its data from the resized physical copy, while
+    /// the shards under its own id are the retired copy; a snapshot addressed
+    /// by the logical id must copy the live shards, and must keep addressing
+    /// them even if the alias moves before the copy finishes. Empty falls back
+    /// to <c>SourceTreeId</c>, which is also what legacy persisted state
+    /// decodes to, so an in-flight snapshot started before this slot existed
+    /// resumes against the shards it began on.
+    /// </summary>
+    [Id(14)] public string SourcePhysicalTreeId { get; set; } = "";
 }
 
 /// <summary>

@@ -322,13 +322,18 @@ public class GrpcPushTransportClientIntegrationTests
     [Test]
     public async Task GetPeerHighWaterMarkAsync_returns_the_stored_clock_over_the_wire()
     {
+        // The declared origin must be this cluster's own: the transport stamps
+        // LocalClusterId on the call and the receiver binds the two, so a probe
+        // may only ask what the peer has recorded for the asking cluster. The
+        // sole production caller (ReplicationDigestProbeGrain) passes
+        // options.ClusterId for exactly that reason.
         var clock = new HybridLogicalClock { WallClockTicks = 7777, Counter = 2 };
         var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
-        hwmGrain.GetAsync("origin", Arg.Any<CancellationToken>())
+        hwmGrain.GetAsync("self", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(clock));
         _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
 
-        var result = await _transport.GetPeerHighWaterMarkAsync("peer", "tree", "origin", CancellationToken.None);
+        var result = await _transport.GetPeerHighWaterMarkAsync("peer", "tree", "self", CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(clock));
     }

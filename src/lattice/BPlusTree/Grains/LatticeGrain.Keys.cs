@@ -138,15 +138,23 @@ internal sealed partial class LatticeGrain
         // caller (durable point-in-time cursor) that already set the
         // ambient retains its own snapshot - we never overwrite an
         // existing scope, so the durable-cursor pin always wins.
-        Dictionary<Guid, TxStatus>? scanSnapshot = null;
+        //
+        // Issue #3641: when the scan-start snapshot cannot be fetched the scan
+        // runs under the distinguishable "snapshot unavailable" ambient rather
+        // than a plain null (which means "no scope" and let every page resolve
+        // its prepares per leaf, at its own moment, for the life of the
+        // enumeration). Under it a page that reaches a prepared key throws
+        // LatticeTransactionOutcomeUnavailableException; pages already yielded
+        // held no prepared key, so what the caller received is consistent.
         var ownsScanSnapshotScope = !isSystemTree
-            && LatticeRegistrySnapshotContext.Current is null;
+            && !LatticeRegistrySnapshotContext.IsScoped;
+        RegistrySnapshotPair scanSnapshot = default;
         if (ownsScanSnapshotScope)
         {
-            scanSnapshot = (await FetchRegistrySnapshotAsync()).Snap;
+            scanSnapshot = await FetchRegistrySnapshotAsync();
         }
         using var scanSnapshotScope = ownsScanSnapshotScope
-            ? LatticeRegistrySnapshotContext.BeginScope(scanSnapshot)
+            ? BeginRegistryScope(scanSnapshot, strict: false)
             : null;
 
         IComparer<string> comparer = reverse ? ReverseOrdinal : StringComparer.Ordinal;

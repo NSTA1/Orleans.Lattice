@@ -316,14 +316,15 @@
     {
       "id": 100,
       "title": "SetAsync / SetManyAsync envelope p50 (ms)",
-      "description": "Top-of-stack public-API call duration: set.duration is single-key SetAsync, set_many.duration is bulk SetManyAsync. Pairs with the stage-breakdown panels below to attribute envelope cost to gate / route / bucket / shard / publish.",
+      "description": "Top-of-stack public-API call duration: set.duration is single-key SetAsync, set_many.duration is bulk SetManyAsync, set_many_where_predicate.duration is the conditional bulk SetManyWherePredicateAsync. Pairs with the stage-breakdown panels below to attribute envelope cost to gate / route / bucket / shard / publish.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "S", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_set_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 SetAsync" },
-        { "refId": "M", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_set_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 SetManyAsync" }
+        { "refId": "M", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_set_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 SetManyAsync" },
+        { "refId": "W", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_set_many_where_predicate_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 SetManyWherePredicateAsync" }
       ]
     },
     {
@@ -336,7 +337,8 @@
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "S", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_set_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 SetAsync" },
-        { "refId": "M", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_set_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 SetManyAsync" }
+        { "refId": "M", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_set_many_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 SetManyAsync" },
+        { "refId": "W", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_set_many_where_predicate_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 SetManyWherePredicateAsync" }
       ]
     },
     {
@@ -368,16 +370,16 @@
     {
       "id": 104,
       "title": "ShardRoot.SetMany sub-attribution p95 (ms)",
-      "description": "Per-step latency inside ShardRootGrain.SetManyLocalOnlyAsync: local_apply (per-leaf parallel dispatch), shadow_forward (mid-split forward to destination shard), and leaf_rpc (the actual per-leaf SetManyAsync RPC envelope). Conditionally-emitted series here (shard_root.set_many.shadow_forward.duration) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
+      "description": "Per-step latency inside a shard root's local apply of one batched write: local_apply (per-leaf parallel dispatch), shadow_forward (mid-split forward to destination shard), and leaf_rpc (the actual per-leaf RPC envelope). local_apply and leaf_rpc are recorded by both ShardRootGrain.SetManyAsync and ShardRootGrain.SetManyWherePredicateAsync and are split here by their operation tag (set_many / set_many_where_predicate); compare each arm only against the envelope of the same operation (set_many.duration or set_many_where_predicate.duration). shadow_forward is not split by operation. Conditionally-emitted series here (shard_root.set_many.shadow_forward.duration) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 52 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_set_many_local_apply_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 local_apply" },
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(orleans_lattice_shard_root_set_many_local_apply_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 local_apply {{operation}}" },
         { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_set_many_shadow_forward_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "p95 shadow_forward" },
-        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_set_many_leaf_rpc_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 leaf_rpc" }
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(orleans_lattice_shard_root_set_many_leaf_rpc_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 leaf_rpc {{operation}}" }
       ]
     },
     {
@@ -784,7 +786,7 @@
     {
       "id": 131,
       "title": "Leaf snapshot load failures (rate) by reason - issue #2364",
-      "description": "Leaf activations that could not load their snapshot (orleans.lattice.leaf.snapshot.load_failures), split by reason. READ THIS PANEL WITH THE ACTIVATION-FAILURE PANEL ABOVE, NOT INSTEAD OF IT: this counter does not count activations that failed, it counts activations that SUCCEEDED while silently giving up their warm start. A failed snapshot load is not fatal for the faulted arm - the leaf declines the snapshot, activates cold, and replays its whole readable WAL window - so that fault is invisible in availability terms and shows up only as slower activations and higher WAL read volume. SINCE ISSUE #2765 THE resource_exhausted ARM IS DIFFERENT AND DELIBERATELY SO: it declines the ACTIVATION rather than the snapshot, because the cold replay it used to fall through to allocates more than the load that had just failed, and under a container limit that is positive feedback rather than a fallback. Failing one leaf costs one leaf; escalating cost the silo. Before this instrument existed the decline was indistinguishable from a leaf that genuinely had no snapshot, so the failure population read as zero at every rate of occurrence, which is not a weak measurement but no measurement. reason=resource_exhausted means the load ran out of memory, which under a container memory limit is the self-reinforcing shape: the cgroup limit sizes the .NET GC heap hard limit, so the process is never OOM-killed and there is no restart, no exit code and no resource event - the allocation simply fails inside the storage provider deserialising the snapshot blob, and surfaces to an operator as the provider's own \"Error reading grain state\". A memory shortage wearing a storage fault's clothes. The cold replay that follows raises memory pressure further, so a non-zero resource_exhausted rate tends to climb rather than settle. reason=faulted is every other cause, and is what a snapshot-grain activation failure arrives as, because that failure is raised in-process inside the snapshot grain and never crosses a grain-call boundary carrying the original exception. Zero is the healthy steady state. Any sustained non-zero rate means leaves are paying for full-window replays they should not be paying for; correlate with container memory headroom first.",
+      "description": "Snapshot load failures (orleans.lattice.leaf.snapshot.load_failures), not genuine snapshot absence. Read alongside activation failures: this counter alone does not say whether the leaf activated. reason=resource_exhausted means an OutOfMemoryException was observable in the exception chain; reason=contiguity_exhausted means that OOM occurred while hydration was admitted as the sole occupant. Both decline activation rather than escalate to a more expensive cold WAL replay. For contiguity_exhausted, divide the leaf or lower MaxLeafBytes instead of raising the memory grant. reason=unclassified means no OOM was observable, NOT that memory pressure was ruled out: a snapshot-grain activation failure may hide the original exception. This arm retains the existing cold-replay fallback; correlate storage/activation logs and memory headroom before choosing a remedy. Since issue #2404 unclassified replaces the historical faulted value. During rollout, selectors must accept both values; this panel groups all reasons without filtering either out. No live production OOM attribution is claimed.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 179 },
@@ -947,7 +949,7 @@
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 356 },
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "spanNulls": false } }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_wait_oldest_age{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "oldest parked wait {{tree}}" }
+        { "refId": "A", "expr": "max by (tree) (orleans_lattice_wal_replay_permit_wait_oldest_age_seconds{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "oldest parked wait {{tree}}" }
       ]
     },
     {

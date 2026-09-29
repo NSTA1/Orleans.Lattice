@@ -121,23 +121,28 @@ internal sealed class LeafCursorReporter(
         // legacy unsuffixed key so no orphaned pin survives the purge.
         if (grainFactory is not null)
         {
+            var factory = grainFactory;
             var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
             var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+
+            // Fan out rather than walk. Every entry of the enumeration is a
+            // distinct grain key with no ordering relationship to the others,
+            // so a sequential loop buys nothing and costs one scheduler round
+            // trip - plus, off-silo, one network round trip - per key. The
+            // enumeration is 2*shards+1 entries (17 at the default shard count
+            // of 8), so the purge serialises seventeen calls end to end where
+            // one concurrent round suffices. The bound is the configured shard
+            // count, a small routing constant, never request size.
+            var clears = new Task[keys.Count];
             for (var i = 0; i < keys.Count; i++)
             {
-                try
-                {
-                    await grainFactory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).ClearAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogWarning(
-                        ex,
-                        "Failed to clear durable WAL materialiser pins for tree {TreeId} shard key {GrainKey} during tree-deletion purge.",
-                        treeName,
-                        keys[i]);
-                }
+                clears[i] = ClearPinShardAsync(factory, treeName, keys[i]);
             }
+
+            // Each task absorbs its own failure, so this never faults and one
+            // unreachable shard still cannot abandon the rest - the same
+            // per-key independence the sequential try/catch gave.
+            await Task.WhenAll(clears).ConfigureAwait(false);
         }
 
         // Drop any debounce state for this tree so a future re-creation of
@@ -986,24 +991,68 @@ internal sealed class LeafCursorReporter(
         // is attempted independently so one failure cannot abandon the rest.
         var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
         var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+
+        // Fan out for the same reason the tree-deletion purge above does: the
+        // keys address distinct grains, so walking them serialises 2*shards+1
+        // round trips (17 at the default shard count) behind one another on a
+        // path that runs on every materialiser unregistration. Cancellation is
+        // observed once before the round is issued rather than between keys;
+        // a token cancelled mid-round no longer abandons the remaining keys,
+        // which is the safer direction here - a half-applied removal is exactly
+        // the state that leaves a stranded pin flooring the WAL trim.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var removals = new Task[keys.Count];
         for (var i = 0; i < keys.Count; i++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                await grainFactory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).RemoveAsync(consumerId).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(
-                    ex,
-                    "Failed to remove durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId} at shard key {GrainKey}.",
-                    treeName,
-                    consumerId,
-                    keys[i]);
-            }
+            removals[i] = RemovePinShardAsync(grainFactory, treeName, consumerId, keys[i]);
         }
 
+        await Task.WhenAll(removals).ConfigureAwait(false);
+
         _durableDebounce.TryRemove((treeName, consumerId), out _);
+    }
+
+    /// <summary>
+    /// Clears one shard key's durable pin slot, absorbing and logging its own
+    /// failure so a concurrent round keeps the per-key independence the
+    /// sequential walk had: one unreachable shard must not abandon the rest.
+    /// </summary>
+    private async Task ClearPinShardAsync(IGrainFactory factory, string treeName, string grainKey)
+    {
+        try
+        {
+            await factory.GetGrain<IWalMaterialiserPinGrain>(grainKey).ClearAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to clear durable WAL materialiser pins for tree {TreeId} shard key {GrainKey} during tree-deletion purge.",
+                treeName,
+                grainKey);
+        }
+    }
+
+    /// <summary>
+    /// Removes one consumer's pin from one shard key, absorbing and logging its
+    /// own failure for the same reason <see cref="ClearPinShardAsync"/> does.
+    /// </summary>
+    private async Task RemovePinShardAsync(
+        IGrainFactory factory, string treeName, string consumerId, string grainKey)
+    {
+        try
+        {
+            await factory.GetGrain<IWalMaterialiserPinGrain>(grainKey).RemoveAsync(consumerId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Failed to remove durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId} at shard key {GrainKey}.",
+                treeName,
+                consumerId,
+                grainKey);
+        }
     }
 }

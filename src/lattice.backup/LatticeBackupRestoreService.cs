@@ -55,21 +55,6 @@ internal sealed class LatticeBackupRestoreService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        // Coordinated-restore dispatch: when the target tree is replicated the
-        // saga dispatcher promotes this restore to an all-or-nothing coordinated
-        // restore across the target's current peer set and returns the local
-        // result. The default no-op dispatcher (single-cluster hosts) always
-        // declines, so the local path below is unchanged. The decision is a
-        // function of the target tree now, not of the backup's origin. The
-        // dispatcher is resolved lazily to break the construction-time cycle
-        // (the dispatcher and the restore participant both consult this engine).
-        var dispatcher = (IRestoreSagaDispatcher)serviceProvider.GetService(typeof(IRestoreSagaDispatcher))!;
-        var coordinated = await dispatcher.TryDispatchAsync(request, cancellationToken).ConfigureAwait(false);
-        if (coordinated is not null)
-        {
-            return coordinated;
-        }
-
         var stopwatch = Stopwatch.StartNew();
         var phase = LatticeBackupMetrics.PhaseRead;
         try
@@ -91,9 +76,33 @@ internal sealed class LatticeBackupRestoreService(
             // system-origin scope is entered. Two identifiers are in play whenever
             // the restore retargets: the tree written to, and the tree the manifest
             // was captured from.
+            //
+            // This runs BEFORE the coordinated-restore dispatch below, and the
+            // ordering is load-bearing rather than incidental. The dispatcher
+            // returns the saga's own result for a replicated target, so a gate
+            // placed after it is unreachable on exactly the path that fans work out
+            // across the fleet - probing admission, fencing peers and running the
+            // cross-cluster coordinator on the caller's behalf, all before any
+            // participant reaches its own check. Do not move the dispatch above
+            // these two lines.
             await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
             await AuthorizeCapturedSourcesAsync([target], effectiveScope, targetTreeId, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Coordinated-restore dispatch: when the target tree is replicated the
+            // saga dispatcher promotes this restore to an all-or-nothing coordinated
+            // restore across the target's current peer set and returns the local
+            // result. The default no-op dispatcher (single-cluster hosts) always
+            // declines, so the local path below is unchanged. The decision is a
+            // function of the target tree now, not of the backup's origin. The
+            // dispatcher is resolved lazily to break the construction-time cycle
+            // (the dispatcher and the restore participant both consult this engine).
+            var dispatcher = (IRestoreSagaDispatcher)serviceProvider.GetService(typeof(IRestoreSagaDispatcher))!;
+            var coordinated = await dispatcher.TryDispatchAsync(request, cancellationToken).ConfigureAwait(false);
+            if (coordinated is not null)
+            {
+                return coordinated;
+            }
 
             // Read the base chain (base-first) and validate every artifact up front.
             var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
@@ -171,13 +180,32 @@ internal sealed class LatticeBackupRestoreService(
     {
         ArgumentException.ThrowIfNullOrEmpty(setId);
 
+        // Expand the set into its member trees FIRST, so every member's target can
+        // be authorized before anything is dispatched. The set read seam and the
+        // dispatcher are resolved lazily to break the construction-time cycle (the
+        // dispatcher consults this engine).
+        var resolver = (ILatticeBackupSetResolver)serviceProvider.GetService(typeof(ILatticeBackupSetResolver))!;
+        var members = await resolver.ResolveMembersAsync(setId, cancellationToken).ConfigureAwait(false);
+
+        // Fail-closed authorization over every member target, before the coordinated
+        // dispatch below. The same ordering rule as RestoreAsync: the dispatcher
+        // returns the saga's own results for a set with any replicated member, so a
+        // gate reached only through the per-member local RestoreAsync calls is
+        // unreachable on exactly the path that fans the set out across the fleet.
+        // An unresolved set authorizes nothing and falls through to the diagnostic
+        // below, which the dispatcher also declines.
+        foreach (var member in members)
+        {
+            await authorizer
+                .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(member.TreeId), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         // Coordinated set dispatch: when any member tree is replicated the saga
         // dispatcher promotes the whole set to a single all-or-nothing coordinated
         // restore across the union of the replicated members' peer sets and returns
         // this cluster's per-member results. The default no-op dispatcher (single
-        // cluster) declines, so the local per-member path below runs. The dispatcher
-        // and the set read seam are resolved lazily to break the construction-time
-        // cycle (the dispatcher consults this engine).
+        // cluster) declines, so the local per-member path below runs.
         var dispatcher = (IRestoreSagaDispatcher)serviceProvider.GetService(typeof(IRestoreSagaDispatcher))!;
         var coordinated = await dispatcher
             .TryDispatchSetAsync(setId, LatticeRestoreMode.ShadowCutover, cancellationToken)
@@ -187,12 +215,10 @@ internal sealed class LatticeBackupRestoreService(
             return coordinated;
         }
 
-        // Local (no member replicated, or single-cluster) path: expand the set into
-        // its member trees and restore each one via shadow-cutover. Each per-member
-        // RestoreAsync re-consults the dispatcher, which declines for an unreplicated
-        // member, so this stays a plain local multi-tree restore.
-        var resolver = (ILatticeBackupSetResolver)serviceProvider.GetService(typeof(ILatticeBackupSetResolver))!;
-        var members = await resolver.ResolveMembersAsync(setId, cancellationToken).ConfigureAwait(false);
+        // Local (no member replicated, or single-cluster) path: restore each member
+        // tree via shadow-cutover. Each per-member RestoreAsync re-consults the
+        // dispatcher, which declines for an unreplicated member, so this stays a
+        // plain local multi-tree restore.
         if (members.Count == 0)
         {
             throw await BuildUnresolvedSetExceptionAsync(setId, cancellationToken).ConfigureAwait(false);
@@ -556,6 +582,20 @@ internal sealed class LatticeBackupRestoreService(
                 $"No backup with id '{request.BackupId}' exists in the catalog or sink.");
 
         var targetTreeId = request.TargetTreeId ?? target.Scope.TreeId;
+
+        // Fail-closed authorization, at the same scope BuildShadowAsync,
+        // CommitShadowAsync and DeleteShadowAsync gate at. This was the one
+        // ILatticeCoordinatedRestoreEngine seam with no check, and it is the one
+        // that answers first: the report it returns names the tree a backup id
+        // belongs to along with its materialisation cost and shard count, and the
+        // dispatcher surfaces those in a caller-facing validation error. Ungated,
+        // the restore entry point was a metadata-enumeration oracle over the whole
+        // catalog for a caller holding nothing on the tree.
+        await authorizer
+            .AuthorizeRestoreAsync(
+                ResolveEffectiveScope(request.Scope, target.Scope, targetTreeId), cancellationToken)
+            .ConfigureAwait(false);
+
         var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
 
         long totalBytes = 0;

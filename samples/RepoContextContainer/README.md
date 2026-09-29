@@ -167,8 +167,11 @@ claims, and why you must not enable it in the middle of a measurement.
 - Build context differs per image: the host image's is the REPOSITORY ROOT (it
   ProjectReferences the just-built `src/` bits), so its service sets
   `context: ../..`; the embedder builds from its own `apps/embedding-onnx`
-  directory, which has no `src/` dependency and so keeps a small context. Run
-  compose from this directory either way.
+  directory, which has no `ProjectReference` into `src/` and so keeps a small
+  context. Its one shared source folder, the container cgroup readers in
+  `src/lattice/Internal/Cgroups`, arrives as the BuildKit named context `cgroups`
+  that the embedder service declares under `additional_contexts`. Run compose
+  from this directory either way.
 
 ## The mounted workspace
 

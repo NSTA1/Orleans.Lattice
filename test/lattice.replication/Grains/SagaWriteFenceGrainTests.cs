@@ -35,6 +35,21 @@ public partial class SagaWriteFenceGrainTests
         public required IReminderRegistry Reminders { get; init; }
     }
 
+    /// <summary>
+    /// A shard provider whose routing reaches <c>{tree}/0..count-1</c> of every
+    /// tree - the unsplit, unaliased topology most tests fence.
+    /// </summary>
+    private static IShardCountProvider RoutedShards(int count)
+    {
+        var shardCounts = Substitute.For<IShardCountProvider>();
+        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(count));
+        shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult<IReadOnlyList<string>>(
+                [.. Enumerable.Range(0, count).Select(i => $"{call.ArgAt<string>(0)}/{i}")]));
+        return shardCounts;
+    }
+
     private static Harness CreateGrain(
         IEnumerable<string> peers, IReminderRegistry? reminderRegistry = null)
     {
@@ -48,9 +63,7 @@ public partial class SagaWriteFenceGrainTests
                 .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
         }
 
-        var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(ShardCount));
+        var shardCounts = RoutedShards(ShardCount);
 
         var shard = Substitute.For<IShardRootGrain>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
@@ -269,9 +282,7 @@ public partial class SagaWriteFenceGrainTests
         var reminders = Substitute.For<IReminderRegistry>();
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
-        var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(ShardCount));
+        var shardCounts = RoutedShards(ShardCount);
         var shard = Substitute.For<IShardRootGrain>();
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);

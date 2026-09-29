@@ -369,11 +369,15 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
-    /// Computes the HLC anchor for a captured registry snapshot. Used
-    /// only as a diagnostic field on
-    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>;
-    /// visibility gating is driven by the snapshot dictionary itself,
-    /// not by this anchor.
+    /// Computes the HLC anchor for a captured registry snapshot, stamped on
+    /// <see cref="LatticeSnapshotCoordinate.RegistrySnapshotHlc"/>. It
+    /// currently always returns <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/>,
+    /// so every consumer of that field observes Zero - including the snapshot
+    /// cursor's WAL cursor-registry position (which therefore holds back no
+    /// trimming). The backup capture does not take its consistency-cut HLC from
+    /// this anchor alone; it uses the highest HLC over the entries it captured.
+    /// Visibility gating is driven by the snapshot dictionary itself, not by this
+    /// anchor.
     /// </summary>
     private static Orleans.Lattice.HybridLogicalClock ComputeRegistrySnapshotHlc(
         Dictionary<Guid, TxStatus>? snapshot)

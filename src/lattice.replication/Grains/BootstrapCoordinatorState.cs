@@ -11,11 +11,13 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <para>
 /// On silo failover the keepalive reminder reactivates the grain on a
 /// surviving silo; the work-pump resumes from <see cref="Phase"/> and
-/// re-opens the snapshot stream at <see cref="LastAppliedHlc"/> rather
-/// than from <see cref="HybridLogicalClock.Zero"/>. The per-origin
-/// high-water-mark grain handles overlap between the resumed stream
-/// and the prior partial drain idempotently, so correctness is
-/// unconditional regardless of how stale the persisted cursor is.
+/// re-opens the snapshot stream with no upper bound
+/// (<see cref="HybridLogicalClock.Zero"/>). The export treats its
+/// <c>asOfHlc</c> as a strict upper bound and yields entries in
+/// leaf-chain order, not HLC order, so re-opening at
+/// <see cref="LastAppliedHlc"/> would exclude every not-yet-applied entry
+/// stamped above the cursor. Receiver-side LWW reconciliation makes
+/// re-applying the overlap with the prior partial drain a no-op.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -60,10 +62,12 @@ internal sealed class BootstrapCoordinatorState
 
     /// <summary>
     /// The highest <see cref="HybridLogicalClock"/> whose entry has
-    /// been applied during the current bootstrap. Used as the
-    /// resume cursor passed to <see cref="ISnapshotProvider.ExportAsync"/>
-    /// after a silo failover so the receiver does not re-fetch every
-    /// entry from <see cref="HybridLogicalClock.Zero"/>.
+    /// been applied during the current bootstrap. Folded into the
+    /// source-origin seal pinned at the incremental handoff. It is
+    /// deliberately <b>not</b> passed to
+    /// <see cref="ISnapshotProvider.ExportAsync"/> on a resume: the export
+    /// treats that argument as a strict upper bound, so a resumed drain
+    /// would silently drop every unapplied entry stamped above it.
     /// </summary>
     [Id(4)] public HybridLogicalClock LastAppliedHlc { get; set; }
 

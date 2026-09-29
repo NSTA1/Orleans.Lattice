@@ -166,6 +166,21 @@ public class LatticeStatsGrainTests
     }
 
     [Test]
+    public async Task InvalidateAsync_drops_both_cached_reports()
+    {
+        var (grain, _, _, shards) = CreateGrain(options: new LatticeOptions { DiagnosticsCacheTtl = TimeSpan.FromMinutes(5) });
+
+        await grain.GetReportAsync(deep: false, CancellationToken.None);
+        await grain.GetReportAsync(deep: true, CancellationToken.None);
+        await grain.InvalidateAsync();
+        await grain.GetReportAsync(deep: false, CancellationToken.None);
+        await grain.GetReportAsync(deep: true, CancellationToken.None);
+
+        await shards[0].Received(2).GetDiagnosticsBoundedAsync(false, null);
+        await shards[0].Received(2).GetDiagnosticsBoundedAsync(true, null);
+    }
+
+    [Test]
     public void GetReportAsync_precancelled_token_throws()
     {
         var (grain, _, _, _) = CreateGrain();

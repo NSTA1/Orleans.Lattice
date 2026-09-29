@@ -22,6 +22,19 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task DeleteTreeAsync();
 
     /// <summary>
+    /// Soft-deletes the physical tree a resize retired when that physical
+    /// tree's id is also the id of the live logical tree - the original copy a
+    /// tree's first resize replaces, which carries the logical id while the
+    /// logical tree now resolves through an alias to the resized copy. Marks
+    /// the retired shards deleted and schedules their purge exactly as
+    /// <see cref="DeleteTreeAsync"/> does, but leaves the registry entry and the
+    /// tombstone compaction schedule under this id in place, because both
+    /// belong to the live logical tree: the purge that follows reclaims the
+    /// retired shards and never unregisters the logical tree. Idempotent.
+    /// </summary>
+    Task DeleteRetiredPhysicalTreeAsync();
+
+    /// <summary>
     /// Returns <c>true</c> if the tree has been soft-deleted (whether or not
     /// the purge has completed).
     /// </summary>

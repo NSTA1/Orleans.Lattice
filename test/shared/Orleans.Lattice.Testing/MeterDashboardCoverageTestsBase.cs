@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Orleans.Lattice.Testing.Hygiene;
+using Orleans.Lattice.Testing.Metrics;
 
 namespace Orleans.Lattice.Testing;
 
@@ -97,16 +98,14 @@ public abstract class MeterDashboardCoverageTestsBase
         var referenced = ReferencedTokens();
 
         var unpaneled = new List<string>();
-        foreach (var name in InstrumentNames())
+        foreach (var (name, series) in Instruments())
         {
             if (IntentionallyUnpaneledInstruments.Contains(name))
             {
                 continue;
             }
 
-            var forms = new HashSet<string>(StringComparer.Ordinal);
-            AddInstrumentForms(forms, name);
-            if (!forms.Any(referenced.Contains))
+            if (!series.Any(referenced.Contains))
             {
                 unpaneled.Add(name);
             }
@@ -129,9 +128,9 @@ public abstract class MeterDashboardCoverageTestsBase
     public void Every_meter_token_referenced_by_the_dashboards_resolves_to_a_live_instrument()
     {
         var known = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var name in InstrumentNames())
+        foreach (var (_, series) in Instruments())
         {
-            AddInstrumentForms(known, name);
+            known.UnionWith(series);
         }
 
         var prefix = MeterName.Replace('.', '_') + "_";
@@ -152,6 +151,35 @@ public abstract class MeterDashboardCoverageTestsBase
             string.Join(Environment.NewLine + "  - ", unknown));
     }
 
+    /// <summary>
+    /// Every instrument this fixture covers has a declared unit and kind the
+    /// exporter naming model can read, so its exact series names are known.
+    /// </summary>
+    /// <remarks>
+    /// The two guards above match dashboard tokens against exactly the series
+    /// <c>.AddPrometheusExporter()</c> emits (issue #3260), which depends on the
+    /// instrument's unit and kind. A statically wired instrument supplies both
+    /// through the live <see cref="Instrument"/>; one named only in
+    /// <see cref="AdditionalInstrumentNames"/> is read from its declaration in
+    /// <c>src/</c>. An instrument neither route can place would otherwise contribute
+    /// no series and surface only as an unexplained unpaneled or unresolved entry,
+    /// so it is reported here by name.
+    /// </remarks>
+    [Test]
+    public void Every_instrument_on_the_meter_has_a_known_exporter_series_name()
+    {
+        var unknown = Instruments()
+            .Where(static pair => pair.Value.Count == 0)
+            .Select(static pair => pair.Key)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(unknown, Is.Empty,
+            $"These instruments on meter '{MeterName}' are neither published at test time nor declared in src/ " +
+            "with a readable unit and kind, so the exporter series name they render as cannot be derived:" +
+            $"{Environment.NewLine}  - " + string.Join(Environment.NewLine + "  - ", unknown));
+    }
+
     private HashSet<string> ReferencedTokens()
     {
         var tokens = new HashSet<string>(StringComparer.Ordinal);
@@ -164,9 +192,14 @@ public abstract class MeterDashboardCoverageTestsBase
         return tokens;
     }
 
-    private IEnumerable<string> InstrumentNames()
+    /// <summary>
+    /// Every instrument this fixture covers, mapped to the exact series names
+    /// <c>.AddPrometheusExporter()</c> emits for it (empty when they cannot be
+    /// derived).
+    /// </summary>
+    private Dictionary<string, IReadOnlyList<string>> Instruments()
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var names = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
         // Force the owning type-initialiser so statically-wired instruments are
         // published before the snapshot listener enumerates them.
@@ -179,7 +212,8 @@ public abstract class MeterDashboardCoverageTestsBase
             {
                 if (ReferenceEquals(instrument.Meter, meter) && IncludeInstrument(instrument.Name))
                 {
-                    names.Add(instrument.Name);
+                    names[instrument.Name] = PrometheusExporterNaming.SeriesNames(
+                        instrument.Name, instrument.Unit, PrometheusExporterNaming.FamilyTypeOf(instrument));
                 }
             };
             listener.Start();
@@ -187,7 +221,10 @@ public abstract class MeterDashboardCoverageTestsBase
 
         foreach (var name in AdditionalInstrumentNames)
         {
-            names.Add(name);
+            if (!names.ContainsKey(name))
+            {
+                names[name] = DeclaredSeriesNames(name);
+            }
         }
 
         // Anti-vacuity control on the SHARED discovery root of both tests in this
@@ -210,55 +247,27 @@ public abstract class MeterDashboardCoverageTestsBase
         return names;
     }
 
-    private static void AddInstrumentForms(HashSet<string> forms, string instrumentName)
+    /// <summary>
+    /// The exporter series names for an instrument read from its declaration in
+    /// <c>src/</c>, or an empty list when the declaration does not record both its
+    /// kind and its unit.
+    /// </summary>
+    /// <remarks>
+    /// Exactly the series <c>.AddPrometheusExporter()</c> emits (issue #3260). No
+    /// alternative spelling is accepted: the repository-context container's
+    /// unsuffixed exposition is not what the bundled dashboards target, and
+    /// accepting it certified panel queries naming series that exporter never
+    /// emits.
+    /// </remarks>
+    private static IReadOnlyList<string> DeclaredSeriesNames(string instrumentName)
     {
-        // OpenTelemetry's Prometheus exporter translates '.' to '_' and preserves
-        // any underscores already present in the .NET name.
-        var underscored = instrumentName.Replace('.', '_');
+        if (DeclaredInstruments.ByDottedName.TryGetValue(instrumentName, out var kind)
+            && DeclaredInstruments.UnitByDottedName.TryGetValue(instrumentName, out var unit))
+        {
+            return PrometheusExporterNaming.SeriesNames(instrumentName, unit, PrometheusExporterNaming.FamilyTypeOf(kind));
+        }
 
-        forms.Add(underscored);
-        forms.Add(underscored + "_total");
-
-        // KNOWN-INCOMPLETE RETENTION - see issue #3260.
-        //
-        // The repo-context container's in-house Prometheus exposition appends no unit
-        // segment for "ms" or "s" any more than it does for "By": it records the unit
-        // in HELP text and leaves the family name bare. Measured on that live scrape
-        // (440 families):
-        //
-        //   # HELP orleans_lattice_atomic_write_duration ... (unit: ms)
-        //   # TYPE orleans_lattice_atomic_write_duration summary
-        //
-        // The six forms below are therefore forms the exporter never emits, and
-        // are retained DELIBERATELY rather than because they are believed
-        // correct. Removing them today turns this gate red on 60 already-dead
-        // dashboard tokens (57 `_milliseconds_bucket`, 2 bare `_milliseconds`,
-        // 1 `_seconds_bucket`), whose correct target spelling is undetermined
-        // until the histogram-as-summary shape question (issue #3261) is
-        // answered - the same scrape shows zero `_bucket` lines, so a `_bucket`
-        // panel is dead however it is named.
-        //
-        // So: this guard's green is PARTIAL. It covers the byte-unit class
-        // completely (issue #3259) and the ms/s class not at all. Closing #3260
-        // means deleting the six lines below.
-        forms.Add(underscored + "_milliseconds_bucket");
-        forms.Add(underscored + "_milliseconds_count");
-        forms.Add(underscored + "_milliseconds_sum");
-        forms.Add(underscored + "_seconds_bucket");
-        forms.Add(underscored + "_seconds_count");
-        forms.Add(underscored + "_seconds_sum");
-
-        forms.Add(underscored + "_bucket");
-        forms.Add(underscored + "_count");
-        forms.Add(underscored + "_sum");
-
-        // NO byte-unit synthesis. Synthesizing "_bytes" / "_bytes_total" here
-        // previously made both spellings of a "By"-unit instrument resolve, so
-        // this guard certified queries naming series that cannot exist. Those
-        // panels render empty, which is indistinguishable from a real zero.
-        // Six dead queries hid behind it (issue #3259). Do not reinstate them:
-        // an instrument whose name already ends in "bytes" is covered by the
-        // bare name plus "_total" above.
+        return [];
     }
 
     private static void WalkForExpr(JsonElement element, HashSet<string> tokens)

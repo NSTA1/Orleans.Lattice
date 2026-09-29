@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// surface change), and a falling token (so it revisits a value it previously
 /// carried under a different surface). Both defeat the reader-side fast path in
 /// <see cref="ReaderStabilityGate.IsRevisionStable(long, long)"/>, which
-/// short-circuits on token equality and never consults <c>IsSnapshotStable</c>.
+/// short-circuits on token equality and never consults <c>ClassifySnapshot</c>.
 /// </para>
 /// </summary>
 public partial class TxRegistryGrainTests

@@ -33,6 +33,21 @@ namespace Orleans.Lattice.Api.Mcp;
 internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
 {
     private readonly IReadOnlyList<McpServerTool> _tools;
+    private readonly HashSet<string> _mutatingTools = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The operations that make a mutating data tool reachable. The group's coarse
+    /// mask admits the whole group on any data-plane operation - deliberately wide,
+    /// so discovery stays cheap - which without this refinement advertises the
+    /// destructive tools to a caller holding only a read grant.
+    /// </summary>
+    private const LatticeOperation MutatingOperations =
+        LatticeOperation.Write
+        | LatticeOperation.Delete
+        | LatticeOperation.RangeDelete
+        | LatticeOperation.CrdtApply
+        | LatticeOperation.AtomicWrite
+        | LatticeOperation.BulkLoad;
 
     /// <summary>
     /// Builds the data tool module. When <paramref name="enableWrites"/> is
@@ -65,6 +80,7 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
 
         if (enableWrites)
         {
+            var firstMutating = tools.Count;
             tools.Add(BuildSetTool());
             tools.Add(BuildDeleteTool());
             tools.Add(BuildDeleteRangeTool());
@@ -84,10 +100,24 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
             tools.Add(BuildSequenceWriteTool());
             tools.Add(BuildMapWriteTool());
             tools.Add(BuildGSetWriteTool());
+
+            // Derived from the tools actually contributed under the write opt-in,
+            // so a mutating tool added later cannot be left out of the per-tool
+            // minimum by omission.
+            for (var i = firstMutating; i < tools.Count; i++)
+            {
+                _mutatingTools.Add(tools[i].ProtocolTool.Name);
+            }
         }
 
         _tools = tools;
     }
+
+    /// <inheritdoc />
+    public LatticeOperation RequiredOperationsFor(string toolName)
+        => toolName is not null && _mutatingTools.Contains(toolName)
+            ? MutatingOperations
+            : LatticeApiMcpGroupCapabilityMap.RequiredOperations(Group);
 
     /// <inheritdoc />
     public LatticeApiMcpGroup Group => LatticeApiMcpGroup.Data;

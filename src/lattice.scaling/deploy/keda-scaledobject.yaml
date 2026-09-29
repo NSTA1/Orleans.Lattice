@@ -40,14 +40,19 @@ spec:
         # (default /lattice/scale).
         url: "http://orleans-silo.default.svc.cluster.local:8080/lattice/scale"
         valueLocation: "scaleValue"
-        # scaleValue is expressed in replica-units, so targetValue "1" tracks
-        # it directly (desiredReplicas = ceil(scaleValue / 1)).
-        targetValue: "1"
+        # scaleValue is the dominant pressure (0.0 to 1.0) times the current
+        # replica count, so it never exceeds that count. desiredReplicas =
+        # ceil(scaleValue / targetValue), so targetValue must be below 1 for the
+        # pool to grow: "1" could only hold or shrink it. "0.5" holds each
+        # replica at half load and asks for twice the current count at full
+        # saturation.
+        targetValue: "0.5"
 #
 # Plain-HPA alternative (no KEDA):
 # If you cannot run KEDA, expose scaleValue as a custom/external metric through
 # a metrics adapter (for example the Prometheus Adapter scraping the same
 # endpoint via a ServiceMonitor, or a custom metrics API server) and reference
 # it from a standard autoscaling/v2 HorizontalPodAutoscaler with a
-# type: External metric whose target.averageValue is "1". The metrics-api
-# scaler above is the lower-ceremony path and is recommended.
+# type: External metric whose target.averageValue is "0.5" (below 1, for the
+# same reason as targetValue above). The metrics-api scaler above is the
+# lower-ceremony path and is recommended.

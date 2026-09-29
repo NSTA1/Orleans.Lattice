@@ -48,7 +48,8 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
 
     private static IServiceProvider Services(
         ITenantRegionVisibilityResolver? resolver = null,
-        ILatticeApiMcpRegionIdentityVerifier? verifier = null)
+        ILatticeApiMcpRegionIdentityVerifier? verifier = null,
+        ITenantContextResolver? tenantContext = null)
     {
         var services = new ServiceCollection();
         if (resolver is not null)
@@ -60,6 +61,13 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
         {
             services.AddSingleton(verifier);
         }
+
+        // The tenancy add-on registers the validating resolver alongside the
+        // visibility resolver, so a fixture exercising scoped behaviour must model
+        // both. Default to one that validates whatever the caller asserted, which
+        // is the post-validation state every scoping test below is about; the
+        // refusal path gets its own explicit cases.
+        services.AddSingleton(tenantContext ?? ValidatingTenantContext.Permissive);
 
         return services.BuildServiceProvider();
     }
@@ -465,6 +473,157 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
 
         Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
             "Tenant scoping narrows the answer; it never widens it past the identity gate.");
+    }
+
+    // ----- the assertion itself must validate: refusal fails closed -----
+
+    [Test]
+    public async Task An_unvalidated_tenant_assertion_is_refused_and_falls_back_to_the_current_region()
+    {
+        // The header is caller-controlled. Without validation, asserting any
+        // tenant id enumerated that tenant's actionable region set - a routing
+        // topology disclosure available to anyone who can reach the head.
+        var visibility = new FakeResolver(MapOf(
+            ("eu", true, TenantRegionResidencyStatus.Online),
+            ("ap", true, TenantRegionResidencyStatus.Online)));
+        var catalog = new LatticeApiMcpRegionCatalog(
+            Router("eu", "ap"),
+            Services(visibility, tenantContext: ValidatingTenantContext.Refusing));
+
+        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("victim"));
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
+                "A refused assertion must fail closed to the current region, never the full topology.");
+            Assert.That(visibility.Calls, Is.Zero,
+                "The visibility engine must not be consulted for a tenant the caller never proved, "
+                + "which would otherwise make the catalog a tenant-existence oracle.");
+        });
+    }
+
+    [Test]
+    public async Task A_refused_assertion_never_echoes_the_asserted_tenant_back()
+    {
+        var catalog = new LatticeApiMcpRegionCatalog(
+            Router("eu"),
+            Services(
+                new FakeResolver(MapOf(("eu", true, TenantRegionResidencyStatus.Online))),
+                tenantContext: ValidatingTenantContext.Refusing));
+
+        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("victim"));
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(regions.Select(r => r.TenantScope), Is.All.Null,
+                "Annotating a refused call would confirm the assertion was understood, and the "
+                + "annotation carries the asserted tenant id straight back to the caller.");
+            Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }));
+        });
+    }
+
+    [Test]
+    public async Task An_assertion_that_validates_to_a_different_tenant_is_refused()
+    {
+        // Resolution succeeding is not enough: it must resolve to the tenant that
+        // was asserted. A caller authorized for `acme` asserting `victim` must not
+        // be handed `victim`'s topology merely because resolution returned a tenant.
+        var visibility = new FakeResolver(MapOf(("eu", true, TenantRegionResidencyStatus.Online)));
+        var catalog = new LatticeApiMcpRegionCatalog(
+            Router("eu", "ap"),
+            Services(visibility, tenantContext: ValidatingTenantContext.Resolving(TenantId.Parse("acme"))));
+
+        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("victim"));
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }));
+            Assert.That(visibility.Calls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task A_validating_resolver_that_is_not_registered_is_refused()
+    {
+        // An active visibility resolver with no validating seam beside it is a
+        // mis-wired host, not a licence to honour the header. The tenancy add-on
+        // registers the two together, so this shape can only arise by hand.
+        var services = new ServiceCollection();
+        services.AddSingleton<ITenantRegionVisibilityResolver>(
+            new FakeResolver(MapOf(("eu", true, TenantRegionResidencyStatus.Online))));
+        var catalog = new LatticeApiMcpRegionCatalog(
+            Router("eu", "ap"), services.BuildServiceProvider());
+
+        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("victim"));
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
+            "A missing validating resolver must fail closed, not open.");
+    }
+
+    [Test]
+    public async Task A_validated_assertion_resolved_asynchronously_is_still_honoured()
+    {
+        // The warm synchronous path is an optimisation, not the contract: a
+        // membership cache miss must reach the same verdict, or the gate would
+        // reject legitimate callers under cold cache.
+        var catalog = new LatticeApiMcpRegionCatalog(
+            Router("eu"),
+            Services(
+                new FakeResolver(MapOf(("eu", true, TenantRegionResidencyStatus.Online))),
+                tenantContext: ValidatingTenantContext.PermissiveAsyncOnly));
+
+        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("acme"));
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us", "eu" }),
+            "An asynchronous resolution of the same tenant must scope exactly as the warm path does.");
+    }
+
+    /// <summary>
+    /// A stand-in for the tenancy add-on's validating resolver. The tenancy
+    /// package validates the ambient assertion against the caller's membership and
+    /// returns the uninitialised "no tenant" value when the caller may not act as
+    /// it; this models the three outcomes the catalog must distinguish - validated,
+    /// refused, and validated-as-someone-else - and whether resolution is warm.
+    /// </summary>
+    private sealed class ValidatingTenantContext(TenantId? resolved, bool useAmbient, bool warm)
+        : ITenantContextResolver
+    {
+        /// <summary>Validates whatever the caller asserted, synchronously.</summary>
+        public static ValidatingTenantContext Permissive { get; } = new(null, useAmbient: true, warm: true);
+
+        /// <summary>Validates the assertion, but only via the async fallback.</summary>
+        public static ValidatingTenantContext PermissiveAsyncOnly { get; }
+            = new(null, useAmbient: true, warm: false);
+
+        /// <summary>Refuses every assertion, as for a caller outside the tenant.</summary>
+        public static ValidatingTenantContext Refusing { get; } = new(default(TenantId), useAmbient: false, warm: true);
+
+        /// <summary>Validates to a fixed tenant regardless of what was asserted.</summary>
+        public static ValidatingTenantContext Resolving(TenantId tenant)
+            => new(tenant, useAmbient: false, warm: true);
+
+        public ValueTask<TenantId> ResolveCurrentAsync(CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Resolve());
+
+        public bool TryResolveCurrent(out TenantId tenant)
+        {
+            if (!warm)
+            {
+                tenant = default;
+                return false;
+            }
+
+            tenant = Resolve();
+            return true;
+        }
+
+        private TenantId Resolve()
+            => useAmbient ? LatticeActiveTenantContext.Current ?? default : resolved ?? default;
     }
 
     private sealed class FakeResolver(TenantRegionVisibilityMap map, bool isActive = true)

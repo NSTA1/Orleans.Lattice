@@ -132,6 +132,40 @@ public sealed class GSet : ICrdt<GSet>
     }
 
     /// <summary>
+    /// The eager counterpart to <see cref="Values"/>: the identical
+    /// deterministic projection, materialised once into an exactly-sized
+    /// array. <see cref="Count"/> is exact, so the destination is sized up
+    /// front and the decoded elements are written straight into it.
+    /// <para>
+    /// Prefer this over <c>[.. set.Values()]</c> or <c>set.Values().ToArray()</c>
+    /// on a read path that materialises the whole set. <see cref="Values"/> is a
+    /// <c>yield return</c> iterator, so it hides its element count from the
+    /// materialiser: the builder cannot size the destination, and instead fills
+    /// a chain of segments and copies the whole projection once more into the
+    /// final array - on top of the iterator state machine itself. The segments
+    /// are pooled, so the cost is the bookkeeping, the extra copy, and the state
+    /// machine rather than heap bytes. Sizing the destination up front pays none
+    /// of it.
+    /// </para>
+    /// </summary>
+    internal byte[][] SnapshotValues()
+    {
+        var count = Elements.Count;
+        if (count == 0) return Array.Empty<byte[]>();
+
+        var keys = new string[count];
+        Elements.CopyTo(keys);
+        Array.Sort(keys, StringComparer.Ordinal);
+
+        var values = new byte[count][];
+        for (var i = 0; i < count; i++)
+        {
+            values[i] = Convert.FromBase64String(keys[i]);
+        }
+        return values;
+    }
+
+    /// <summary>
     /// Lattice merge: the set union of <paramref name="left"/> and
     /// <paramref name="right"/>. Commutative, associative, idempotent.
     /// </summary>

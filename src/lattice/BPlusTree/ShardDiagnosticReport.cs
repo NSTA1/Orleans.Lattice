@@ -58,4 +58,14 @@ public readonly record struct ShardDiagnosticReport
 
     /// <summary>Whether a bulk-load graft is pending on this shard.</summary>
     [Id(11)] public bool BulkOperationPending { get; init; }
+
+    /// <summary>
+    /// Whether the diagnostics fan-out failed to sample this shard - the shard
+    /// grain faulted or timed out partway through its walk. When <c>true</c>
+    /// only <see cref="ShardIndex"/> is meaningful: every count reads <c>0</c>
+    /// because nothing was measured, not because the shard is empty, so a
+    /// caller deciding anything from the counts must treat the shard as
+    /// unknown.
+    /// </summary>
+    [Id(12)] public bool SampleFailed { get; init; }
 }

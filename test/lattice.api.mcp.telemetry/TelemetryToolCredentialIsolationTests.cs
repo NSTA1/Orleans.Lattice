@@ -98,7 +98,7 @@ public sealed class TelemetryToolCredentialIsolationTests
     {
         var client = BearerClient(out var handler);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         AssertNoCredentialLeak(result.Success, result.Error, handler, SecretToken);
     }
@@ -110,7 +110,7 @@ public sealed class TelemetryToolCredentialIsolationTests
         var end = DateTimeOffset.UtcNow;
 
         var result = await TelemetryToolHandlers.QueryRangeAsync(
-            client, ReadAll(), Guardrails(), CancellationToken.None,
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), Guardrails(), CancellationToken.None,
             "up", end.AddMinutes(-10), end, TimeSpan.FromMinutes(1));
 
         AssertNoCredentialLeak(result.Success, result.Error, handler, SecretToken);
@@ -121,7 +121,7 @@ public sealed class TelemetryToolCredentialIsolationTests
     {
         var client = BearerClient(out var handler);
 
-        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), CancellationToken.None);
+        var result = await TelemetryToolHandlers.ListMetricsAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None);
 
         AssertNoCredentialLeak(result.Success, result.Error, handler, SecretToken);
     }
@@ -132,7 +132,7 @@ public sealed class TelemetryToolCredentialIsolationTests
         var client = BearerClient(out var handler);
 
         var result = await TelemetryToolHandlers.MetricMetadataAsync(
-            client, ReadAll(), CancellationToken.None, "up");
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         AssertNoCredentialLeak(result.Success, result.Error, handler, SecretToken);
     }
@@ -142,7 +142,7 @@ public sealed class TelemetryToolCredentialIsolationTests
     {
         var client = BasicClient(out var handler);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         AssertNoCredentialLeak(result.Success, result.Error, handler, SecretUser, SecretPassword);
     }
@@ -156,10 +156,11 @@ public sealed class TelemetryToolCredentialIsolationTests
             MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed,
         };
         var denied = await TelemetryToolHandlers.QueryAsync(
-            client, new TelemetryMetricAccessPolicy(denyAllOptions), CancellationToken.None, "up");
+            client, new TelemetryMetricAccessPolicy(denyAllOptions),
+            TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         var faulted = await TelemetryToolHandlers.QueryAsync(
-            client, ReadAll(), CancellationToken.None, "up");
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -191,7 +192,7 @@ public sealed class TelemetryToolCredentialIsolationTests
             tokenProvider: null,
             logger);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {
@@ -224,7 +225,7 @@ public sealed class TelemetryToolCredentialIsolationTests
             tokenProvider: null,
             logger);
 
-        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), CancellationToken.None, "up");
+        var result = await TelemetryToolHandlers.QueryAsync(client, ReadAll(), TelemetryAuthorizers.Allowed(), CancellationToken.None, "up");
 
         Assert.Multiple(() =>
         {

@@ -145,11 +145,12 @@ public readonly record struct SnapshotEntry
     [Id(8)] public int AtomicBatchIndex { get; init; }
 
     /// <summary>
-    /// Absolute UTC tick at which the prepared mutation's entry
-    /// expires, or <c>0</c> when the entry never expires. Mirrors
-    /// <c>LwwValue.ExpiresAtTicks</c>; preserved verbatim across the
-    /// snapshot boundary so the receiver's per-tx pending bucket
-    /// stamps the same TTL the source recorded.
+    /// Absolute UTC tick at which the entry expires, or <c>0</c> when the
+    /// entry never expires. Mirrors <c>LwwValue.ExpiresAtTicks</c> and is
+    /// carried on committed and prepared rows alike, preserved verbatim
+    /// across the snapshot boundary so the receiver installs the same TTL
+    /// the source recorded (on its live row, or on its per-tx pending
+    /// bucket for a prepared mutation).
     /// </summary>
     [Id(9)] public long ExpiresAtTicks { get; init; }
 

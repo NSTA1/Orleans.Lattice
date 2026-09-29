@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Internal;
+namespace Orleans.Lattice.Internal.Cgroups;
 
 /// <summary>
 /// Reads the container's enforced CPU grant from the cgroup filesystem, so any
@@ -14,11 +14,24 @@ namespace Orleans.Lattice.Internal;
 /// library, because the core library's own WAL replay concurrency gate is the
 /// site where the quota/<c>DOTNET_PROCESSOR_COUNT</c> disagreement was actually
 /// measured to hurt, and a package may only reference core, never the reverse.
-/// Promotion was chosen over a third copy deliberately: two copies already exist
-/// and are kept honest only by a divergence guard, and a third would be exactly
-/// the defect that guard exists to prevent. The standalone ONNX embedding
-/// companion keeps the byte-identical mirror because its container image has no
-/// project reference into <c>src/</c> at all.
+/// Promotion was chosen over a third copy deliberately. The standalone ONNX
+/// embedding companion once kept a byte-identical mirror, held in sync only by a
+/// drift guard, because its container image has no project reference into
+/// <c>src/</c>; issue #2817 removed the mirror, and the companion now compiles
+/// this very file, linked from its csproj and delivered to its image through a
+/// BuildKit named context. There is exactly one copy, and every file in this
+/// folder must therefore depend on the base class library alone (enforced by
+/// <c>CgroupSourcesCompileStandaloneTests</c>).
+/// </para>
+/// <para>
+/// The file access itself - the ordered path probe, the defensive read, and the
+/// degrade-to-unknown policy - belongs to <see cref="CgroupFileSystem"/> (issue
+/// #2828), so this type holds only the CPU-specific parsing. The probe is "first
+/// known value wins": a cgroup v2 <c>cpu.max</c> that reads <c>max</c> no longer
+/// ends the probe, and the v1 pair is consulted next. On a real host the two
+/// hierarchies do not both carry the CPU controller, so the answer is the same as
+/// before; the rule is stated here because it is now shared with
+/// <see cref="ContainerMemoryLimit"/> rather than chosen per reader.
 /// </para>
 /// <para>
 /// It exists because <see cref="System.Environment.ProcessorCount"/> is not a
@@ -67,8 +80,8 @@ namespace Orleans.Lattice.Internal;
 /// its own from the same figure.
 /// </para>
 /// <para>
-/// Lives in <c>Orleans.Lattice.Internal</c> rather than the <c>Runtime</c> folder
-/// this reader arrived in, and that placement is load-bearing rather than
+/// Lives in <c>Orleans.Lattice.Internal.Cgroups</c> rather than the <c>Runtime</c>
+/// folder this reader arrived in, and that placement is load-bearing rather than
 /// cosmetic. A namespace <c>Orleans.Lattice.Runtime</c> would sit as a sibling of
 /// Orleans' own heavily-used <c>Orleans.Runtime</c>, and C# resolves a namespace
 /// qualifier by walking outward through the enclosing namespaces. Every file in
@@ -102,16 +115,10 @@ internal static class ContainerCpuGrant
     /// A null result is not an error: it is the correct answer on an
     /// unconstrained host and on a non-Linux machine.</returns>
     public static int? Read()
-    {
-        var v2 = TryReadAllText(CgroupV2CpuMaxPath);
-        if (v2 is not null)
-        {
-            return ParseCpuMax(v2);
-        }
-
-        return ParseCpuQuota(
-            TryReadAllText(CgroupV1QuotaPath), TryReadAllText(CgroupV1PeriodPath));
-    }
+        => CgroupFileSystem.ReadFirstKnown([CgroupV2CpuMaxPath], ParseCpuMax)
+            ?? ParseCpuQuota(
+                CgroupFileSystem.TryReadAllText(CgroupV1QuotaPath),
+                CgroupFileSystem.TryReadAllText(CgroupV1PeriodPath));
 
     /// <summary>
     /// Parses a cgroup v2 <c>cpu.max</c> payload, which is a quota and a period
@@ -156,11 +163,7 @@ internal static class ContainerCpuGrant
         }
 
         var trimmedQuota = quota.Trim();
-        if (string.Equals(trimmedQuota, "max", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
+        // cgroup v2's "max" fails numeric parsing; v1's -1 is non-positive.
         if (!long.TryParse(trimmedQuota, out var quotaValue) || quotaValue <= 0)
         {
             return null;
@@ -171,23 +174,8 @@ internal static class ContainerCpuGrant
             return null;
         }
 
-        var cpus = (int)Math.Ceiling((double)quotaValue / periodValue);
-        return Math.Max(1, cpus);
-    }
-
-    private static string? TryReadAllText(string path)
-    {
-        try
-        {
-            return File.Exists(path) ? File.ReadAllText(path) : null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
+        // Positive inputs make the ceiling at least one; .NET 10 saturates
+        // the conversion at int.MaxValue for a quota larger than it can hold.
+        return (int)Math.Ceiling((double)quotaValue / periodValue);
     }
 }

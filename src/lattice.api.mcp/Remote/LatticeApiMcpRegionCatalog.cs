@@ -25,10 +25,21 @@ namespace Orleans.Lattice.Api.Mcp;
 /// caller's own session rather than conceal anything.
 /// </para>
 /// <para>
+/// <b>The asserted tenant is validated, never trusted.</b> The active tenant
+/// arrives on the caller-supplied <c>lattice-active-tenant</c> header and the MCP
+/// head's bridge only syntax-checks it, so this catalog re-resolves it through
+/// <see cref="ITenantContextResolver"/> - the same validating seam the data plane
+/// uses - and honours it only when the resolved tenant matches the assertion. A
+/// caller that asserts a tenant it may not act as is refused rather than served
+/// that tenant's region set.
+/// </para>
+/// <para>
 /// <b>Fail-closed.</b> A tenant-asserted call whose standing cannot be established
-/// (no tenancy engine reachable, or the registry read failed) degrades to the
-/// current region alone. It never falls back to the full routing topology, which is
-/// the disclosure this scoping exists to close.
+/// (no tenancy engine reachable, the registry read failed, or the assertion did not
+/// validate) degrades to the current region alone, with no <c>tenantScope</c>
+/// annotation - so a refused assertion is never echoed back to its author. It never
+/// falls back to the full routing topology, which is the disclosure this scoping
+/// exists to close.
 /// </para>
 /// <para>
 /// <b>Tenancy off costs nothing.</b> The tenant probe is a single ambient-context
@@ -59,12 +70,12 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
 
         // Cheapest possible tenancy probe: one ambient-context read first, and a
         // single singleton lookup only if something actually asserted a tenant.
-        var scopedTenant = ResolveScopedTenant(out var resolver);
+        var scope = await ResolveTenantScopeAsync(cancellationToken).ConfigureAwait(false);
 
         // Fast path: no verification configured, every cluster id already known and
         // no tenant asserted, so return the frozen snapshot verbatim with no
         // allocation - byte-for-byte the pre-tenancy answer, same reference.
-        if (verifier is null && !needsEnrichment && scopedTenant is null)
+        if (verifier is null && !needsEnrichment && scope.IsUnscoped)
         {
             return snapshot;
         }
@@ -73,14 +84,21 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
             ? await ResolveCurrentClusterIdAsync(cancellationToken).ConfigureAwait(false)
             : null;
 
-        // Fail closed: a tenant-asserted call whose standing cannot be established
-        // resolves to the unresolved verdict, whose every lookup misses, so the
-        // loop below prunes every peer and the caller is left with the current
-        // region alone rather than the full topology.
-        var visibility = scopedTenant is null
-            ? null
-            : await ResolveVisibilityAsync(resolver!, scopedTenant.Value, cancellationToken).ConfigureAwait(false);
-        var tenantId = scopedTenant?.Value;
+        // Fail closed: a tenant-asserted call whose assertion did not validate, or
+        // whose standing cannot be established, resolves to the unresolved verdict,
+        // whose every lookup misses, so the loop below prunes every peer and the
+        // caller is left with the current region alone rather than the full
+        // topology. A refused assertion also carries a null tenant id, so the
+        // caller's own unvalidated header value is never annotated back onto the
+        // response.
+        var visibility = scope switch
+        {
+            { IsUnscoped: true } => null,
+            { Refused: true } => TenantRegionVisibilityMap.Unresolved,
+            _ => await ResolveVisibilityAsync(scope.Resolver!, scope.Tenant, cancellationToken)
+                .ConfigureAwait(false),
+        };
+        var tenantId = scope.Refused ? null : scope.Tenant.Value;
 
         var result = new List<LatticeRegionDescriptor>(snapshot.Count);
         for (var i = 0; i < snapshot.Count; i++)
@@ -129,13 +147,17 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
     }
 
     /// <summary>
-    /// Returns the tenant the catalog must scope to, or <see langword="null"/> when
-    /// the answer is the unscoped topology: nothing asserted a tenant (the normal
-    /// case, including every operator call), the asserted tenant is the reserved
-    /// legacy-adoption default (which names the pre-tenancy behaviour by
-    /// definition), or the cluster has no tenancy engine at all.
+    /// Establishes whose catalog this call may see: the unscoped topology, a
+    /// validated tenant, or a refusal.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The answer is the unscoped topology when nothing asserted a tenant (the
+    /// normal case, including every operator call), when the asserted tenant is the
+    /// reserved legacy-adoption default (which names the pre-tenancy behaviour by
+    /// definition), or when the cluster has no tenancy engine at all.
+    /// </para>
+    /// <para>
     /// The last case is load-bearing and not merely defensive. The MCP head's
     /// active-tenant bridge is registered unconditionally, so a caller can put a
     /// <c>lattice-active-tenant</c> header on a cluster running <b>no tenancy
@@ -145,34 +167,86 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
     /// assertion against - would echo the caller's own unvalidated header value back
     /// as a <c>tenantScope</c> annotation. Requiring a live
     /// <see cref="ITenantRegionVisibilityResolver"/> keeps a tenancy-off cluster
-    /// byte-for-byte on its pre-tenancy answer whatever headers the caller sends,
-    /// while preserving the fail-closed behaviour when tenancy IS on and the engine
-    /// merely cannot answer (which resolves to
-    /// <see cref="TenantRegionVisibilityMap.Unresolved"/> and prunes).
+    /// byte-for-byte on its pre-tenancy answer whatever headers the caller sends.
+    /// </para>
+    /// <para>
+    /// <b>Tenancy on: the assertion is re-resolved, not trusted.</b> The header is
+    /// a caller-supplied assertion and the bridge that stamps it only checks its
+    /// syntax, so the value is put through
+    /// <see cref="ITenantContextResolver"/> - which the tenancy add-on registers
+    /// alongside the visibility resolver, and which validates the assertion against
+    /// the caller's own membership - and honoured only when what comes back is the
+    /// tenant that was asserted. A refusal (the resolver returns the uninitialised
+    /// "no tenant" value), a mismatch, or a missing resolver all fail closed, so an
+    /// unauthorized assertion can neither enumerate another tenant's actionable
+    /// region set nor probe whether that tenant exists.
+    /// </para>
+    /// <para>
+    /// The warm path stays await-free: <see cref="ITenantContextResolver.TryResolveCurrent"/>
+    /// resolves from the ambient context and a warm membership read, and only a
+    /// membership cache miss falls through to the asynchronous resolution.
+    /// </para>
     /// </remarks>
-    private TenantId? ResolveScopedTenant(out ITenantRegionVisibilityResolver? resolver)
+    private async ValueTask<TenantScopeDecision> ResolveTenantScopeAsync(CancellationToken cancellationToken)
     {
-        resolver = null;
-
         if (!LatticeActiveTenantContext.IsActive)
         {
-            return null;
+            return TenantScopeDecision.Unscoped;
         }
 
         var tenant = LatticeActiveTenantContext.Current;
         if (tenant is not { } asserted || asserted.Value is null || asserted.IsDefault)
         {
-            return null;
+            return TenantScopeDecision.Unscoped;
         }
 
-        var candidate = _services.GetService<ITenantRegionVisibilityResolver>();
-        if (candidate is not { IsActive: true })
+        var visibility = _services.GetService<ITenantRegionVisibilityResolver>();
+        if (visibility is not { IsActive: true })
         {
-            return null;
+            return TenantScopeDecision.Unscoped;
         }
 
-        resolver = candidate;
-        return asserted;
+        // Tenancy is on, so the assertion must be validated. The tenancy add-on
+        // registers both resolvers together; an absent one means a host wired the
+        // visibility resolver without the validating seam, which is not a state in
+        // which an assertion may be honoured.
+        var context = _services.GetService<ITenantContextResolver>();
+        if (context is null)
+        {
+            return TenantScopeDecision.Deny;
+        }
+
+        var resolved = context.TryResolveCurrent(out var warm)
+            ? warm
+            : await context.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+
+        return resolved == asserted
+            ? TenantScopeDecision.Scoped(asserted, visibility)
+            : TenantScopeDecision.Deny;
+    }
+
+    /// <summary>
+    /// The outcome of <see cref="ResolveTenantScopeAsync"/>: unscoped (advertise the
+    /// whole topology), scoped to a validated tenant, or refused (advertise the
+    /// current region alone, unannotated).
+    /// </summary>
+    private readonly record struct TenantScopeDecision(
+        TenantId Tenant,
+        ITenantRegionVisibilityResolver? Resolver,
+        bool Refused)
+    {
+        /// <summary>No tenant is in play; the pre-tenancy answer stands.</summary>
+        public static TenantScopeDecision Unscoped => default;
+
+        /// <summary>The assertion did not validate; fail closed.</summary>
+        public static TenantScopeDecision Deny => new(default, null, true);
+
+        /// <summary>The assertion validated; scope to it.</summary>
+        public static TenantScopeDecision Scoped(
+            TenantId tenant, ITenantRegionVisibilityResolver resolver) => new(tenant, resolver, false);
+
+        /// <summary><see langword="true"/> when the call is not tenant-scoped at all.</summary>
+        public bool IsUnscoped => Resolver is null && !Refused;
     }
 
     /// <summary>

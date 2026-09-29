@@ -107,7 +107,7 @@ public sealed class RwSet : ICrdt<RwSet>
             foreach (var (key, dots) in Adds)
             {
                 if (dots.Count == 0) continue;
-                if (noRemoves || LiveRemoveCount(key) == 0) return false;
+                if (noRemoves || !HasLiveRemove(key)) return false;
             }
             return true;
         }
@@ -251,7 +251,7 @@ public sealed class RwSet : ICrdt<RwSet>
         foreach (var (key, dots) in Adds)
         {
             if (dots.Count == 0) continue;
-            if (noRemoves || LiveRemoveCount(key) == 0) live.Add(key);
+            if (noRemoves || !HasLiveRemove(key)) live.Add(key);
         }
         live.Sort(StringComparer.Ordinal);
         foreach (var key in live)
@@ -272,10 +272,51 @@ public sealed class RwSet : ICrdt<RwSet>
             foreach (var (key, dots) in Adds)
             {
                 if (dots.Count == 0) continue;
-                if (noRemoves || LiveRemoveCount(key) == 0) n++;
+                if (noRemoves || !HasLiveRemove(key)) n++;
             }
             return n;
         }
+    }
+
+    /// <summary>
+    /// The eager counterpart to <see cref="Elements"/>: the identical
+    /// deterministic projection, materialised once into an exactly-sized array
+    /// after a <em>single</em> survivor scan.
+    /// <para>
+    /// Prefer this over <c>set.Elements().ToArray()</c> or
+    /// <c>[.. set.Elements()]</c> on a read path that materialises the whole
+    /// set. <see cref="Elements"/> is a <c>yield return</c> iterator, so it
+    /// hides its element count from the materialiser: the builder cannot size
+    /// the destination, and instead fills a chain of segments and copies the
+    /// whole projection once more into the final array - on top of the iterator
+    /// state machine itself. Presizing from <see cref="Count"/> instead would be
+    /// no better, because <see cref="Count"/> re-runs the very same survivor
+    /// scan, so the whole remove/tombstone probe would be paid twice. This form
+    /// pays neither: one scan, one exactly-sized destination.
+    /// </para>
+    /// </summary>
+    internal byte[][] SnapshotElements()
+    {
+        if (Adds.Count == 0) return Array.Empty<byte[]>();
+
+        // No element has ever been removed: every add-carrying key is live, so
+        // skip the per-key remove/tombstone probe when collecting survivors.
+        var noRemoves = Removes.Count == 0;
+        var live = new List<string>(Adds.Count);
+        foreach (var (key, dots) in Adds)
+        {
+            if (dots.Count == 0) continue;
+            if (noRemoves || !HasLiveRemove(key)) live.Add(key);
+        }
+        if (live.Count == 0) return Array.Empty<byte[]>();
+
+        live.Sort(StringComparer.Ordinal);
+        var values = new byte[live.Count][];
+        for (var i = 0; i < live.Count; i++)
+        {
+            values[i] = Convert.FromBase64String(live[i]);
+        }
+        return values;
     }
 
     /// <summary>
@@ -357,15 +398,20 @@ public sealed class RwSet : ICrdt<RwSet>
         {
             Tombstones.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(key, out tomb);
         }
-        return LiveDotCount(removeDots, tomb) == 0;
+        return !HasLiveDot(removeDots, tomb);
     }
 
-    private int LiveRemoveCount(string key)
+    /// <summary>
+    /// Whether <paramref name="key"/> carries a remove dot no observed-add
+    /// tombstone cancels. Every caller consumes a boolean, so the walk stops at
+    /// the first survivor rather than counting them all.
+    /// </summary>
+    private bool HasLiveRemove(string key)
     {
-        if (Removes.Count == 0) return 0;
-        if (!Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return 0;
+        if (Removes.Count == 0) return false;
+        if (!Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return false;
         Tombstones.TryGetValue(key, out var tomb);
-        return LiveDotCount(removeDots, tomb);
+        return HasLiveDot(removeDots, tomb);
     }
 
     private static void AddObservedTombstones(List<OrSetDot> tomb, List<OrSetDot> observed)
@@ -387,20 +433,26 @@ public sealed class RwSet : ICrdt<RwSet>
     /// mutation and merge makes the fix self-healing: a set written by an older
     /// build collapses the first time any state or delta merges into it.
     /// </para>
+    /// <para>
+    /// Each map is swept independently. Compaction of one element's dot list
+    /// depends on nothing but that list, so grouping an add list with its remove
+    /// and tombstone lists bought nothing: it cost two hash probes for every add
+    /// key and a third for every remove key - over base64 element keys, so full
+    /// string hashes - and then compacted remove and tombstone lists that the
+    /// sweeps below compact anyway. This runs on every mutation and merge, so
+    /// those probes were paid per element on the replication fold path.
+    /// </para>
     /// </summary>
-    private void Compact()
+    internal void Compact()
     {
-        foreach (var (key, addDots) in Adds)
+        foreach (var dots in Adds.Values)
         {
-            Removes.TryGetValue(key, out var removeDots);
-            Tombstones.TryGetValue(key, out var tomb);
-            CompactSlot(addDots, removeDots, tomb);
+            OrSetDotCompaction.CompactMaxPerReplica(dots);
         }
 
-        foreach (var (key, removeDots) in Removes)
+        foreach (var dots in Removes.Values)
         {
-            Tombstones.TryGetValue(key, out var tomb);
-            CompactSlot(null, removeDots, tomb);
+            OrSetDotCompaction.CompactMaxPerReplica(dots);
         }
 
         foreach (var dots in Tombstones.Values)
@@ -416,8 +468,14 @@ public sealed class RwSet : ICrdt<RwSet>
         if (tomb is not null) OrSetDotCompaction.CompactMaxPerReplica(tomb);
     }
 
-    private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
-        => tomb is null ? dots.Count : OrSetDotCompaction.CountLive(dots, tomb);
+    /// <summary>
+    /// Whether <paramref name="dots"/> holds at least one dot that
+    /// <paramref name="tomb"/> does not cancel. Asking "any" rather than "how
+    /// many" is a free early exit for callers that only consume a boolean,
+    /// which is all of them here.
+    /// </summary>
+    private static bool HasLiveDot(List<OrSetDot> dots, List<OrSetDot>? tomb)
+        => tomb is null ? dots.Count > 0 : OrSetDotCompaction.AnyLive(dots, tomb);
 
     private static void MergeMap(Dictionary<string, List<OrSetDot>> target, Dictionary<string, List<OrSetDot>> source)
     {

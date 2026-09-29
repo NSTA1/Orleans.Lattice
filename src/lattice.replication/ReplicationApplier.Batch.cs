@@ -546,32 +546,8 @@ internal sealed partial class ReplicationApplier
     /// peer to attribute. The recording is best-effort and never
     /// throws into the apply pipeline.
     /// </summary>
-    private void RecordInboundContact(WalRecord representative, bool success)
-    {
-        if (_peerStats is null)
-        {
-            return;
-        }
-        if (string.IsNullOrEmpty(representative.OriginClusterId)
-            || string.IsNullOrEmpty(representative.TreeId))
-        {
-            return;
-        }
-        var resolved = options.Get(representative.TreeId);
-        if (string.Equals(representative.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
-        {
-            // Local-origin defence path - no inbound peer to attribute.
-            return;
-        }
-        if (success)
-        {
-            _peerStats.RecordInboundSuccess(representative.TreeId, representative.OriginClusterId!);
-        }
-        else
-        {
-            _peerStats.RecordInboundError(representative.TreeId, representative.OriginClusterId!);
-        }
-    }
+    private void RecordInboundContact(WalRecord representative, bool success) =>
+        ReplicationInboundContact.Record(_peerStats, options, representative, success);
 
     /// <summary>
     /// Applies a contiguous run of entries that share the same

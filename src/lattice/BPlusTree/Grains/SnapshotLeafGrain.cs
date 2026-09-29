@@ -491,6 +491,11 @@ internal sealed class SnapshotLeafGrain(
     /// <inheritdoc />
     public Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
+
         EnsureOpened();
         if (limit <= 0)
             return Task.FromResult(new List<string>());
@@ -513,7 +518,7 @@ internal sealed class SnapshotLeafGrain(
             }
             if (value.IsTombstone || value.IsExpired(nowTicks))
                 continue;
-            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred, predicateFastPath))
                 continue;
             // Drop donor orphans: a key the pinned snapshot map no longer
             // routes to this shard was migrated to a sibling shard by an
@@ -541,6 +546,11 @@ internal sealed class SnapshotLeafGrain(
     /// <inheritdoc />
     public Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
+
         EnsureOpened();
         if (limit <= 0)
             return Task.FromResult(new List<KeyValuePair<string, byte[]>>());
@@ -560,7 +570,7 @@ internal sealed class SnapshotLeafGrain(
                 continue;
             if (value.Value is null)
                 continue;
-            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred, predicateFastPath))
                 continue;
             // Drop donor orphans: see GetKeysAsync. Doing this in the leaf
             // (before the value is reduced to bytes) is load-bearing -
@@ -586,6 +596,11 @@ internal sealed class SnapshotLeafGrain(
     /// <inheritdoc />
     public Task<List<LwwEntry>> GetRawEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false)
     {
+        // Fast-path eligibility is a property of the predicate tree alone, so it
+        // is loop-invariant across every row this call folds. Resolve it once
+        // here rather than let each row re-walk the whole tree to rediscover it.
+        var predicateFastPath = predicate is not null && LatticePredicateEvaluator.IsFastPathEligible(predicate.Value);
+
         EnsureOpened();
         if (limit <= 0)
             return Task.FromResult(new List<LwwEntry>());
@@ -605,7 +620,7 @@ internal sealed class SnapshotLeafGrain(
                 continue;
             if (value.Value is null)
                 continue;
-            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred, predicateFastPath))
                 continue;
             // Drop donor orphans: see GetEntriesAsync. The full LWW envelope
             // (HLC, expiry, origin, version vector) is preserved verbatim so the

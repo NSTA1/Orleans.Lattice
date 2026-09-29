@@ -44,16 +44,16 @@ public interface ISnapshotProvider
     /// <b>Entry ordering and resume semantics.</b> Implementations are
     /// not required to emit entries in <see cref="SnapshotEntry.Timestamp"/>
     /// order - the default <c>LatticeSnapshotProvider</c> emits in
-    /// leaf-chain enumeration order. Receivers that resume a partial
-    /// drain by passing a non-<see cref="HybridLogicalClock.Zero"/>
-    /// <paramref name="asOfHlc"/> as a resume hint must therefore
-    /// treat the call as <i>"return every live entry whose timestamp is
-    /// ≤ asOfHlc, in any order"</i> - overlap with previously-applied
-    /// entries is the receiver's job to dedupe (the per-origin
-    /// high-water-mark dedupe in
-    /// <c>IReplicationApplier</c> makes any re-applied entry a no-op).
-    /// Implementations that can stream in HLC order are encouraged to
-    /// do so, since it tightens the resume cursor's effectiveness.
+    /// leaf-chain enumeration order. A non-<see cref="HybridLogicalClock.Zero"/>
+    /// <paramref name="asOfHlc"/> is therefore <i>not</i> a resume point:
+    /// the call returns every live entry whose timestamp is
+    /// ≤ asOfHlc, in any order, and excludes the rest. A receiver
+    /// resuming a partial drain must re-export with
+    /// <see cref="HybridLogicalClock.Zero"/> (as the bootstrap coordinator
+    /// does) and dedupe the overlap with previously-applied entries itself
+    /// - per-key LWW reconciliation on the receiver makes any re-applied
+    /// entry a no-op. Passing the highest applied timestamp as a resume
+    /// hint would silently drop every not-yet-applied entry stamped above it.
     /// </para>
     /// </summary>
     /// <param name="treeName">

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -115,9 +116,16 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (adds.TryGetValue(key, out var addDots))
             {
-                for (var i = 0; i < addDots.Count; i++)
+                // Span walk - see the type remarks on the OR-set twin. The loop
+                // appends only to result, so the scanned list's length cannot
+                // change while the span is alive. The element is copied rather
+                // than held by reference: the body calls into result.Add, and a
+                // byref into the span held live across a call is pinned to a
+                // GC-tracked stack slot, which measured dearer than the copy.
+                var addSpan = CollectionsMarshal.AsSpan(addDots);
+                for (var i = 0; i < addSpan.Length; i++)
                 {
-                    var dot = addDots[i];
+                    var dot = addSpan[i];
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -131,9 +139,10 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
 
             if (removes.TryGetValue(key, out var removeDots))
             {
-                for (var i = 0; i < removeDots.Count; i++)
+                var removeSpan = CollectionsMarshal.AsSpan(removeDots);
+                for (var i = 0; i < removeSpan.Length; i++)
                 {
-                    var dot = removeDots[i];
+                    var dot = removeSpan[i];
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -185,14 +194,16 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
             // Remove-wins: the element is present only when no remove dot
             // survives (every remove dot has been cancelled by an observed-add
             // tombstone).
-            if (LiveRemoveCount(set, key) != 0) continue;
+            if (HasLiveRemove(set, key)) continue;
 
             var bestReplica = string.Empty;
             var bestCounter = long.MinValue;
             var hasLive = false;
-            for (var i = 0; i < addDots.Count; i++)
+            // Span walk: the selection body only reads.
+            var addSpan = CollectionsMarshal.AsSpan(addDots);
+            for (var i = 0; i < addSpan.Length; i++)
             {
-                var dot = addDots[i];
+                ref readonly var dot = ref addSpan[i];
                 if (!hasLive
                     || dot.Counter > bestCounter
                     || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
@@ -215,18 +226,103 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
         return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
     }
 
-    private static int LiveRemoveCount(RwSet set, string key)
+    /// <summary>
+    /// Whether any of <paramref name="key"/>'s remove dots survives its
+    /// observed-add tombstones - the remove-wins exclusion test.
+    /// <para>
+    /// Cancellation is coverage-based, not exact-match: a remove dot is
+    /// cancelled when the same replica tombstoned any counter at or above it.
+    /// So when an element's tombstones all carry one replica id - which is what
+    /// they overwhelmingly do - the whole list collapses to that replica's
+    /// highest counter and the per-dot test becomes a single comparison,
+    /// reducing the element from O(removes x tombstones) to O(T + R) with no
+    /// allocation. An element whose tombstones span several replicas, or whose
+    /// list is short, keeps the scan. The shared-replica check is a
+    /// <b>precondition</b>: a counter-only test would wrongly cancel a remove
+    /// dot on replica B whose counter equals a tombstoned counter on replica A.
+    /// </para>
+    /// <para>
+    /// The caller only asks whether any remove survives, so the walk stops at
+    /// the first one rather than counting them all.
+    /// </para>
+    /// </summary>
+    private static bool HasLiveRemove(RwSet set, string key)
     {
-        if (!set.Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return 0;
+        if (!set.Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return false;
         set.Tombstones.TryGetValue(key, out var tomb);
-        if (tomb is null || tomb.Count == 0) return removeDots.Count;
-        var live = 0;
-        for (var i = 0; i < removeDots.Count; i++)
+        if (tomb is null || tomb.Count == 0) return true;
+
+        string? sharedReplica = null;
+        var coverCounter = long.MinValue;
+        // Span walk: the coverage test only reads, so neither scanned list's
+        // length changes while a span over it is alive.
+        var removeSpan = CollectionsMarshal.AsSpan(removeDots);
+        if (tomb.Count > TombstoneIndexThreshold && removeSpan.Length > 1)
         {
-            var dot = removeDots[i];
-            if (!OrSetDotCompaction.Covers(tomb, in dot)) live++;
+            sharedReplica = SingleReplica(tomb);
+            if (sharedReplica is not null)
+            {
+                // Span walk: the gate above guarantees this list is longer than
+                // TombstoneIndexThreshold, and the body only reads.
+                var tombSpan = CollectionsMarshal.AsSpan(tomb);
+                for (var i = 0; i < tombSpan.Length; i++)
+                {
+                    var counter = tombSpan[i].Counter;
+                    if (counter > coverCounter) coverCounter = counter;
+                }
+            }
         }
-        return live;
+
+        for (var i = 0; i < removeSpan.Length; i++)
+        {
+            // Copied, not held by reference: the body can call into Covers, and
+            // a byref into the span live across a call is pinned to a
+            // GC-tracked stack slot.
+            var dot = removeSpan[i];
+            var covered = sharedReplica is not null
+                ? dot.Counter <= coverCounter
+                    && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
+                : OrSetDotCompaction.Covers(tomb, in dot);
+            if (!covered) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Tombstone-list length above which the remove-wins test switches from a
+    /// linear coverage scan to the collapsed replica-plus-highest-counter test.
+    /// Below it the scan wins: the precondition pass has a fixed cost that a
+    /// handful of counter-first comparisons does not repay.
+    /// </summary>
+    private const int TombstoneIndexThreshold = 8;
+
+    /// <summary>
+    /// The single replica id every dot in <paramref name="dots"/> carries, or
+    /// <see langword="null"/> when the list spans more than one replica (or is
+    /// empty). One pass, comparing ordinally and short-circuiting on the
+    /// reference the list overwhelmingly repeats.
+    /// </summary>
+    private static string? SingleReplica(List<OrSetDot> dots)
+    {
+        if (dots.Count == 0) return null;
+        // Span walk - see the OrSet decoder's twin for the rationale. Callers
+        // gate this on a list longer than TombstoneIndexThreshold, and the body
+        // only reads, so the length cannot change while the span is alive.
+        var span = CollectionsMarshal.AsSpan(dots);
+        var first = span[0].ReplicaId;
+        for (var i = 1; i < span.Length; i++)
+        {
+            ref readonly var dot = ref span[i];
+            var candidate = dot.ReplicaId;
+            if (!ReferenceEquals(candidate, first)
+                && !string.Equals(candidate, first, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return first;
     }
 
     private static void EmitDots(

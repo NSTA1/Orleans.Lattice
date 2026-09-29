@@ -439,6 +439,7 @@ else {
 		_Skip -Name 'compose set on the real path (divergent arm)' -Why 'docker compose is not available on this host'
 		_Skip -Name 'compose set on the real path (reordered arm)' -Why 'docker compose is not available on this host'
 		_Skip -Name 'compose set on the real path (absent-label arm)' -Why 'docker compose is not available on this host'
+		_Skip -Name 'acknowledged multi-variable step on the real path (#3598)' -Why 'docker compose is not available on this host'
 	}
 }
 
@@ -768,11 +769,335 @@ if ($dockerUsable) {
 		_Assert -Name 'REAL PATH: the label ALONE changes the outcome (4 arms, 2 distinct codes)' `
 			-Condition (@($composeExits).Count -eq 4 -and @($composeExits | Sort-Object -Unique).Count -eq 2) `
 			-Detail "exits [$($composeExits -join ', ')] - identical codes would mean the label is not being read"
+
+		# -------------------------------------------------------------------
+		# #3598 ON THE REAL PATH. The declaration RESOLVES here, so the old
+		# script-scope `$reason = ''` stayed empty and blanked -Reason outright:
+		# the acknowledgement was refused as "passed without -Reason". This is
+		# the exact D9 reading. The daemon-free section further down covers the
+		# Unreadable arm, where the same alias recorded the wrong text instead.
+		#
+		# The baseline differs from $effective in TWO attribution keys - the two
+		# that were live through D1-D8 when D9 tripped on them - so the current
+		# run agrees with its own declaration and only the step is multi-variable.
+		# -------------------------------------------------------------------
+		$ackBaselineDirectory = Join-Path $scratch 'ack-baseline'
+		New-Item -ItemType Directory -Path $ackBaselineDirectory -Force | Out-Null
+		$ackBaselinePath = Join-Path $ackBaselineDirectory 'baseline.manifest'
+		$ackBaselineReading = $effective.Clone()
+		$ackBaselineReading['EMBED_INTRA_THREADS'] = '12'
+		$ackBaselineReading['embedder.cpus'] = '12'
+
+		# The baseline is written through an empty compose directory, which is
+		# Unreadable without touching docker. Only its EFFECTIVE half is compared.
+		& $assert -ComposeDirectory $ackBaselineDirectory -ManifestPath $ackBaselinePath `
+			-Label 'ack-baseline' -EffectiveReading $ackBaselineReading -CgroupCpuQuota 6 -Quiet *>&1 | Out-Null
+
+		$ackUnacknowledgedPath = Join-Path $scratch 'ack-unacknowledged.manifest'
+		& $assert -ComposeDirectory $envDirectory -ManifestPath $ackUnacknowledgedPath -BaselinePath $ackBaselinePath `
+			-Label 'ack-unacknowledged' -EffectiveReading $effective -CgroupCpuQuota 6 -Quiet *>&1 | Out-Null
+		$ackUnacknowledgedExit = $LASTEXITCODE
+
+		_Assert -Name 'REAL PATH #3598: CONTROL - the pair is a genuine multi-variable step (exit 2)' `
+			-Condition ($ackUnacknowledgedExit -eq 2) `
+			-Detail "got exit $ackUnacknowledgedExit - the acknowledgement arm proves nothing unless this refuses"
+
+		$ackToken = 'real-path-3598-acknowledgement'
+		$ackPath = Join-Path $scratch 'ack-acknowledged.manifest'
+		$ackOutput = & $assert -ComposeDirectory $envDirectory -ManifestPath $ackPath -BaselinePath $ackBaselinePath `
+			-Label 'ack-acknowledged' -EffectiveReading $effective -CgroupCpuQuota 6 `
+			-AcceptMultipleDeltas -Reason $ackToken *>&1 | Out-String
+		$ackExit = $LASTEXITCODE
+
+		_Assert -Name 'REAL PATH #3598: -AcceptMultipleDeltas -Reason is ACCEPTED (exit 0)' `
+			-Condition ($ackExit -eq 0) `
+			-Detail "got exit $ackExit - the -Reason parameter did not survive to the acknowledgement check"
+
+		_Assert -Name 'REAL PATH #3598: the "passed without -Reason" refusal is NOT raised' `
+			-Condition ($ackOutput -notmatch 'passed without -Reason') `
+			-Detail 'the script-scope local is aliasing -Reason again'
+
+		$ackText = if (Test-Path -LiteralPath $ackPath) { [IO.File]::ReadAllText($ackPath) } else { '' }
+
+		_Assert -Name "REAL PATH #3598: the manifest records the caller's reason VERBATIM" `
+			-Condition ($ackText -match ('(?m)^# ACKNOWLEDGED MULTI-VARIABLE STEP: ' + [regex]::Escape($ackToken) + '\r?$')) `
+			-Detail 'no acknowledgement line carrying exactly the supplied -Reason'
+
+		# The arm is only about the resolved path if the declaration resolved.
+		$ackStatus = if ($ackText) { (Read-DeployManifest -Text $ackText).DeclarationStatus } else { '<no manifest>' }
+
+		_Assert -Name 'REAL PATH #3598: this arm ran with the declaration RESOLVED (Available)' `
+			-Condition ($ackStatus -eq 'Available') `
+			-Detail "got '$ackStatus' - the arm would be exercising the Unreadable path instead"
 	}
 	finally {
 		Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 	}
 }
+
+
+# ---------------------------------------------------------------------------
+_Section 'ACKNOWLEDGED MULTI-VARIABLE STEP (#3598 - -Reason must reach the manifest)'
+# ---------------------------------------------------------------------------
+
+# WHAT #3598 WAS. Assert-DeployManifest.ps1 assigned `$reason = ''` in script
+# scope as the [ref] out-parameter for Get-DeclaredReading. PowerShell variable
+# names are case-insensitive, so that line WAS the -Reason parameter. When the
+# declaration resolved it stayed empty, and `-AcceptMultipleDeltas -Reason` was
+# refused as though no reason had been given; when the declaration failed, the
+# FAILURE TEXT was recorded as the acknowledgement. Either way the manifest could
+# never carry the operator's reason.
+#
+# DAEMON-FREE. The compose directory is empty, so Get-DeclaredReading fails on
+# its first file check and never invokes docker. That is precisely the arm where
+# the alias wrote the wrong text, and it runs on every host. The resolved arm,
+# which reproduces the D9 refusal itself, lives in the REAL ACQUISITION section.
+
+$ackScratch = Join-Path ([IO.Path]::GetTempPath()) ("deploymanifest-ack-" + [Guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $ackScratch -Force | Out-Null
+
+try {
+	$ackEmptyCompose = Join-Path $ackScratch 'no-compose'
+	New-Item -ItemType Directory -Path $ackEmptyCompose -Force | Out-Null
+
+	$ackWas = @{
+		'LATTICE_WAL_MAX_CONCURRENT_REPLAYS' = '0'
+		'DOTNET_GCHeapCount'                 = '6'
+		'DOTNET_gcServer'                    = '1'
+		'EMBED_INTRA_THREADS'                = '4'
+		'repocontext.cpus'                   = '6'
+		'repocontext.mem_limit'              = '12288m'
+		'embedder.cpus'                      = '4'
+		'embedder.mem_limit'                 = '5120m'
+	}
+
+	# Two attribution-relevant variables moved: a multi-variable step.
+	$ackNow = $ackWas.Clone()
+	$ackNow['EMBED_INTRA_THREADS'] = '12'
+	$ackNow['embedder.cpus'] = '12'
+
+	$ackBaseline = Join-Path $ackScratch 'baseline.manifest'
+	& $assert -ComposeDirectory $ackEmptyCompose -ManifestPath $ackBaseline `
+		-Label 'ack-baseline' -EffectiveReading $ackWas -CgroupCpuQuota 6 -Quiet *>&1 | Out-Null
+	$ackBaselineExit = $LASTEXITCODE
+
+	_Assert -Name '#3598: PRECONDITION - the baseline is written and accepted' `
+		-Condition ($ackBaselineExit -eq 0 -and (Test-Path -LiteralPath $ackBaseline)) `
+		-Detail "got exit $ackBaselineExit"
+
+	# CONTROL 1. Without the acknowledgement the pair must be refused, or the arm
+	# below would pass on a single-variable step that needs no acknowledgement.
+	$ackRefusedOutput = & $assert -ComposeDirectory $ackEmptyCompose `
+		-ManifestPath (Join-Path $ackScratch 'unacknowledged.manifest') -BaselinePath $ackBaseline `
+		-Label 'ack-unacknowledged' -EffectiveReading $ackNow -CgroupCpuQuota 6 -Quiet *>&1 | Out-String
+	$ackRefusedExit = $LASTEXITCODE
+
+	_Assert -Name '#3598: CONTROL - the pair is a genuine multi-variable step (exit 2)' `
+		-Condition ($ackRefusedExit -eq 2) `
+		-Detail "got exit $ackRefusedExit"
+
+	# CONTROL 2. The refusal the fix must NOT produce, shown to be detectable by
+	# this harness. An absence of that text proves nothing unless its presence
+	# can be seen.
+	$ackNoReasonOutput = & $assert -ComposeDirectory $ackEmptyCompose `
+		-ManifestPath (Join-Path $ackScratch 'no-reason.manifest') -BaselinePath $ackBaseline `
+		-Label 'ack-no-reason' -EffectiveReading $ackNow -CgroupCpuQuota 6 `
+		-AcceptMultipleDeltas -Quiet *>&1 | Out-String
+	$ackNoReasonExit = $LASTEXITCODE
+
+	_Assert -Name '#3598: CONTROL - -AcceptMultipleDeltas with NO -Reason is refused (exit 2)' `
+		-Condition ($ackNoReasonExit -eq 2 -and $ackNoReasonOutput -match 'passed without -Reason') `
+		-Detail "got exit $ackNoReasonExit"
+
+	_Assert -Name '#3598: CONTROL - the unacknowledged refusal does not claim a missing -Reason' `
+		-Condition ($ackRefusedOutput -notmatch 'passed without -Reason') `
+		-Detail 'the two refusals must be distinguishable, or the arm below cannot tell them apart'
+
+	# THE ASSERTION #3598 IS ABOUT.
+	$ackToken = 'daemon-free-3598-acknowledgement'
+	$ackAcceptedPath = Join-Path $ackScratch 'acknowledged.manifest'
+	$ackAcceptedOutput = & $assert -ComposeDirectory $ackEmptyCompose `
+		-ManifestPath $ackAcceptedPath -BaselinePath $ackBaseline `
+		-Label 'ack-acknowledged' -EffectiveReading $ackNow -CgroupCpuQuota 6 `
+		-AcceptMultipleDeltas -Reason $ackToken *>&1 | Out-String
+	$ackAcceptedExit = $LASTEXITCODE
+
+	_Assert -Name '#3598: -AcceptMultipleDeltas -Reason is ACCEPTED (exit 0)' `
+		-Condition ($ackAcceptedExit -eq 0) `
+		-Detail "got exit $ackAcceptedExit"
+
+	_Assert -Name '#3598: the "passed without -Reason" refusal is NOT raised' `
+		-Condition ($ackAcceptedOutput -notmatch 'passed without -Reason') `
+		-Detail 'a script-scope local is aliasing -Reason'
+
+	_Assert -Name "#3598: the console ACKNOWLEDGED line carries the caller's reason" `
+		-Condition ($ackAcceptedOutput -match ('ACKNOWLEDGED multi-variable step: ' + [regex]::Escape($ackToken) + '\r?(\n|$)')) `
+		-Detail 'the acknowledgement printed some other text, or none'
+
+	$ackAcceptedText = if (Test-Path -LiteralPath $ackAcceptedPath) { [IO.File]::ReadAllText($ackAcceptedPath) } else { '' }
+
+	# Exact line, not a substring. Before the fix the manifest DID carry an
+	# acknowledgement line here - holding "compose file ... not found" - so an
+	# assertion that merely looked for the marker would have passed on the defect.
+	_Assert -Name "#3598: the manifest records the caller's reason VERBATIM, not the resolution failure" `
+		-Condition ($ackAcceptedText -match ('(?m)^# ACKNOWLEDGED MULTI-VARIABLE STEP: ' + [regex]::Escape($ackToken) + '\r?$')) `
+		-Detail "acknowledgement lines found: [$((@([regex]::Matches($ackAcceptedText, '(?m)^# ACKNOWLEDGED MULTI-VARIABLE STEP: .*$') | ForEach-Object { $_.Value.Trim() })) -join ' | ')]"
+
+	$ackAcceptedStatus = if ($ackAcceptedText) { (Read-DeployManifest -Text $ackAcceptedText).DeclarationStatus } else { '<no manifest>' }
+
+	# The arm is only about the failure-text alias if the declaration failed.
+	_Assert -Name '#3598: this arm ran with the declaration UNREADABLE' `
+		-Condition ($ackAcceptedStatus -eq 'Unreadable') `
+		-Detail "got '$ackAcceptedStatus'"
+}
+finally {
+	Remove-Item -LiteralPath $ackScratch -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+
+# ---------------------------------------------------------------------------
+_Section 'PARAMETER SHADOWING LINT (#3598 - no local may alias its own parameter)'
+# ---------------------------------------------------------------------------
+
+<#
+	Finds a write to a variable whose name matches one of its scope's own
+	parameters CASE-INSENSITIVELY but not exactly. PowerShell resolves both
+	spellings to the same variable, so such a write is never a local: it
+	overwrites the parameter. #3598 was `$reason = ''` against `-Reason`.
+
+	The case difference is the signal. `$Label = Get-Date` against `-Label` is
+	the idiomatic way to default a parameter and is spelled like one; spelling it
+	differently is what reads as an independent local, which is the belief that
+	made #3598 invisible in review.
+
+	Writes are assignments, foreach iteration variables, and `[ref]` targets. A
+	write belongs to the nearest enclosing script or function body, so a
+	function's local cannot collide with the script's parameter - that is a
+	different scope and a different variable.
+#>
+function _FindParameterShadowing {
+	param([Parameter(Mandatory)] [System.Management.Automation.Language.Ast] $Ast)
+
+	$findings = @()
+	$blocks = @($Ast.FindAll({
+		param($node)
+		$node -is [System.Management.Automation.Language.ScriptBlockAst] -and $null -ne $node.ParamBlock
+	}, $true))
+
+	foreach ($block in $blocks) {
+		$names = @($block.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+		$writes = @()
+
+		foreach ($assignment in $block.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+			$writes += @($assignment.Left.FindAll({ param($node) $node -is [System.Management.Automation.Language.VariableExpressionAst] }, $true))
+		}
+
+		foreach ($loop in $block.FindAll({ param($node) $node -is [System.Management.Automation.Language.ForEachStatementAst] }, $true)) {
+			$writes += $loop.Variable
+		}
+
+		foreach ($convert in $block.FindAll({
+			param($node)
+			$node -is [System.Management.Automation.Language.ConvertExpressionAst] -and $node.Type.TypeName.Name -eq 'ref'
+		}, $true)) {
+			$writes += @($convert.Child.FindAll({ param($node) $node -is [System.Management.Automation.Language.VariableExpressionAst] }, $true))
+		}
+
+		foreach ($write in $writes) {
+			$owner = $write.Parent
+
+			while ($null -ne $owner -and -not (
+				$owner -is [System.Management.Automation.Language.ScriptBlockAst] -and
+				($null -eq $owner.Parent -or $owner.Parent -is [System.Management.Automation.Language.FunctionDefinitionAst]))) {
+				$owner = $owner.Parent
+			}
+
+			if (-not [object]::ReferenceEquals($owner, $block)) {
+				continue
+			}
+
+			$name = $write.VariablePath.UserPath
+
+			foreach ($parameter in $names) {
+				if ($name -ieq $parameter -and $name -cne $parameter) {
+					$findings += ('{0}:{1} ${2} aliases the parameter ${3}' -f `
+						$(if ($write.Extent.File) { Split-Path -Leaf $write.Extent.File } else { '<input>' }),
+						$write.Extent.StartLineNumber, $name, $parameter)
+				}
+			}
+		}
+	}
+
+	return ,$findings
+}
+
+function _LintText {
+	param([Parameter(Mandatory)] [string] $Text)
+	$ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref] $null, [ref] $null)
+	# Assigned first: `return ,(...)` around a function that itself returns `,$array`
+	# double-wraps it, and every Count below would read 1 - the trap _Flatten documents.
+	$found = _FindParameterShadowing -Ast $ast
+	return ,$found
+}
+
+# POSITIVE CONTROLS FIRST. A lint that reports nothing on the real scripts is
+# only evidence if it is shown to report the defect when the defect is there.
+_Assert -Name 'LINT: flags the #3598 shape (script-scope assignment)' `
+	-Condition ((_LintText -Text "param([string] `$Reason)`n`$reason = ''").Count -eq 1)
+
+_Assert -Name 'LINT: flags a [ref] target that aliases a parameter' `
+	-Condition ((_LintText -Text "param([string] `$Reason)`nGet-Thing -Out ([ref] `$REASON)").Count -eq 1)
+
+_Assert -Name 'LINT: flags a foreach variable that aliases a parameter' `
+	-Condition ((_LintText -Text "param([string[]] `$Item)`nforeach (`$item in 1..2) { }").Count -eq 1)
+
+_Assert -Name "LINT: flags the shape inside a function against the FUNCTION's parameter" `
+	-Condition ((_LintText -Text "function f { param(`$Reading) `$reading = 1 }").Count -eq 1)
+
+# NEGATIVE CONTROLS. Each would make the gate unusable if it fired.
+_Assert -Name 'LINT: does NOT flag defaulting a parameter spelled exactly as declared' `
+	-Condition ((_LintText -Text "param([string] `$Label)`nif (-not `$Label) { `$Label = 'x' }").Count -eq 0)
+
+_Assert -Name "LINT: does NOT flag a function's local against the SCRIPT's parameter" `
+	-Condition ((_LintText -Text "param([string] `$Reason)`nfunction f { `$reason = 1 }").Count -eq 0)
+
+_Assert -Name 'LINT: does NOT flag a read of the parameter in another case' `
+	-Condition ((_LintText -Text "param([string] `$Reason)`nWrite-Host `$reason").Count -eq 0)
+
+# PRODUCTION PERTURBATION. The real Assert-DeployManifest.ps1 with the #3598
+# name put back, in memory. This is the production call site, not a fixture, so
+# the lint is shown to catch the defect exactly where it lived.
+$assertText = [IO.File]::ReadAllText($assert)
+
+_Assert -Name 'LINT: PRECONDITION - the fixed out-parameter name is present to perturb' `
+	-Condition ($assertText -match '\$declarationFailure\b') `
+	-Detail 'the perturbation below would be a no-op'
+
+_Assert -Name 'LINT: PERTURBATION - restoring $reason in Assert-DeployManifest.ps1 is flagged' `
+	-Condition ((_LintText -Text ($assertText -replace '\$declarationFailure\b', '$reason')).Count -gt 0)
+
+# THE GATE, with its denominator.
+$lintFiles = @(Get-ChildItem -LiteralPath $here -Filter '*.ps1' -File)
+$lintParamBlocks = 0
+$lintFindings = @()
+
+foreach ($lintFile in $lintFiles) {
+	$lintAst = [System.Management.Automation.Language.Parser]::ParseFile($lintFile.FullName, [ref] $null, [ref] $null)
+	$lintParamBlocks += @($lintAst.FindAll({
+		param($node)
+		$node -is [System.Management.Automation.Language.ScriptBlockAst] -and $null -ne $node.ParamBlock
+	}, $true)).Count
+	$lintFound = _FindParameterShadowing -Ast $lintAst
+	$lintFindings += $lintFound
+}
+
+_Assert -Name 'LINT: the scan covers the deploy scripts, including Assert-DeployManifest.ps1' `
+	-Condition ($lintFiles.Count -ge 10 -and ($lintFiles.Name -contains 'Assert-DeployManifest.ps1') -and $lintParamBlocks -ge 20) `
+	-Detail "files $($lintFiles.Count), param blocks $lintParamBlocks - a shrunk population makes the gate vacuous"
+
+_Assert -Name 'LINT: no deploy script writes a local that aliases one of its own parameters' `
+	-Condition ($lintFindings.Count -eq 0) `
+	-Detail ($lintFindings -join '; ')
 
 
 # ---------------------------------------------------------------------------
