@@ -1,86 +1,78 @@
-# Mutation-test record: #1793 (aria-selected bound to a bool)
+# Mutation-test record: what axe catches, and what it does not
 
-This file records the mutation-test evidence for the accessibility baseline in
-`AccessibilitySweepTests.cs`. It documents, honestly, exactly what axe-core does and
-does not catch for the #1793 regression, and which assertion is the real guard.
+This file records the mutation evidence for the accessibility gate in `Accessibility/`.
+It says honestly what the axe-core sweep catches, what it misses, and which named
+assertion is the real guard for what it misses. Both records were taken against the
+rewritten Explorer (epic #3807) with this suite (issue #3832).
 
-## The regression
+## 1. An ARIA state bound to a C# `bool` - axe does not catch it
 
-#1793: in `src/lattice.explorer/UI/Navigation/AppShell.razor` the home area tab bound
-its selection state with a bare C# `bool`:
+### The mutation
 
-```razor
-aria-selected="@(_activePlugin is null)"
-```
-
-Blazor renders a `bool`-valued attribute as an HTML boolean attribute: when the value is
-`true` the attribute is emitted with no value at all (`aria-selected`), and when `false`
-it is omitted entirely. The ARIA spec defines `aria-selected` as an *enumerated* attribute
-whose only valid tokens are `"true"` and `"false"`, so the active tab reported no valid
-enumerated value. The fix binds an explicit string:
+`src/lattice.explorer/UI/Design/Components/LtButton.razor` renders a toggle's state as
 
 ```razor
-aria-selected="@(_activePlugin is null ? "true" : "false")"
+aria-pressed="@AriaPressed"
 ```
 
-## What the rendered DOM looks like under the mutation
+where `AriaPressed` is the string `"true"` or `"false"` (or no attribute for a button that
+is not a toggle). The mutation binds the `bool?` directly:
 
-With the buggy `bool` binding, the active home tab renders (captured from a live web head):
-
-```html
-<button type="button" role="tab" class="lx-shell-area-tab is-active" aria-selected>Explore</button>
+```razor
+aria-pressed="@Pressed"
 ```
 
-That is, `aria-selected` with **no value**. Read back through the DOM API
-(`getAttribute('aria-selected')`) this is the empty string `""`.
+Blazor renders a `bool`-valued attribute as an HTML boolean attribute: present with no
+value when `true`, absent when `false`. The ARIA specification defines `aria-pressed` as
+an enumerated attribute (`true`, `false`, `mixed`), so every pressed toggle - the
+appearance menu's choices, a segmented filter - then reports no valid state, and every
+unpressed one reports that it is not a toggle at all. This is the same class of defect as
+#1793, which bound `aria-selected` to a `bool` in the retired Explorer.
 
-## Finding: axe-core does NOT catch this
+### The result
 
-Running the axe-core `wcag2a` / `wcag2aa` rule set over the mutated home surface reported
-**zero** critical or serious violations - `Home_surface_has_no_critical_or_serious_wcag_violations`
-still passed. axe's `aria-required-attr` / `aria-valid-attr-value` handling is satisfied by
-the mere presence of `aria-selected` and tolerates the valueless boolean-attribute form, so
-the automated sweep alone would not have caught #1793.
+With the mutation applied, the full axe sweep
+(`AccessibilitySweepTests`, nine areas in eight appearances, plus the signed-out home and
+the sign-in dialog) **passed**: 10 of 10. axe's `aria-valid-attr-value` tolerates the
+valueless form.
 
-This is reported honestly rather than worked around: the brief anticipated this outcome and
-directed that if axe does not flag the mutation, we say so and assert the attribute directly.
-
-## The real guard: a direct enumerated-value assertion
-
-`Every_tab_reports_a_valid_enumerated_aria_selected_value` asserts that every `role="tab"`
-element carries an `aria-selected` attribute whose value is exactly `"true"` or `"false"`.
-This is the assertion that catches #1793.
-
-### Mutation-test output (buggy source)
-
-Recorded when the tab was still bound in `AppShell.razor`. The binding has since
-moved into the design system's single tab primitive, and the test now runs once
-per breakpoint band and reports a per-band count, so a present-day run prints a
-different message. With the `bool` binding restored to `AppShell.razor` line 51,
-the test failed:
+The named assertion **failed**:
 
 ```
-role=tab element at index 0 has aria-selected="", which is not a valid enumerated value.
-A valueless (boolean-attribute) aria-selected renders as null here and is the exact #1793 regression.
-  Assert.That(value, Is.EqualTo("true").Or.EqualTo("false"))
-  But was:  <string.Empty>
-
-Failed!  - Failed: 1, Passed: 0, Skipped: 0, Total: 1
+Failed Every_control_reports_a_valid_enumerated_aria_state
+  The Data area reports ARIA states outside their enumerated tokens.
+  But was: < "aria-pressed="" on <button data-lt-command="appearance.theme.system" ...>System</but",
+             "aria-pressed="" on <button data-lt-command="appearance.contrast.system" ...>System</",
+             "aria-pressed="" on <button data-lt-command="appearance.density.comfortable" ...>Comf",
+             "aria-pressed="" on <button type="button" class="lt-btn lt-btn--quiet" aria-pressed="">All</button>" >
 ```
 
-### On fixed source
+`AccessibilityStructureTests.Every_control_reports_a_valid_enumerated_aria_state` is
+therefore the guard for criterion 6 of `ConformanceChecklist.md`, and the sweep is not.
 
-With the correct string binding, both the axe sweep and the enumerated-value assertion pass.
+## 2. Link ink missing on Board - axe does catch it
+
+This record is a real defect the sweep found, rather than a mutation made to prove it.
+
+When this suite first ran, links in running content (a rule id in the Access table, a tree
+in the Data directory, the address on the not-found page) had no colour of their own and
+fell back to the browser's `#0000ee`, which measures 1.94:1 on Board's chalkboard:
+
+```
+Failed Every_area_primary_page_has_no_serious_violations_in_any_appearance("data")
+  [serious] color-contrast: Elements must meet minimum color contrast ratio thresholds
+    at a[href$="factory-floor"]: Element has insufficient color contrast of 1.94
+    (foreground color: #0000ee, background color: #101613)
+```
+
+The same finding failed Access, Tenancy and Telemetry. The fix gives every such link the
+documentation site's link ink on both materials, at zero specificity
+(`src/lattice.explorer/UI/wwwroot/design/lattice-primitives.css`, section 1), and the sweep
+has been green since. Removing that rule turns the four cases red again.
 
 ## How to reproduce
 
-Every tab strip in the shell - the area rail included - now renders through
-`LatticeAdaptiveTabs`, so the enumerated binding lives there once.
-
-1. In `src/lattice.explorer/DesignSystem/Components/LatticeAdaptiveTabs.razor`, change the
-   binding `aria-selected="@(isActive ? "true" : "false")"` back to the buggy `bool` form
-   `aria-selected="@isActive"`.
+1. Apply the mutation to `LtButton.razor`, or delete the `:where(.lt-viewport) a` rule.
 2. `dotnet build test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release`
-3. `dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release --no-build --filter "FullyQualifiedName~Every_tab_reports_a_valid_enumerated_aria_selected_value"`
-4. Observe a failure at every breakpoint band, reporting the tabs whose `aria-selected` reads as
-   an empty string, then restore the binding and confirm `git diff src/` is clean.
+3. `dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj -c Release --no-build --filter "FullyQualifiedName~Every_control_reports_a_valid_enumerated_aria_state|FullyQualifiedName~AccessibilitySweepTests"`
+4. Restore the source and confirm `git diff src/` is clean.
