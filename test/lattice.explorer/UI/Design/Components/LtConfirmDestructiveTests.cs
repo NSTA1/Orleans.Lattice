@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
@@ -100,6 +101,18 @@ public sealed class LtConfirmDestructiveTests : ShellDesignTestContext
         cut.FindAll(".lt-dialog__actions button")[0].Click();
 
         Assert.That(events, Is.EqualTo(new[] { "open:False" }));
+    }
+
+    [Test]
+    public void A_refused_focus_on_open_leaves_the_confirmation_answering()
+    {
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true)
+            .SetException(new JSException("Unable to focus an invalid element."));
+
+        var cut = RenderConfirm();
+        cut.Find("input").Input(TreeName);
+
+        Assert.That(Confirm(cut).HasAttribute("disabled"), Is.False, "typing the name still arms the confirmation");
     }
 
     [Test]

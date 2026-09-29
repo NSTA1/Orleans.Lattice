@@ -22,6 +22,9 @@ public partial class AppearanceMenu : IDisposable
     [Inject]
     internal ShellAppearance Appearance { get; set; } = default!;
 
+    [Inject]
+    internal ShellChromeInterop Interop { get; set; } = default!;
+
     private string Label => Appearance.Theme switch
     {
         ShellTheme.Paper => "Paper",
@@ -44,7 +47,7 @@ public partial class AppearanceMenu : IDisposable
         if (args.Key == "Escape")
         {
             _open = false;
-            await _toggle.FocusAsync();
+            await Interop.FocusAsync(_toggle);
         }
     }
 

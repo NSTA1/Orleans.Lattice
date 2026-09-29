@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -220,6 +221,30 @@ public sealed class AppearanceTests : ShellChromeTestContext
         panel.KeyDown(new KeyboardEventArgs { Key = "Escape" });
 
         Assert.That(cut.FindAll(".lt-shell-menu"), Is.Empty);
+    }
+
+    [Test]
+    public void Escape_in_the_menu_survives_a_refused_focus()
+    {
+        RefuseEveryFocus();
+        var cut = Render<AppearanceMenu>();
+        cut.Find("button").Click();
+
+        cut.Find(".lt-shell-menu").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+
+        // Still answering: it closed, and it opens again.
+        Assert.That(cut.FindAll(".lt-shell-menu"), Is.Empty);
+        cut.Find("button").Click();
+        Assert.That(cut.FindAll(".lt-shell-menu"), Has.Count.EqualTo(1));
+    }
+
+    // The browser refuses a focus whose element a later render removed. Both routes a
+    // chrome focus can take are refused: Blazor's own, and the chrome module's.
+    private void RefuseEveryFocus()
+    {
+        var refused = new JSException("Unable to focus an invalid element.");
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true).SetException(refused);
+        JSInterop.SetupModule(ShellChromeAssets.ModuleSpecifier).SetupVoid("focusElement", _ => true).SetException(refused);
     }
 
     [Test]

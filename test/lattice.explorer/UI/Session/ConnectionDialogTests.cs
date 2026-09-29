@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Session;
@@ -13,6 +14,19 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Session;
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed class ConnectionDialogTests : SessionTestContext
 {
+    [Test]
+    public void A_refused_first_focus_leaves_the_dialog_answering()
+    {
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true)
+            .SetException(new JSException("Unable to focus an invalid element."));
+
+        var cut = Render<ConnectionDialog>();
+        cut.Find("input.lt-input").Input("not a url");
+        cut.Find("form").Submit();
+
+        Assert.That(cut.Find("input.lt-input").GetAttribute("aria-invalid"), Is.EqualTo("true"));
+    }
+
     [Test]
     public void An_empty_endpoint_is_refused_with_an_announced_error_and_nothing_is_applied()
     {
