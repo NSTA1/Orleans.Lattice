@@ -83,7 +83,11 @@ public sealed class OnyxEmbeddingOptions
     /// Optional per-request timeout applied to the underlying HTTP client. When
     /// <see langword="null"/> the ambient <see cref="System.Net.Http.HttpClient"/>
     /// default is used. A timeout elapsing is a fail-closed failure, not an
-    /// exception surfaced to the caller.
+    /// exception surfaced to the caller. When set it must be strictly positive and
+    /// no longer than <see cref="int.MaxValue"/> milliseconds (about 24.8 days), the
+    /// longest finite timeout <see cref="System.Net.Http.HttpClient"/> accepts, or
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> for no timeout; any
+    /// other value is rejected when the options are resolved.
     /// </summary>
     public TimeSpan? RequestTimeout { get; set; }
 }

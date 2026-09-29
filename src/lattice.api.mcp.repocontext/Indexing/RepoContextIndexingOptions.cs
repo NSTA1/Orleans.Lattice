@@ -625,15 +625,5 @@ internal sealed class RepoContextIndexingOptions
     }
 
     private static TimeSpan ReadSeconds(string key, TimeSpan fallback)
-    {
-        var raw = Environment.GetEnvironmentVariable(key);
-        if (!string.IsNullOrWhiteSpace(raw)
-            && double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-            && seconds >= 0)
-        {
-            return TimeSpan.FromSeconds(seconds);
-        }
-
-        return fallback;
-    }
+        => RepoContextEnvironmentDurations.ReadSeconds(key, fallback, allowZero: true);
 }

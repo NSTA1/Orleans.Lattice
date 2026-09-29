@@ -76,6 +76,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Config - Telemetry request timeout ceiling.** A `RequestTimeout` longer than `HttpClient` accepts (`int.MaxValue` milliseconds) passed validation and then failed every resolution of the backend client. Validation now rejects it, naming the ceiling. ([#3925](https://github.com/NSTA1/Orleans.Lattice/issues/3925)) (`Orleans.Lattice.Api.Telemetry`)
 
+- **Config - Embedding request timeout ceiling.** An `OnyxEmbeddingOptions.RequestTimeout` that `HttpClient` refuses (non-positive, or above `int.MaxValue` milliseconds) made every embedding health probe and embed call throw instead of failing closed. Validation now rejects it. ([#3966](https://github.com/NSTA1/Orleans.Lattice/issues/3966)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Config - Unrepresentable RepoContext durations.** A seconds variable too large for a `TimeSpan`, such as `1e20` or `Infinity`, stopped the host at startup instead of falling back to its default, and a memory archive cadence above about 49.7 days ended the archive loop. It now falls back or clamps. ([#3968](https://github.com/NSTA1/Orleans.Lattice/issues/3968)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Backup - Timings above the timer ceiling.** A `CrossTreeFencePollInterval` or `SinkSharingProbeTimeout` longer than a timer can wait (about 49.7 days) passed validation, then failed every cross-tree capture that had to wait, or blocked silo start. Validation now rejects it. ([#3967](https://github.com/NSTA1/Orleans.Lattice/issues/3967)) (`Orleans.Lattice.Backup`)
+
 - **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)
 
 - **Observability - Logical tree id after an alias.** Mutation observers and the `tree` metric tag keep reporting the logical tree id after a resize, restore or schema remediation moves a tree to a new physical copy, so observers, dashboards and alerts keep their series. ([#3767](https://github.com/NSTA1/Orleans.Lattice/issues/3767), [#3780](https://github.com/NSTA1/Orleans.Lattice/issues/3780)) (`Orleans.Lattice`)
