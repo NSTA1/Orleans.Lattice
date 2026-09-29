@@ -106,7 +106,7 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
-    public async Task UndoResize_during_drain_deletes_destination_tree()
+    public async Task UndoResize_during_drain_discards_destination_tree()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
 
@@ -120,8 +120,11 @@ public partial class TreeResizeGrainTests
 
         await grain.UndoResizeAsync();
 
-        await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/undo-drain")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+        // Discarded rather than deleted (issue #3930), so the destination's
+        // WAL retention is released instead of held for the soft-delete window.
+        var destination = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/undo-drain");
+        await destination.Received(1).DiscardDerivedPhysicalTreeAsync();
+        await destination.DidNotReceive().DeleteDerivedPhysicalTreeAsync();
     }
 
     [Test]
@@ -263,7 +266,7 @@ public partial class TreeResizeGrainTests
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/undo-reject");
         await oldDeletion.DidNotReceive().RecoverPhysicalAsync();
-        await newDeletion.Received().DeleteDerivedPhysicalTreeAsync();
+        await newDeletion.Received().DiscardDerivedPhysicalTreeAsync();
 
         // Alias removed so the logical tree maps back to the old physical tree.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);

@@ -94,6 +94,26 @@ public sealed partial class InternalOriginGuardIntegrationTests
             async () => await grain.PurgeNowAsync());
     }
 
+    [Test]
+    public void TreeDeletion_DiscardDerivedPhysicalTreeAsync_direct_external_call_is_refused()
+    {
+        // A discard releases a tree's WAL retention and makes it unrecoverable,
+        // so it must be reachable only through the resize coordinator's undo.
+        var grain = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>("coord-guard-discard");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await grain.DiscardDerivedPhysicalTreeAsync());
+    }
+
+    [Test]
+    public void TreeDeletion_DiscardIfAbandonedDerivedCopyAsync_direct_external_call_is_refused()
+    {
+        var grain = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>("coord-guard-discard/resized/op");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await grain.DiscardIfAbandonedDerivedCopyAsync());
+    }
+
     // --- Tree resize ---
 
     [Test]
