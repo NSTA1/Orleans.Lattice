@@ -458,12 +458,14 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             CurrentMaxInternalChildren = 32,
             RequestedMaxLeafKeys = 256,
             RequestedMaxInternalChildren = 128,
+            UndoRequested = true,
         });
 
         Assert.Multiple(() =>
         {
             Assert.That(copy.TreeId, Is.EqualTo("orders"));
             Assert.That(copy.InProgress, Is.True);
+            Assert.That(copy.UndoRequested, Is.True);
             Assert.That(copy.CurrentMaxLeafKeys, Is.EqualTo(64));
             Assert.That(copy.CurrentMaxInternalChildren, Is.EqualTo(32));
             Assert.That(copy.RequestedMaxLeafKeys, Is.EqualTo(256));

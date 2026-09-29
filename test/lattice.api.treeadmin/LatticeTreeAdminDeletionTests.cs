@@ -171,6 +171,35 @@ public sealed class LatticeTreeAdminDeletionTests
     }
 
     [Test]
+    public async Task PurgeTreeAsync_accepted_but_still_running_projects_the_purge_progress()
+    {
+        // Issue #3941: a purge that outlasts the verb's bounded wait is reported as
+        // accepted and running, with its shard progress, rather than as a failure.
+        var factory = Substitute.For<IGrainFactory>();
+        var (lattice, deletion) = Wire(factory);
+        deletion.GetDeletionStatusAsync().Returns(new TreeDeletionSnapshot
+        {
+            IsDeleted = true,
+            PurgeInProgress = true,
+            PurgedShardCount = 5,
+            PurgeShardCount = 64,
+        });
+        var facade = Create(factory);
+
+        var status = await facade.PurgeTreeAsync(Tree, confirm: true);
+
+        await lattice.Received(1).PurgeTreeAsync(Arg.Any<CancellationToken>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.PurgeInProgress, Is.True);
+            Assert.That(status.PurgeComplete, Is.False);
+            Assert.That(status.PurgedShardCount, Is.EqualTo(5));
+            Assert.That(status.PurgeShardCount, Is.EqualTo(64));
+            Assert.That(status.CanRecover, Is.False);
+        });
+    }
+
+    [Test]
     public void PurgeTreeAsync_without_confirmation_is_rejected_before_any_authorization_or_dial()
     {
         var factory = Substitute.For<IGrainFactory>();
@@ -220,6 +249,8 @@ public sealed class LatticeTreeAdminDeletionTests
             RecoveryDeadlineUtc = deletedAt.AddHours(1),
             PurgeInProgress = true,
             PurgeComplete = false,
+            PurgedShardCount = 2,
+            PurgeShardCount = 8,
         });
         var facade = Create(factory);
 
@@ -232,6 +263,8 @@ public sealed class LatticeTreeAdminDeletionTests
             Assert.That(status.TreeId, Is.EqualTo(Tree));
             Assert.That(status.IsDeleted, Is.True);
             Assert.That(status.PurgeInProgress, Is.True);
+            Assert.That(status.PurgedShardCount, Is.EqualTo(2));
+            Assert.That(status.PurgeShardCount, Is.EqualTo(8));
             // A purge in progress means the tree can no longer be recovered.
             Assert.That(status.CanRecover, Is.False);
         });

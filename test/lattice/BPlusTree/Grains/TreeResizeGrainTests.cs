@@ -23,7 +23,8 @@ public partial class TreeResizeGrainTests
                      IOptionsMonitor<LatticeOptions> optionsMonitor) CreateGrain(
         LatticeOptions? options = null,
         FakePersistentState<TreeResizeState>? existingState = null,
-        IServiceProvider? activationServices = null)
+        IServiceProvider? activationServices = null,
+        FakePersistentState<TreeResizeUndoState>? undoState = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("resize", TreeId));
@@ -52,7 +53,8 @@ public partial class TreeResizeGrainTests
         var grain = new TreeResizeGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeResizeGrain>(),
-            Substitute.For<ITagIndexReconcileTrigger>(), state);
+            Substitute.For<ITagIndexReconcileTrigger>(), state,
+            undoState ?? new FakePersistentState<TreeResizeUndoState>());
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 
@@ -173,12 +175,13 @@ public partial class TreeResizeGrainTests
         state.State.Phase = ResizePhase.Snapshot;
         state.State.OldPhysicalTreeId = TreeId;
         state.State.SnapshotTreeId = $"{TreeId}/resized/op1";
+        var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        snapshot.RunSnapshotSliceAsync().Returns(true);
 
         await grain.WaitForSnapshotAsync();
 
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
-        await grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId)
-            .Received(1).RunSnapshotPassAsync();
+        await snapshot.Received(1).RunSnapshotSliceAsync();
     }
 
     // --- SwapAliasAsync ---
@@ -291,6 +294,7 @@ public partial class TreeResizeGrainTests
         state.State.ShardCount = ShardCount;
         state.State.SnapshotTreeId = $"{TreeId}/resized/full-pass";
         state.State.OldPhysicalTreeId = TreeId;
+        grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId).RunSnapshotSliceAsync().Returns(true);
 
         // Snapshot phase
         await grain.ProcessNextPhaseAsync();
@@ -337,9 +341,10 @@ public partial class TreeResizeGrainTests
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.Received(1).RemoveAliasAsync(TreeId);
 
-        // Deleted new tree.
-        await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/op1")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+        // Discarded new tree (issue #3930): released, not merely deleted.
+        var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/op1");
+        await newDeletion.Received(1).DiscardDerivedPhysicalTreeAsync();
+        await newDeletion.DidNotReceive().DeleteDerivedPhysicalTreeAsync();
 
         // Restored old config.
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
@@ -379,11 +384,12 @@ public partial class TreeResizeGrainTests
         var (grain, state, reminderRegistry, grainFactory, _) =
             CreateGrain(existingState: existingState);
         SetupKeepalive(reminderRegistry);
+        var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        snapshot.RunSnapshotSliceAsync().Returns(true);
 
         await grain.ProcessNextPhaseAsync();
 
-        await grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId)
-            .Received(1).RunSnapshotPassAsync();
+        await snapshot.Received(1).RunSnapshotSliceAsync();
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
     }
 

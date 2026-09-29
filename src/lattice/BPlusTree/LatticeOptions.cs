@@ -2343,6 +2343,17 @@ public class LatticeOptions
     /// CPU-bound path (issue #2816). An unreadable or unlimited quota is treated
     /// as unknown and imposes no constraint. Set to a positive value to pin the
     /// ceiling explicitly; an explicit value always wins over both figures.
+    /// <para>
+    /// The derived value is an initial guess sized from CPU. When replays are
+    /// bound on the grain store instead, which serialises its writes, more
+    /// permits do not finish more replays per second: they lengthen every hold,
+    /// and a long hold is what makes the replay admission gate refuse work.
+    /// Tune this to the store's write parallelism on such a deployment. Read
+    /// <c>orleans.lattice.wal.replay.permit_hold</c> against the service rate on
+    /// <c>orleans.lattice.wal.replay.permits_served</c>: if the hold time grows
+    /// with this ceiling while the service rate does not, lower it (issue
+    /// #3921).
+    /// </para>
     /// </summary>
     public int WalMaterialiserMaxConcurrentReplays { get; set; } = DefaultWalMaterialiserMaxConcurrentReplays;
 

@@ -42,7 +42,7 @@ Resize runs **online**: reads and writes remain available throughout. A whole-tr
 
 1. **Provision destination** - the resize coordinator creates a destination physical tree ID (e.g. `my-tree/resized/{operationId}`) registered with the new `MaxLeafKeys` / `MaxInternalChildren`, the source's pinned `ShardCount`, and the logical tree's shard map and split allocation mark, so every virtual slot routes to the same physical shard index on both trees. The snapshot copies each source shard, and shadow-forwards its live writes, to the destination shard with the same index, covering shard indices `0` to `ShardCount - 1` and every index the shard map routes to - including a shard an adaptive split allocated above the pinned count (a split gives its target shard an index above every index allocated so far and leaves the pinned `ShardCount` unchanged). The shard map is captured when the resize starts; the autonomic split monitor starts no split while the resize is in flight.
 2. **Snapshot with shadow forwarding** - the source tree runs under `SnapshotMode.Online`. Before drain begins, every source shard root enters its draining shadow-forward phase, and each of its mutation paths - `SetAsync` (with or without a TTL), `GetOrSetAsync`, `SetIfVersionAsync`, `SetManyAsync` and its predicated form, `DeleteAsync`, `DeleteRangeAsync`, the batched merge path, and the terminal (commit or abort) of an atomic-write saga such as `SetManyAtomicAsync` - runs the local write and a parallel forward to the corresponding destination shard (`SetIfVersionAsync` forwards only once its local compare-and-set has succeeded). The typed CRDT delta paths (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync` and the typed accessors built on them) and bulk appends (`BulkAppendChunkAsync` and the streaming `BulkLoadAsync` extension) are not forwarded, so one that reaches a source shard after the copy has read past the key it writes does not reach the destination.
-3. **Drain** - the snapshot coordinator reads each source shard's live entries and merges them into the destination shard with a last-writer-wins merge, draining up to `LatticeOptions.MaxConcurrentDrains` shards at a time (default 4). Tombstoned and expired entries are skipped; each copied entry keeps its source HLC timestamp and any remaining TTL, with the same absolute expiry. An entry is copied only when the shard map routes its key to the shard it was read from: an adaptive split leaves the keys it moved in place on the shard that gave them up - hidden there from reads - and those stale copies are left behind rather than carried over, so every key reaches the destination at its current value. As each shard finishes draining it is marked drained; its live forwards continue until swap.
+3. **Drain** - the snapshot coordinator reads each source shard's live entries and merges them into the destination shard with a last-writer-wins merge, draining up to `LatticeOptions.MaxConcurrentDrains` shards at a time (default 4). Tombstoned and expired entries are skipped; each copied entry keeps its source HLC timestamp and any remaining TTL, with the same absolute expiry. An entry is copied only when the shard map routes its key to the shard it was read from: an adaptive split leaves the keys it moved in place on the shard that gave them up - hidden there from reads - and those stale copies are left behind rather than carried over, so every key reaches the destination at its current value. As each shard finishes draining it is marked drained; its live forwards continue until swap. The resize coordinator drives the drain in wall-clock-bounded slices: each call copies for at most `LatticeOptions.BackgroundDrainMaxDuration` (capped at 10 seconds, and 10 seconds when that option is zero), persists every shard's resume key, and returns, so no call outlives the caller's response timeout or holds the snapshot's turn against its keepalive reminder. The next phase tick resumes each shard from its persisted key, so a large or contended tree converges in time proportional to the work rather than to the number of retries ([#3904](https://github.com/NSTA1/Orleans.Lattice/issues/3904)).
 4. **Swap** - the logical tree's registry entry is rewritten with the new sizing and the pinned `ShardCount`. The tree's own configuration overrides - `PublishEvents`, projection digest maintenance and its latch, history retention, and the cache value-byte and WAL retained-byte ceilings - are carried over, and so are the shard map and split allocation mark the copy followed, read from the destination's own registry entry and re-stamped with a newer map version so every cached router observes the change; the old physical tree's WAL layout is dropped, since the destination's own registry entry carries its own (`UndoResizeAsync` restores the original entry). The registry alias then atomically points the logical tree ID at the destination. Like every alias assignment, that step is first put to the host's [ownership guard](tree-registry.md#ownership-bounded-aliasing), which allows it unless the host registers an ownership provider; the apps package's provider allows it too, because the destination is recorded as derived from the tree. A guard that refuses it stops the resize at the swap, which it retries on every tick until the guard allows it or the resize is undone - by then the logical tree's registry entry has already been rewritten with the new sizing, and undoing the resize restores it. Once the alias is set, each source shard the snapshot shadow-forwarded (the same set as step 1, split-added shards included) enters its rejecting phase, in which every read or write that still reaches the old physical tree fails with an internal stale-routing signal. The routing tier behind `ILattice` catches that signal, drops its cached alias, re-resolves through the registry, and retries the call against the destination, so callers do not see the transition as an error.
 5. **Cleanup** - the old physical tree is retired: its shards are soft-deleted as physical maintenance, which publishes no `TreeDeleted` or `TreePurged` event and leaves the logical tree reading as not deleted (see [Tree Deletion](tree-deletion.md#retiring-a-resized-trees-original-copy)). It will be purged automatically after the configured `SoftDeleteDuration` (default 72 hours), leaving `UndoResizeAsync` viable until then. On a tree's first resize the old physical tree's ID is the logical tree ID itself, so the purge reclaims its shards but leaves the logical tree's registry entry - its alias, sizing and configuration - and its tombstone compaction schedule in place. On a later resize the old physical tree is the previous resize's copy; its own registry entry is first given the logical tree's shard map and split allocation mark, because a split writes those to the logical tree's entry only, so the retirement - and an undo's recovery - reaches every shard a split added to it.
 
@@ -67,14 +67,41 @@ for as long as the old tree remains inside the soft-delete window:
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.UndoResizeAsync();
+
+// The undo is accept-then-poll: follow an unwind that outlasted the call.
+while (await tree.IsResizeUndoPendingAsync())
+{
+    await Task.Delay(TimeSpan.FromSeconds(1));
+}
 ```
 
-`UndoResizeAsync` is phase-aware:
+`UndoResizeAsync` is **accept-then-poll**. It persists the undo intent and is
+admitted even while a resize phase is in flight - a large snapshot slice, for
+instance - rather than queueing behind the phase it exists to stop. The resize
+coordinator observes the intent at its next phase or snapshot-slice boundary
+(the snapshot is driven in wall-clock-bounded slices, so that boundary is at most
+a few seconds away) and runs the unwind below. The call then waits a bounded time,
+well inside the default 30-second response timeout, and returns either once the
+unwind has finished or with it still accepted and unwinding; in the second case
+`IsResizeUndoPendingAsync` reports `true` until it lands, and the tree-admin
+`tree_resize_status` read reports `undoRequested`. Retrying while an undo is pending
+is acknowledged again rather than refused, and a retry after the unwind finished is
+refused with a message naming the resize that was already undone, so a slow first
+undo is never mistaken for a failed one. An unwind that cannot be applied - the old
+tree has already been purged, say - is withdrawn, the resize carries on as if the
+undo had not been asked for, and the call that is waiting for it throws
+`InvalidOperationException` with the reason. While an accepted undo is pending,
+`ResizeAsync` throws `InvalidOperationException` rather than start or re-affirm a
+resize the coordinator is about to unwind.
 
-- **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, deletes the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination.
-- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree. The old physical tree is recovered from soft-delete only when it was actually soft-deleted: `Cleanup` is the only phase that deletes it, and it does so at the very end, so throughout `Swap` and `Reject` - and in `Cleanup` until the delete lands - the old tree is still live and is simply left alone.
+The unwind is phase-aware:
+
+- **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, discards the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination. An undo accepted while a snapshot slice was running is unwound from here even if that slice finished the copy: the alias is never swapped onto a copy the operator asked to discard.
+- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and discards the new snapshot tree. The old physical tree is recovered from soft-delete only when it was actually soft-deleted: `Cleanup` is the only phase that deletes it, and it does so at the very end, so throughout `Swap` and `Reject` - and in `Cleanup` until the delete lands - the old tree is still live and is simply left alone.
 
 Once the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
+
+Either way the destination is discarded rather than merely deleted: its shards are marked deleted and purged after the soft-delete window like any retired copy, but its write-ahead-log retention - every leaf materialiser pin held against it, and its log - is released at once, and it can never be recovered. See [Discarding an undone resize's copy](tree-deletion.md#discarding-an-undone-resizes-copy).
 
 ### Important considerations
 
@@ -91,7 +118,7 @@ Once the soft-delete window expires and the old tree is purged, the resize can n
 
 ### Manual trigger (testing)
 
-In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously. This grain interface is **declared `internal`** - consumer assemblies cannot reference or invoke it. Use `ILattice.ResizeAsync` for all non-test scenarios; it delegates to `ITreeResizeGrain` internally and exposes `ILattice.IsResizeCompleteAsync()` for progress polling.
+In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously; `ITreeResizeGrain.UndoResizeAsync` is likewise the run-to-completion undo, which takes the coordinator's turn and so waits behind an in-flight phase. This grain interface is **declared `internal`** - consumer assemblies cannot reference or invoke it. Use `ILattice.ResizeAsync` and `ILattice.UndoResizeAsync` for all non-test scenarios; they delegate to `ITreeResizeGrain` internally, and `ILattice.IsResizeCompleteAsync()` and `ILattice.IsResizeUndoPendingAsync()` poll their progress.
 
 ## See also
 

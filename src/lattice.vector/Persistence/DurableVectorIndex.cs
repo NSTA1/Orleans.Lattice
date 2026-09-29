@@ -273,6 +273,20 @@ public sealed partial class DurableVectorIndex
     public VectorIndexLoadDiscardReason LoadDiscardReason { get; private set; }
 
     /// <summary>
+    /// The committed manifest of the durable state this instance discarded while
+    /// opening, or <see langword="null"/> when nothing was discarded or the
+    /// discarded state had no decodable manifest.
+    /// <para>
+    /// A discard is otherwise indistinguishable from a first-ever build, so this is
+    /// how a caller makes its cost visible: <see cref="VectorIndexManifest.Generation"/>,
+    /// <see cref="VectorIndexManifest.IndexedCount"/> and the header's partition
+    /// count describe exactly what has to be rebuilt. Retained after opening,
+    /// alongside <see cref="LoadDiscardReason"/>.
+    /// </para>
+    /// </summary>
+    public VectorIndexManifest? LoadDiscardedManifest { get; private set; }
+
+    /// <summary>
     /// Whether an interrupted load banked progress that a further
     /// <see cref="LoadOrResumeAsync"/> will continue from rather than re-read.
     /// <para>

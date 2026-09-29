@@ -704,7 +704,19 @@ public interface ILattice : IGrainWithStringKey
     /// Permanently removes the tree's leaf and internal node state and unregisters
     /// it. On an aliased tree it purges the live copy the delete pinned and
     /// unregisters both that copy and the logical tree. Throws <see cref="InvalidOperationException"/> if the tree has not been
-    /// deleted, or if the purge has already completed.
+    /// deleted.
+    /// <para>
+    /// Accept-then-poll: the purge is recorded as in progress and its shard walk
+    /// runs in the background on the tree's deletion coordinator, where no
+    /// caller's response timeout can stop it part-way; a purge interrupted by a
+    /// silo restart resumes from the last shard it recorded. This call then waits
+    /// a bounded time - 15 seconds, or half the silo response timeout when that is
+    /// shorter - and returns once the purge has completed or, for a tree too large
+    /// to purge in that time, with it still running. Follow a running purge
+    /// through the tree-admin deletion status, which reports it in progress with
+    /// the number of shards finished. A call while a purge is running, or after it
+    /// has completed, returns without error.
+    /// </para>
     /// </summary>
     Task PurgeTreeAsync(CancellationToken cancellationToken = default);
 
@@ -747,10 +759,23 @@ public interface ILattice : IGrainWithStringKey
     /// in flight - at any phase - and afterwards for as long as the old tree
     /// is within its <see cref="LatticeOptions.SoftDeleteDuration"/> window
     /// (before purge completes).
+    /// <para>
+    /// <b>Accept, then poll.</b> The undo is admitted even while a resize phase is
+    /// in flight: the intent is persisted immediately and the resize coordinator
+    /// unwinds at its next phase or snapshot-slice boundary. This call then waits a
+    /// bounded time (well inside the default response timeout) for the unwind and
+    /// returns either once it has finished or once the budget is spent with the
+    /// undo still accepted and unwinding. Use <see cref="IsResizeUndoPendingAsync"/>
+    /// to follow an unwind that outlasted the call. Retrying while an undo is
+    /// pending is acknowledged again rather than refused.
+    /// </para>
     /// </summary>
+    /// <param name="cancellationToken">Cancels the call before the undo is accepted, or stops waiting for an accepted undo to finish; an accepted undo still runs to completion.</param>
     /// <exception cref="InvalidOperationException">
-    /// Thrown if no resize exists to undo, or if the old tree has
-    /// already been purged.
+    /// Thrown if no resize exists to undo (the message names the most recent
+    /// resize when it was already undone, so a retry after success is not read as a
+    /// failure), or if the accepted unwind could not be applied - for example
+    /// because the old tree has already been purged.
     /// </exception>
     Task UndoResizeAsync(CancellationToken cancellationToken = default);
 
@@ -918,8 +943,20 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> if no resize operation is in progress for this tree -
     /// either the most recent resize has completed or no resize has ever been initiated.
+    /// Answers without waiting for an in-flight resize phase.
     /// </summary>
     Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns <c>true</c> while an undo accepted by <see cref="UndoResizeAsync"/>
+    /// is still unwinding, and <c>false</c> once it has finished or when no undo has
+    /// been requested. Together with <see cref="IsResizeCompleteAsync"/> this
+    /// distinguishes a resize that is running, one whose undo was accepted and is
+    /// unwinding, and no resize at all: a pending undo takes precedence, since an
+    /// undo of an already completed resize leaves <see cref="IsResizeCompleteAsync"/>
+    /// reporting <c>true</c>. Answers without waiting for an in-flight resize phase.
+    /// </summary>
+    Task<bool> IsResizeUndoPendingAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Online reshard - grows the tree to <paramref name="newShardCount"/>

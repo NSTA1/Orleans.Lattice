@@ -3807,6 +3807,97 @@ public static class LatticeMetrics
             advice: WalReplayPermitQueueWaitAdvice);
 
     /// <summary>
+    /// Explicit bucket boundaries for <see cref="WalReplayPermitHold"/> (issue
+    /// #3921), in milliseconds. The same span as the queue-wait boundaries, for
+    /// the same reason: a warm tail replay holds a permit for under a
+    /// millisecond, while a whole-window replay against a store that serialises
+    /// its writes has been measured holding one for minutes. Declared above the
+    /// histogram that consumes it, for the ordering reason given on
+    /// <see cref="WalReplayPermitQueueWaitAdvice"/>.
+    /// </summary>
+    private static readonly InstrumentAdvice<double> WalReplayPermitHoldAdvice = new()
+    {
+        HistogramBucketBoundaries =
+        [
+            1d, 5d, 10d, 50d, 100d, 500d, 1_000d, 5_000d,
+            15_000d, 30_000d, 60_000d, 300_000d, 900_000d, 1_800_000d,
+        ],
+    };
+
+    /// <summary>
+    /// Wall-clock ms a replay <b>held</b> a permit on the per-silo WAL replay
+    /// concurrency gate, from acquisition to the end of the replay, tagged with
+    /// <see cref="TagTree"/> and the derived tenant dimension. Recorded for an
+    /// activation replay and for a WAL GC starvation drive alike, since both
+    /// take the same permit for the same work. Issue #3921.
+    /// <para>
+    /// <b>This is the measurement that separates the two regimes the gate can
+    /// be in, which have opposite remedies.</b> The gate's ceiling is derived
+    /// from CPU supply (<see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>),
+    /// but a replay may be bound on the grain store instead, which serialises
+    /// its writes. When replays are CPU-bound, more permits mean more replays
+    /// finished per second and hold time stays flat; when they are store-bound,
+    /// more permits leave the rate unchanged and only lengthen each hold. Read
+    /// this histogram's mean against the service rate in
+    /// <see cref="WalReplayPermitsServed"/>: a hold time that rises when the
+    /// ceiling is raised, while the service rate does not, is the store-bound
+    /// regime, and raising the ceiling there makes the admission gate refuse
+    /// more work rather than less.
+    /// </para>
+    /// <para>
+    /// <b>Tagged by tree</b>, like <see cref="WalReplayPermitQueueWait"/>,
+    /// because a hold is one replay's own cost and is attributable to the tree
+    /// whose leaf replayed. The gate's service rate is a process-wide quantity
+    /// and is published untagged on <see cref="WalReplayPermitsServed"/>.
+    /// </para>
+    /// <para>
+    /// <b>Not zero-primed</b>, for the reason given on
+    /// <see cref="WalReplayPermitQueueWait"/>: a primed histogram records a
+    /// fabricated <c>0 ms</c> hold, which biases the very distribution this
+    /// instrument exists to read toward "the store is fast". Whether any hold
+    /// ended is visible on the zero-primed <see cref="WalReplayPermitsServed"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> WalReplayPermitHold =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.replay.permit_hold", unit: "ms",
+            description: "Wall-clock ms a replay held a permit on the per-silo WAL replay concurrency gate, from acquisition to the end of the replay, tagged by tree. Read its mean against orleans.lattice.wal.replay.permits_served: a hold time that grows with the ceiling while the service rate does not means replays are bound on the store rather than on CPU (issue #3921).",
+            tags: null,
+            advice: WalReplayPermitHoldAdvice);
+
+    /// <summary>
+    /// Count of holds that ended on the per-silo WAL replay concurrency gate -
+    /// the gate's <b>service count</b>, so its rate is the gate's service rate
+    /// in replays per second (issue #3921). Tagged with the platform tenant
+    /// label only.
+    /// <para>
+    /// One increment per permit hold that ends, by activation replay or by WAL
+    /// GC starvation drive, whether the permit then returns to the gate or is
+    /// withheld by memory backpressure: a withheld permit still finished its
+    /// replay. The mean in-flight replay count is, by Little's law, this rate
+    /// multiplied by the mean of <see cref="WalReplayPermitHold"/>, so the two
+    /// instruments together say whether the ceiling is the constraint (service
+    /// rate rises with the ceiling) or the store is (service rate flat, hold
+    /// time rising).
+    /// </para>
+    /// <para>
+    /// <b>Untagged by tree</b>, like <see cref="WalReplayPermitAdaptations"/>:
+    /// the gate is one process-wide semaphore shared by every tree on this silo,
+    /// and its service rate is a property of that semaphore.
+    /// </para>
+    /// <para>
+    /// <b>Zero-primed when the gate is sized</b>, the one site that proves the
+    /// gate was created. That is what lets a flat series be read: a sized gate
+    /// whose service count has stopped moving while activations are queued is
+    /// the regime the admission gate's <c>no_progress</c> refusal arm reports,
+    /// and without the prime it would read the same as a build without this
+    /// instrument.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> WalReplayPermitsServed =
+        Meter.CreateCounter<long>("orleans.lattice.wal.replay.permits_served", unit: "{permit}",
+            description: "Permit holds that ended on the per-silo WAL replay concurrency gate, whether the permit was then returned or withheld; its rate is the gate's service rate. Zero-primed when the gate is sized. Untagged by tree because the gate is process-wide (issue #3921).");
+
+    /// <summary>
     /// Count of WAL GC starvation drives abandoned at
     /// <see cref="LatticeOptions.StarvationDriveBudget"/> with their replay
     /// permit forcibly released, tagged by tree (issue #3065).
@@ -9754,7 +9845,8 @@ public static class LatticeMetrics
     /// <see cref="LatticeSaturatedException"/>; a starvation drive refused a
     /// replay permit now reports a refused result instead (issue #3761). Tagged
     /// with <see cref="TagTree"/>, <see cref="TagSaturationSource"/> and the
-    /// tenant.
+    /// tenant, and a <c>replay_permit_admission</c> refusal additionally with
+    /// <see cref="TagSaturationArm"/> (issue #3921).
     /// <para>
     /// <b>Why it exists.</b> The runtime's own exception counter reported
     /// about 490 refusals a minute with no way to say which seam raised
@@ -9784,7 +9876,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> SaturationRefusals =
         Meter.CreateCounter<long>(SaturationRefusalsName, unit: "{refusal}",
-            description: "Count of saturation refusals raised or returned by the refusing seam (source); the tree tag is the id held at that seam.");
+            description: "Count of saturation refusals raised or returned by the refusing seam (source); the tree tag is the id held at that seam. A replay_permit_admission refusal also carries the arm of the predicate that refused (wait_exceeded, no_progress or gc_share).");
 
     /// <summary>
     /// Records one saturation refusal from <paramref name="source"/> on
@@ -9798,6 +9890,70 @@ public static class LatticeMetrics
             new KeyValuePair<string, object?>(TagTree, treeId ?? string.Empty),
             SaturationSourceTag(source),
             LatticeTenantLabel.ForTree(treeId));
+
+    /// <summary>
+    /// Records one saturation refusal from <paramref name="source"/> on
+    /// <paramref name="treeId"/>, on <see cref="SaturationRefusals"/>, naming the
+    /// <paramref name="arm"/> of the seam's predicate that refused (issue #3921).
+    /// </summary>
+    /// <param name="treeId">The refused tree, or <see langword="null"/> when none is known.</param>
+    /// <param name="source">The admission seam that refused.</param>
+    /// <param name="arm">
+    /// The refusing arm, keyed <see cref="TagSaturationArm"/>: one of
+    /// <see cref="SaturationArmWaitExceeded"/>, <see cref="SaturationArmNoProgress"/>
+    /// or <see cref="SaturationArmGcShare"/>.
+    /// </param>
+    internal static void RecordSaturationRefusal(
+        string? treeId, LatticeSaturationSource source, KeyValuePair<string, object?> arm)
+        => SaturationRefusals.Add(
+            1,
+            new KeyValuePair<string, object?>(TagTree, treeId ?? string.Empty),
+            SaturationSourceTag(source),
+            arm,
+            LatticeTenantLabel.ForTree(treeId));
+
+    /// <summary>
+    /// Tag key naming which arm of a seam's refusal predicate fired, on
+    /// <see cref="SaturationRefusals"/> (issue #3921). Carried today by the
+    /// <c>replay_permit_admission</c> source only, whose refusals have
+    /// different causes and opposite remedies: see
+    /// <see cref="SaturationArmWaitExceeded"/>,
+    /// <see cref="SaturationArmNoProgress"/> and
+    /// <see cref="SaturationArmGcShare"/>. A refusal from any other source
+    /// carries no arm.
+    /// </summary>
+    public const string TagSaturationArm = "arm";
+
+    /// <summary>
+    /// Arm of a <c>replay_permit_admission</c> refusal on
+    /// <see cref="SaturationRefusals"/>: the queue was past its depth bound and
+    /// the <b>smoothed wait</b> of recently terminated permit waits was at or
+    /// above <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/>. Waits
+    /// are completing, but slowly: too much is queued for the permits in
+    /// circulation.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SaturationArmWaitExceeded = new(TagSaturationArm, "wait_exceeded");
+
+    /// <summary>
+    /// Arm of a <c>replay_permit_admission</c> refusal on
+    /// <see cref="SaturationRefusals"/>: the queue was past its depth bound and
+    /// <b>no queued activation acquired a permit</b> for at least
+    /// <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/>. The permits
+    /// already issued are not coming back, which is a hold-time condition - the
+    /// replays holding them are slow, typically bound on the grain store - and
+    /// not a queue-depth one. Raising the ceiling on a store-bound silo
+    /// lengthens holds and makes this arm fire harder (issue #3921).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SaturationArmNoProgress = new(TagSaturationArm, "no_progress");
+
+    /// <summary>
+    /// Arm of a <c>replay_permit_admission</c> refusal on
+    /// <see cref="SaturationRefusals"/>: a WAL GC starvation drive found the
+    /// process-wide GC share of replay permits full, or no permit immediately
+    /// free. Starvation drives never queue, so this is a bounded background
+    /// drive being told to try later, not a foreground activation refused.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SaturationArmGcShare = new(TagSaturationArm, "gc_share");
 
     /// <summary>
     /// Maps a <see cref="LatticeSaturationSource"/> to its
