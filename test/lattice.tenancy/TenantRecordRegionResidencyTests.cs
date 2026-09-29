@@ -240,4 +240,156 @@ public sealed class TenantRecordRegionResidencyTests
             Assert.That(merged.GetRegionStatus("region-a"), Is.EqualTo(TenantRegionStatus.Provisioning));
         });
     }
+
+    // ---- TryPromoteRegionStatus (issue #3897) ------------------------------
+
+    [TestCase(TenantRegionStatus.Provisioning, TenantRegionStatus.Backfilling)]
+    [TestCase(TenantRegionStatus.Backfilling, TenantRegionStatus.Online)]
+    [TestCase(TenantRegionStatus.Draining, TenantRegionStatus.Offline)]
+    [TestCase(TenantRegionStatus.Offline, TenantRegionStatus.Removed)]
+    public void TryPromoteRegionStatus_applies_the_single_legal_step(TenantRegionStatus from, TenantRegionStatus to)
+    {
+        var record = NewRecord();
+        record.SetRegionStatus("region-a", from, TestClocks.Clock(5), "admin");
+
+        var promotedOk = record.TryPromoteRegionStatus("region-a", "driver", out var promoted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(promotedOk, Is.True);
+            Assert.That(promoted, Is.EqualTo(to));
+            Assert.That(record.GetRegionStatus("region-a"), Is.EqualTo(to));
+        });
+    }
+
+    [TestCase(TenantRegionStatus.Online)]
+    [TestCase(TenantRegionStatus.Removed)]
+    [TestCase(TenantRegionStatus.None)]
+    public void TryPromoteRegionStatus_is_a_no_op_at_a_terminal_or_non_transitional_status(TenantRegionStatus status)
+    {
+        var record = NewRecord();
+        record.SetRegionStatus("region-a", status, TestClocks.Clock(5), "admin");
+
+        var promotedOk = record.TryPromoteRegionStatus("region-a", "driver", out var promoted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(promotedOk, Is.False);
+            Assert.That(promoted, Is.EqualTo(status));
+            Assert.That(record.GetRegionStatus("region-a"), Is.EqualTo(status));
+        });
+    }
+
+    [Test]
+    public void TryPromoteRegionStatus_is_a_no_op_for_a_region_with_no_slot()
+    {
+        var record = NewRecord();
+
+        var promotedOk = record.TryPromoteRegionStatus("region-a", "driver", out var promoted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(promotedOk, Is.False);
+            Assert.That(promoted, Is.EqualTo(TenantRegionStatus.None));
+            Assert.That(record.HasResidencyConfiguration, Is.False, "a no-op must not create a slot");
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    public void TryPromoteRegionStatus_null_or_empty_region_throws(string? regionId) =>
+        Assert.That(
+            () => NewRecord().TryPromoteRegionStatus(regionId!, "driver", out _),
+            Throws.InstanceOf<ArgumentException>());
+
+    [Test]
+    public void A_promotion_supersedes_the_version_it_was_computed_from()
+    {
+        // Merging the promotion back into a replica that still holds the observed
+        // version must apply it, whatever the writer ids.
+        var stored = NewRecord();
+        stored.SetRegionStatus("region-a", TenantRegionStatus.Draining, TestClocks.Clock(5), "zzz-admin");
+        var promotion = stored.Clone();
+        promotion.TryPromoteRegionStatus("region-a", "aaa-driver", out _);
+
+        var merged = TenantRecord.Merge(stored, promotion);
+
+        Assert.That(merged.GetRegionStatus("region-a"), Is.EqualTo(TenantRegionStatus.Offline));
+    }
+
+    [Test]
+    public void A_promotion_never_supersedes_a_write_committed_after_its_read()
+    {
+        // The regression behind issue #3897's driver: the promoter reads Provisioning,
+        // a tenant admin then drains the region, and the stale promotion is written
+        // back. Stamped at the observed version's successor it must lose to the later
+        // admin write, even one only a single tick later.
+        var stored = NewRecord();
+        stored.SetRegionStatus("region-a", TenantRegionStatus.Provisioning, TestClocks.Clock(5), "admin");
+        var promotion = stored.Clone();
+        stored.SetRegionStatus("region-a", TenantRegionStatus.Draining, TestClocks.Clock(6), "admin");
+
+        promotion.TryPromoteRegionStatus("region-a", "zzz-driver", out _);
+        var merged = TenantRecord.Merge(stored, promotion);
+
+        Assert.That(merged.GetRegionStatus("region-a"), Is.EqualTo(TenantRegionStatus.Draining));
+    }
+
+    [Test]
+    public void Two_promoters_of_the_same_version_converge_on_one_slot()
+    {
+        var stored = NewRecord();
+        stored.SetRegionStatus("region-a", TenantRegionStatus.Draining, TestClocks.Clock(5), "admin");
+        var first = stored.Clone();
+        var second = stored.Clone();
+
+        first.TryPromoteRegionStatus("region-a", "cluster", out _);
+        second.TryPromoteRegionStatus("region-a", "cluster", out _);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TenantRecord.Merge(first, second).RegionStatusEntries,
+                Is.EqualTo(first.RegionStatusEntries));
+            Assert.That(first.GetRegionStatus("region-a"), Is.EqualTo(TenantRegionStatus.Offline));
+        });
+    }
+
+    [Test]
+    public void A_promotion_at_a_saturated_counter_rolls_to_the_next_wall_clock_tick()
+    {
+        var stored = NewRecord();
+        stored.SetRegionStatus("region-a", TenantRegionStatus.Draining, TestClocks.Clock(5, int.MaxValue), "admin");
+        var promotion = stored.Clone();
+
+        var promotedOk = promotion.TryPromoteRegionStatus("region-a", "driver", out _);
+        var laterAdmin = stored.Clone();
+        laterAdmin.SetRegionStatus("region-a", TenantRegionStatus.Provisioning, TestClocks.Clock(7), "admin");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(promotedOk, Is.True);
+            Assert.That(TenantRecord.Merge(stored, promotion).GetRegionStatus("region-a"), Is.EqualTo(TenantRegionStatus.Offline));
+            Assert.That(
+                TenantRecord.Merge(promotion, laterAdmin).GetRegionStatus("region-a"),
+                Is.EqualTo(TenantRegionStatus.Provisioning),
+                "the rolled successor is still minimal: a later wall-clock write wins");
+        });
+    }
+
+    [Test]
+    public void A_promotion_at_the_representable_ceiling_writes_nothing()
+    {
+        var record = NewRecord();
+        var ceiling = new HybridLogicalClock { WallClockTicks = long.MaxValue, Counter = int.MaxValue };
+        record.SetRegionStatus("region-a", TenantRegionStatus.Draining, ceiling, "admin");
+
+        var promotedOk = record.TryPromoteRegionStatus("region-a", "driver", out var promoted);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(promotedOk, Is.False, "no successor exists, so the promotion must fail closed");
+            Assert.That(promoted, Is.EqualTo(TenantRegionStatus.Draining));
+        });
+    }
 }
