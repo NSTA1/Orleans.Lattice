@@ -29,7 +29,10 @@ and the enforcing tests for each, is [`ConformanceChecklist.md`](../../test/latt
   `aria-current` and `aria-selected`, so no state is carried by colour alone.
 - **Announcements.** The address line announces how many suggestions there are
   and which areas did not answer, in a polite status region, and notifications
-  appear in one toast region.
+  appear in one toast region. A long-running tree operation's progress bar is an
+  ARIA `progressbar` that describes itself in `aria-valuetext`; a change of step is
+  announced once, and the moving percentage is not, so a reader is not interrupted
+  on every poll.
 - **Contrast.** Text clears 4.5:1 on every surface in both materials, and 7:1
   under the high-contrast overlay. Control boundaries, the focus ring, the
   selected ring and every state glyph clear 3:1, and 4.5:1 under the overlay.

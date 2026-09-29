@@ -1311,6 +1311,16 @@
           "name": "RequestedShardCount",
           "type": "int?",
           "required": false
+        },
+        {
+          "name": "TargetShardCount",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "StartPhysicalShardCount",
+          "type": "int?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeReshardStatus.cs#TreeReshardStatus"
@@ -1345,6 +1355,26 @@
         },
         {
           "name": "RequestedMaxInternalChildren",
+          "type": "int?",
+          "required": false
+        },
+        {
+          "name": "UndoRequested",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Phase",
+          "type": "TreeResizePhase?",
+          "required": false
+        },
+        {
+          "name": "CompletedUnits",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "TotalUnits",
           "type": "int?",
           "required": false
         }
@@ -1465,6 +1495,21 @@
         {
           "name": "RequestedMode",
           "type": "TreeSnapshotMode?",
+          "required": false
+        },
+        {
+          "name": "Phase",
+          "type": "TreeSnapshotPhase?",
+          "required": false
+        },
+        {
+          "name": "CopiedShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "ShardCount",
+          "type": "int?",
           "required": false
         }
       ],

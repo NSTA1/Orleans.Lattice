@@ -20,6 +20,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Type-ahead pickers.** Every field that names an existing tree, region, user or group, tenant or key now suggests matching values as you type. A pick-existing field refuses an unknown value, a suggest field flags an existing one, and a source that cannot list falls back to free text. ([#3949](https://github.com/NSTA1/Orleans.Lattice/issues/3949)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Admin - Operation progress.** Resize, snapshot and reshard statuses now report the step they have reached and their progress in shards or units, and the Explorer draws it as a progress bar, follows an accepted undo or purge until it finishes, and shows when a deleted tree stops being recoverable. ([#3958](https://github.com/NSTA1/Orleans.Lattice/issues/3958)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
+
 - **Core - Ownership-bounded aliasing.** An optional `ITreeOwnershipGuard` can refuse an alias that would cross tree ownership, for every alias change including resize, restore and remediation; a refusal throws `LatticeTreeOwnershipDeniedException`. ([#3766](https://github.com/NSTA1/Orleans.Lattice/issues/3766)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin.Grpc`)
 
 - **Gates - First-party namespaces cannot shadow Orleans.** A hygiene gate fails when an `Orleans.Lattice.*` namespace segment matches an Orleans framework namespace, the defect that let a new `Runtime` namespace break name resolution in a package the change never touched. ([#2822](https://github.com/NSTA1/Orleans.Lattice/issues/2822)) (`repository-wide`)

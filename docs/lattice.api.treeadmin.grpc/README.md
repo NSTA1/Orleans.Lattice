@@ -43,6 +43,8 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | Tag indexes | `ListTagIndexesAsync`, `GetTagIndexStatusAsync`, `ReconcileTagIndexAsync` |
 | Compaction and retention | `TriggerShardCompactionAsync`, `GetHistoryRetentionAsync`, `SetHistoryRetentionAsync` |
 
+The reshard, resize and snapshot RPCs return the facade's status records unchanged, so their [operation progress](../lattice.api.treeadmin/README.md#operation-progress) members travel over the wire as well: `TreeResizeStatus.Phase`, `CompletedUnits` and `TotalUnits`; `TreeSnapshotStatus.Phase`, `CopiedShardCount` and `ShardCount`; and `TreeReshardStatus.TargetShardCount` and `StartPhysicalShardCount`, with the `TreeResizePhase` and `TreeSnapshotPhase` enums. They are appended `[Id]` members, so a client built before them reads the same records and ignores them, and a server built before them leaves them null.
+
 ### Client method signatures
 
 | Method | Signature |

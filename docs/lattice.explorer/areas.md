@@ -319,7 +319,12 @@ Configuration and history-retention saves are forward-only configuration
 changes, so they do not ask for destructive confirmation. Lifecycle operations
 do: Delete soft-deletes the tree and schedules purge, Recover restores normal
 reads and writes, Purge permanently removes tree state and is not an app
-operation, and Set alias points the logical name at another physical tree. The
+operation, and Set alias points the logical name at another physical tree.
+**Recoverable until** is shown with the recovery deadline only while the tree can
+still be recovered. Purge is accept-then-poll: the call can return while the shard
+walk is still running, so the tab says the purge was accepted, follows it with a
+"N of M shards purged" bar, and says the tree is purged only once the status
+reports the purge complete (or warns if it stopped before finishing). The
 Shards tab can run a confirmed deep read to count tombstones because it walks
 every leaf. The Storage tab links to the WAL page.
 
@@ -338,8 +343,37 @@ physical shards. Resize rebuilds the tree into a shadow at the requested node
 capacity, can be undone while the old tree remains recoverable, and warns that
 undo loses writes that reached only the resized copy. Snapshot copies live
 entries into a new tree, either online or offline, and allows optional sizing.
-While any of these operations is in progress, the page polls status every 2
-seconds and stops when the operation finishes or the page goes away.
+
+These operations, like purge below, are accept-then-poll: the cluster accepts the
+request and runs it on its own, reminder-anchored, so it survives a silo restart
+and carries on if you leave the page. While one is running, its page asks for
+status every 2 seconds. A read that fails does not end the follow: the page waits
+twice as long after each failure, up to 30 seconds, and returns to every 2 seconds
+once a read succeeds. Coming back to the page's address resumes following, because
+the status is the cluster's.
+
+Each running operation is drawn as a progress bar (the `LtProgress` primitive),
+with the step it is on in words and a line naming its units. The same bar appears
+on the operation's own page and on the tree's summary tab:
+
+| Operation | Steps shown | Units |
+| --- | --- | --- |
+| Resize | Copying the tree at the new size, pointing the tree's name at the copy, turning requests away from the old copy, retiring the old copy | One per shard the copy drains, then one for each of the three steps after the copy: "3 of 8 shards copied, then 3 steps to finish", then "Copy complete. Step 2 of 3 to finish." |
+| Snapshot | Taking the source out of service (offline) or starting to forward live writes (online), copying shards, returning a copied shard to service (offline) | Shards copied: "3 of 8 shards copied." |
+| Reshard | Splitting shards | The bar measures the physical shards added since the reshard started, out of the shards it adds; the line reads the current count against the target: "5 of 8 physical shards." |
+| Purge | Purging shards, then Purged | Shards purged: "3 of 8 shards purged." |
+
+A bar is determinate only when the cluster reports a total; otherwise it is
+hatched and shows the step alone, never an invented percentage, which is what a
+cluster that predates progress reporting produces. A small total is drawn as one
+segment per unit. The percentage is rounded down, so a bar never reads 100% before
+the last unit is done. A change of step is announced once through a polite live
+region; the moving percentage is not.
+
+An accepted undo of a resize shows the resize as **Undoing**, with an
+indeterminate bar labelled "Undoing the resize", because an unwind reports no
+units. The page reads the undo before the resize's own in-progress flag, so an
+undo of a resize that had already finished is still followed until it has unwound.
 
 The WAL page first audits placement for a named tree. The move planner's target
 provider key is a picker over the provider keys the resolving silo reports for that
