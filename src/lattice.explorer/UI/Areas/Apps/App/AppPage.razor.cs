@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.App;
 
@@ -30,12 +31,25 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.App;
 /// </remarks>
 public partial class AppPage : IDisposable
 {
+    /// <summary>How many times a page re-reads an app that is still settling after a lifecycle change.</summary>
+    internal const int SettlingRetries = 4;
+
+    /// <summary>How long a page waits between those re-reads.</summary>
+    internal static readonly TimeSpan SettlingRetryDelay = TimeSpan.FromSeconds(1);
+
     private CancellationTokenSource? _loading;
     private AppPageLoad? _load;
-    private (string? Tenant, string Slug)? _loadedFor;
+    private (string? Tenant, string Slug, string Tab)? _loadedFor;
+    private bool _settling;
 
     [Inject]
     internal AppPageLoader Loader { get; set; } = default!;
+
+    [Inject]
+    internal AppsAccess Access { get; set; } = default!;
+
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
 
     /// <summary>The app slug the address names.</summary>
     internal string Slug => Address.Path.Count > 0 ? Address.Path[0] : string.Empty;
@@ -54,6 +68,7 @@ public partial class AppPage : IDisposable
     /// <summary>Stops any load in flight.</summary>
     public void Dispose()
     {
+        Access.Changed -= OnAppsChanged;
         _loading?.Cancel();
         _loading?.Dispose();
         _loading = null;
@@ -61,15 +76,26 @@ public partial class AppPage : IDisposable
     }
 
     /// <inheritdoc />
+    protected override void OnInitialized() => Access.Changed += OnAppsChanged;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Every navigation to a different section reads the app again, so a page reached
+    /// after an install, an enable or a binding never shows what was true before it.
+    /// Moving between sections of the same app keeps the page on screen while the
+    /// new read runs; only a move within the open app's own frame (its in-app path)
+    /// reads nothing, because re-reading would tear the running frame down.
+    /// </remarks>
     protected override async Task OnParametersSetAsync()
     {
-        var key = (Address.Tenant, Slug);
+        var key = (Address.Tenant, Slug, Tab);
         if (_loadedFor == key)
         {
             return;
         }
 
-        await LoadAsync(key);
+        var sameApp = _loadedFor is { } loaded && loaded.Tenant == key.Tenant && loaded.Slug == key.Slug;
+        await LoadAsync(key, keepShowing: sameApp);
     }
 
     internal static LtStateRole StateRole(AppLifecycleState state) => state switch
@@ -159,16 +185,43 @@ public partial class AppPage : IDisposable
     private async Task RetryAsync()
     {
         _loadedFor = null;
-        await LoadAsync((Address.Tenant, Slug));
+        await LoadAsync((Address.Tenant, Slug, Tab), keepShowing: false);
     }
 
-    private async Task LoadAsync((string? Tenant, string Slug) key)
+    // A lifecycle change anywhere in the Apps area: read this app again, keeping the
+    // page on screen, unless the change was to another app.
+    private void OnAppsChanged() => _ = InvokeAsync(async () =>
+    {
+        if (string.IsNullOrEmpty(Slug) || _loadedFor is null)
+        {
+            return;
+        }
+
+        await LoadAsync((Address.Tenant, Slug, Tab), keepShowing: true);
+        StateHasChanged();
+    });
+
+    /// <summary>
+    /// Whether a read of an app that changed in this circuit a moment ago is still
+    /// settling: not found yet, or enabled on the administrative path while the caller's
+    /// own access to it has not caught up.
+    /// </summary>
+    private bool IsSettling(AppPageLoad load, string slug) =>
+        Access.ChangedRecently(slug)
+        && (load.Kind == AppPageLoadKind.NotFound
+            || load.Model is { Admin.State: AppLifecycleState.Enabled, CallerRoleNames.IsDefaultOrEmpty: true });
+
+    private async Task LoadAsync((string? Tenant, string Slug, string Tab) key, bool keepShowing)
     {
         _loading?.Cancel();
         _loading?.Dispose();
         var loading = _loading = new CancellationTokenSource();
 
-        _load = null;
+        if (!keepShowing)
+        {
+            _load = null;
+        }
+
         _loadedFor = key;
         StateHasChanged();
 
@@ -176,10 +229,27 @@ public partial class AppPage : IDisposable
         try
         {
             load = await Loader.LoadAsync(key.Slug, loading.Token);
+
+            // Right after an install or an enable the cluster's reads can briefly miss
+            // the change. Read again a few times, saying so, before settling on the answer.
+            for (var attempt = 0; attempt < SettlingRetries && IsSettling(load, key.Slug); attempt++)
+            {
+                _settling = true;
+                StateHasChanged();
+                await Task.Delay(SettlingRetryDelay, Time, loading.Token);
+                load = await Loader.LoadAsync(key.Slug, loading.Token);
+            }
         }
         catch (OperationCanceledException) when (loading.IsCancellationRequested)
         {
             return;
+        }
+        finally
+        {
+            if (ReferenceEquals(loading, _loading))
+            {
+                _settling = false;
+            }
         }
 
         if (!ReferenceEquals(loading, _loading))

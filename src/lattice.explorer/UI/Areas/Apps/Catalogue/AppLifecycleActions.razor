@@ -91,6 +91,9 @@
     internal AppsAccess Access { get; set; } = default!;
 
     [Inject]
+    internal Orleans.Lattice.Explorer.UI.Navigation.ExplorerAreaDirectory Directory { get; set; } = default!;
+
+    [Inject]
     internal AppsFacades Facades { get; set; } = default!;
 
     [Inject]
@@ -165,7 +168,8 @@
 
             _state = result.State;
             Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
-            Access.Invalidate();
+            Access.Invalidate(installed.Slug);
+            Directory.Invalidate();
             await OnChanged.InvokeAsync();
         }
         catch (Exception error)

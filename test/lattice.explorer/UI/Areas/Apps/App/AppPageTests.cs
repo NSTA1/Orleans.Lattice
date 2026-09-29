@@ -342,15 +342,34 @@ public sealed partial class AppPageTests : AppPageTestContext
     }
 
     [Test]
-    public void Switching_sections_within_an_app_does_not_reload_it()
+    public void Switching_sections_within_an_app_reads_it_again_and_keeps_the_page_on_screen()
     {
         Workspace.Grant(Workspace());
         var cut = RenderAt("apps/crm/overview");
+        Workspace.Gate = new TaskCompletionSource();
 
         Navigation.NavigateTo("apps/crm/roles");
         cut.Render();
+        var whileReading = cut.Find("h1").TextContent;
+        Workspace.Gate.SetResult();
 
-        Assert.That(Workspace.Described, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(whileReading, Is.EqualTo("CRM"), "the page stays while the section's read runs");
+            Assert.That(Workspace.Described, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void A_move_within_the_open_apps_own_frame_reads_nothing()
+    {
+        Workspace.Grant(Workspace());
+        var cut = RenderAt("apps/crm/open");
+
+        Navigation.NavigateTo("apps/crm/open/board");
+        cut.Render();
+
+        Assert.That(Workspace.Described, Has.Count.EqualTo(1), "re-reading would tear the running frame down");
     }
 
     [Test]

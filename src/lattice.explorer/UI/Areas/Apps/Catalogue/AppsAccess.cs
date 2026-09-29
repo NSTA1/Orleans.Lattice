@@ -16,8 +16,14 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// </remarks>
 /// <param name="facades">The circuit's facades.</param>
 /// <param name="logger">Where a failing probe is reported.</param>
-internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logger = null)
+/// <param name="time">The clock a lifecycle change is recorded on.</param>
+internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logger = null, TimeProvider? time = null)
 {
+    /// <summary>How long after a lifecycle change an app's pages treat an unready read as settling rather than final.</summary>
+    public static readonly TimeSpan SettlingWindow = TimeSpan.FromSeconds(30);
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly Dictionary<string, DateTimeOffset> _changedAt = new(StringComparer.Ordinal);
     /// <summary>How many catalogue entries completions search, at most.</summary>
     public const int CompletionIndexSize = AvailableAppQuery.MaxPageSize;
 
@@ -83,15 +89,41 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
     /// Forgets the memoized probe and starts a fresh one at once, so every reader
     /// after a lifecycle change or sign-in sees the cluster's answer again.
     /// </summary>
-    public void Invalidate()
+    public void Invalidate() => Invalidate(null);
+
+    /// <summary>
+    /// Forgets the memoized probe after a lifecycle change to <paramref name="slug"/>,
+    /// and records when it changed, so that app's pages re-read it and briefly treat an
+    /// unready answer as settling (see <see cref="ChangedRecently"/>).
+    /// </summary>
+    /// <param name="slug">The app that changed, or <see langword="null"/> for a change to no one app, such as a sign-in.</param>
+    public void Invalidate(string? slug)
     {
         lock (_gate)
         {
             _snapshot = ProbeAsync();
             _index = null;
+            if (slug is not null)
+            {
+                _changedAt[slug] = _time.GetUtcNow();
+            }
         }
 
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="slug"/> went through a lifecycle change in this circuit
+    /// within <see cref="SettlingWindow"/>. A cluster read right after an install or an
+    /// enable can briefly miss it while the change settles.
+    /// </summary>
+    /// <param name="slug">The app slug.</param>
+    public bool ChangedRecently(string slug)
+    {
+        lock (_gate)
+        {
+            return _changedAt.TryGetValue(slug, out var at) && _time.GetUtcNow() - at <= SettlingWindow;
+        }
     }
 
     private async Task<AppsAccessSnapshot> ProbeAsync()

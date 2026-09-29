@@ -16,7 +16,7 @@ public partial class AppReviewPage : IDisposable
     private AppInstallFlow? _flow;
     private ExplorerAddress? _resolvedFor;
     private string? _slug;
-    private bool _announcedInstall;
+    private AppInstallStage? _announcedStage;
 
     [Inject]
     internal AppsAccess Access { get; set; } = default!;
@@ -118,7 +118,7 @@ public partial class AppReviewPage : IDisposable
     private void Attach(AppInstallFlow flow)
     {
         _flow = flow;
-        _announcedInstall = flow.Stage is AppInstallStage.Installed or AppInstallStage.Enabled;
+        _announcedStage = flow.Stage is AppInstallStage.Installed or AppInstallStage.Enabled ? flow.Stage : null;
         flow.Changed += OnFlowChanged;
         _ = flow.LoadAsync();
         TakeUpgradeIntent();
@@ -147,15 +147,17 @@ public partial class AppReviewPage : IDisposable
 
     private void OnFlowChanged() => _ = InvokeAsync(() =>
     {
-        if (_flow is { Stage: AppInstallStage.Installed or AppInstallStage.Enabled } && !_announcedInstall)
+        // Installing and enabling are separate lifecycle changes, and each changes what
+        // the rest of the circuit may read about the app, so each is announced once.
+        if (_flow is { Stage: AppInstallStage.Installed or AppInstallStage.Enabled } flow && _announcedStage != flow.Stage)
         {
-            _announcedInstall = true;
-            Access.Invalidate();
+            _announcedStage = flow.Stage;
+            Access.Invalidate(flow.Key.Slug);
             Directory.Invalidate();
         }
         else if (_flow is { Stage: not (AppInstallStage.Installed or AppInstallStage.Enabled or AppInstallStage.Enabling) })
         {
-            _announcedInstall = false;
+            _announcedStage = null;
         }
 
         TakeUpgradeIntent();

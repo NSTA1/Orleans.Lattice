@@ -19,7 +19,18 @@
 
 <link rel="stylesheet" href="@AppPagesAssets.Stylesheet" />
 
-@if (_load is null)
+@if (_settling && (_load is null || _load.Kind == AppPageLoadKind.NotFound))
+{
+    <PageTitle>Apps - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">The app is starting</h1>
+    <div role="status">
+        <LtEmptyState Title="Just changed" HeadingLevel="2">
+            <ChildContent>This app was installed or enabled a moment ago, and the cluster is still catching up. This page reads it again on its own.</ChildContent>
+            <Actions><LtButton OnClick="RetryAsync">Retry now</LtButton></Actions>
+        </LtEmptyState>
+    </div>
+}
+else if (_load is null)
 {
     <PageTitle>Apps - Orleans.Lattice Explorer</PageTitle>
     <LtSkeleton Lines="4" Label="Loading the app" />
@@ -32,6 +43,21 @@ else if (_load.Kind == AppPageLoadKind.Unavailable)
         <LtEmptyState Title="The cluster did not answer" HeadingLevel="2">
             <ChildContent>Nothing could be read about this app. Check the connection, then try again.</ChildContent>
             <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    </div>
+}
+else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && IsSectionAddress && Tab == AppPageTabs.Open && !enabled.CanOpen)
+{
+    @* The administrative read proves the install exists, so this is not "nothing here": the caller's own access is what is missing, or has not caught up yet. *@
+    <PageTitle>@enabled.DisplayName - Apps - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-shell-page-title">@enabled.DisplayName is not open to you yet</h1>
+    <div role="status">
+        <LtEmptyState Title="No access to its interface" HeadingLevel="2">
+            <ChildContent>The app is enabled, but its interface opens only for someone who holds one of its roles. Access follows a moment after the app is enabled or a role is bound to one of your groups; if you hold no role in it, it stays closed.</ChildContent>
+            <Actions>
+                <LtButton OnClick="RetryAsync">Retry</LtButton>
+                <a class="lt-btn lt-btn--quiet" href="@Href(AppPageAddresses.Page(Address.Tenant, Slug, AppPageTabs.Overview))">Overview</a>
+            </Actions>
         </LtEmptyState>
     </div>
 }
