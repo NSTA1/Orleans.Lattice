@@ -152,6 +152,21 @@ public sealed class DataHistoryPanelTests : DataTestContext
     }
 
     [Test]
+    public void The_key_picker_offers_the_trees_keys_by_prefix_and_accepts_a_key_that_no_longer_exists()
+    {
+        Client.WithTree("orders", keys: 30, prefix: "order/");
+        var cut = RenderAt("data/orders?tab=history");
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("Choose a key")));
+
+        var offered = Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Offers(cut, "Key", "order/002");
+
+        Assert.That(offered, Is.EqualTo(Enumerable.Range(20, 8).Select(i => $"order/{i:D4}")), "a bounded prefix scan, in key order");
+
+        Control(cut, "Key").Input("order/deleted");
+        cut.Find(".lt-empty form").Submit();
+        cut.WaitUntil(() => Assert.That(CurrentRelative, Is.EqualTo("/data/orders?tab=history&key=order%2Fdeleted")));
+    }
+    [Test]
     public void An_expired_live_tail_offers_a_restart_and_a_history_failure_offers_a_retry()
     {
         SeedHistory("orders", "k", "\"a\"");

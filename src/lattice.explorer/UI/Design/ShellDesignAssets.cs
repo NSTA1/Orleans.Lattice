@@ -28,6 +28,16 @@ internal static class ShellDesignAssets
     /// <summary>The design primitives.</summary>
     public const string PrimitivesStylesheet = DesignBasePath + "lattice-primitives.css";
 
+    /// <summary>
+    /// The combobox's small script: it keeps Enter on a highlighted suggestion from
+    /// also submitting the surrounding form, and scrolls the highlighted suggestion
+    /// into view. <see cref="Components.LtComboBox"/> imports it itself.
+    /// </summary>
+    public const string ComboBoxModule = DesignBasePath + "lattice-combobox.js";
+
+    /// <summary>The specifier <see cref="ComboBoxModule"/> is imported by, resolved against the document's base.</summary>
+    public const string ComboBoxModuleSpecifier = "./" + ComboBoxModule;
+
     /// <summary>The favicon: the lattice mark on an ink tile, linked from the documentation site.</summary>
     public const string Favicon = DesignBasePath + "favicon.svg";
 

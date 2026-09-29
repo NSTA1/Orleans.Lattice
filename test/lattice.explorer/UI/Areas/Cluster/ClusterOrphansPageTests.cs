@@ -137,13 +137,14 @@ public sealed class ClusterOrphansPageTests : ClusterTestContext
     [Test]
     public void Without_a_tree_or_read_authority_it_says_so()
     {
+        UseTrees(Tree("orders"));
         var none = RenderAt("/cluster/orphans");
         Assert.That(none.Find(".lt-empty h2").TextContent, Is.EqualTo("Choose a tree"));
         none.Find("form").Submit();
         Assert.That(none.Find(".lt-field__error").TextContent, Does.Contain("Name the tree to audit."));
         none.Find("form input").Input("orders");
         none.Find("form").Submit();
-        Assert.That(Navigation.Uri, Does.EndWith("/cluster/orphans?tree=orders"));
+        none.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/orphans?tree=orders")));
 
         Granted = Grants.Admin;
         var denied = RenderAt(Address);

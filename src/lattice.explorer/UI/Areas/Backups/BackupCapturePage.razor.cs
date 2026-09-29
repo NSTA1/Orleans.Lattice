@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
@@ -50,12 +51,17 @@ public partial class BackupCapturePage : IDisposable
     private string? _keyError;
     private string? _error;
     private bool _initialised;
+    private LtComboBox? _addBox;
+    private LtComboBox? _treeBox;
 
     [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
 
     [Inject]
     internal BackupActions Actions { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     private IReadOnlyList<LtSelectOption> BaseOptions =>
     [
@@ -107,25 +113,29 @@ public partial class BackupCapturePage : IDisposable
         _base = null;
     }
 
-    private Task AddTreeAsync()
+    private async Task AddTreeAsync()
     {
         var tree = _tree?.Trim();
         if (string.IsNullOrEmpty(tree))
         {
             _treeError = "Name a tree to add.";
-            return Task.CompletedTask;
+            return;
         }
 
         if (_setTrees.Contains(tree, StringComparer.Ordinal))
         {
             _treeError = "That tree is already in the set.";
-            return Task.CompletedTask;
+            return;
         }
 
         _treeError = null;
+        if (_addBox is not null && !await _addBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         _setTrees.Add(tree);
         _tree = null;
-        return Task.CompletedTask;
     }
 
     private void RemoveTree(string tree) => _setTrees.Remove(tree);
@@ -155,7 +165,7 @@ public partial class BackupCapturePage : IDisposable
         }
     }
 
-    private Task CaptureAsync()
+    private async Task CaptureAsync()
     {
         _error = null;
         _nameError = string.IsNullOrWhiteSpace(_name) ? "Give the backup a name." : null;
@@ -183,6 +193,11 @@ public partial class BackupCapturePage : IDisposable
                 _error = "Choose the full backup this one builds on.";
             }
 
+            if (scope is not null && _treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+            {
+                return;
+            }
+
             if (_nameError is null && _treeError is null && _keyError is null && _error is null && scope is not null)
             {
                 operation = _kind == IncrementalKind
@@ -195,8 +210,6 @@ public partial class BackupCapturePage : IDisposable
         {
             Navigator.NavigateTo(BackupsAddresses.Operation(operation.Id));
         }
-
-        return Task.CompletedTask;
     }
 
     private BackupScopeSelector? Scope()

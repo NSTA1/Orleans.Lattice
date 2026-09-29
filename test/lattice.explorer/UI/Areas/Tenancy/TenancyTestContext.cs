@@ -46,12 +46,25 @@ public abstract class TenancyTestContext : ShellChromeTestContext
         Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Cluster);
         Services.AddSingleton<IExplorerAuthSession>(Auth);
 
+        // The pickers' directory and region sources read these; fakes keep them off the wire.
+        Directory = new Access.FakeAuthAdmin();
+        Regions = new Replication.FakeReplicationStatus { LocalRegionId = "eu-west" };
+        Regions.Links.AddRange(Replication.ReplicationTestData.Estate());
+        Services.AddKeyedSingleton<Orleans.Lattice.Api.Auth.ILatticeAuthAdmin>(ShellFacades.Key, Directory);
+        Services.AddKeyedSingleton<Orleans.Lattice.Api.Replication.ILatticeReplicationStatus>(ShellFacades.Key, Regions);
+
         // The chrome context keeps only its own probe areas; the area under test is put back.
         Services.AddExplorerArea<TenancyArea>();
     }
 
     /// <summary>The cluster behind every tenant facade.</summary>
     internal FakeTenancyCluster Cluster { get; }
+
+    /// <summary>The identity directory the subject pickers search.</summary>
+    internal Access.FakeAuthAdmin Directory { get; }
+
+    /// <summary>The replication peer report the region pickers read: eu-west here, us-east, ap-south and sa-east as peers.</summary>
+    internal Replication.FakeReplicationStatus Regions { get; }
 
     /// <summary>The Explorer's sign-in.</summary>
     internal FakeAuthSession Auth { get; }

@@ -76,9 +76,9 @@ public sealed class BackupsCataloguePageTests : BackupsTestContext
         searches[0].KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
         Assert.That(CurrentPath, Does.Contain("name=nig"));
 
-        searches = cut.FindAll("input[type=search]");
-        searches[1].Input("orders");
-        searches[1].KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+        var tree = cut.Find("input[role=combobox]");
+        tree.Input("orders");
+        cut.Find("input[role=combobox]").KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
         Assert.That(CurrentPath, Does.Contain("tree=orders"));
     }
 

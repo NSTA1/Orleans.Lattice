@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -13,6 +14,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterSnapshotPage : IDisposable
 {
+    private LtComboBox? _destinationBox;
     private static readonly IReadOnlyList<LtSelectOption> Modes =
     [
         new(nameof(TreeSnapshotMode.Online), "Online"),
@@ -39,6 +41,9 @@ public partial class ClusterSnapshotPage : IDisposable
 
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
     private TimeProvider Time { get; set; } = default!;
@@ -101,7 +106,7 @@ public partial class ClusterSnapshotPage : IDisposable
         return running;
     }
 
-    private void Review()
+    private async Task Review()
     {
         var destination = _destination?.Trim();
         _destinationError = string.IsNullOrEmpty(destination)
@@ -113,7 +118,7 @@ public partial class ClusterSnapshotPage : IDisposable
             ? null
             : "Sizing must be whole numbers: at least 2 keys per leaf and 3 children per node.";
 
-        if (_destinationError is null && _sizingError is null)
+        if (_destinationError is null && _sizingError is null && (_destinationBox is null || await _destinationBox.ConfirmAsync().ConfigureAwait(true)))
         {
             _destination = destination;
             _reviewing = true;

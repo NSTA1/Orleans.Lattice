@@ -40,6 +40,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
     [Test]
     public void Without_a_tree_it_asks_for_one_and_the_audit_form_navigates()
     {
+        UseTrees(Tree("orders"));
         var cut = RenderAt("/cluster/wal");
 
         Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("Choose a tree"));
@@ -48,7 +49,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
 
         cut.Find("form[aria-label='Choose a tree'] input").Input("orders");
         cut.Find("form[aria-label='Choose a tree']").Submit();
-        Assert.That(Navigation.Uri, Does.EndWith("/cluster/wal?tree=orders"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/wal?tree=orders")));
     }
 
     [Test]
@@ -66,6 +67,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
     [Test]
     public void The_plan_command_has_a_visible_control_whose_dialog_plans_at_a_resumable_address()
     {
+        UseTrees(Tree("orders"));
         var cut = RenderAt("/cluster/wal?tree=orders");
         var command = Services.GetServices<IExplorerArea>().OfType<ClusterArea>().Single().Commands.Single(candidate => candidate.Id == ClusterArea.PlanWalMoveCommandId);
 
@@ -81,7 +83,7 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         cut.FindAll(".lt-dialog input")[2].Input("blob-b");
         cut.Find(".lt-dialog form").Submit();
 
-        Assert.That(Navigation.Uri, Does.EndWith("/cluster/wal?tree=orders&partition=1&target=blob-b"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/wal?tree=orders&partition=1&target=blob-b")));
     }
 
     [Test]

@@ -119,24 +119,29 @@ else
           Placement="@DialogPlacement"
           Description="The tree's changes ship to every enrolled peer region, which converge on it under the merge mode you choose.">
     <form class="lt-replication-form" @onsubmit="EnableAsync">
-        <LtTextInput Label="Tree"
-                     Mono="true"
-                     Value="@_enableTree"
-                     ValueChanged="OnEnableTreeChanged"
-                     ReadOnly="@_enableTreeFixed"
-                     Error="@EnableTreeError"
-                     Hint="The logical tree id, such as orders." />
+        <LtComboBox @ref="_enableTreeBox"
+                    Label="Tree"
+                    Source="@Suggestions.Trees"
+                    Noun="tree"
+                    Value="@_enableTree"
+                    ValueChanged="OnEnableTreeChanged"
+                    ReadOnly="@_enableTreeFixed"
+                    Error="@EnableTreeError"
+                    Hint="The logical tree id, such as orders." />
         <LtSelect Label="Merge mode"
                   Options="@MergeModeOptions"
                   Value="@_enableMode"
                   ValueChanged="OnEnableModeChanged"
                   Disabled="@_enableModeFixed"
                   Hint="@(_enableModeFixed ? "Fixed when the tree was first enabled; disable and re-enable cannot change it." : "Fixed once enabled. Choose the CRDT the tree's values are written with.")" />
-        <LtTextInput Label="Bootstrap from cluster (optional)"
-                     Mono="true"
-                     Value="@_enableBootstrap"
-                     ValueChanged="OnEnableBootstrapChanged"
-                     Hint="When the tree already holds data, name the cluster to pull an initial snapshot from. Leave empty to skip." />
+        <LtComboBox Label="Bootstrap from cluster (optional)"
+                    Source="@Suggestions.Regions"
+                    Mode="LtComboBoxMode.Suggest"
+                    Noun="region"
+                    ExistingMessage="A region this cluster knows."
+                    Value="@_enableBootstrap"
+                    ValueChanged="OnEnableBootstrapChanged"
+                    Hint="When the tree already holds data, name the cluster to pull an initial snapshot from. Leave empty to skip." />
         <div class="lt-dialog__actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEnableAsync">Cancel</LtButton>
             <LtButton Type="LtButtonType.Submit" Disabled="@(!CanSubmitEnable)">@(_busy ? "Enabling" : "Enable replication")</LtButton>

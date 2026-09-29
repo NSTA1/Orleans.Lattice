@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 
@@ -11,6 +12,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 /// </summary>
 public partial class ReplicationTreesPage
 {
+    private LtComboBox? _enableTreeBox;
     private static readonly IReadOnlyList<LtSelectOption> MergeModeOptions =
     [
         .. Enum.GetValues<LatticeMergeMode>().Select(mode => new LtSelectOption(mode.ToString(), ReplicationFormat.MergeMode(mode))),
@@ -42,6 +44,9 @@ public partial class ReplicationTreesPage
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
@@ -179,6 +184,11 @@ public partial class ReplicationTreesPage
     private async Task EnableAsync()
     {
         if (!CanSubmitEnable || !Enum.TryParse<LatticeMergeMode>(_enableMode, out var mode))
+        {
+            return;
+        }
+
+        if (!_enableTreeFixed && _enableTreeBox is not null && !await _enableTreeBox.ConfirmAsync())
         {
             return;
         }

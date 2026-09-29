@@ -54,34 +54,35 @@ public sealed partial class AppReviewPageTests
     }
 
     [Test]
-    public void Group_search_is_read_only_and_falls_back_to_listing_groups()
+    public void The_group_picker_searches_the_directory_read_only_and_falls_back_to_listing_groups()
     {
         Offer(AppsTestData.TaskBoard());
         Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>())
             .Returns(new DirectorySearchResult { Available = true, Principals = [new DirectoryPrincipalDescriptor { Id = "grp-readers", DisplayName = "Readers", Kind = DirectoryPrincipalKind.Group }] });
         var cut = AtBindRoles();
+        var inputs = () => cut.FindAll("section[aria-labelledby=lt-apps-bind] input[role=combobox]");
 
-        Buttons(cut, "Find groups")[0].Click();
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-apps-results button"), Has.Count.EqualTo(1)));
-        cut.Find(".lt-apps-results button").Click();
+        inputs()[0].Input("read");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option]"), Has.Count.EqualTo(1)));
+        cut.Find("[role=option]").Click();
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-bind] input")[0].GetAttribute("value"), Is.EqualTo("grp-readers")));
+        cut.WaitUntil(() => Assert.That(inputs()[0].GetAttribute("value"), Is.EqualTo("grp-readers")));
         Auth.Received().SearchDirectoryAsync(Arg.Is<DirectorySearchRequest>(request => request.Kind == DirectoryPrincipalKind.Group), Arg.Any<CancellationToken>());
 
         Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(DirectorySearchResult.Unavailable);
         Auth.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>())
             .Returns(new AuthGroupPage { Entries = [new AuthGroup { GroupId = "writers", DisplayName = "Writers" }, new AuthGroup { GroupId = "ops" }] });
-        cut.FindAll("section[aria-labelledby=lt-apps-bind] input")[1].Input("writ");
-        Buttons(cut, "Find groups")[1].Click();
+        inputs()[1].Input("writ");
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-apps-results button").Select(button => button.TextContent), Has.Some.Contains("Writers")));
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option] .lt-combobox__detail").Select(detail => detail.TextContent), Has.Some.Contains("Writers")));
 
         Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<DirectorySearchResult>(new TimeoutException()));
-        Buttons(cut, "Find groups")[0].Click();
+        Auth.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<AuthGroupPage>(new TimeoutException()));
+        inputs()[0].Input("any-group");
 
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-apps-binding [role=status]").TextContent, Is.EqualTo("Group search is not available. Type the group id.")));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-apps-binding .lt-combobox__note").TextContent, Does.Contain("used as typed")));
+        Assert.That(Control.Calls, Is.Empty, "nothing is created or changed while searching");
     }
-
     [Test]
     public void Editing_the_ceiling_shows_what_would_fail_activation()
     {

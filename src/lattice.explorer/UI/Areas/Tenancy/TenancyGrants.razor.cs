@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -14,6 +15,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// </summary>
 public partial class TenancyGrants
 {
+    private LtComboBox? _granteeBox;
     private static readonly IReadOnlyList<LtSelectOption> AccessOptions =
     [
         new(nameof(TenantGrantAccess.Read), "Read"),
@@ -48,7 +50,13 @@ public partial class TenancyGrants
     internal TenancyCatalog Catalog { get; set; } = default!;
 
     [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
+
+    [Inject]
     internal LtToastService Toasts { get; set; } = default!;
+
+    // Only a platform operator can list every tenant, so only an operator's picker refuses an unlisted one.
+    private LtComboBoxMode GranteeMode => Catalog.LastStanding is { IsOperator: true } ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest;
 
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
@@ -138,6 +146,11 @@ public partial class TenancyGrants
         _scopeError = scope.Length == 0 ? "Enter the tree name or prefix to share." : null;
         _formError = null;
         if (_granteeError is not null || _scopeError is not null)
+        {
+            return;
+        }
+
+        if (_granteeBox is not null && !await _granteeBox.ConfirmAsync().ConfigureAwait(true))
         {
             return;
         }

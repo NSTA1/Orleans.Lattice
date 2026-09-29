@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -21,7 +22,10 @@ public partial class TenancyRegions
     private bool _busy;
     private bool _confirmResidency;
     private bool _confirmAllowed;
-    private string _allowedText = string.Empty;
+    private IReadOnlyList<string> _allowed = [];
+    private LtMultiComboBox? _allowedBox;
+    private TenancyRegionSuggestionSource? _regionSource;
+    private IReadOnlyList<string> _regionIds = [];
     private string? _allowedError;
     private IReadOnlyList<string> _pendingAllowed = [];
     private IReadOnlyList<string> _revokedAllowed = [];
@@ -39,6 +43,9 @@ public partial class TenancyRegions
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
@@ -69,6 +76,10 @@ public partial class TenancyRegions
             return "Not applied: " + string.Join("; ", parts) + ".";
         }
     }
+
+    /// <inheritdoc />
+    protected override void OnInitialized() =>
+        _regionSource = new TenancyRegionSuggestionSource(Suggestions.Regions, () => _regionIds);
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -102,7 +113,8 @@ public partial class TenancyRegions
     {
         _regions = [.. regions.OrderBy(region => region.RegionId, StringComparer.Ordinal)];
         _plan.Reset(_regions);
-        _allowedText = string.Join(", ", TenancyFormat.AllowedRegions(_regions));
+        _allowed = [.. TenancyFormat.AllowedRegions(_regions)];
+        _regionIds = [.. _regions.Select(region => region.RegionId)];
         _allowedError = null;
     }
 
@@ -176,10 +188,12 @@ public partial class TenancyRegions
     private async Task SaveAllowed()
     {
         _allowedError = null;
-        var requested = _allowedText
-            .Split([',', ' ', ';', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        if (_allowedBox is not null && !await _allowedBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
+        var requested = _allowed.Distinct(StringComparer.Ordinal).ToArray();
         var resident = TenancyFormat.ResidentRegions(_regions ?? []);
         var stillResident = resident.Where(region => !requested.Contains(region, StringComparer.Ordinal)).ToArray();
         if (stillResident.Length > 0)

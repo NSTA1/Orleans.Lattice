@@ -67,7 +67,7 @@ public sealed class TenancyMembersTests : TenancyTestContext
         TenancyForms.Type(cut, "Subject id", subject);
         cut.Find("form.lt-tenancy-add").Submit();
 
-        Assert.Multiple(() =>
+        cut.WaitUntil(() =>
         {
             Assert.That(TenancyForms.ErrorOf(cut, "Subject id"), Is.EqualTo(error));
             Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.AddAdminSubjectAsync)));

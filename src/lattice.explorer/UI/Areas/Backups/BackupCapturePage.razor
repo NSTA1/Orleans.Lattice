@@ -38,7 +38,7 @@
                 </ul>
             }
             <div class="lt-backups-form__row">
-                <LtTextInput Label="Tree to add" Mono="true" Value="@_tree" ValueChanged="value => _tree = value" Placeholder="a/crm/orders" Error="@_treeError" />
+                <LtComboBox @ref="_addBox" Label="Tree to add" Value="@_tree" ValueChanged="value => _tree = value" OnCommit="_ => AddTreeAsync()" Source="@Suggestions.Trees" Noun="tree" Placeholder="a/crm/orders" Error="@_treeError" />
                 <div class="lt-backups-actions">
                     <LtButton OnClick="AddTreeAsync">Add tree</LtButton>
                 </div>
@@ -48,7 +48,7 @@
     }
     else
     {
-        <LtTextInput Label="Tree" Mono="true" Value="@_tree" ValueChanged="SetTree" Placeholder="a/crm/orders" Error="@_treeError" Hint="The tree to back up." />
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="SetTree" Source="@Suggestions.Trees" Noun="tree" Placeholder="a/crm/orders" Error="@_treeError" Hint="The tree to back up." />
         <LtSelect Label="Scope" Options="@ScopeOptions" Value="@_scopeKind" ValueChanged="value => _scopeKind = value" />
         @if (_scopeKind != WholeTree)
         {

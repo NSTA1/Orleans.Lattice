@@ -134,7 +134,7 @@ else
         else
         {
             <form class="lt-backups-form" @onsubmit="RequestRestore">
-                <LtTextInput Label="Restore into tree" Mono="true" Value="@_target" ValueChanged="value => _target = value" Hint="The backup's own tree by default." Error="@_targetError" />
+                <LtComboBox Label="Restore into tree" Value="@_target" ValueChanged="value => _target = value" Source="@Suggestions.Trees" Mode="LtComboBoxMode.Suggest" Noun="tree" ExistingMessage="This tree exists: restoring replaces what it holds." Hint="The backup's own tree by default; a new name restores into a new tree." Error="@_targetError" />
                 <LtSelect Label="Restore mode" Options="@ModeOptions" Value="@_mode" ValueChanged="value => _mode = value" Hint="@ModeHint" />
                 @if (_chain.Count > 1)
                 {

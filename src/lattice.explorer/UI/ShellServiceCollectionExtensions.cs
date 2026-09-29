@@ -59,6 +59,7 @@ internal static partial class ShellServiceCollectionExtensions
         AddAppsCatalogue(services);
         AddApp(services);
         AddData(services);
+        AddSuggestions(services);
         AddAccess(services);
         AddTenancy(services);
         AddSchema(services);
@@ -79,6 +80,10 @@ internal static partial class ShellServiceCollectionExtensions
     {
         services.TryAddScoped<LtToastService>();
     }
+
+    /// <summary>The type-ahead pickers' shared suggestion sources: trees, regions, tenants, users and groups (S3, issue #3949).</summary>
+    /// <param name="services">The service collection to register into.</param>
+    static partial void AddSuggestions(IServiceCollection services);
 
     /// <summary>Navigation chrome: spine, address line, palette, routing and appearance (S1, issue #3815).</summary>
     /// <param name="services">The service collection to register into.</param>

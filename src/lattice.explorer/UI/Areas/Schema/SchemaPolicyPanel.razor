@@ -120,7 +120,7 @@
                         break;
                     case SchemaRuleDraftKind.Pattern:
                         <LtTextInput Label="Pattern (a regular expression)" Mono="true" Value="@_builder.Pattern" ValueChanged="value => _builder.Pattern = value" />
-                        <LtTextInput Label="Member (leave empty for the whole value)" Mono="true" Value="@_builder.MemberPath" ValueChanged="value => _builder.MemberPath = value" />
+                        <LtComboBox Label="Member (leave empty for the whole value)" Value="@_builder.MemberPath" ValueChanged="value => _builder.MemberPath = value" Source="@_members" Mode="LtComboBoxMode.Suggest" Noun="member" ExistingMessage="The policy already names this member." />
                         break;
                 }
                 <LtTextInput Label="Description (optional)" Value="@_builder.Description" ValueChanged="value => _builder.Description = value" Error="@_builderError" />

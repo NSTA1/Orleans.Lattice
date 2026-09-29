@@ -30,6 +30,8 @@ public partial class SchemaRemediationPanel : IDisposable
     private string? _startError;
     private bool _confirm;
 
+    private SchemaMemberSuggestionSource? _members;
+
     [CascadingParameter]
     internal SchemaWorkspace? Workspace { get; set; }
 
@@ -49,7 +51,11 @@ public partial class SchemaRemediationPanel : IDisposable
     }
 
     /// <inheritdoc />
-    protected override void OnInitialized() => Operations.Changed += OnOperationChanged;
+    protected override void OnInitialized()
+    {
+        _members = new SchemaMemberSuggestionSource(Facades, () => Workspace?.TreeId);
+        Operations.Changed += OnOperationChanged;
+    }
 
     /// <inheritdoc />
     protected override void OnParametersSet()

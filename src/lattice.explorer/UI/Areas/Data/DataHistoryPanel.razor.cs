@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
@@ -24,6 +25,7 @@ public partial class DataHistoryPanel : IDisposable
     private readonly List<HistoryRevisionRow> _liveRows = [];
     private readonly List<StateChangeNotification> _prefixChanges = [];
     private ILatticeStateClient? _client;
+    private DataKeySuggestionSource? _keySource;
     private (string StateId, string? Key, string? Prefix, string? At)? _query;
     private HistoryTimeline? _timeline;
     private HistoryLiveTail? _tail;
@@ -91,6 +93,11 @@ public partial class DataHistoryPanel : IDisposable
         }
 
         _query = query;
+        if (_keySource?.StateId != workspace.Tree.StateId)
+        {
+            _keySource = DataServices.Find<IDataReader>(Services) is { } reader ? new DataKeySuggestionSource(reader, workspace.Tree.StateId) : null;
+        }
+
         StopFollow();
         _keyInput = null;
         _atInput = atText;

@@ -5,7 +5,7 @@
 
 <div class="lt-toolbar">
     <form class="lt-cluster-inline-form" @onsubmit="Audit" aria-label="Choose a tree">
-        <LtTextInput Label="Tree" Mono="true" @bind-Value="_tree" Error="@_treeError" />
+        <LtComboBox @ref="_treeBox" Label="Tree" @bind-Value="_tree" Error="@_treeError" Source="@Suggestions.ClusterTrees" Noun="tree" />
         <LtButton Type="LtButtonType.Submit">Audit</LtButton>
     </form>
     <LtButton data-lt-command="@ClusterArea.PlanWalMoveCommandId" OnClick="OpenPlan">Plan a move...</LtButton>
@@ -93,9 +93,9 @@ else
 
 <LtDialog @bind-Open="_planOpen" Title="Plan a WAL move" Description="Previewing a move changes nothing: it shows the range that would be copied." Placement="@SheetPlacement">
     <form class="lt-cluster-form" @onsubmit="ContinuePlan">
-        <LtTextInput Label="Tree" Mono="true" @bind-Value="_planTree" Error="@_planTreeError" />
+        <LtComboBox @ref="_planTreeBox" Label="Tree" @bind-Value="_planTree" Error="@_planTreeError" Source="@Suggestions.ClusterTrees" Noun="tree" />
         <LtTextInput Label="Partition" Mono="true" @bind-Value="_planPartition" Error="@_planPartitionError" inputmode="numeric" />
-        <LtTextInput Label="Target provider key" Mono="true" @bind-Value="_planTarget" Error="@_planTargetError" Hint="@TargetHint" />
+        <LtComboBox @ref="_planTargetBox" Label="Target provider key" @bind-Value="_planTarget" Error="@_planTargetError" Hint="@TargetHint" Source="@_providerKeys" Noun="provider key" />
         <div class="lt-dialog__actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _planOpen = false">Cancel</LtButton>
             <LtButton Type="LtButtonType.Submit">Plan</LtButton>

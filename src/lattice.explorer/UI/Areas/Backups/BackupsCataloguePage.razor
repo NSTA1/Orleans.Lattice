@@ -16,7 +16,7 @@
 <div class="lt-toolbar">
     <LtSelect Label="Kind" Options="@KindOptions" Value="@KindValue" ValueChanged="SetKindAsync" />
     <LtSearchInput Label="Filter by name prefix" Placeholder="Name starts with" Value="@_nameInput" ValueChanged="value => _nameInput = value" OnSubmit="SetNameAsync" />
-    <LtSearchInput Label="Filter by tree" Placeholder="Tree, such as a/crm/orders" Value="@_treeInput" ValueChanged="value => _treeInput = value" OnSubmit="SetTreeAsync" />
+    <LtComboBox Label="Filter by tree" Placeholder="Tree, such as a/crm/orders" Value="@_treeInput" ValueChanged="value => _treeInput = value" OnCommit="SetTreeAsync" Source="@Suggestions.Trees" Mode="LtComboBoxMode.Suggest" Noun="tree" ExistingMessage="Enter shows this tree's backups." />
     <a class="lt-btn" href="@Href(BackupsAddresses.Capture)" data-lt-command="@BackupsArea.CaptureCommandId">Capture backup...</a>
 </div>
 

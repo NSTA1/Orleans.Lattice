@@ -4,6 +4,7 @@ using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -14,6 +15,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// </summary>
 public partial class BackupSchedulesPage : IDisposable
 {
+    private LtComboBox? _treeBox;
     private const string FullKind = "full";
     private const string IncrementalKind = "incremental";
 
@@ -43,6 +45,9 @@ public partial class BackupSchedulesPage : IDisposable
 
     [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
     internal BackupsAccess Access { get; set; } = default!;
@@ -101,18 +106,22 @@ public partial class BackupSchedulesPage : IDisposable
     private bool CanChange(bool incremental) =>
         _capabilities is { } capabilities && (incremental ? capabilities.CanCaptureIncremental : capabilities.CanCapture);
 
-    private Task ShowTreeAsync()
+    private async Task ShowTreeAsync()
     {
         var tree = _treeInput?.Trim();
         if (string.IsNullOrEmpty(tree))
         {
             _treeError = "Name a tree.";
-            return Task.CompletedTask;
+            return;
         }
 
         _treeError = null;
+        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         Navigator.NavigateTo(BackupsAddresses.SchedulesOf(tree));
-        return Task.CompletedTask;
     }
 
     private async Task LoadAsync()

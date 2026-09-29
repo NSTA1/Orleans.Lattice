@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -24,13 +25,17 @@ public partial class TenancyDirectoryPage
     private bool _createOpen;
     private bool _saving;
     private string _newId = string.Empty;
-    private string _newAdmins = string.Empty;
+    private IReadOnlyList<string> _newAdmins = [];
+    private LtMultiComboBox? _adminsBox;
     private string? _idError;
     private string? _adminsError;
     private string? _formError;
 
     [Inject]
     internal TenancyCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -156,7 +161,7 @@ public partial class TenancyDirectoryPage
     private void OpenCreate()
     {
         _newId = string.Empty;
-        _newAdmins = string.Empty;
+        _newAdmins = [];
         _idError = null;
         _adminsError = null;
         _formError = null;
@@ -183,10 +188,12 @@ public partial class TenancyDirectoryPage
             return;
         }
 
-        var admins = _newAdmins
-            .Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        if (_adminsBox is not null && !await _adminsBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
+        var admins = _newAdmins.Distinct(StringComparer.Ordinal).ToArray();
 
         _saving = true;
         TenantCreationResult created;

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -15,6 +16,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// </summary>
 public partial class ClusterOrphansPage : IDisposable
 {
+    private LtComboBox? _treeBox;
     /// <summary>The most batches one pass runs before it stops and says so.</summary>
     internal const int MaximumBatches = 1000;
 
@@ -35,6 +37,9 @@ public partial class ClusterOrphansPage : IDisposable
 
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
     private ExplorerNavigator Navigator { get; set; } = default!;
@@ -66,7 +71,7 @@ public partial class ClusterOrphansPage : IDisposable
         }
     }
 
-    private void Choose()
+    private async Task Choose()
     {
         var tree = _tree?.Trim();
         if (string.IsNullOrEmpty(tree))
@@ -76,6 +81,11 @@ public partial class ClusterOrphansPage : IDisposable
         }
 
         _treeError = null;
+        if (_treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         Navigator.NavigateTo(ClusterAddresses.Orphans(tree));
     }
 

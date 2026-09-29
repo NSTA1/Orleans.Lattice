@@ -96,9 +96,8 @@ public sealed class AccessGroupsPageTests : AccessTestContext
         var cut = OpenCreate();
 
         AccessForms.Type(cut, "Group id", "oper");
-        AccessForms.Button(cut, "Search the directory").Click();
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-access-results__option"), Has.Count.EqualTo(1)));
-        cut.Find(".lt-access-results__option").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option]"), Has.Count.EqualTo(1)));
+        cut.Find("[role=option]").Click();
 
         Assert.Multiple(() =>
         {
@@ -120,7 +119,7 @@ public sealed class AccessGroupsPageTests : AccessTestContext
     {
         var cut = OpenCreate();
 
-        Assert.That(AccessForms.Field(cut, "Group id").ParentElement!.QuerySelector(".lt-field__hint")!.TextContent,
+        Assert.That(AccessForms.Field(cut, "Group id").Closest(".lt-field")!.QuerySelector(".lt-field__hint")!.TextContent,
             Does.Contain("not validated"));
         Assert.That(AccessForms.HasField(cut, "Subject kind") || cut.FindAll("button").Any(button => button.TextContent == "Search the directory"), Is.False);
 

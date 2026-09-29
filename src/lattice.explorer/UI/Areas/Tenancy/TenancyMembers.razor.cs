@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -10,6 +11,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// </summary>
 public partial class TenancyMembers
 {
+    private LtComboBox? _subjectBox;
     private IReadOnlyList<string>? _subjects;
     private TenancyFailure? _failure;
     private string? _loadedFor;
@@ -24,6 +26,9 @@ public partial class TenancyMembers
 
     [Inject]
     internal TenancyCatalog Catalog { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
@@ -74,6 +79,11 @@ public partial class TenancyMembers
         if (subject.Length == 0)
         {
             _addError = "Enter the subject id.";
+            return;
+        }
+
+        if (_subjectBox is not null && !await _subjectBox.ConfirmAsync().ConfigureAwait(true))
+        {
             return;
         }
 

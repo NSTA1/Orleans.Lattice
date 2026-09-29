@@ -110,9 +110,9 @@ public sealed class TenancyRegionsTests : TenancyTestContext
     {
         var cut = RenderRegions(canAuthorize: true);
         cut.WaitUntil(() => TenancyForms.Field(cut, "Allowed region ids"));
-        Assert.That(TenancyForms.Field(cut, "Allowed region ids").GetAttribute("value"), Is.EqualTo("eu-west, us-east"));
+        Assert.That(Chips(cut), Is.EqualTo(new[] { "eu-west", "us-east" }), "the allowed set is chosen chips");
 
-        TenancyForms.Type(cut, "Allowed region ids", "eu-west us-east; ap-south");
+        TenancyForms.Type(cut, "Allowed region ids", "ap-south,");
         cut.Find("form.lt-tenancy-allowed").Submit();
 
         cut.WaitUntil(() =>
@@ -128,7 +128,7 @@ public sealed class TenancyRegionsTests : TenancyTestContext
         var cut = RenderRegions(canAuthorize: true);
         cut.WaitUntil(() => TenancyForms.Field(cut, "Allowed region ids"));
 
-        TenancyForms.Type(cut, "Allowed region ids", "eu-west");
+        RemoveChip(cut, "us-east");
         cut.Find("form.lt-tenancy-allowed").Submit();
         cut.WaitUntil(() => Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo("Revoke allowed regions?")));
         Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.AuthorizeAllowedRegionsAsync)));
@@ -144,10 +144,10 @@ public sealed class TenancyRegionsTests : TenancyTestContext
         var cut = RenderRegions(canAuthorize: true);
         cut.WaitUntil(() => TenancyForms.Field(cut, "Allowed region ids"));
 
-        TenancyForms.Type(cut, "Allowed region ids", "us-east");
+        RemoveChip(cut, "eu-west");
         cut.Find("form.lt-tenancy-allowed").Submit();
 
-        Assert.Multiple(() =>
+        cut.WaitUntil(() =>
         {
             Assert.That(TenancyForms.ErrorOf(cut, "Allowed region ids"), Is.EqualTo("Tenant acme is still resident in eu-west. Remove the residency first."));
             Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.AuthorizeAllowedRegionsAsync)));
@@ -229,4 +229,12 @@ public sealed class TenancyRegionsTests : TenancyTestContext
 
     private static AngleSharp.Dom.IElement Checkbox(IRenderedComponent<TenancyRegions> cut, string region) =>
         TenancyForms.Field(cut, $"Resident in {region}");
+
+    private static string[] Chips<TComponent>(IRenderedComponent<TComponent> cut)
+        where TComponent : Microsoft.AspNetCore.Components.IComponent =>
+        [.. cut.FindAll(".lt-combobox__chip-value").Select(chip => chip.TextContent)];
+
+    private static void RemoveChip<TComponent>(IRenderedComponent<TComponent> cut, string region)
+        where TComponent : Microsoft.AspNetCore.Components.IComponent =>
+        cut.Find($"button[aria-label='Remove {region}']").Click();
 }
