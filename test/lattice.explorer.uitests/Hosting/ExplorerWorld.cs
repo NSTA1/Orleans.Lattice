@@ -19,6 +19,8 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Lattice.Api.TenantAdmin.Grpc;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Apps;
@@ -28,6 +30,7 @@ using Orleans.Lattice.Membership;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Samples.Explorer.TaskBoard;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 
@@ -76,7 +79,18 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     public string GrpcEndpoint { get; }
 
     /// <summary>Starts the world and seeds its data, groups and rules.</summary>
-    public static async Task<ExplorerWorld> StartAsync()
+    public static Task<ExplorerWorld> StartAsync() => StartCoreAsync(tenancy: false);
+
+    /// <summary>
+    /// Starts a world that also serves tenancy - the tenant registry, the tenant
+    /// administration facades and the tenants in <see cref="Tenants"/>, each
+    /// administered by <see cref="WorldIdentities.Admin"/> - so an operator can
+    /// reach several tenants. It is a separate world, so the shared one keeps
+    /// tenancy's single-tenant shape for every other fixture.
+    /// </summary>
+    public static Task<ExplorerWorld> StartWithTenancyAsync() => StartCoreAsync(tenancy: true);
+
+    private static async Task<ExplorerWorld> StartCoreAsync(bool tenancy)
     {
         var grpcPort = LoopbackEndpoints.ReservePort();
         var siloPort = LoopbackEndpoints.ReservePort();
@@ -87,14 +101,22 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         {
             Endpoint = grpcEndpoint,
             ConfigureKestrel = kestrel => kestrel.Listen(System.Net.IPAddress.Loopback, grpcPort, listen => listen.Protocols = HttpProtocols.Http2),
-            ConfigureBuilder = builder => ConfigureCluster(builder, siloPort, gatewayPort),
-            ConfigureApp = MapClusterSurface,
+            ConfigureBuilder = builder => ConfigureCluster(builder, siloPort, gatewayPort, tenancy),
+            ConfigureApp = app => MapClusterSurface(app, tenancy),
         });
 
         var world = new ExplorerWorld(head, grpcEndpoint);
         await world.SeedAsync();
+        if (tenancy)
+        {
+            await world.SeedTenantsAsync();
+        }
+
         return world;
     }
+
+    /// <summary>The tenants a world started with <see cref="StartWithTenancyAsync"/> serves, beside the reserved default.</summary>
+    public static IReadOnlyList<string> Tenants { get; } = ["acme", "globex"];
 
     /// <summary>
     /// The app-control facade as <paramref name="user"/> sees it, over the world's
@@ -167,7 +189,7 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         });
     }
 
-    private static void ConfigureCluster(WebApplicationBuilder builder, int siloPort, int gatewayPort)
+    private static void ConfigureCluster(WebApplicationBuilder builder, int siloPort, int gatewayPort, bool tenancy)
     {
         builder.Host.UseOrleans(silo =>
         {
@@ -195,6 +217,12 @@ internal sealed class ExplorerWorld : IAsyncDisposable
                 options.BootstrapAdministrators.Add(WorldIdentities.Admin);
             });
             silo.AddLatticeAuthApi();
+
+            if (tenancy)
+            {
+                silo.AddLatticeTenancy();
+                silo.AddLatticeTenantAdminApi();
+            }
 
             silo.AddLatticeSchemaEnforcement();
             silo.AddLatticeSchemaApi();
@@ -228,9 +256,13 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         services.AddLatticeBackupApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeReplicationApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeReplicationStatusApiGrpc();
+        if (tenancy)
+        {
+            services.AddLatticeTenantAdminApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
+        }
     }
 
-    private static void MapClusterSurface(WebApplication app)
+    private static void MapClusterSurface(WebApplication app, bool tenancy)
     {
         app.MapLatticeStateApiGrpc();
         app.MapLatticeAuthApiGrpc();
@@ -242,6 +274,25 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         app.MapLatticeTreeAdminApiGrpc();
         app.MapLatticeBackupApiGrpc();
         app.MapLatticeReplicationStatusApiGrpc();
+        if (tenancy)
+        {
+            app.MapLatticeTenantAdminApiGrpc();
+        }
+    }
+
+    private async Task SeedTenantsAsync()
+    {
+        // As the operator, through the same facade the Tenancy area calls: the
+        // tenant directory lists the tenants its caller administers.
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(WorldIdentities.Admin + ":" + WorldIdentities.Password));
+        using (LatticeCredentialContext.Use(token, scheme: TrustedUserAuthenticator.Scheme))
+        {
+            var admin = Head.Services.GetRequiredService<ILatticeTenantAdmin>();
+            foreach (var tenant in Tenants)
+            {
+                await admin.CreateTenantAsync(tenant, [WorldIdentities.Admin]);
+            }
+        }
     }
 
     private async Task SeedAsync()

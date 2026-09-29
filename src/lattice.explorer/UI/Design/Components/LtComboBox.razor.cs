@@ -233,21 +233,8 @@ public partial class LtComboBox : IAsyncDisposable
 
     /// <summary>Moves keyboard focus to the input.</summary>
     /// <returns>A task that completes when the focus request has been sent.</returns>
-    public async ValueTask FocusAsync()
-    {
-        try
-        {
-            await _input.FocusAsync().ConfigureAwait(true);
-        }
-        catch (JSException)
-        {
-            // The input is gone from the page (a render replaced it); nothing to focus.
-        }
-        catch (JSDisconnectedException)
-        {
-            // The circuit has gone.
-        }
-    }
+    /// <remarks>A request whose input a later render removed is a focus not taken, never a fault.</remarks>
+    public ValueTask FocusAsync() => _input.FocusSafelyAsync();
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()

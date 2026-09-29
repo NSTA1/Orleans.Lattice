@@ -119,6 +119,31 @@ internal sealed class ExplorerTenancy
     }
 
     /// <summary>
+    /// Whether this caller may switch tenant at all: tenancy is on and the
+    /// operator-gated switcher proves the caller's standing. Every fault, a head
+    /// without a switcher and tenancy off all read as "may not", so an affordance
+    /// that depends on it fails closed; the switch itself is still re-checked.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the operator validation.</param>
+    /// <returns><see langword="true"/> only for a proven operator with tenancy on.</returns>
+    public async ValueTask<bool> CanSwitchAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsActive || _switcher is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await _switcher.IsOperatorAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Makes <paramref name="tenant"/> the active tenant, through the
     /// operator-gated switcher. Returns <see langword="true"/> when it is (already,
     /// or now) active, and <see langword="false"/> when the switch was refused or

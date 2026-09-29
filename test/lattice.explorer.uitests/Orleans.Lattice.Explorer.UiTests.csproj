@@ -89,6 +89,10 @@
     <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.replication\Orleans.Lattice.Api.Replication.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+    <!-- Tenancy, served only by the tenancy world (ExplorerWorld.StartWithTenancyAsync). -->
+    <ProjectReference Include="..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
     <!-- The task-board pilot app (P1): its manifest and UI bundle, embedded in a class library. -->
     <ProjectReference Include="..\..\samples\Explorer\Apps\TaskBoard\src\TaskBoard.csproj" />
   </ItemGroup>

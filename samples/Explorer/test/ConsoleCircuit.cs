@@ -1,4 +1,7 @@
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Authentication;
@@ -82,6 +85,23 @@ internal sealed class ConsoleCircuit : IAsyncDisposable
     /// <summary>The slugs of the apps installed in the circuit's tenant.</summary>
     public async Task<IReadOnlyList<string>> ListInstalledAppsAsync() =>
         [.. (await Apps.ListAsync()).Apps.Select(app => app.Slug)];
+
+    /// <summary>
+    /// The tenants the console offers this circuit to switch between: the one list the
+    /// address line's <c>t/</c> completions, the tenant directory and the top-bar tenant
+    /// switcher all read.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListAccessibleTenantsAsync() =>
+        [.. (await Services.GetRequiredService<IExplorerAccessibleTenantSource>().GetAccessibleTenantsAsync()).Select(tenant => tenant.Value)];
+
+    /// <summary>Renders <typeparamref name="TComponent"/> in this circuit, as the console would, and returns its markup.</summary>
+    /// <typeparam name="TComponent">A console component.</typeparam>
+    public async Task<string> RenderAsync<TComponent>()
+        where TComponent : IComponent
+    {
+        await using var renderer = new HtmlRenderer(Services, Services.GetRequiredService<ILoggerFactory>());
+        return await renderer.Dispatcher.InvokeAsync(async () => (await renderer.RenderComponentAsync<TComponent>()).ToHtmlString());
+    }
 
     /// <inheritdoc />
     public ValueTask DisposeAsync() => _scope.DisposeAsync();

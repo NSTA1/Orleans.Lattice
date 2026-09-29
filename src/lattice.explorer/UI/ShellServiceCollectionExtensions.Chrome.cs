@@ -26,6 +26,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<ExplorerNavigator>();
         services.TryAddScoped<AddressCompletionFanOut>();
         services.TryAddScoped<TenantCompletionSource>();
+        services.TryAddScoped<ExplorerTenantSwitch>();
 
         services.TryAddScoped<ShellChromeInterop>();
         services.TryAddScoped<IShellAppearanceApplier, JsShellAppearanceApplier>();

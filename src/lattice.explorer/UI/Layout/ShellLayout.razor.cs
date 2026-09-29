@@ -94,6 +94,9 @@ public partial class ShellLayout : IAsyncDisposable
     [Inject]
     internal ShellAssertedTenant AssertedTenant { get; set; } = default!;
 
+    [Inject]
+    internal ExplorerTenantSwitch TenantSwitch { get; set; } = default!;
+
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
     // The compact modifier is how a stylesheet reacts to the band without a width
@@ -144,6 +147,7 @@ public partial class ShellLayout : IAsyncDisposable
     {
         Directory.Changed -= OnDirectoryChanged;
         Session.OverlayOpening -= OnSessionOverlayOpening;
+        TenantSwitch.OpenRequested -= OnTenantSwitchRequested;
         AuthSession.AuthenticationChanged -= OnSessionStateChanged;
         ExplorerSession.ConfigurationChanged -= OnSessionStateChanged;
         if (_watchedConnection is not null)
@@ -165,6 +169,7 @@ public partial class ShellLayout : IAsyncDisposable
     {
         Directory.Changed += OnDirectoryChanged;
         Session.OverlayOpening += OnSessionOverlayOpening;
+        TenantSwitch.OpenRequested += OnTenantSwitchRequested;
 
         // An area's availability follows the circuit's connection and sign-in,
         // which change without a navigation: the session initialises, the
@@ -487,6 +492,19 @@ public partial class ShellLayout : IAsyncDisposable
         {
             _menuOpen = false;
             _directoryOpen = false;
+            StateHasChanged();
+        }
+    });
+
+    // Compact, the tenant switcher lives in the directory sheet, so the palette's
+    // Switch tenant opens the sheet; the switcher it mounts takes the request and
+    // the focus. Wider, the header's switcher answers the request itself.
+    private void OnTenantSwitchRequested() => _ = InvokeAsync(() =>
+    {
+        if (IsCompact && !_directoryOpen)
+        {
+            _menuOpen = false;
+            _directoryOpen = true;
             StateHasChanged();
         }
     });

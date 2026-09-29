@@ -78,6 +78,9 @@ public partial class AddressLine : IDisposable
     internal ShellAppearance Appearance { get; set; } = default!;
 
     [Inject]
+    internal ExplorerTenantSwitch TenantSwitch { get; set; } = default!;
+
+    [Inject]
     internal ShellChromeInterop Interop { get; set; } = default!;
 
     private ExplorerLocation CurrentLocation => Location ?? ExplorerLocation.Initial;
@@ -408,7 +411,7 @@ public partial class AddressLine : IDisposable
         switch (input.Mode)
         {
             case AddressQueryMode.Command:
-                var commands = ChromeCommands.Build(location, Appearance)
+                var commands = ChromeCommands.Build(location, Appearance, TenantSwitch)
                     .Concat(location.Entries.Where(entry => entry.IsVisible).SelectMany(entry => entry.Area.Commands))
                     .Where(command => command.Title.Contains(input.Text, StringComparison.OrdinalIgnoreCase)
                         || command.Id.Contains(input.Text, StringComparison.OrdinalIgnoreCase))
