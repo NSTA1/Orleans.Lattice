@@ -4,6 +4,7 @@ using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Slots;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -52,6 +53,8 @@ public partial class ShellLayout : IAsyncDisposable
     private IJSObjectReference? _viewport;
     private ILatticeStateConnection? _watchedConnection;
     private LatticeConnectionState _connectionState;
+    private bool _sessionReady;
+    private (bool Authenticated, string? User)? _tenantResolvedFor;
 
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
@@ -79,6 +82,9 @@ public partial class ShellLayout : IAsyncDisposable
 
     [Inject]
     internal IExplorerAuthSession AuthSession { get; set; } = default!;
+
+    [Inject]
+    internal IServiceProvider Services { get; set; } = default!;
 
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
@@ -198,6 +204,16 @@ public partial class ShellLayout : IAsyncDisposable
             return;
         }
 
+        await ResolveTenantIdentityAsync(token);
+        if (version != _version)
+        {
+            return;
+        }
+
+        // Only now may a page ask the cluster anything: the configuration, the
+        // sign-in and the caller's tenant are all established.
+        _sessionReady = true;
+
         // The operator verdict decides whether a caller scoped to the reserved
         // default tenant sees tenancy chrome, and canonicalisation reads it
         // synchronously, so it is refreshed before the address is resolved.
@@ -279,13 +295,66 @@ public partial class ShellLayout : IAsyncDisposable
         }
 
         _connectionState = status.State;
-        Directory.Invalidate();
+        if (_sessionReady)
+        {
+            Directory.Invalidate();
+        }
     }
 
+    // A sign-in or configuration change can move the caller's tenant and so the
+    // canonical address as well as which areas are shown, so the whole location
+    // is synchronised again rather than only the directory.
     private void OnSessionStateChanged()
     {
         WatchConnection();
-        Directory.Invalidate();
+
+        // The first synchronisation is still establishing the session, and it
+        // reads the configuration, sign-in and tenant only after they settle, so a
+        // change raised while it runs (the stored credential signing the circuit
+        // in, say) is already accounted for. Re-entering it would only abandon it.
+        if (!_sessionReady)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await SyncLocationAsync();
+                StateHasChanged();
+            }
+            catch (OperationCanceledException)
+            {
+                // The circuit is ending.
+            }
+        });
+    }
+
+    /// <summary>
+    /// Maps the signed-in identity onto the circuit's active tenant through Core's
+    /// resolver, once per identity. Core's tenant view is fail-closed: until this
+    /// runs, an active view has no tenant and scopes every catalogue to nothing.
+    /// A head without tenancy registers no resolver, and this does nothing.
+    /// </summary>
+    private async Task ResolveTenantIdentityAsync(CancellationToken token)
+    {
+        var identity = (AuthSession.IsAuthenticated, AuthSession.Username);
+        if (_tenantResolvedFor == identity
+            || Services.GetService(typeof(IExplorerTenantIdentityResolver)) is not IExplorerTenantIdentityResolver resolver)
+        {
+            return;
+        }
+
+        try
+        {
+            await resolver.ResolveAsync(token);
+            _tenantResolvedFor = identity;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Unresolved stays fail-closed: no active tenant, nothing scoped in.
+        }
     }
 
     private async Task RefreshEntriesAsync(int version, CancellationToken token)

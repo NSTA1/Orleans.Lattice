@@ -110,6 +110,31 @@ public sealed class ShellLayoutSessionTests : ShellLayoutTestContext
     }
 
     [Test]
+    public void The_tenant_identity_is_resolved_before_an_area_is_first_asked_and_again_after_a_sign_in()
+    {
+        var resolver = new CountingTenantResolver();
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Tenancy.IExplorerTenantIdentityResolver>(resolver);
+        AddArea(new FakeArea("data", "Data")
+        {
+            Availability = _ => ValueTask.FromResult(resolver.Calls > 0
+                ? AreaAvailability.Visible
+                : AreaAvailability.Unavailable(NotConnected)),
+        });
+        Navigation.NavigateTo("data");
+
+        var cut = RenderLayout();
+        var first = resolver.Calls;
+        Auth.SignIn("explorer-admin");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(1));
+            Assert.That(cut.Find("main").TextContent, Does.Not.Contain(NotConnected));
+        });
+        cut.WaitForAssertion(() => Assert.That(resolver.Calls, Is.EqualTo(2), "a new identity is mapped onto its tenant again"));
+    }
+
+    [Test]
     public async Task Disposing_the_layout_stops_listening_to_the_session()
     {
         var cut = RenderLayout();
@@ -122,4 +147,15 @@ public sealed class ShellLayoutSessionTests : ShellLayoutTestContext
     }
 
     private FakeAuthSession Auth => (FakeAuthSession)Services.GetRequiredService<IExplorerAuthSession>();
+
+    private sealed class CountingTenantResolver : Orleans.Lattice.Explorer.Core.Tenancy.IExplorerTenantIdentityResolver
+    {
+        public int Calls { get; private set; }
+
+        public ValueTask ResolveAsync(CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return ValueTask.CompletedTask;
+        }
+    }
 }

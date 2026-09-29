@@ -108,6 +108,28 @@ public sealed class DataAreaTests : DataTestContext
     }
 
     [Test]
+    public async Task The_remembered_catalogue_is_forgotten_when_the_caller_changes()
+    {
+        Client.WithTree("orders");
+        var directory = Services.GetRequiredService<DataDirectory>();
+        var auth = (Orleans.Lattice.Explorer.Tests.UI.Session.FakeAuthSession)Services.GetRequiredService<Orleans.Lattice.Explorer.Core.Authentication.IExplorerAuthSession>();
+
+        var anonymous = await directory.LoadAsync();
+        Client.WithTree("customers");
+        var stillAnonymous = await directory.LoadAsync();
+        auth.SignIn("alice");
+        var signedIn = await directory.LoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(anonymous.Select(entry => entry.LogicalId), Is.EqualTo(new[] { "orders" }));
+            Assert.That(stillAnonymous, Is.SameAs(anonymous), "the same caller reads the remembered catalogue");
+            Assert.That(signedIn.Select(entry => entry.LogicalId), Is.EquivalentTo(new[] { "orders", "customers" }),
+                "a catalogue read for one caller is never shown to the next");
+        });
+    }
+
+    [Test]
     public async Task The_badge_counts_the_loaded_directory_and_is_absent_before_it_loads()
     {
         Client.WithTree("orders").WithTree("customers");

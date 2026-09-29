@@ -14,9 +14,10 @@
     width is measured the expanded frame renders, so nothing here depends on
     script to be usable.
 
-    The main landmark is gated: an area the caller may not see renders the
-    not-found page, an unavailable one says why, and nothing renders an area's
-    page before its availability is known.
+    The main landmark is gated: nothing renders before the circuit's session
+    (configuration and sign-in) is loaded, an area the caller may not see renders
+    the not-found page, an unavailable one says why, and nothing renders an
+    area's page before its availability is known.
 *@
 
 <div class="@RootClass" @ref="_root">
@@ -77,7 +78,12 @@
                     </div>
                 }
                 <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
-                    @if (GatedArea is { } area)
+                    @if (!_sessionReady)
+                    {
+                        @* No page asks the cluster anything until the circuit's configuration and sign-in are loaded, so nothing is read, or remembered, as the wrong caller. *@
+                        <LtSkeleton Lines="6" Label="Loading" />
+                    }
+                    else if (GatedArea is { } area)
                     {
                         @if (!_location.EntriesLoaded)
                         {

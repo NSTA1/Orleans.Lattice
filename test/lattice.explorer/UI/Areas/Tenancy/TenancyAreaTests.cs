@@ -305,6 +305,9 @@ public sealed class TenancyAreaTests : TenancyTestContext
     public async Task An_operator_scoped_to_the_default_tenant_is_not_offered_a_grant()
     {
         UseTenancyAs(active: TenantId.DefaultId, isOperator: true);
+        // The layout proves operator standing for the reserved default tenant before
+        // any area is asked; until it does, tenancy chrome is withheld (tenant-scope.md).
+        await Services.GetRequiredService<ExplorerTenancy>().RefreshAsync();
         var area = CreateArea();
 
         await area.GetAvailabilityAsync(CancellationToken.None);

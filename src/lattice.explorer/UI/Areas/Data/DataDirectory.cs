@@ -1,4 +1,6 @@
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
@@ -17,6 +19,14 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// Loads run on the directory's own lifetime, never on a caller's token, so a
 /// caller that gives up (the chrome's availability time box) does not cancel the
 /// load another caller is waiting for.
+/// <para>
+/// What is remembered belongs to one caller at one endpoint. The catalogue is
+/// filtered by the caller's own read rights and tenant scope, so the memo is keyed
+/// on the signed-in identity, the configured endpoint and the active tenant, and
+/// any change to one of them forgets it:
+/// a catalogue read before sign-in never outlives the sign-in, and one identity's
+/// trees are never shown to the next after a sign-out.
+/// </para>
 /// </remarks>
 internal sealed class DataDirectory : IDisposable
 {
@@ -34,6 +44,7 @@ internal sealed class DataDirectory : IDisposable
     private Task<bool>? _probe;
     private IReadOnlyList<DataTreeEntry>? _entries;
     private Dictionary<string, DataTreeEntry>? _byStateId;
+    private (bool Authenticated, string? User, string? Endpoint, string? Tenant) _caller;
 
     /// <summary>Creates the directory.</summary>
     /// <param name="services">The circuit's services, from which the catalogue reader is resolved lazily.</param>
@@ -60,6 +71,7 @@ internal sealed class DataDirectory : IDisposable
     /// <param name="cancellationToken">Stops waiting; the probe itself continues.</param>
     public async Task<bool> ProbeAsync(CancellationToken cancellationToken)
     {
+        ForgetIfTheCallerChanged();
         if (_entries is not null)
         {
             return true;
@@ -89,6 +101,7 @@ internal sealed class DataDirectory : IDisposable
     /// <param name="cancellationToken">Stops waiting; the load itself continues.</param>
     public Task<IReadOnlyList<DataTreeEntry>> LoadAsync(CancellationToken cancellationToken = default)
     {
+        ForgetIfTheCallerChanged();
         if (_entries is { } loaded)
         {
             return Task.FromResult(loaded);
@@ -189,6 +202,36 @@ internal sealed class DataDirectory : IDisposable
         _lifetime.Dispose();
     }
 
+    /// <summary>
+    /// Drops everything remembered when the caller's identity or endpoint is not
+    /// the one it was remembered for. Reading the current caller allocates nothing
+    /// in the steady state: the tuple is compared by value.
+    /// </summary>
+    private void ForgetIfTheCallerChanged()
+    {
+        var caller = CurrentCaller();
+        lock (_gate)
+        {
+            if (caller == _caller)
+            {
+                return;
+            }
+
+            _caller = caller;
+            _load = null;
+            _probe = null;
+            _entries = null;
+            _byStateId = null;
+        }
+    }
+
+    private (bool Authenticated, string? User, string? Endpoint, string? Tenant) CurrentCaller()
+    {
+        var auth = _services.GetService(typeof(IExplorerAuthSession)) as IExplorerAuthSession;
+        var session = _services.GetService(typeof(IExplorerSession)) as IExplorerSession;
+        return (auth?.IsAuthenticated == true, auth?.Username, session?.Current?.Endpoint, _tenancy.ActiveTenant);
+    }
+
     private ICatalogReader? TryGetReader()
     {
         try
@@ -223,6 +266,7 @@ internal sealed class DataDirectory : IDisposable
 
     private async Task<IReadOnlyList<DataTreeEntry>> RunLoadAsync()
     {
+        var caller = _caller;
         try
         {
             var reader = TryGetReader() ?? throw new InvalidOperationException("No state API is configured for this Explorer.");
@@ -231,8 +275,13 @@ internal sealed class DataDirectory : IDisposable
             var entries = Build(trees, views);
             lock (_gate)
             {
-                _entries = entries;
-                _byStateId = entries.ToDictionary(entry => entry.StateId, StringComparer.Ordinal);
+                // A load that finished for a caller who has since changed is
+                // returned to its own waiters but never remembered.
+                if (caller == _caller)
+                {
+                    _entries = entries;
+                    _byStateId = entries.ToDictionary(entry => entry.StateId, StringComparer.Ordinal);
+                }
             }
 
             return entries;
