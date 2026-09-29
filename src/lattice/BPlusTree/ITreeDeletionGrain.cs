@@ -113,7 +113,8 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> while logical deletion is pending or durable
     /// (whether or not the purge has completed). Physical retirement alone
-    /// does not make the logical tree deleted.
+    /// does not make the logical tree deleted, and a purged tree whose id has
+    /// been registered again is a new, live tree, so it reads <c>false</c>.
     /// </summary>
     [Orleans.Concurrency.AlwaysInterleave]
     Task<bool> IsDeletedAsync();
@@ -124,7 +125,8 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// configured soft-delete duration, and whether a purge is in progress or has
     /// completed. A pure read with no side effects; unlike the mutating verbs it
     /// asserts no internal-origin marker, so a diagnostics facade may call it
-    /// directly.
+    /// directly. A purged tree whose id has been registered again reads as live,
+    /// so the snapshot never disagrees with the registry.
     /// </summary>
     Task<TreeDeletionSnapshot> GetDeletionStatusAsync();
 
@@ -137,7 +139,9 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// (data is gone). A retry after a partial failure is safe - the per-shard
     /// unmark and re-seed are idempotent and the deletion record is cleared only
     /// after them - but a call after a successful recovery throws, because the
-    /// tree is no longer deleted.
+    /// tree is no longer deleted. On a purged tree whose id has been registered
+    /// again it clears the stale deletion record and returns: there is nothing
+    /// to restore, and the id already names a live tree.
     /// </summary>
     Task RecoverAsync();
 

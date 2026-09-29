@@ -59,6 +59,7 @@ internal sealed partial class TreeDeletionGrain(
     private async Task RetirePhysicalAsync(bool retainsRegistryEntry)
     {
         EnsureLifecycleOrigin();
+        await ClearRecordIfReusedAfterPurgeAsync();
         var suppressed = state.State.SuppressLifecycleEvents;
         state.State.SuppressLifecycleEvents = true;
         try { await state.WriteStateAsync(); }
@@ -208,42 +209,56 @@ internal sealed partial class TreeDeletionGrain(
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
     }
 
-    public Task<bool> IsDeletedAsync() => Task.FromResult(
-        state.State.DeletePending || state.State.LogicalPhysicalTreeId is not null
-        || (!state.State.RetainsRegistryEntry && state.State.IsDeleted));
+    public async Task<bool> IsDeletedAsync()
+    {
+        var deleted = state.State.DeletePending || state.State.LogicalPhysicalTreeId is not null
+            || (!state.State.RetainsRegistryEntry && state.State.IsDeleted);
+
+        // A purged tree whose id was registered again is a new, live tree.
+        return deleted && !await IsReusedAfterPurgeAsync();
+    }
 
     public Task<bool> IsPhysicalDeletedAsync() => Task.FromResult(state.State.IsDeleted || state.State.Delegated);
 
-    public Task<TreeDeletionSnapshot> GetDeletionStatusAsync()
+    public async Task<TreeDeletionSnapshot> GetDeletionStatusAsync()
     {
         // A pure read: no internal-origin assertion (mirrors IsDeletedAsync), so
         // the diagnostics facade can dial it directly. The recovery deadline is
         // derived from the persisted delete time and the tree's configured
-        // soft-delete duration; it is null while the tree is live.
+        // soft-delete duration; it is null while the tree is live. A purged
+        // tree whose id was registered again reads as the live tree it now is,
+        // so this never disagrees with TreeExistsAsync.
+        if (await IsReusedAfterPurgeAsync())
+            return new TreeDeletionSnapshot();
         if (state.State.LogicalPhysicalTreeId is not null)
-            return Task.FromResult(new TreeDeletionSnapshot
+            return new TreeDeletionSnapshot
             {
                 IsDeleted = true,
                 DeletedAtUtc = state.State.LogicalDeletedAtUtc,
                 RecoveryDeadlineUtc = state.State.LogicalDeletedAtUtc + Options.SoftDeleteDuration,
                 PurgeInProgress = state.State.LogicalPurgeInProgress,
                 PurgeComplete = state.State.LogicalPurgeComplete,
-            });
+            };
         var retired = state.State.RetainsRegistryEntry;
         var deletedAt = retired ? null : state.State.DeletedAtUtc;
-        return Task.FromResult(new TreeDeletionSnapshot
+        return new TreeDeletionSnapshot
         {
             IsDeleted = !retired && state.State.IsDeleted,
             DeletedAtUtc = deletedAt,
             RecoveryDeadlineUtc = deletedAt is { } at ? at + Options.SoftDeleteDuration : null,
             PurgeInProgress = !retired && state.State.PurgeInProgress,
             PurgeComplete = !retired && state.State.PurgeComplete,
-        });
+        };
     }
 
     public async Task RecoverAsync()
     {
         EnsureLifecycleOrigin();
+
+        // Nothing to restore: the purged tree's data is gone and the id already
+        // names a live tree. Clearing the record is the whole recovery.
+        if (await ClearRecordIfReusedAfterPurgeAsync())
+            return;
         if (state.State.LogicalPhysicalTreeId is not null)
         {
             await RecoverLogicalAsync();
@@ -364,6 +379,7 @@ internal sealed partial class TreeDeletionGrain(
     public async Task PurgeNowAsync()
     {
         EnsureLifecycleOrigin();
+        await ClearRecordIfReusedAfterPurgeAsync();
         if (state.State.LogicalPhysicalTreeId is not null)
         {
             await PurgeLogicalAsync();
@@ -412,12 +428,14 @@ internal sealed partial class TreeDeletionGrain(
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        _finalisingPurge = true;
         try
         {
             await state.WriteStateAsync();
         }
         catch
         {
+            _finalisingPurge = false;
             state.State.PurgeInProgress = purgeInProgressSnapshot;
             state.State.PurgeComplete = purgeCompleteSnapshot;
             state.State.NextShardIndex = nextShardIndexSnapshot;
@@ -436,6 +454,7 @@ internal sealed partial class TreeDeletionGrain(
         if (state.State.Discarded)
             await TrimDiscardedWalAsync();
         await UnregisterPurgedTreeAsync();
+        _finalisingPurge = false;
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
@@ -576,6 +595,7 @@ internal sealed partial class TreeDeletionGrain(
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        _finalisingPurge = true;
         await state.WriteStateAsync();
 
         // Remove the tree from the registry, trimming a discarded copy's log
@@ -583,6 +603,7 @@ internal sealed partial class TreeDeletionGrain(
         if (state.State.Discarded)
             await TrimDiscardedWalAsync();
         await UnregisterPurgedTreeAsync();
+        _finalisingPurge = false;
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
