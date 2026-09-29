@@ -1,106 +1,152 @@
 # Managing schema from the Explorer
 
-> **Hidden by default.** The Schema area is withheld from the Explorer's rail
-> by default because its versioning UI cannot yet express what differs between
-> schema versions. Surface it by calling
-> `AddExplorerSchemaPlugin()` on the head's service collection - registration is
-> the whole of the opt-in, and it replaces the retired `EnableSchemaArea` flag
-> that `LatticeExplorerWebOptions` once carried (see
-> [Running the Explorer](running-the-explorer.md)). The schema control services
-> ship and stay registered regardless, so this only decides whether the tab is
-> rendered. Tracking
-> issue: re-surface the area once version-shape differences are expressible.
+The **Schema** area is a native compiled-in Explorer area. No extra registration is needed. It appears when the schema control facade's capability probe grants the caller at least one schema capability.
 
-The Orleans.Lattice Explorer's top-level areas sit in a vertical rail down the
-left of the shell. **Schema** is the schema-management admin area. It lets an operator
-inspect and edit a tree's write-validation policy and its value-versioning
-config, run a read-only compliance audit, and inspect the strict-mode dead-letter
-queue - over the schema control gRPC binding, with no new server surface.
+Schema is tenant-scoped. In a tenant-rooted Explorer, the same address under `/t/{tenant}` scopes the caller-supplied tree name through the active tenant before the cluster authorizes or acts on it.
 
-## Where it sits
+## Availability
 
-Schema is one of the rail's areas, alongside **Explore** (the tree browser),
-**Backups**, **Access**, **Tenant administration**, **My tenant**, and
-**Telemetry**. Selecting it swaps the working surface to the schema admin tabs.
-Like every area, it is a plugin that carries its own advisory access gate.
+Schema is visible when its fail-closed capability probe returns any schema grant. The probe names a reserved sentinel tree and has no side effects. A definite visible or refused answer is remembered until the sign-in state or connection changes. A transport fault is not remembered, so the next navigation asks again.
 
-The area drives the schema control API
-([`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md)) over
-the transport-agnostic facade
-([`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md)); the underlying
-enforcement, versioning, and dead-letter semantics belong to
-[`Orleans.Lattice.Schema`](../lattice.schema/README.md) and are not
-re-implemented here.
+The area is hidden when the schema facade is absent, when a signed-in identity receives no grant, when the probe is denied, when the cluster does not serve schema administration, or when the connection is unavailable.
 
-## Per-tree, selection auto-loads
+An anonymous caller whose probe returns no grants sees the area as unavailable. The exact sentence shown is:
 
-Schema state is per tree. Each tab starts empty; picking a tree from the tree
-list immediately probes that tree, and the Policy and Versions tabs load its
-policy and version state as soon as they are shown (there is no separate **Load**
-button for either). Two reads stay explicit because they can be expensive: the
-compliance audit runs only when you start it, and the dead-letter queue loads
-only when you press **Load dead letters**. The area is capability-gated as a
-whole (see below), and the per-tree load also reports whether the specific tree
-is governed by a policy at all - a tree with no policy accepts all values, and
-the area says so rather than showing an error.
+> Sign in to manage schema on this cluster.
 
-## The three tabs
+Per-tree grants are probed separately and reused briefly. If the caller has no grant on a selected tree, the tree page says:
 
-- **Policy** - view, set, and clear the tree's write-validation policy. A tree
-  with no policy accepts every value; setting a policy turns on validation for
-  subsequent writes. When a policy is loaded, this tab also hosts a **Compliance**
-  action: a **read-only** audit that scans the tree's entries against its compiled
-  policy and reports how many values are compliant versus non-compliant, with a
-  breakdown of the reasons. It never mutates anything; a tree with no policy is
-  reported as ungoverned.
-- **Versions** - view, set, advance, migrate, and clear the tree's
-  envelope-version config, and see the status of the last remediation run.
-  Advancing the target version can either leave existing values in place or
-  migrate them up to the new version. Version operations require the versioning
-  add-on to be registered on the silo; when it is not, the area reports that
-  clearly instead of failing opaquely.
-- **Dead letters** - list the writes that strict-mode validation diverted (the
-  schema-rejected entries), and show their count. The queue loads on demand,
-  from the **Load dead letters** button, because it can be large.
+> You may not manage this tree's schema
 
-## Capability-aware, demote not hide
+Panel-level denials are shown beside the panel, for example **You may not read this tree's policy**, **You may not scan this tree**, or **You may not read this tree's dead letters**.
 
-The area is gated in two layers. The coarse gate, which is the plugin's own
-access gate, is the capability probe's own answer: the probe reports each capability as a flag
-rather than throwing on an authorization denial, and it is the flags it reports,
-not the fact that it completed, that constitute the grant - a probe that comes
-back with nothing set withholds rather than admits. The resulting state follows
-the fault. A cluster that does not serve schema administration at all answers
-`Unimplemented`, and the area resolves `Unavailable` and renders no entry, with
-the absence explained in the rail's capabilities affordance rather than left as
-a silent gap. Any other transport fault, including an unreachable endpoint or a
-console not yet configured with one, withholds the grant instead: the area
-resolves `Denied` for a signed-in caller and `AuthenticationRequired` for an
-anonymous one, and is re-probed when the connection status next changes. A probe
-the server rejects as `Unauthenticated` resolves `AuthenticationRequired` even for
-a caller the console believes is signed in, because the server did not accept the
-credential. Inside
-the area, each action - setting or clearing a policy, changing or advancing the
-version config, running remediation, and the read-only compliance scan -
-disables from the **per-tree capability snapshot** the panel requests when a
-tree is loaded (and also whenever no tree is loaded or an action is already in
-flight), not from the coarse gate.
+## Addresses
 
-## Advisory, not a security boundary
+The Schema area is tenant-scoped. These route forms exist in the shipped pages:
 
-The gating is a usability affordance only. The **server remains the
-fail-closed enforcement point**: every real read or mutation authorizes the
-tree's scope on the server when it runs - Read authority for the inspect verbs
-and the compliance audit, SchemaAdmin authority for the mutations - regardless of
-what the cached capability said. An over-optimistic capability still fails closed
-on the server, and the Explorer surfaces a clean "not permitted" message rather
-than an unhandled error. The capability probe itself has no side effects.
+| Page | Plain address | Tenant-rooted form | Notes |
+| --- | --- | --- | --- |
+| Schema directory | `/schema` | `/t/{tenant}/schema` | Lists governed trees by default. Use `?show=all` to include ungoverned trees and `?filter={text}` to filter by tree id. |
+| Tree workspace | `/schema/{tree-path}` | `/t/{tenant}/schema/{tree-path}` | Supports tree ids carried in up to six path segments after `/schema`. The tab is selected with `?tab=...`. |
+
+The area uses these query keys:
+
+- `show=all` lists every tree, not only trees with schema state.
+- `filter={text}` filters the directory by tree id.
+- `tab=policy|versions|compliance|remediation|dead-letters` selects a tree-workspace tab. Missing or unknown values fall back to `policy`.
+- `scan=start` on the compliance tab starts one read-only compliance scan, then the page removes the key from the address so refresh or history navigation does not start another scan.
+
+## Directory page
+
+The directory page shows the logical trees under a schema policy, version config, or app declaration. The **Under schema** and **All trees** links switch between governed trees and every logical tree. The filter narrows by tree id. **Refresh** reads again. **Scan compliance...** opens a picker listing visible trees that have a policy.
+
+Each row shows:
+
+- the logical tree id, linking to `/schema/{tree}`;
+- policy state: a policy summary, **None**, **Not permitted**, **Not available**, or **Could not read**;
+- versioning state: the target version summary, **Unversioned**, **Not permitted**, **Not available**, or **Could not read**;
+- the last compliance scan result recorded in this Explorer circuit;
+- the declaring app, when an installed app manifest declares the tree's schema.
+
+A declaring app link goes to `/apps/{slug}` in the same tenant. A row with a policy has a **Scan compliance** action linking to `/schema/{tree}?tab=compliance&scan=start`.
+
+The directory shows a truncated note when the cluster holds more trees than one bounded listing inspects. A tree can still be opened directly by address.
+
+## Tree workspace and tabs
+
+A tree workspace heading shows the logical tree id, badges for policy and version state, and app declaration metadata when present. The declaring app line links to `/apps/{slug}` and names the app version, schema family, schema version, and strict-ingest flag.
+
+The workspace has five tabs.
+
+### Policy
+
+The Policy tab reads, sets, edits, and clears the tree's write-validation policy. A tree with no policy accepts every value. The editor can add these rule shapes:
+
+- well-formed UTF-8;
+- one JSON document;
+- largest size in bytes;
+- regular-expression match, optionally under a member path.
+
+A policy needs at least one rule; to accept every value, clear the policy instead. Saving replaces the whole policy and affects new writes immediately. Existing stored values are not changed.
+
+**Strict ingest** controls whether replicated and restored values are checked too. When it is on, a value that fails strict ingest is diverted to dead letters instead of being applied.
+
+Clearing a policy uses a destructive confirmation named **Clear this tree's policy**. The confirmation states that every value will be accepted from then on, strict ingest stops diverting values, and the rules are not kept.
+
+### Versions
+
+The Versions tab manages the tree's envelope-version config. A version is a stamp, not a shape: new writes are stamped with the schema family and target version, and older values are upgraded when they are read or migrated. The Explorer does not show the shape difference between versions because those registrations live in code on the silos.
+
+When versioning is off, **Turn on versioning** asks for a schema family, a target version of 1 or more, and strict ingest. When versioning is on, the tab can:
+
+- **Advance target version...** after a confirmation named **Advance to version N**;
+- **Advance and migrate...** after a confirmation named **Advance to version N and migrate**;
+- **Migrate stored values...** after a review dialog;
+- **Change config** by replacing the config as typed;
+- **Turn off versioning** after a destructive confirmation named **Turn off versioning**.
+
+Advancing can only move the target version up. Migration and advance-and-migrate are staged background operations. The tab links to the Remediation tab while one is running.
+
+If the cluster has not registered schema versioning, the tab says **Versioning is not available** instead of failing opaquely.
+
+### Compliance
+
+The Compliance tab runs a read-only scan of every value in the tree against the current policy. The scan changes nothing. It can be started from the tab, from the directory picker, or by the address `?tab=compliance&scan=start`.
+
+While a scan runs, the tab shows **Scanning every value of {tree}...** and a **Stop scanning** control. Stopping a scan reports that it was stopped before it finished. A finished scan shows scanned, compliant, and non-compliant counts, finish time, and a breakdown of non-compliance reasons. The last scan result is kept for this Explorer circuit and summarised in the directory.
+
+If the tree has no policy, the tab says there is nothing to scan against and links back to the Policy tab.
+
+### Remediation
+
+The Remediation tab is the status page for a tree's background migration or remediation, and the place to start a remediation when the caller may manage schema.
+
+A remediation rewrites every value through ordered transform steps, checks each rewritten value against the current policy, and cuts over only when every value passes. If a value still fails, nothing is cut over. The editor can add only top-level member steps: set, remove, and rename. Conditional or computed transforms are registered in code on the silos and are not authored here.
+
+Starting a remediation opens a destructive confirmation named **Remediate this tree**. It says every value is rewritten and checked, that a successful run cuts over to the rewritten values, and that a failed value leaves the tree unchanged. The operation runs in the background and the page can be left while it runs.
+
+The status section reads the cluster's own remediation status and also shows operations started in the current circuit. It displays stages (**Confirmed**, **Running in the cluster**, **Finished**), operation id when present, values checked, aborted-key detail, failure text, **Refresh status**, and **Clear this result** for a finished circuit operation. Running status is read again every 2 seconds.
+
+### Dead letters
+
+The Dead letters tab counts strict-mode dead letters on arrival and lists entries on demand because the queue can be large. It is read-only: there is no replay or delete action here.
+
+**Load dead letters** reads the first 100 entries. **Load more dead letters** increases the limit by another 100. Rows show key, reason, source, diverted time, and value size. The detail view shows the full key and a text preview of the rejected value's first bytes.
+
+## Palette and address completions
+
+Schema contributes these commands:
+
+| Command id | Label | Target |
+| --- | --- | --- |
+| `schema.scan-compliance` | `Scan compliance...` | `/schema` and opens the picker on the directory page |
+| `schema.all-trees` | `Show every tree's schema` | `/schema?show=all` |
+
+The visible controls carry the same command ids: the **Scan compliance...** button and the **All trees** link.
+
+Address completions list governed trees from the remembered directory read. Search mode matches tree ids; app mode matches declaring app slugs; address mode matches `/schema/...` paths. Completions stay in the current tenant and include details such as **Schema policy**, **Schema versioning**, **Schema policy and versioning**, or **Schema declared by an app**.
+
+## Limits and caching
+
+- The tree catalogue is cached for 30 seconds and follows at most 20 catalogue pages per read.
+- A directory listing inspects at most 500 logical trees at a time and probes up to 8 trees concurrently.
+- The directory read is cached for 30 seconds.
+- Per-tree grants are cached for 30 seconds unless a refresh is requested.
+- Dead-letter reads load 100 entries at a time.
+- Running operation status is re-read every 2 seconds while it is running.
+- Compliance scan results are remembered only in the current Explorer circuit.
+
+## Server authority
+
+The schema control facade scopes caller-supplied tree names through the active tenant, then authorizes and acts on the same effective tree. Read authority gates policy reads, version reads, remediation status, dead-letter reads, and compliance scans. Schema-admin authority gates policy changes, version changes, and remediation. Version operations require the versioning add-on on the silo.
 
 ## See also
 
-- [Schema enforcement and versioning](../lattice.schema/README.md) - the engine
-  whose control surface this area drives.
-- [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the
-  transport-agnostic schema control facade.
-- [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) - the
-  gRPC binding and typed client the area drives.
+- [Explorer overview](README.md)
+- [Navigation model](navigation-model.md)
+- [Area availability](area-availability.md)
+- [Areas reference](areas.md#schema)
+- [Lattice Apps](lattice-apps.md)
+- [Schema engine](../lattice.schema/README.md)
+- [Schema API](../lattice.api.schema/README.md)
+- [Schema gRPC binding](../lattice.api.schema.grpc/README.md)

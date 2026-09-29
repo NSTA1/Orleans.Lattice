@@ -1,26 +1,44 @@
 # Orleans.Lattice.Explorer.Entra.Web
 
-Hosted-web [Microsoft Entra ID](https://learn.microsoft.com/entra/identity/) (OpenID Connect) sign-in for the [Orleans.Lattice Explorer](../lattice.explorer/README.md) when it runs as a Blazor Server web app.
+`Orleans.Lattice.Explorer.Entra.Web` adds hosted-web Microsoft Entra ID sign-in
+to the Explorer's Blazor Server web head.
 
-## What is it?
+## What it does
 
-`Orleans.Lattice.Explorer.Entra.Web` adds an interactive, browser-based Entra sign-in to a hosted Explorer. It wires the standard ASP.NET Core OpenID Connect flow (authorization code + PKCE, cookie session) through [Microsoft.Identity.Web](https://learn.microsoft.com/entra/msal/dotnet/microsoft-identity-web/), then exchanges the signed-in user's session for a downstream **State API** token so the Explorer connects to an auth-enabled cluster as that user.
+The package wires ASP.NET Core OpenID Connect through Microsoft.Identity.Web and
+then exchanges the signed-in browser session for a downstream State API token.
+The Explorer still sees an `IExplorerAuthMethod` for the `entra` scheme; the web
+provider is the implementation behind that scheme.
 
-It is the web counterpart to [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md), which uses an interactive desktop/device-code MSAL flow. A remote Blazor Server circuit has no ambient `HttpContext`, so this package acquires tokens by passing the circuit's `ClaimsPrincipal` to Microsoft.Identity.Web explicitly.
+Use [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md) for
+interactive non-web hosts. A remote Blazor Server circuit has no ambient
+`HttpContext`, so this package explicitly passes the circuit's `ClaimsPrincipal`
+to Microsoft.Identity.Web when it acquires tokens.
 
-## Core properties
+## Behaviour
 
-- **No public API change to the released Explorer.** The package plugs into the core `IExplorerAuthMethod` seam for the `entra` scheme; the existing sign-in dialog already renders a generic "Sign in with ..." button, labelled with the display name the State API advertises for that scheme, when the endpoint advertises it. The OIDC redirect happens at the ASP.NET middleware layer, not inside the SignalR circuit.
-- **Per-circuit credential isolation.** The auth method and token acquirer are registered **scoped**, so each user's circuit acquires and holds only its own token.
-- **Fail-closed authorization.** By default the registration installs a fallback authorization policy that challenges any unauthenticated request into the OIDC redirect. During silent token renewal, a re-auth-required signal from Microsoft.Identity.Web is translated into a typed `ExplorerWebReauthRequiredException` and latches the credential as revoked rather than serving a stale token; the initial token acquisition is outside this latch path and surfaces its failure directly.
-- **Multi-replica ready.** Select the distributed token cache and register a shared `IDistributedCache` (for example [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md)) so a user routed to a cold replica does not silently lose their session. See [multi-replica and failover hosting](../lattice.explorer/multi-replica-hosting.md).
-- **Graceful re-authentication.** When the credential latches as revoked, the core Explorer shows a "sign in again" interstitial that navigates to the mapped `MapLatticeExplorerEntraWebReauth` endpoint, which forces a fresh interactive sign-in (`prompt=login`) so a new authorization code is redeemed and the replica's token cache is repopulated.
-- **Full federated sign-out.** The Explorer's "Sign out" button posts to the mapped `MapLatticeExplorerEntraWebSignOut` endpoint (published automatically as the core `ExplorerSignOutOptions.FederatedSignOutPath`), which drops the local State API credential, clears the OpenID Connect cookie, and ends the Entra session in one antiforgery-guarded `POST`. Without it a "Sign out" would only drop the API credential and the fallback authorization policy would silently re-authenticate the still-cookie-valid circuit.
-- **Optional auto-sign-in.** A best-effort Blazor Server circuit handler completes the State API sign-in automatically for an already browser-authenticated user, so the console connects without a manual click; any failure degrades silently to the interactive dialog.
+- The provider registers a scoped `IExplorerAuthMethod` for `entra` and a scoped
+  token-acquirer seam. Each browser circuit uses its own user and token source.
+- By default it installs a fallback authorization policy, so unauthenticated HTTP
+  requests are challenged into the OIDC redirect.
+- It registers cascading authentication state so the Blazor Server circuit sees
+  the authenticated browser principal.
+- Silent renewal failures are translated into `ExplorerWebReauthRequiredException`.
+  During renewal, the auth method treats that as a revoked credential and lets the
+  session chrome show the re-authentication interstitial.
+- `AutoSignIn` is on by default. A best-effort circuit handler signs in to the
+  State API automatically when the browser user is already authenticated and the
+  endpoint advertises `entra`.
+- `SignOutPath` publishes a federated sign-out path so the identity menu posts to
+  the Entra sign-out endpoint instead of only clearing the local State API
+  credential.
+- `ReauthChallengePath` publishes the forced-interactive challenge path used by
+  the `Your session expired` interstitial.
 
 ## Setup
 
-Register the provider on the web host and map the re-authentication and sign-out endpoints. Supplying the tenant and the Explorer console's own application (client) id is required.
+Register the provider on the web host and map the re-authentication and sign-out
+endpoints. Tenant id and the Explorer console's own application id are required.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -43,11 +61,15 @@ app.MapLatticeExplorerEntraWebSignOut();
 
 ## Reference
 
-- [API reference](api.md) - the public options, extensions, token-acquirer seam, and exception.
-- [Configuration](configuration.md) - every public options property, its type, and its default.
-- [Architecture](architecture.md) - how the OIDC middleware, the scoped auth method, the token acquirer, and the auto-sign-in circuit handler fit together.
+- [API reference](api.md) - registration, endpoint extensions, token seam and
+  exception.
+- [Configuration](configuration.md) - every public option and enum member.
+- [Architecture](architecture.md) - how OIDC middleware, the scoped auth method,
+  token acquisition and auto-sign-in fit together.
 
 ## See also
 
-- [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md) - the core Explorer and its `IExplorerAuthMethod` auth seam.
-- [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md) - a durable `IDistributedCache` for the distributed token cache on a multi-replica host.
+- [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md)
+- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md)
+- [Multi-replica and failover hosting](../lattice.explorer/multi-replica-hosting.md)
+- [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md)
