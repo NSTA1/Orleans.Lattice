@@ -1,0 +1,27 @@
+@{
+    var name = ClusterTreeName.Parse(TreeId);
+}
+<div class="lt-cluster-title">
+    <h1 class="@(Heading is null ? "lt-shell-page-title lt-shell-mono" : "lt-shell-page-title")">
+        @if (Heading is not null)
+        {
+            <span>@(Heading + " ")</span><span class="lt-shell-mono">@TreeId</span>
+        }
+        else
+        {
+            @TreeId
+        }
+    </h1>
+    @if (name.App is { } app)
+    {
+        <span class="lt-cluster-owner" data-lt-owner="app">app: <span class="lt-shell-mono">@app</span></span>
+    }
+    @if (name.Tenant is { } tenant)
+    {
+        <span class="lt-cluster-owner" data-lt-owner="tenant">tenant: <span class="lt-shell-mono">@tenant</span></span>
+    }
+</div>
+@if (ChildContent is not null)
+{
+    <p class="lt-shell-page-lede">@ChildContent</p>
+}

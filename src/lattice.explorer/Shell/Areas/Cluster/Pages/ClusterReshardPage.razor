@@ -1,0 +1,64 @@
+<PageTitle>Reshard @TreeId - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<ClusterTreeHeader TreeId="@TreeId" Heading="Reshard">Grow the tree to more physical shards, online: reads and writes continue throughout. Resharding only grows.</ClusterTreeHeader>
+
+@if (_status.IsLoading)
+{
+    <LtSkeleton Lines="3" Label="Loading the reshard status" />
+}
+else if (_status.Value is not { } status)
+{
+    <p class="lt-cluster-error" role="alert">@_status.Error</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Reshard status" aria-live="polite">
+        <div class="lt-cluster-stage">
+            <LtStatusPill State="@(status.InProgress ? LtStateRole.Lagging : LtStateRole.Healthy)" Text="@(status.InProgress ? "Running" : "Idle")" />
+            <span>@StatusSentence(status)</span>
+        </div>
+        <LtDefinitionList>
+            <LtDefinition Term="Physical shards">@ClusterFormat.Count(status.CurrentPhysicalShardCount)</LtDefinition>
+            <LtDefinition Term="Virtual slots">@ClusterFormat.Count(status.VirtualShardCount)</LtDefinition>
+            <LtDefinition Term="Map version">@ClusterFormat.Count(status.MapVersion)</LtDefinition>
+        </LtDefinitionList>
+        @if (Poller.IsFollowing)
+        {
+            <p class="lt-cluster-note">This page asks again every few seconds. You can leave and come back to this address; the reshard carries on in the cluster.</p>
+        }
+    </section>
+
+    @if (!_access.CanManageTreeLifecycle)
+    {
+        <p class="lt-cluster-note">Resharding needs the TreeLifecycle grant, which your identity does not hold over this tree.</p>
+    }
+    else if (!status.InProgress)
+    {
+        @if (_reviewing is { } target)
+        {
+            <section class="lt-cluster-section lt-cluster-review" aria-labelledby="lt-cluster-reshard-review">
+                <h2 class="lt-cluster-heading" id="lt-cluster-reshard-review">Review</h2>
+                <p>Grow <span class="lt-shell-mono">@TreeId</span> from @ClusterFormat.Plural(status.CurrentPhysicalShardCount, "physical shard") to @ClusterFormat.Plural(target, "physical shard"). The largest shards split one at a time and routing swaps per split. It cannot be reversed: resharding only grows.</p>
+                <div class="lt-cluster-form__actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _reviewing = null">Back</LtButton>
+                    <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = true" Disabled="@_busy">Reshard...</LtButton>
+                </div>
+            </section>
+        }
+        else
+        {
+            <form class="lt-cluster-form" @onsubmit="() => Review(status)" aria-label="Stage a reshard">
+                <LtTextInput Label="Target physical shards" Mono="true" @bind-Value="_target" Error="@_error" Hint="@($"More than {status.CurrentPhysicalShardCount}, at most {MaximumShards}.")" inputmode="numeric" />
+                <div class="lt-cluster-form__actions">
+                    <LtButton Type="LtButtonType.Submit">Review</LtButton>
+                </div>
+            </form>
+        }
+    }
+
+    <LtConfirmDestructive @bind-Open="_confirm"
+                          Title="Reshard tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Reshard"
+                          OnConfirm="StartAsync">
+        <p>Grows the tree to @(_reviewing ?? 0) physical shards. The migration survives silo restarts and cannot be undone.</p>
+    </LtConfirmDestructive>
+}

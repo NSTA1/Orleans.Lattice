@@ -1,0 +1,79 @@
+<PageTitle>Resize @TreeId - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<ClusterTreeHeader TreeId="@TreeId" Heading="Resize">Rebuild the tree with a new node capacity, online: it is copied into a shadow at the new size and swapped in, and reads and writes continue throughout.</ClusterTreeHeader>
+
+@if (_status.IsLoading)
+{
+    <LtSkeleton Lines="3" Label="Loading the resize status" />
+}
+else if (_status.Value is not { } status)
+{
+    <p class="lt-cluster-error" role="alert">@_status.Error</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Resize status" aria-live="polite">
+        <div class="lt-cluster-stage">
+            <LtStatusPill State="@(status.InProgress ? LtStateRole.Lagging : LtStateRole.Healthy)" Text="@(status.InProgress ? "Running" : "Idle")" />
+            <span>@StatusSentence(status)</span>
+        </div>
+        <LtDefinitionList>
+            <LtDefinition Term="Keys per leaf">@ClusterFormat.Count(status.CurrentMaxLeafKeys)</LtDefinition>
+            <LtDefinition Term="Children per internal node">@ClusterFormat.Count(status.CurrentMaxInternalChildren)</LtDefinition>
+        </LtDefinitionList>
+        @if (Poller.IsFollowing)
+        {
+            <p class="lt-cluster-note">This page asks again every few seconds. You can leave and come back to this address; the resize carries on in the cluster.</p>
+        }
+    </section>
+
+    @if (!_access.CanManageTreeLifecycle)
+    {
+        <p class="lt-cluster-note">Resizing needs the TreeLifecycle grant, which your identity does not hold over this tree.</p>
+    }
+    else
+    {
+        @if (!status.InProgress)
+        {
+            @if (_reviewing is { } target)
+            {
+                <section class="lt-cluster-section lt-cluster-review" aria-labelledby="lt-cluster-resize-review">
+                    <h2 class="lt-cluster-heading" id="lt-cluster-resize-review">Review</h2>
+                    <p>Rebuild <span class="lt-shell-mono">@TreeId</span> with @ClusterFormat.Count(target.Leaf) keys per leaf and @ClusterFormat.Count(target.Internal) children per internal node, from @ClusterFormat.Count(status.CurrentMaxLeafKeys) and @ClusterFormat.Count(status.CurrentMaxInternalChildren). It can be undone while the old tree is within its recovery window.</p>
+                    <div class="lt-cluster-form__actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _reviewing = null">Back</LtButton>
+                        <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = Verb.Resize" Disabled="@_busy">Resize...</LtButton>
+                    </div>
+                </section>
+            }
+            else
+            {
+                <form class="lt-cluster-form" @onsubmit="Review" aria-label="Stage a resize">
+                    <LtTextInput Label="Keys per leaf" Mono="true" @bind-Value="_leaf" Error="@_leafError" Hint="At least 2." inputmode="numeric" />
+                    <LtTextInput Label="Children per internal node" Mono="true" @bind-Value="_internal" Error="@_internalError" Hint="At least 3." inputmode="numeric" />
+                    <div class="lt-cluster-form__actions">
+                        <LtButton Type="LtButtonType.Submit">Review</LtButton>
+                    </div>
+                </form>
+            }
+        }
+
+        <section class="lt-cluster-section" aria-labelledby="lt-cluster-resize-undo">
+            <h2 class="lt-cluster-heading" id="lt-cluster-resize-undo">Undo</h2>
+            <p class="lt-cluster-note">Undo returns the tree to its pre-resize size: a running copy is aborted, and a finished resize is reverted while the old tree is still within its recovery window.</p>
+            <LtButton Variant="LtButtonVariant.Destructive" data-lt-cluster="undo" OnClick="() => _confirm = Verb.Undo" Disabled="@_busy">Undo the last resize...</LtButton>
+        </section>
+    }
+
+    <LtConfirmDestructive Open="@(_confirm == Verb.Resize)" OpenChanged="Close"
+                          Title="Resize tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Resize"
+                          OnConfirm="StartAsync">
+        <p>Copies the whole tree into a shadow at the new capacity and swaps it in. The copy survives silo restarts.</p>
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive Open="@(_confirm == Verb.Undo)" OpenChanged="Close"
+                          Title="Undo resize" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Undo resize"
+                          OnConfirm="UndoAsync">
+        <p>Returns the tree to its pre-resize physical tree and capacity, and deletes the resized copy. Writes that reached only the resized copy are lost with it.</p>
+    </LtConfirmDestructive>
+}

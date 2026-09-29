@@ -1,0 +1,19 @@
+<LtTable Items="_rows" Caption="WAL partitions" CaptionHidden="true" RowKey="row => row.Partition" DetailTitle="@(row => $"Partition {row.Partition}")">
+    <ChildContent>
+        <LtColumn TItem="TreeWalPartitionPlacement" Title="Partition" RowHeader="true" Mono="true" Value="row => row.Partition" SortBy="row => row.Partition" />
+        <LtColumn TItem="TreeWalPartitionPlacement" Title="Provider key" Mono="true" Value="row => KeyText(row.ProviderKey)" SortBy="row => row.ProviderKey" />
+        <LtColumn TItem="TreeWalPartitionPlacement" Title="Resolves on this silo">
+            <LtStatusPill State="@(context.ResolvableOnThisSilo ? LtStateRole.Healthy : LtStateRole.Failed)" Text="@(context.ResolvableOnThisSilo ? "Resolves" : "Does not resolve")" />
+        </LtColumn>
+    </ChildContent>
+    <CompactRow>
+        <LtCompactRow Mono="true">
+            <Primary>partition @context.Partition</Primary>
+            <Secondary>@KeyText(context.ProviderKey)</Secondary>
+            <State><LtStatusPill State="@(context.ResolvableOnThisSilo ? LtStateRole.Healthy : LtStateRole.Failed)" Text="@(context.ResolvableOnThisSilo ? "Resolves" : "Does not resolve")" /></State>
+        </LtCompactRow>
+    </CompactRow>
+    <EmptyContent>
+        <LtEmptyState Title="No partitions reported" HeadingLevel="3">The cluster reported no WAL partition for this tree.</LtEmptyState>
+    </EmptyContent>
+</LtTable>

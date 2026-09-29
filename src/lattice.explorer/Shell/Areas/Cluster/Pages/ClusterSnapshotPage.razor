@@ -1,0 +1,62 @@
+<PageTitle>Snapshot @TreeId - Cluster - Orleans.Lattice Explorer</PageTitle>
+
+<ClusterTreeHeader TreeId="@TreeId" Heading="Snapshot">Copy every live entry of the tree into a new tree at a point in time. The copy is a live tree, not a backup.</ClusterTreeHeader>
+
+@if (_status.IsLoading)
+{
+    <LtSkeleton Lines="2" Label="Loading the snapshot status" />
+}
+else if (_status.Value is not { } status)
+{
+    <p class="lt-cluster-error" role="alert">@_status.Error</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Snapshot status" aria-live="polite">
+        <div class="lt-cluster-stage">
+            <LtStatusPill State="@(status.InProgress ? LtStateRole.Lagging : LtStateRole.Healthy)" Text="@(status.InProgress ? "Running" : "Idle")" />
+            <span>@StatusSentence(status)</span>
+        </div>
+        @if (Poller.IsFollowing)
+        {
+            <p class="lt-cluster-note">This page asks again every few seconds. You can leave and come back to this address; the capture carries on in the cluster.</p>
+        }
+    </section>
+
+    @if (!_access.CanAdministerTree)
+    {
+        <p class="lt-cluster-note">A snapshot needs whole-tree admin authority, which your identity does not hold over this tree.</p>
+    }
+    else if (!status.InProgress)
+    {
+        @if (_reviewing)
+        {
+            <section class="lt-cluster-section lt-cluster-review" aria-labelledby="lt-cluster-snapshot-review">
+                <h2 class="lt-cluster-heading" id="lt-cluster-snapshot-review">Review</h2>
+                <p>Copy <span class="lt-shell-mono">@TreeId</span> into the new tree <span class="lt-shell-mono">@_destination</span>, @(IsOffline ? "offline: the source stops serving reads and writes until the copy finishes." : "online: the source keeps serving, and live writes are forwarded to the copy.")</p>
+                <div class="lt-cluster-form__actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _reviewing = false">Back</LtButton>
+                    <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = true" Disabled="@_busy">Snapshot...</LtButton>
+                </div>
+            </section>
+        }
+        else
+        {
+            <form class="lt-cluster-form" @onsubmit="Review" aria-label="Stage a snapshot">
+                <LtTextInput Label="Destination tree" Mono="true" @bind-Value="_destination" Error="@_destinationError" Hint="A new tree's logical name. It must not exist yet." />
+                <LtSelect Label="Mode" Options="Modes" @bind-Value="_mode" Hint="Offline stops the source for the copy; online keeps it serving." />
+                <LtTextInput Label="Keys per leaf (optional)" Mono="true" @bind-Value="_leaf" Error="@_sizingError" Hint="Leave empty for the library default; the source's sizing is not inherited." inputmode="numeric" />
+                <LtTextInput Label="Children per internal node (optional)" Mono="true" @bind-Value="_internal" inputmode="numeric" />
+                <div class="lt-cluster-form__actions">
+                    <LtButton Type="LtButtonType.Submit">Review</LtButton>
+                </div>
+            </form>
+        }
+    }
+
+    <LtConfirmDestructive @bind-Open="_confirm"
+                          Title="Snapshot tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Snapshot"
+                          OnConfirm="StartAsync">
+        <p>@(IsOffline ? "The source tree stops serving reads and writes until the copy finishes." : "The source keeps serving while every live entry is copied.") The copy survives silo restarts.</p>
+    </LtConfirmDestructive>
+}

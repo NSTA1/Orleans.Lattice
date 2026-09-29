@@ -1,0 +1,64 @@
+@if (!Capabilities.CanViewDiagnostics && !Capabilities.CanAdministerTree)
+{
+    <p class="lt-cluster-note">Your identity cannot read this tree's configuration.</p>
+}
+else if (_config.IsLoading)
+{
+    <LtSkeleton Lines="5" Label="Loading configuration" />
+}
+else if (_config.Value is not { } config)
+{
+    <p class="lt-cluster-error" role="alert">@_config.Error</p>
+}
+else
+{
+    <section class="lt-cluster-section" aria-label="Configuration">
+        <LtDefinitionList>
+            <LtDefinition Term="Physical shards">@Optional(config.ShardCount)</LtDefinition>
+            <LtDefinition Term="Keys per leaf">@Optional(config.MaxLeafKeys)</LtDefinition>
+            <LtDefinition Term="Children per internal node">@Optional(config.MaxInternalChildren)</LtDefinition>
+            <LtDefinition Term="Publish events">@Switch(config.PublishEvents)</LtDefinition>
+            <LtDefinition Term="Projection digest">@(config.ProjectionDigestPermanentlyDisabled ? "Permanently disabled" : Switch(config.MaintainProjectionDigest))</LtDefinition>
+            <LtDefinition Term="WAL retained-byte ceiling">@(config.WalMaxRetainedBytes is { } ceiling ? ClusterFormat.Bytes(ceiling) : "Cluster default")</LtDefinition>
+        </LtDefinitionList>
+
+        @if (Capabilities.CanAdministerTree)
+        {
+            <form class="lt-cluster-form" @onsubmit="SaveConfigurationAsync" aria-label="Change configuration">
+                <h2 class="lt-cluster-heading">Change configuration</h2>
+                <LtSelect Label="Publish events" Options="SwitchOptions" @bind-Value="_publishEvents" />
+                <LtSelect Label="Maintain projection digest" Options="SwitchOptions" @bind-Value="_maintainDigest" Disabled="@config.ProjectionDigestPermanentlyDisabled" />
+                <LtTextInput Label="WAL retained-byte ceiling" Mono="true" @bind-Value="_walCeiling" Error="@_walCeilingError" Hint="In bytes. Leave empty to use the cluster default. Advisory: it never trims more than garbage collection may." inputmode="numeric" />
+                <div class="lt-cluster-form__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@_saving">Save configuration</LtButton>
+                </div>
+            </form>
+        }
+    </section>
+
+    <section class="lt-cluster-section" aria-labelledby="lt-cluster-retention">
+        <h2 class="lt-cluster-heading" id="lt-cluster-retention">History retention</h2>
+        @if (_retention.Value is { } retention)
+        {
+            <LtDefinitionList>
+                <LtDefinition Term="Mode">@ModeText(retention.Mode)</LtDefinition>
+                <LtDefinition Term="Window">@(retention.Window > TimeSpan.Zero ? ClusterFormat.Duration(retention.Window) : "Revisions do not expire by age")</LtDefinition>
+            </LtDefinitionList>
+        }
+        else if (_retention.Error is { } error)
+        {
+            <p class="lt-cluster-error" role="alert">@error</p>
+        }
+
+        @if (Capabilities.CanAdministerTree)
+        {
+            <form class="lt-cluster-form" @onsubmit="SaveRetentionAsync" aria-label="Change history retention">
+                <LtSelect Label="Retention mode" Options="ModeOptions" @bind-Value="_mode" />
+                <LtTextInput Label="Window in seconds" Mono="true" @bind-Value="_window" Error="@_windowError" Hint="Leave empty for no age bound. New revisions adopt the change; written ones keep their shape." inputmode="numeric" />
+                <div class="lt-cluster-form__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@_saving">Save retention</LtButton>
+                </div>
+            </form>
+        }
+    </section>
+}
