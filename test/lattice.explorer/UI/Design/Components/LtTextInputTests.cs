@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
@@ -107,5 +108,17 @@ public sealed class LtTextInputTests : ShellDesignTestContext
         Assert.That(
             ((ElementReference)invocation.Arguments[0]!).Id,
             Is.EqualTo(cut.Find("input").GetAttribute("blazor:elementreference")));
+    }
+
+    [Test]
+    public void FocusAsync_treats_a_refused_focus_as_a_focus_not_taken()
+    {
+        // The input can be removed by a later render before the request arrives, and the
+        // browser then refuses it. Thrown, that would end the circuit of whoever asked.
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true)
+            .SetException(new JSException("Unable to focus an invalid element."));
+        var cut = Render<LtTextInput>(p => p.Add(x => x.Label, "Key"));
+
+        Assert.That(async () => await cut.InvokeAsync(() => cut.Instance.FocusAsync().AsTask()), Throws.Nothing);
     }
 }

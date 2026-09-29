@@ -78,8 +78,13 @@ public partial class LtTextInput
     };
 
     /// <summary>Moves keyboard focus to the input.</summary>
-    /// <returns>A task that completes when the focus request has been sent.</returns>
-    public ValueTask FocusAsync() => _input.FocusAsync();
+    /// <remarks>
+    /// A focus the browser refuses - the input removed by a later render before the request
+    /// arrives, or the circuit closing - is ignored rather than thrown, so it can never end
+    /// the circuit.
+    /// </remarks>
+    /// <returns>A task that completes when the focus request has been answered or refused.</returns>
+    public ValueTask FocusAsync() => _input.FocusSafelyAsync();
 
     private Task HandleInputAsync(ChangeEventArgs args)
     {

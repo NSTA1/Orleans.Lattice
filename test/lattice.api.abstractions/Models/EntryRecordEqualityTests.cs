@@ -75,6 +75,30 @@ public sealed class EntryRecordEqualityTests
     }
 
     [Test]
+    public void Not_equal_when_the_member_count_differs()
+    {
+        // A different arm from the element-difference test above: the comparison
+        // short-circuits on the count before it ever reaches an element, so a
+        // record whose members are a strict prefix of another's is decided here
+        // and nowhere else. Asserted in both directions because the length test
+        // is written over one side's count.
+        var one = Sample(members: [Member("apple", "eu", 1)]);
+        var two = Sample(members: [Member("apple", "eu", 1), Member("pear", "us", 2)]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(one.Equals(two), Is.False, "a prefix must not compare equal to the longer list");
+            Assert.That(two.Equals(one), Is.False);
+            Assert.That(one.Equals(Sample(members: [])), Is.False, "nor must an empty list");
+            Assert.That(
+                one.Equals(Sample(members: [Member("apple", "eu", 1)])),
+                Is.True,
+                "the positive counterpart: an equal-length, equal-content list still compares equal, so "
+                + "the count arm is rejecting on length rather than rejecting everything");
+        });
+    }
+
+    [Test]
     public void Not_equal_when_a_scalar_field_differs()
     {
         var a = Sample();

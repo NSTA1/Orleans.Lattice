@@ -127,7 +127,12 @@ public partial class AddressLine : IDisposable
     }
 
     /// <summary>Moves focus to the address line: its input while editing, otherwise its edit control.</summary>
-    internal ValueTask FocusAsync() => _editing ? _input.FocusAsync() : _trigger.FocusAsync();
+    /// <remarks>
+    /// Through the chrome module, never <see cref="ElementReference"/>'s own focus: a render
+    /// can remove the element before the request lands, and an exception here would end the
+    /// circuit rather than merely lose the focus.
+    /// </remarks>
+    internal ValueTask FocusAsync() => Interop.FocusAsync(_editing ? _input : _trigger);
 
     /// <inheritdoc />
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -140,7 +145,7 @@ public partial class AddressLine : IDisposable
         else if (_focusTrigger && !_editing)
         {
             _focusTrigger = false;
-            await _trigger.FocusAsync();
+            await Interop.FocusAsync(_trigger);
         }
     }
 

@@ -180,7 +180,7 @@ public class GrpcPushTransportIntegrationTests
         };
 
         var box = new ReplicationBatchEnvelopeBox { Value = envelope };
-        using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: default, request: box);
+        using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: GrpcTestFactories.OriginOptions("remote"), request: box);
         var ackBox = await call.ResponseAsync;
 
         Assert.Multiple(() =>
@@ -212,7 +212,7 @@ public class GrpcPushTransportIntegrationTests
             },
         };
 
-        using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: default, request: box);
+        using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: GrpcTestFactories.OriginOptions("remote"), request: box);
         var ackBox = await call.ResponseAsync;
 
         Assert.Multiple(() =>
@@ -361,7 +361,7 @@ public class GrpcPushTransportIntegrationTests
             Value = new PeerHighWaterMarkRequest { TreeName = "tree", OriginClusterId = "origin" },
         };
 
-        using var call = invoker.AsyncUnaryCall(method.GetPeerHighWaterMark, host: null, options: default, request: box);
+        using var call = invoker.AsyncUnaryCall(method.GetPeerHighWaterMark, host: null, options: GrpcTestFactories.OriginOptions("origin"), request: box);
         var response = await call.ResponseAsync;
 
         Assert.That(response.Value.Clock, Is.EqualTo(clock));

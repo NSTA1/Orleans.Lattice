@@ -269,6 +269,20 @@ internal static class LeafSnapshotCodec
     /// </summary>
     /// <param name="frame">Frame bytes.</param>
     /// <param name="stateBytes">Receives the summed footprint on success.</param>
+    // Deliberately not inlined. This walk calls TryMeasureRowFootprint once per
+    // row and gets its speed from the JIT inlining that callee into it, which
+    // only happens while this method is the inline root. Left inlinable, the
+    // JIT instead inlines THIS method into its callers, spends their inline
+    // budget on the walk body, and leaves none for the per-row parser - which
+    // then degrades to a real call per row. Measured 228us -> 73us (-68%) over
+    // a 4096-row frame; see group (6) of the leafsnapshotframetrims suite.
+    //
+    // Note the sibling Validate walk was swept at the same time and did NOT
+    // benefit (-1.8%, inside noise): its body carries the frame hash check
+    // inline, which already puts it over the inline budget, so it was the
+    // inline root regardless. The attribute is therefore shipped here and
+    // deliberately NOT there - the shape alone does not imply the win.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static bool TryComputeStateBytes(ReadOnlySpan<byte> frame, out long stateBytes)
     {
         stateBytes = 0;
@@ -849,7 +863,7 @@ internal static class LeafSnapshotCodec
     /// <param name="pos">Row start on entry; the next row's start on success.</param>
     /// <param name="row">Receives the decoded row on success.</param>
     internal static bool TryReadRow(ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row)
-        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out _);
+        => TryReadRowCore<MaterialisingRowMode>(frame, limit, ref pos, out row, out _);
 
     /// <summary>
     /// As <see cref="TryReadRow(ReadOnlySpan{byte}, int, ref int, out LeafSnapshotRow)"/>, but
@@ -868,20 +882,61 @@ internal static class LeafSnapshotCodec
     /// <param name="keyUtf8Length">Receives the key's UTF-8 byte length on success.</param>
     internal static bool TryReadRow(
         ReadOnlySpan<byte> frame, int limit, ref int pos, out LeafSnapshotRow row, out int keyUtf8Length)
-        => TryReadRowCore(frame, limit, ref pos, materialize: true, out row, out keyUtf8Length);
+        => TryReadRowCore<MaterialisingRowMode>(frame, limit, ref pos, out row, out keyUtf8Length);
 
-    private static bool TrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
-        => TryReadRowCore(frame, limit, ref pos, materialize: false, out _, out _);
+    internal static bool TrySkipRow(ReadOnlySpan<byte> frame, int limit, ref int pos)
+        => TryReadRowCore<SkippingRowMode>(frame, limit, ref pos, out _, out _);
+
+    /// <summary>
+    /// Compile-time parse mode for <see cref="TryReadRowCore{TMode}"/>. The
+    /// mode is carried as a type argument rather than a <see cref="bool"/>
+    /// parameter so that the runtime, which specialises a generic method once
+    /// per value-type argument, produces one copy of the parser per mode in
+    /// which <see cref="Materialize"/> is a constant.
+    /// </summary>
+    private interface IRowParseMode
+    {
+        /// <summary>Whether this mode decodes row payloads or only walks past them.</summary>
+        static abstract bool Materialize { get; }
+    }
+
+    /// <summary>Parse mode that decodes each row into a <see cref="LeafSnapshotRow"/>.</summary>
+    private readonly struct MaterialisingRowMode : IRowParseMode
+    {
+        /// <inheritdoc />
+        public static bool Materialize => true;
+    }
+
+    /// <summary>Parse mode that walks a row's fields without decoding any payload.</summary>
+    private readonly struct SkippingRowMode : IRowParseMode
+    {
+        /// <inheritdoc />
+        public static bool Materialize => false;
+    }
 
     // Single parser for both the materialising and the skipping walk so the
     // field order can never drift between them.
-    private static bool TryReadRowCore(
+    //
+    // The mode is a generic type argument, not a bool parameter, and that is
+    // the whole point. With a runtime bool the JIT must keep the materialising
+    // half of this body in the skip walk's code as well: it cannot prove the
+    // flag is false, so every UTF-8 decode, every VersionVector allocation and
+    // the whole LeafSnapshotRow construction stay in the method the structural
+    // validation walk calls once per row. That inflates the parser far past the
+    // inline budget, so it can never be inlined into its walker - which is
+    // precisely the currency the walkers above are tuned in.
+    //
+    // Instantiated over a struct, the runtime compiles one copy of this method
+    // per mode and TMode.Materialize is a JIT-time constant in each, so the
+    // skip copy dead-codes the materialising half entirely and shrinks to the
+    // bounds-checked field walk the validation pass actually needs.
+    private static bool TryReadRowCore<TMode>(
         ReadOnlySpan<byte> frame,
         int limit,
         ref int pos,
-        bool materialize,
         out LeafSnapshotRow row,
         out int keyUtf8Length)
+        where TMode : struct, IRowParseMode
     {
         row = default;
         keyUtf8Length = 0;
@@ -916,7 +971,7 @@ internal static class LeafSnapshotCodec
                 return false;
             }
 
-            if (materialize)
+            if (TMode.Materialize)
             {
                 originClusterId = Encoding.UTF8.GetString(originUtf8);
             }
@@ -938,7 +993,7 @@ internal static class LeafSnapshotCodec
                 return false;
             }
 
-            if (materialize)
+            if (TMode.Materialize)
             {
                 vectorClock = new VersionVector();
             }
@@ -952,7 +1007,7 @@ internal static class LeafSnapshotCodec
                     return false;
                 }
 
-                if (materialize)
+                if (TMode.Materialize)
                 {
                     vectorClock!.Entries[Encoding.UTF8.GetString(replicaUtf8)] =
                         new HybridLogicalClock { WallClockTicks = entryTicks, Counter = entryCounter };
@@ -968,7 +1023,7 @@ internal static class LeafSnapshotCodec
                 return false;
             }
 
-            if (materialize)
+            if (TMode.Materialize)
             {
                 // The one unavoidable per-row allocation, and it is the
                 // rehydrated payload itself: the entry cache stores byte[].
@@ -977,7 +1032,7 @@ internal static class LeafSnapshotCodec
             }
         }
 
-        if (!materialize)
+        if (!TMode.Materialize)
         {
             return true;
         }
@@ -1001,7 +1056,7 @@ internal static class LeafSnapshotCodec
     // Walks a row far enough to total its logical footprint, skipping every
     // field that does not contribute to it, and reports its tombstone flag so
     // one pass can serve both the footprint and the live-row aggregate.
-    private static bool TryMeasureRowFootprint(
+    internal static bool TryMeasureRowFootprint(
         ReadOnlySpan<byte> frame, int limit, ref int pos, out long rowBytes, out bool isTombstone)
     {
         rowBytes = 0;

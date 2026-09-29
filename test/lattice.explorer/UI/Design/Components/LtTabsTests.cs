@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
@@ -60,6 +61,19 @@ public sealed class LtTabsTests : ShellDesignTestContext
             Assert.That(observed, Is.EqualTo(new[] { "views" }));
             Assert.That(cut.Find("[role=tabpanel]").TextContent, Is.EqualTo("Views panel"));
         });
+    }
+
+    [Test]
+    public void A_refused_focus_leaves_the_tabs_answering_the_keyboard()
+    {
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true)
+            .SetException(new JSException("Unable to focus an invalid element."));
+        var cut = RenderTabs();
+
+        cut.Find("[role=tablist]").KeyDown(new KeyboardEventArgs { Key = "ArrowRight" });
+        cut.Find("[role=tablist]").KeyDown(new KeyboardEventArgs { Key = "ArrowRight" });
+
+        Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo("Views"));
     }
 
     [Test]

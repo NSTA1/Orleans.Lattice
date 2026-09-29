@@ -65,26 +65,36 @@ public sealed class PnCounter : ICrdt<PnCounter>
     /// Advances the positive component for <paramref name="replicaId"/> by
     /// <paramref name="amount"/>. <paramref name="amount"/> must be non-negative.
     /// </summary>
+    /// <exception cref="OverflowException">
+    /// The advance would take the positive component past <see cref="long.MaxValue"/>.
+    /// The component is left unchanged: a wrapped component would be smaller than
+    /// the one it replaced, and the pointwise-max merge would silently discard it.
+    /// </exception>
     public void Increment(string replicaId, long amount = 1)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         if (amount == 0) return;
         ref var inc = ref CollectionsMarshal.GetValueRefOrAddDefault(Increments, replicaId, out _);
-        inc += amount;
+        inc = checked(inc + amount);
     }
 
     /// <summary>
     /// Advances the negative component for <paramref name="replicaId"/> by
     /// <paramref name="amount"/>. <paramref name="amount"/> must be non-negative.
     /// </summary>
+    /// <exception cref="OverflowException">
+    /// The advance would take the negative component past <see cref="long.MaxValue"/>.
+    /// The component is left unchanged: a wrapped component would be smaller than
+    /// the one it replaced, and the pointwise-max merge would silently discard it.
+    /// </exception>
     public void Decrement(string replicaId, long amount = 1)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         if (amount == 0) return;
         ref var dec = ref CollectionsMarshal.GetValueRefOrAddDefault(Decrements, replicaId, out _);
-        dec += amount;
+        dec = checked(dec + amount);
     }
 
     /// <summary>

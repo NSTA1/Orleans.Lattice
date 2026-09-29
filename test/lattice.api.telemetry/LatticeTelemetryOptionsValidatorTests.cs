@@ -86,6 +86,54 @@ public sealed class LatticeTelemetryOptionsValidatorTests
         });
     }
 
+    private static IEnumerable<TimeSpan> TimeoutsAboveTheHttpClientCeiling()
+    {
+        yield return TimeSpan.FromMilliseconds(int.MaxValue) + TimeSpan.FromMilliseconds(1);
+        yield return TimeSpan.FromDays(30);
+
+        // The usual attempt to say "no timeout".
+        yield return TimeSpan.MaxValue;
+    }
+
+    [TestCaseSource(nameof(TimeoutsAboveTheHttpClientCeiling))]
+    public void A_request_timeout_the_backend_http_client_cannot_represent_is_rejected(TimeSpan timeout)
+    {
+        // HttpClient.Timeout refuses any finite value above int.MaxValue milliseconds, so a
+        // timeout above that ceiling would validate and then fail every resolution of the
+        // backend client instead.
+        var options = Valid();
+        options.RequestTimeout = timeout;
+
+        using var client = new HttpClient();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(IsValid(options), Is.False);
+            Assert.That(
+                Failures(options),
+                Has.Some.StartsWith("RequestTimeout must be at most "));
+            Assert.That(
+                () => client.Timeout = timeout,
+                Throws.InstanceOf<ArgumentOutOfRangeException>(),
+                "anti-vacuity: the rejected value is one HttpClient itself refuses");
+        });
+    }
+
+    [Test]
+    public void The_largest_admitted_request_timeout_is_one_the_backend_http_client_accepts()
+    {
+        var options = Valid();
+        options.RequestTimeout = TimeSpan.FromMilliseconds(int.MaxValue);
+
+        using var client = new HttpClient();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(IsValid(options), Is.True);
+            Assert.That(() => client.Timeout = options.RequestTimeout, Throws.Nothing);
+        });
+    }
+
     [Test]
     public void A_non_positive_max_range_is_rejected()
     {
