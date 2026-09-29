@@ -114,9 +114,10 @@ public sealed class LatticeAppWorkspaceTests
         var harness = Granted();
         var workspaces = new[]
         {
-            new LatticeAppWorkspace(new AppRoleGrantEvaluator(null, harness.Sources), harness.Sources, harness.Tenants, harness.Membership),
-            new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, null), harness.Sources, harness.Tenants, harness.Membership),
-            new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, harness.Sources), harness.Sources, null, harness.Membership),
+            new LatticeAppWorkspace(new AppRoleGrantEvaluator(null, harness.Sources, harness.Gate), harness.Sources, harness.Tenants, harness.Membership),
+            new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, null, harness.Gate), harness.Sources, harness.Tenants, harness.Membership),
+            new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, harness.Sources, null), harness.Sources, harness.Tenants, harness.Membership),
+            new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, harness.Sources, harness.Gate), harness.Sources, null, harness.Membership),
         };
 
         foreach (var workspace in workspaces)
@@ -125,7 +126,7 @@ public sealed class LatticeAppWorkspaceTests
             Assert.That(await workspace.DescribeMyAppAsync(AppsControlHarness.Slug), Is.Null);
         }
 
-        var noSources = new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, harness.Sources), null, harness.Tenants, harness.Membership);
+        var noSources = new LatticeAppWorkspace(new AppRoleGrantEvaluator(harness.Projection, harness.Sources, harness.Gate), null, harness.Tenants, harness.Membership);
         Assert.That(await noSources.GetIconAsync(AppsControlHarness.Slug), Is.Null);
     }
 
@@ -147,6 +148,39 @@ public sealed class LatticeAppWorkspaceTests
             Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "reader" }));
             Assert.That((await workspace.DescribeMyAppAsync(AppsControlHarness.Slug))!.Roles.Select(r => r.Name), Is.EqualTo(new[] { "reader" }));
         });
+    }
+
+    /// <summary>
+    /// Coordinator review of #3902: one rule on every surface - a binding grants the role, and a deny can only
+    /// take it away. A bound writer with an explicit deny on the role's tree is not reported as writer, so the UI
+    /// never shows it controls the bridge refuses; its undenied reader binding still stands.
+    /// </summary>
+    [Test]
+    public async Task A_bound_member_with_an_explicit_deny_is_not_reported_holding_the_denied_role()
+    {
+        var harness = new WorkspaceHarness().Publish(TwoBindingRecord()).GrantReader();
+        harness.AliceMembership.Join("g-writers");
+        harness.Gate.Deny(WorkspaceHarness.Alice, WorkspaceHarness.AppsTreeId(TenantId.Default, "contacts"), LatticeOperation.Write);
+
+        var workspace = harness.Workspace;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That((await workspace.ListMyAppsAsync()).Single().Roles, Is.EqualTo(new[] { "reader" }));
+            Assert.That((await workspace.DescribeMyAppAsync(AppsControlHarness.Slug))!.Roles.Select(r => r.Name), Is.EqualTo(new[] { "reader" }));
+        });
+    }
+
+    [Test]
+    public async Task A_bound_member_denied_every_role_sees_nothing()
+    {
+        var harness = new WorkspaceHarness().Publish(WorkspaceHarness.Record()).GrantReader();
+        foreach (var tree in new[] { "a/crm/contacts", "a/billing/ledger" })
+        {
+            harness.Gate.Deny(WorkspaceHarness.Alice, tree, LatticeOperation.Read);
+        }
+
+        await AssertIndistinguishableFromAbsentAsync(harness);
     }
 
     [Test]

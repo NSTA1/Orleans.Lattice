@@ -145,7 +145,7 @@ public sealed class AppBridgeSupportTests
     public void The_bridge_constructor_rejects_a_null_evaluator_or_limiter()
     {
         var limiter = new AppBridgeRateLimiter(new LatticeAppBridgeOptions());
-        var evaluator = new AppRoleGrantEvaluator(null, null);
+        var evaluator = new AppRoleGrantEvaluator(null, null, null);
 
         Assert.Throws<ArgumentNullException>(() => new LatticeAppBridge(null!, null, null, null, limiter));
         Assert.Throws<ArgumentNullException>(() => new LatticeAppBridge(evaluator, null, null, null, null!));

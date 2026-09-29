@@ -23,11 +23,11 @@ namespace Orleans.Lattice.Apps;
 /// is seen on the next evaluation.
 /// </para>
 /// <para>
-/// <b>A deny still wins where the gate is asked.</b> <see cref="IsHeld"/> is the binding alone.
-/// <see cref="IsHeldAsync"/> additionally lets the access gate take the role away when it refuses the role's
-/// operations, so an explicit deny rule on a bound member is honoured; it can never add a role. The app MCP tool
-/// gate uses it, because an app tool runs app code the data path may not see. The app bridge gets the same
-/// deny semantics from the data path itself, which authorizes every call under the caller's own identity.
+/// <b>A deny still wins.</b> <see cref="IsHeld"/> is the binding alone. <see cref="IsHeldAsync"/> is the rule every
+/// surface reports: the binding grants the role and the access gate can then only take it away, when it refuses
+/// the role's operations, so an explicit deny rule on a bound member is honoured; it can never add a role. The app
+/// workspace and the app MCP tool gate use it. The app bridge gets the same deny semantics from the data path
+/// itself, which authorizes every call under the caller's own identity.
 /// </para>
 /// </remarks>
 internal sealed class AppRoleGate

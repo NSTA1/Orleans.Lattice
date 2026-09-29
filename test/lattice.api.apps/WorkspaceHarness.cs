@@ -30,6 +30,12 @@ internal sealed class WorkspaceHarness
 
     public SettableProjection Projection { get; } = new();
 
+    /// <summary>
+    /// The access gate: the whole policy, including the install's compiled app rules. It allows by default (the
+    /// app rules are live and nothing denies), so a test removes a role with an explicit deny.
+    /// </summary>
+    public GrantingGate Gate { get; } = new() { AllowByDefault = true };
+
     public ConfigurableTenantResolver Tenants { get; } = new();
 
     public FixedSubjectMembership AliceMembership { get; } = new(Alice);
@@ -39,7 +45,7 @@ internal sealed class WorkspaceHarness
     public IAppActivationPipeline Pipeline { get; } = Substitute.For<IAppActivationPipeline>();
 
     public LatticeAppWorkspace Workspace => new(
-        new AppRoleGrantEvaluator(Projection, Sources), Sources, Tenants, Membership, Pipeline);
+        new AppRoleGrantEvaluator(Projection, Sources, Gate), Sources, Tenants, Membership, Pipeline);
 
     public static AppManifest Manifest(string version = AppsControlHarness.Version) =>
         UiTestManifests.WithUi(AppsControlHarness.Manifest(version), UiTestManifests.Bridge(AppUiBridgeOperations.DataRead));
@@ -82,19 +88,39 @@ internal sealed class WorkspaceHarness
         public Task EnsureWarmAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
-    /// <summary>A gate allowing exactly the granted (subject, tree, operation) triples.</summary>
+    /// <summary>A gate allowing exactly the granted (subject, tree, operation) triples, or everything not explicitly denied.</summary>
     internal sealed class GrantingGate : ILatticeAccessGate
     {
         private readonly HashSet<(string Subject, string Tree, LatticeOperation Operation)> _grants = [];
+        private readonly HashSet<(string Subject, string Tree, LatticeOperation Operation)> _denies = [];
 
         public int Requests { get; private set; }
 
+        /// <summary>
+        /// When true, a request neither granted nor denied is allowed - the policy as it stands once an install's
+        /// compiled app rules are live and nothing denies the caller.
+        /// </summary>
+        public bool AllowByDefault { get; set; }
+
         public void Grant(string subject, string tree, LatticeOperation operation) => _grants.Add((subject, tree, operation));
+
+        /// <summary>Adds an explicit deny on every bit of <paramref name="operations"/>, which wins over every grant.</summary>
+        public void Deny(string subject, string tree, LatticeOperation operations)
+        {
+            foreach (var value in Enum.GetValues<LatticeOperation>())
+            {
+                if (value != LatticeOperation.None && (operations & value) == value)
+                    _denies.Add((subject, tree, value));
+            }
+        }
 
         public ValueTask<LatticeAccessDecision> AuthorizeAsync(in LatticeAccessRequest request, CancellationToken cancellationToken = default)
         {
             Requests++;
-            return new(_grants.Contains((request.Subject.SubjectId, request.TreeId, request.Operation))
+            var triple = (request.Subject.SubjectId, request.TreeId, request.Operation);
+            if (_denies.Contains(triple))
+                return new(LatticeAccessDecision.Deny("explicitly denied"));
+            return new(AllowByDefault || _grants.Contains(triple)
                 ? LatticeAccessDecision.Allow()
                 : LatticeAccessDecision.Deny("not granted"));
         }

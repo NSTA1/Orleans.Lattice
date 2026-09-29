@@ -75,11 +75,12 @@ internal sealed class BridgeHarness
     public LatticeAppBridge Create(
         bool withGrains = true,
         bool withTenants = true,
+        bool withGate = true,
         bool withProjection = true,
         bool withSource = true,
         AppBridgeRateLimiter? limiter = null) =>
         new(
-            new AppRoleGrantEvaluator(withProjection ? Projection : null, withSource ? Sources : null),
+            new AppRoleGrantEvaluator(withProjection ? Projection : null, withSource ? Sources : null, withGate ? Gate : null),
             withGrains ? Grains : null,
             withTenants ? Tenants : null,
             Membership,

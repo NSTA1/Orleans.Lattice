@@ -69,7 +69,7 @@ public sealed class AppRoleGrantEvaluatorParityTests
         Apply(bindingCase, bound, host);
 
         var advertised = (await host.AdvertisedAsync()).Where(ToolRoles.ContainsKey).Select(t => ToolRoles[t]).ToHashSet();
-        var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source);
+        var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source, host.Gate);
         using var credential = LatticeCredentialContext.With(new LatticeCredential("t", principalId: "alice"));
         var alice = await host.Membership.ResolveCurrentAsync();
         var evaluation = await evaluator.EvaluateAsync(TenantId.Default, Notes, alice, CancellationToken.None);
@@ -94,7 +94,7 @@ public sealed class AppRoleGrantEvaluatorParityTests
         host.Source.Add(ThreeRoleManifest());
         host.Bind("alice");
 
-        var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source);
+        var evaluator = new AppRoleGrantEvaluator(host.Projection, host.Source, host.Gate);
 
         Assert.That(await host.AdvertisedAsync(), Is.EqualTo(new[] { "lattice_capabilities" }));
         Assert.That(await evaluator.EvaluateAsync(TenantId.Default, Notes, new LatticeSubject("alice", ["g-reader"]), CancellationToken.None), Is.Null);

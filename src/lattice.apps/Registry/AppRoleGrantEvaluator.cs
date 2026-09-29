@@ -6,17 +6,19 @@ namespace Orleans.Lattice.Apps;
 
 /// <summary>
 /// The shared app-role evaluation: which roles of an enabled install a caller holds, for the install recorded in
-/// the current registry snapshot. A role is held by <em>binding</em>: the caller is a member of a membership group
-/// the install binds to the role, and the role's app-owned <c>app:{slug}:</c> rules confer something (see
-/// <see cref="AppRoleGate"/>). The app workspace, the app MCP tool surface and the app bridge all derive from the
-/// roles compiled here, so the three surfaces can never disagree about who holds a role.
+/// the current registry snapshot. One rule holds on every surface: a <em>binding</em> grants the role - the caller
+/// is a member of a membership group the install binds to it, and the role's app-owned <c>app:{slug}:</c> rules
+/// confer something - and the shared access gate can only take it away, when it explicitly refuses the role (see
+/// <see cref="AppRoleGate.IsHeldAsync"/>). The app workspace (and so the roles an app's UI is told) and the app MCP
+/// tool surface evaluate that rule here, and the app bridge's grants are built from the same compiled roles and
+/// run under the caller's own identity on the data path, so the three surfaces can never disagree about who holds
+/// a role.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Only app-owned rules.</b> The evaluation never consults the caller's other rules, so broad rights a caller
-/// holds of its own never make it hold an app role, exactly as the bridge never lets them flow into the app. A
-/// surface that also asks the access gate (the app MCP tools, through <see cref="AppRoleGate.IsHeldAsync"/>) lets
-/// it only take a role away, never add one.
+/// <b>The gate only takes away.</b> The gate is asked only once the binding holds, so broad rights a caller holds
+/// of its own never make it hold an app role, exactly as the bridge never lets them flow into the app. An explicit
+/// deny on a bound member - on the role's trees, or cluster-wide - removes the role.
 /// </para>
 /// <para>
 /// <b>Which installs count.</b> Only an <see cref="AppRegistryLifecycleState.Enabled"/> install whose
@@ -25,33 +27,41 @@ namespace Orleans.Lattice.Apps;
 /// the same slug cannot substitute the roles.
 /// </para>
 /// <para>
-/// <b>Fail closed.</b> A missing projection or source, an install whose manifest does not resolve to exactly the
-/// installed slug and version, or a source fault, evaluates to no install at all. A caller with no resolved
+/// <b>Fail closed.</b> A missing projection, source or gate, an install whose manifest does not resolve to exactly
+/// the installed slug and version, or a source fault, evaluates to no install at all. A caller with no resolved
 /// identity or group closure holds no role.
 /// </para>
 /// <para>
 /// <b>Cost.</b> Each install's roles, with their bound groups, are compiled once per registry record revision and
 /// cached, so a re-binding (which writes a new revision) moves the role on the next evaluation. A warm evaluation
-/// resolves no manifest, consults no gate and allocates only the list of held role names.
+/// resolves no manifest, asks the gate once per bound role (each role of an install exactly once per call, so a
+/// listing memoises per call as the MCP surface memoises per session) and allocates only the list of held role
+/// names.
 /// </para>
 /// </remarks>
 internal sealed class AppRoleGrantEvaluator
 {
     private readonly IAppRegistryProjection? _projection;
     private readonly IAppSource? _source;
+    private readonly ILatticeAccessGate? _gate;
     private readonly ConcurrentDictionary<(TenantId Tenant, AppSlug Slug), AppRoleGrantInstall> _installs = new();
 
     /// <summary>Initializes a new <see cref="AppRoleGrantEvaluator"/>.</summary>
     /// <param name="projection">The app registry projection, or null when none is registered.</param>
     /// <param name="source">The app source manifests resolve through, or null when none is registered.</param>
-    public AppRoleGrantEvaluator(IAppRegistryProjection? projection, IAppSource? source)
+    /// <param name="gate">The shared access gate, which can only take a bound role away, or null when none is registered.</param>
+    public AppRoleGrantEvaluator(IAppRegistryProjection? projection, IAppSource? source, ILatticeAccessGate? gate)
     {
         _projection = projection;
         _source = source;
+        _gate = gate;
     }
 
     /// <summary>Whether every collaborator is present; when false, every evaluation reports no install.</summary>
-    public bool CanServe => _projection is not null && _source is not null;
+    public bool CanServe => _projection is not null && _source is not null && _gate is not null;
+
+    /// <summary>The shared access gate roles are evaluated through, or null when none is registered.</summary>
+    public ILatticeAccessGate? Gate => _gate;
 
     /// <summary>
     /// Compiles the roles of <paramref name="manifest"/> for the install <paramref name="record"/>, in manifest
@@ -167,16 +177,26 @@ internal sealed class AppRoleGrantEvaluator
         if (install is null)
             return null;
 
-        return new AppRoleGrantEvaluation(install, Evaluate(install, subject));
+        return new AppRoleGrantEvaluation(install, await EvaluateAsync(_gate!, install, subject, cancellationToken).ConfigureAwait(false));
     }
 
-    /// <summary>Evaluates which of an install's roles <paramref name="subject"/> holds by binding.</summary>
+    /// <summary>
+    /// Evaluates which of an install's roles <paramref name="subject"/> holds: each role the binding grants, unless
+    /// <paramref name="gate"/> explicitly refuses it. Each role is evaluated exactly once.
+    /// </summary>
+    /// <param name="gate">The shared access gate, which can only take a bound role away.</param>
     /// <param name="install">The compiled install.</param>
     /// <param name="subject">The resolved caller.</param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
     /// <returns>The names of the held roles, in manifest order; empty when none is held.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="install"/> is null.</exception>
-    public static ImmutableArray<string> Evaluate(AppRoleGrantInstall install, in LatticeSubject subject)
+    /// <exception cref="ArgumentNullException"><paramref name="gate"/> or <paramref name="install"/> is null.</exception>
+    public static async ValueTask<ImmutableArray<string>> EvaluateAsync(
+        ILatticeAccessGate gate,
+        AppRoleGrantInstall install,
+        LatticeSubject subject,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(install);
         var roles = install.Roles;
         var declared = install.Manifest.Roles ?? [];
@@ -184,7 +204,7 @@ internal sealed class AppRoleGrantEvaluator
         var count = 0;
         for (var i = 0; i < roles.Length && i < declared.Length; i++)
         {
-            if (!roles[i].IsHeld(subject))
+            if (!await roles[i].IsHeldAsync(gate, subject, cancellationToken).ConfigureAwait(false))
                 continue;
             held ??= new string[roles.Length - i];
             held[count++] = declared[i].Name;

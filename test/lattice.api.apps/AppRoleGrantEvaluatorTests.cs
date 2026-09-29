@@ -14,7 +14,7 @@ public sealed class AppRoleGrantEvaluatorTests
     private static readonly LatticeSubject Alice = new(WorkspaceHarness.Alice);
 
     private static AppRoleGrantEvaluator Evaluator(WorkspaceHarness harness, IAppSource? source = null) =>
-        new(harness.Projection, source ?? harness.Sources);
+        new(harness.Projection, source ?? harness.Sources, harness.Gate);
 
     private static LatticeSubject Member(params string[] groups) =>
         new(WorkspaceHarness.Alice, new HashSet<string>(groups, StringComparer.Ordinal));
@@ -38,8 +38,8 @@ public sealed class AppRoleGrantEvaluatorTests
     }
 
     /// <summary>
-    /// #3902: a role is held by binding, not by capability. The evaluator is given no access gate at all, so no
-    /// right of the caller's own can reach it; a caller bound only to reader holds reader only.
+    /// #3902: a role is held by binding, not by capability. The harness gate allows everything (the app rules are
+    /// live and the caller has broad rights), yet a caller bound only to reader holds reader only.
     /// </summary>
     [Test]
     public async Task EvaluateAsync_reports_only_the_roles_the_caller_is_bound_to()
@@ -154,8 +154,9 @@ public sealed class AppRoleGrantEvaluatorTests
 
         foreach (var evaluator in new[]
         {
-            new AppRoleGrantEvaluator(null, harness.Sources),
-            new AppRoleGrantEvaluator(harness.Projection, null),
+            new AppRoleGrantEvaluator(null, harness.Sources, harness.Gate),
+            new AppRoleGrantEvaluator(harness.Projection, null, harness.Gate),
+            new AppRoleGrantEvaluator(harness.Projection, harness.Sources, null),
         })
         {
             Assert.That(evaluator.CanServe, Is.False);
@@ -163,7 +164,32 @@ public sealed class AppRoleGrantEvaluatorTests
             Assert.That(await evaluator.EvaluateAsync(TenantId.Default, WorkspaceHarness.Crm, alice, CancellationToken.None), Is.Null);
         }
 
-        Assert.That(await new AppRoleGrantEvaluator(null, null).GetSnapshotAsync(CancellationToken.None), Is.SameAs(CompiledAppRegistrySnapshot.Empty));
+        Assert.That(await new AppRoleGrantEvaluator(null, null, null).GetSnapshotAsync(CancellationToken.None), Is.SameAs(CompiledAppRegistrySnapshot.Empty));
+        Assert.That(new AppRoleGrantEvaluator(null, null, harness.Gate).Gate, Is.SameAs(harness.Gate));
+    }
+
+    /// <summary>
+    /// Coordinator review of #3902: the binding grants a role and the gate can only take it away. An explicit
+    /// deny on one bound role removes that role only; the gate is never asked for a role the caller is not bound
+    /// to, so it can never add one.
+    /// </summary>
+    [Test]
+    public async Task EvaluateAsync_lets_an_explicit_deny_take_a_bound_role_away_and_never_add_one()
+    {
+        var harness = new WorkspaceHarness().Publish(BothBound());
+        harness.Gate.Deny(WorkspaceHarness.Alice, "a/crm/contacts", LatticeOperation.Write);
+        var evaluator = Evaluator(harness);
+
+        var bothBound = await evaluator.EvaluateAsync(TenantId.Default, WorkspaceHarness.Crm, Member("g-readers", "g-writers"), CancellationToken.None);
+        var requestsBefore = harness.Gate.Requests;
+        var unbound = await evaluator.EvaluateAsync(TenantId.Default, WorkspaceHarness.Crm, Member("cluster-admins"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bothBound!.HeldRoles, Is.EqualTo(new[] { "reader" }), "the denied writer role is taken away");
+            Assert.That(unbound!.HeldRoles, Is.Empty);
+            Assert.That(harness.Gate.Requests, Is.EqualTo(requestsBefore), "no gate call for an unbound caller");
+        });
     }
 
     [Test]
@@ -238,7 +264,9 @@ public sealed class AppRoleGrantEvaluatorTests
         Assert.Throws<ArgumentNullException>(() => AppRoleGrantEvaluator.CompileRoles(null!, AppsControlHarness.Manifest()));
         Assert.Throws<ArgumentNullException>(() => AppRoleGrantEvaluator.CompileRoles(WorkspaceHarness.Record(), null!));
         Assert.ThrowsAsync<ArgumentNullException>(async () => await Evaluator(harness).GetInstallAsync(null!, CancellationToken.None));
-        Assert.Throws<ArgumentNullException>(() => AppRoleGrantEvaluator.Evaluate(null!, Alice));
+        var install = new AppRoleGrantInstall(WorkspaceHarness.Record(), AppsControlHarness.Manifest(), []);
+        Assert.ThrowsAsync<ArgumentNullException>(async () => await AppRoleGrantEvaluator.EvaluateAsync(null!, install, Alice, CancellationToken.None));
+        Assert.ThrowsAsync<ArgumentNullException>(async () => await AppRoleGrantEvaluator.EvaluateAsync(harness.Gate, null!, Alice, CancellationToken.None));
         Assert.Throws<ArgumentNullException>(() => new AppRoleGrantInstall(null!, AppsControlHarness.Manifest(), []));
         Assert.Throws<ArgumentNullException>(() => new AppRoleGrantInstall(WorkspaceHarness.Record(), null!, []));
         Assert.Throws<ArgumentNullException>(() => new AppRoleGrantInstall(WorkspaceHarness.Record(), AppsControlHarness.Manifest(), null!));

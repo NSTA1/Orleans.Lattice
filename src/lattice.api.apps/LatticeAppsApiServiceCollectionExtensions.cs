@@ -77,7 +77,8 @@ public static class LatticeAppsApiServiceCollectionExtensions
             sp.GetService<ILogger<LatticeAppCatalog>>()));
         services.TryAddSingleton(sp => new AppRoleGrantEvaluator(
             sp.GetService<IAppRegistryProjection>(),
-            sp.GetService<IAppSource>()));
+            sp.GetService<IAppSource>(),
+            sp.GetService<ILatticeAccessGate>()));
         services.TryAddSingleton<ILatticeAppWorkspace>(sp =>
         {
             var source = sp.GetService<IAppSource>();

@@ -279,7 +279,8 @@ public sealed class LatticeAppBridgeAuthorizationTests
     public async Task The_workspace_reports_exactly_the_roles_the_bridge_honours(string subject, string[] groups, string[] roles, bool mayWrite)
     {
         var harness = new BridgeHarness().Installed(subject, groups);
-        var evaluator = new AppRoleGrantEvaluator(harness.Projection, harness.Sources);
+        harness.Gate.AllowByDefault = true;
+        var evaluator = new AppRoleGrantEvaluator(harness.Projection, harness.Sources, harness.Gate);
         var workspace = new LatticeAppWorkspace(evaluator, harness.Sources, harness.Tenants, harness.Membership);
         var bridge = new LatticeAppBridge(evaluator, harness.Grains, harness.Tenants, harness.Membership, new AppBridgeRateLimiter(harness.Options, harness.Time));
 
@@ -466,6 +467,7 @@ public sealed class LatticeAppBridgeAuthorizationTests
 
     [TestCase("grains")]
     [TestCase("tenants")]
+    [TestCase("gate")]
     [TestCase("projection")]
     [TestCase("source")]
     public void A_missing_collaborator_is_denied(string missing)
@@ -474,6 +476,7 @@ public sealed class LatticeAppBridgeAuthorizationTests
         var bridge = harness.Create(
             withGrains: missing != "grains",
             withTenants: missing != "tenants",
+            withGate: missing != "gate",
             withProjection: missing != "projection",
             withSource: missing != "source");
 
