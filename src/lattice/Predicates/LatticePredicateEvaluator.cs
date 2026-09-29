@@ -156,6 +156,17 @@ internal static class LatticePredicateEvaluator
             return true;
         }
 
+        // The structural kinds need the document model: a type test sees objects
+        // and arrays, a quantifier re-roots the document at each item, and Self
+        // names the root itself. None has a forward-only reader twin.
+        if (node.Kind is LatticePredicateNodeKind.TypeOf
+            or LatticePredicateNodeKind.Length
+            or LatticePredicateNodeKind.Every
+            or LatticePredicateNodeKind.Self)
+        {
+            return false;
+        }
+
         var children = node.Children;
         if (children is not null)
         {
@@ -201,8 +212,15 @@ internal static class LatticePredicateEvaluator
             case LatticePredicateNodeKind.StringMethod:
                 return EvaluateStringMethod(node, root, depth);
 
+            case LatticePredicateNodeKind.TypeOf:
+                return TryResolveElement(node.MemberPath, root, out var typed) && IsOfKind(typed, node.ValueKind);
+
+            case LatticePredicateNodeKind.Every:
+                return EvaluateEvery(node, root, depth);
+
             case LatticePredicateNodeKind.Member:
             case LatticePredicateNodeKind.Constant:
+            case LatticePredicateNodeKind.Self:
                 // A bare member / constant in boolean position is truthy iff it
                 // resolves to the boolean value true.
                 var operand = ResolveOperand(node, root, depth);
@@ -211,6 +229,93 @@ internal static class LatticePredicateEvaluator
             default:
                 return false;
         }
+    }
+
+    private static bool EvaluateEvery(in LatticePredicateNode node, JsonElement root, int depth)
+    {
+        var children = node.Children;
+        if (children is null || children.Length != 1
+            || !TryResolveElement(node.MemberPath, root, out var array)
+            || array.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var item in array.EnumerateArray())
+            if (!EvaluateBoolean(children[0], item, depth + 1))
+                return false;
+
+        return true;
+    }
+
+    private static bool IsOfKind(JsonElement element, LatticeValueKind kind) => kind switch
+    {
+        LatticeValueKind.Present => element.ValueKind != JsonValueKind.Null,
+        LatticeValueKind.Null => element.ValueKind == JsonValueKind.Null,
+        LatticeValueKind.Boolean => element.ValueKind is JsonValueKind.True or JsonValueKind.False,
+        LatticeValueKind.Number => element.ValueKind == JsonValueKind.Number,
+        LatticeValueKind.Integer => element.ValueKind == JsonValueKind.Number && IsIntegral(element),
+        LatticeValueKind.String => element.ValueKind == JsonValueKind.String,
+        LatticeValueKind.Object => element.ValueKind == JsonValueKind.Object,
+        LatticeValueKind.Array => element.ValueKind == JsonValueKind.Array,
+        _ => false,
+    };
+
+    private static bool IsIntegral(JsonElement number)
+    {
+        if (number.TryGetInt64(out _))
+            return true;
+
+        var value = number.GetDouble();
+        return double.IsFinite(value) && value == Math.Truncate(value);
+    }
+
+    private static Operand LengthOf(in LatticePredicateNode node, JsonElement root)
+    {
+        if (!TryResolveElement(node.MemberPath, root, out var element))
+            return Operand.Missing();
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                long runes = 0;
+                foreach (var _ in (element.GetString() ?? string.Empty).EnumerateRunes())
+                    runes++;
+                return Operand.OfInteger(runes);
+
+            case JsonValueKind.Array:
+                return Operand.OfInteger(element.GetArrayLength());
+
+            case JsonValueKind.Object:
+                long members = 0;
+                foreach (var _ in element.EnumerateObject())
+                    members++;
+                return Operand.OfInteger(members);
+
+            default:
+                return Operand.Missing();
+        }
+    }
+
+    private static bool TryResolveElement(string? memberPath, JsonElement root, out JsonElement element)
+    {
+        element = root;
+        if (string.IsNullOrEmpty(memberPath))
+            return true;
+
+        int start = 0;
+        while (start <= memberPath.Length)
+        {
+            int dot = memberPath.IndexOf('.', start);
+            var segment = dot < 0 ? memberPath.AsSpan(start) : memberPath.AsSpan(start, dot - start);
+
+            if (element.ValueKind != JsonValueKind.Object || !TryGetProperty(element, segment, out element))
+                return false;
+
+            if (dot < 0)
+                break;
+            start = dot + 1;
+        }
+
+        return true;
     }
 
     private static bool EvaluateBooleanOperator(in LatticePredicateNode node, JsonElement root, int depth)
@@ -361,6 +466,12 @@ internal static class LatticePredicateEvaluator
 
             case LatticePredicateNodeKind.Member:
                 return ResolveMember(node.MemberPath, root);
+
+            case LatticePredicateNodeKind.Self:
+                return FromJson(root);
+
+            case LatticePredicateNodeKind.Length:
+                return LengthOf(node, root);
 
             default:
                 // Nested boolean / comparison / string-method in operand

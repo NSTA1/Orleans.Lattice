@@ -299,6 +299,7 @@ internal static class TypeAliases
     internal const string LatticeComparisonOperator = "ol.pco";
     internal const string LatticeBooleanOperator = "ol.pbo";
     internal const string LatticeStringMethod = "ol.psm";
+    internal const string LatticeValueKind = "ol.pvk";
 
     // Raw-entry bulk load (snapshot TTL preservation)
     internal const string LwwEntry = "ol.lwe";
