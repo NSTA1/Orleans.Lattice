@@ -355,6 +355,8 @@ Every pass logs its elapsed time, probe count, fold count and stop reason at inf
 
 The orphaned-leaf passes - `ILattice.InspectOrphanedLeavesAsync`, `SurveyOrphanedLeavesAsync` and `RepairOrphanedLeavesAsync` - run under this net too. Each shard batch holds the shard root's turn and yields once it has spent this long, and the tree-level call checks the same budget between shard batches, so one call is bounded by roughly twice this value (about 20 seconds at the default). See [Driving a pass to completion](api.md#driving-a-pass-to-completion).
 
+It also sizes the **slice** an online resize drives its snapshot drain in. Each slice copies for this long, capped at 10 seconds so it returns well inside Orleans' 30-second response timeout, then persists every shard's resume key and hands the snapshot's turn back so its keepalive reminder is not starved. Because that bound is load-bearing for the caller, `TimeSpan.Zero` does not disable it: a zero value falls back to the 10-second cap. See [Tree Sizing](tree-sizing.md#how-it-works).
+
 This option can be changed freely at any time.
 
 ### Bounded background leaf walks
@@ -783,7 +785,7 @@ Watch `orleans.lattice.split.in_flight` (summed across the `tree` tag) to size t
 
 ### `MaxConcurrentDrains`
 
-Maximum number of per-shard drains an online snapshot (`ILattice.SnapshotAsync` in `SnapshotMode.Online`) may run concurrently (default: 4). Each drain reads one source shard's leaf chain and bulk-loads it into the corresponding destination shard while live writes keep mirroring onto the destination through shadow-forwarding. Higher values shorten the snapshot at the cost of proportionally more background drain I/O and coordinator memory; values below 1 are treated as 1. The snapshot stays crash-safe and idempotent under any cap, because re-running it converges by last-writer-wins.
+Maximum number of per-shard drains an online snapshot (`ILattice.SnapshotAsync` in `SnapshotMode.Online`) may run concurrently (default: 4). Each drain reads one source shard's leaf chain and bulk-loads it into the corresponding destination shard while live writes keep mirroring onto the destination through shadow-forwarding. Higher values shorten the snapshot at the cost of proportionally more background drain I/O and coordinator memory; values below 1 are treated as 1. The snapshot stays crash-safe and idempotent under any cap, because re-running it converges by last-writer-wins. An online resize drains its snapshot at this concurrency inside each wall-clock-bounded slice (see [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration)), banking every in-flight shard's resume key when the slice ends.
 
 This option can be changed freely at any time.
 

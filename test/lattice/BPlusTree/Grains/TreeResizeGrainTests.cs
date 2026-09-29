@@ -173,12 +173,13 @@ public partial class TreeResizeGrainTests
         state.State.Phase = ResizePhase.Snapshot;
         state.State.OldPhysicalTreeId = TreeId;
         state.State.SnapshotTreeId = $"{TreeId}/resized/op1";
+        var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        snapshot.RunSnapshotSliceAsync().Returns(true);
 
         await grain.WaitForSnapshotAsync();
 
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
-        await grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId)
-            .Received(1).RunSnapshotPassAsync();
+        await snapshot.Received(1).RunSnapshotSliceAsync();
     }
 
     // --- SwapAliasAsync ---
@@ -291,6 +292,7 @@ public partial class TreeResizeGrainTests
         state.State.ShardCount = ShardCount;
         state.State.SnapshotTreeId = $"{TreeId}/resized/full-pass";
         state.State.OldPhysicalTreeId = TreeId;
+        grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId).RunSnapshotSliceAsync().Returns(true);
 
         // Snapshot phase
         await grain.ProcessNextPhaseAsync();
@@ -379,11 +381,12 @@ public partial class TreeResizeGrainTests
         var (grain, state, reminderRegistry, grainFactory, _) =
             CreateGrain(existingState: existingState);
         SetupKeepalive(reminderRegistry);
+        var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        snapshot.RunSnapshotSliceAsync().Returns(true);
 
         await grain.ProcessNextPhaseAsync();
 
-        await grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId)
-            .Received(1).RunSnapshotPassAsync();
+        await snapshot.Received(1).RunSnapshotSliceAsync();
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Swap));
     }
 

@@ -289,7 +289,11 @@ internal sealed class TreeResizeGrain(
 
         if (state.State.Phase == ResizePhase.Snapshot)
         {
-            await WaitForSnapshotAsync();
+            // The manual run-everything path: drive the snapshot to completion
+            // in one call rather than one slice, as this method always has.
+            var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(state.State.OldPhysicalTreeId!);
+            await snapshot.RunSnapshotPassAsync();
+            await AdvanceToSwapAsync();
         }
 
         if (state.State.Phase == ResizePhase.Swap)
@@ -544,14 +548,25 @@ internal sealed class TreeResizeGrain(
     }
 
     /// <summary>
-    /// Waits for the snapshot to complete by calling <c>RunSnapshotPassAsync</c>.
-    /// Exposed as <c>internal</c> for unit testing.
+    /// Advances the online snapshot by one wall-clock-bounded slice and moves the
+    /// resize on to <see cref="ResizePhase.Swap"/> only once the snapshot reports
+    /// that it has finished. Called from the phase timer, so it must return well
+    /// inside the response timeout: the run-to-completion
+    /// <see cref="ITreeSnapshotGrain.RunSnapshotPassAsync"/> held the snapshot's
+    /// turn for the whole copy, timed out every pass on a large or contended tree,
+    /// and starved the snapshot's keepalive reminder (issue 3904). Exposed as
+    /// <c>internal</c> for unit testing.
     /// </summary>
     internal async Task WaitForSnapshotAsync()
     {
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(state.State.OldPhysicalTreeId!);
-        await snapshot.RunSnapshotPassAsync();
+        if (!await snapshot.RunSnapshotSliceAsync()) return;
 
+        await AdvanceToSwapAsync();
+    }
+
+    private async Task AdvanceToSwapAsync()
+    {
         var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Swap;
         try
