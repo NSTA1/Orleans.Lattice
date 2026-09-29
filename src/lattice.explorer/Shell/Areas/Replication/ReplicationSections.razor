@@ -1,0 +1,24 @@
+@*
+    The area's two sections - the estate and the enrolled trees - as a row of
+    links under the page title. The current section is marked (aria-current,
+    with weight and the marker bar); the active filters travel with the links so
+    switching section keeps the question being asked. The area's stylesheet is
+    linked here, once per page, because every area page renders this row.
+*@
+
+<link rel="stylesheet" href="@ReplicationAssets.Stylesheet" />
+<nav class="lt-replication-sections" aria-label="Replication sections">
+    <ul class="lt-replication-sections__list">
+        <li>
+            <a class="lt-replication-sections__link"
+               href="@Href(ReplicationAddresses.Estate)"
+               aria-current="@(Section == SectionKind.Estate ? "page" : null)">Estate</a>
+        </li>
+        <li>
+            <a class="lt-replication-sections__link"
+               href="@Href(ReplicationAddresses.Trees)"
+               aria-current="@TreesCurrent"
+               data-lt-command="@ReplicationArea.TreesCommandId">Enrolled trees</a>
+        </li>
+    </ul>
+</nav>
