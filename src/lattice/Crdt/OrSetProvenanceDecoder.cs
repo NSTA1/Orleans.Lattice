@@ -129,6 +129,7 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         // transient set per call.
         var keys = new List<string>(adds.Count + tombstones.Count);
         var total = 0;
+        var tombstoneDots = 0;
         foreach (var (key, dots) in adds)
         {
             keys.Add(key);
@@ -137,13 +138,29 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         foreach (var (key, dots) in tombstones)
         {
             total += dots.Count;
+            tombstoneDots += dots.Count;
             if (!adds.ContainsKey(key)) keys.Add(key);
         }
         if (total == 0) return Array.Empty<CrdtMemberChange>();
 
         keys.Sort(StringComparer.Ordinal);
 
+        // Presized to the dot total, which is exact for an uncompacted set: every
+        // add dot and every tombstone dot yields one event and nothing else is
+        // appended. A COMPACTED set breaks that, because each tombstone whose dot
+        // no longer survives in the add list synthesizes a second event (see the
+        // Added branch below) - so the list overflows its presize and grows by
+        // doubling, one reallocate-and-copy per doubling, and for a large set
+        // those copies land on the large object heap.
+        //
+        // The widening is deliberately LAZY rather than folded into the presize
+        // above. Presizing eagerly to the worst case would over-allocate by the
+        // whole tombstone dot count on every uncompacted decode, which is the
+        // common path; widening on the first synthesized event instead leaves
+        // that path byte-for-byte as it was and pays exactly one growth, to a
+        // capacity that provably suffices, on the path that needs it.
         var result = new List<CrdtMemberChange>(total);
+        var widened = false;
         foreach (var key in keys)
         {
             // Decode the element bytes once and share the reference across every
@@ -186,6 +203,16 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
                         // newest add. The tombstone is still proof that the
                         // removed dot once existed, so synthesize its Added half
                         // to keep add-then-remove history decodable.
+                        if (!widened)
+                        {
+                            // First synthesized event proves this set is
+                            // compacted. total + tombstoneDots is the ceiling:
+                            // every tombstone dot can synthesize at most one
+                            // extra event, so one growth here is the last.
+                            widened = true;
+                            result.EnsureCapacity(total + tombstoneDots);
+                        }
+
                         result.Add(new CrdtMemberChange
                         {
                             Element = element,

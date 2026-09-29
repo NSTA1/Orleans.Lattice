@@ -219,6 +219,15 @@ internal static class LeafSnapshotCodec
     /// </para>
     /// </summary>
     /// <param name="frame">Candidate frame bytes.</param>
+    // Deliberately not inlined, for the same reason as the aggregate walk and
+    // the order check below: this loop's speed comes from the JIT inlining
+    // TrySkipRow's row parser into it, and that only happens while this method
+    // is the inline root. Validate is called from several wrappers and is small
+    // enough for the JIT to inline into them, which spends the caller's inline
+    // budget on the walk and leaves none for the per-row parser - so the parser
+    // degrades to a real call once per row. See the leafsnapshotframetrims
+    // microbench suite.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static bool Validate(ReadOnlySpan<byte> frame)
     {
         if (!TryReadHeader(frame, out var rowCount, out var indexOffset))
@@ -269,6 +278,11 @@ internal static class LeafSnapshotCodec
     /// </summary>
     /// <param name="frame">Frame bytes.</param>
     /// <param name="stateBytes">Receives the summed footprint on success.</param>
+    // Not inlined, for the same reason as the aggregate walk below: the walk
+    // calls TryMeasureRowFootprint once per row and gets its speed from the JIT
+    // inlining that callee into it, which only happens while this method is the
+    // inline root rather than part of a larger caller.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static bool TryComputeStateBytes(ReadOnlySpan<byte> frame, out long stateBytes)
     {
         stateBytes = 0;
