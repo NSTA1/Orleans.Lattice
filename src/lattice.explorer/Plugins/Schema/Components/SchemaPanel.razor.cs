@@ -317,8 +317,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     }
 
     // Validated against the surfaces this area actually offers, and a remembered
-    // slug that resolves to none of them is forgotten rather than rejected again
-    // on every later visit.
+    // slug that resolves to none of them is abandoned for this visit rather
+    // than restored.
     private void RestoreSurface()
     {
         if (!Preferences.IsLoaded)

@@ -163,10 +163,15 @@ and, once tenancy is enabled, the tenant you act as - per call:
 
   The MCP head authenticates the request as the subject named in the bearer token
   and forwards it to the silo; fail-closed tool discovery then advertises only the
-  tool groups that identity's grants reach. Discovery is per group, so a group's
+  tool groups that identity's grants reach. Discovery is coarse, so a group's
   mutating tools are listed alongside its reads and refused at call time for a
-  caller who lacks them. `data-reader` sees the state and data tools; `auditor`
-  sees the telemetry tools; `region-operator` sees the state, data, auth, and
+  caller who lacks them, with two refinements: the data group lists its mutating
+  tools only to a caller whose grants include a mutating data-plane operation
+  (`Write`, `Delete`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, or `BulkLoad`),
+  and the scopeless `Telemetry` and `AppInstall` capabilities count only from a
+  grant written cluster-wide, as every grant in `identities.json` is.
+  `data-reader` sees the state tools and the data reads; `auditor` sees the
+  telemetry tools; `region-operator` sees the state, data, auth, and
   tree-administration tools; `platform-admin` sees everything; an unlisted id
   sees only the `lattice_capabilities` meta-tool, and a call with no token sees
   nothing.
@@ -228,13 +233,18 @@ and, once tenancy is enabled, the tenant you act as - per call:
 1. `docker compose up --build` and wait for both silos to finish starting (see the
    Quickstart table).
 2. `tools/list` on region A's MCP (port 9090) as `platform-admin` - full tool set.
-3. Repeat as `data-reader` - the state and data tools (the data group's write tools
-   are listed too; step 4 shows them refused). As `auditor` - only telemetry. As
+3. Repeat as `data-reader` - the state tools and the data reads (the data group's
+   write tools are withheld, because its grants include no mutating data-plane
+   operation). As `auditor` - only telemetry. As
    `region-operator` - the state, data, auth, and tree-administration tools, but no
    backup, telemetry, or replication. As an unlisted id such as `nobody` - only the
    `lattice_capabilities` meta-tool; with no bearer - zero tools.
-4. Try a write as `data-reader` (call a data write tool) - it is denied by the
-   per-subject access gate, even though the transport let the call through.
+4. Try a write as `data-reader` (call a data write tool) - it is refused, because
+   discovery never offered that tool to its session. To see the per-subject access
+   gate refuse a call the transport let through, call a tree-lifecycle tool such as
+   `lattice_treeadmin_tree_delete` as `region-operator`: its tree-administration
+   tools are listed (it holds `Admin`), but the silo denies the verb, which needs
+   `TreeLifecycle`.
 
 ## Demo 2 - replication across isolation
 
@@ -273,7 +283,10 @@ uses for State, so the console needs no second address.
 > names `LatticeOperation.Telemetry` as its intended use), and both the telemetry
 > facade and the tree-administration facade authorize the capability over that
 > same sentinel, so a grant authored the documented way is the grant that is
-> honoured. `platform-admin` reaches the area by a different route: a bootstrap
+> honoured. MCP discovery applies the same rule: it counts a scopeless capability
+> only from a cluster-wide grant, so the same `Telemetry` bit on a tree-scoped
+> rule would neither list the telemetry tools nor unlock them. `platform-admin`
+> reaches the area by a different route: a bootstrap
 > administrator bypasses the gate outright. Until #1795 the two facades asked
 > about the reserved auth-policy tree instead, so this delegated grant was
 > silently inert and only bootstrap administrators could see the area.
@@ -401,7 +414,7 @@ So each head is configured with `Mcp__AdministratorToken: platform-admin` (a
 bootstrap administrator): the discovery introspection is forwarded to the silo under
 that administrator service credential, which lets every caller's own grants light up
 their tools. Enforcement is unaffected - the caller's *own* bearer token authorizes
-every actual tool call, so a `data-reader` still sees the write tools advertised but
-is denied at call time by deny-by-default. Without this token only an administrator
+every actual tool call, so a `region-operator` still sees the tree-lifecycle tools
+advertised but is denied them at call time by deny-by-default. Without this token only an administrator
 caller could enumerate a full tool set remotely; every non-admin identity would fall
 back to the `lattice_capabilities` meta-tool alone.

@@ -434,8 +434,8 @@ public readonly record struct ReplicationPeerSnapshot(
 /// sender has negotiated as the target for each peer) and
 /// <c>wire_version.downgrade_active</c>
 /// (<c>1</c> when the negotiated target is below the sender's current
-/// version, else <c>0</c> - telemetry only, the sender does not yet
-/// re-encode at the negotiated version). Instances are designed to be registered as a singleton by
+/// version, else <c>0</c> - the sender validates each batch can be
+/// down-encoded and stamps the negotiated version on the frame header). Instances are designed to be registered as a singleton by
 /// <c>AddLatticeReplication</c> - the constructor wires the observable
 /// gauges, so a single instance is sufficient per silo.
 /// </summary>
@@ -485,13 +485,13 @@ public class WireVersionNegotiationState
             LatticeReplicationMetrics.WireVersionNegotiatedName,
             static () => _current?.ObserveNegotiated() ?? Array.Empty<Measurement<long>>(),
             unit: "{version}",
-            description: "Framing wire version the local sender has negotiated as the target for the named peer.");
+            description: "Framing wire version the local sender has negotiated as the target for the named peer, tagged by tree, peer and tenant.");
 
         meter.CreateObservableGauge<long>(
             LatticeReplicationMetrics.WireVersionDowngradeActiveName,
             static () => _current?.ObserveDowngradeActive() ?? Array.Empty<Measurement<long>>(),
             unit: "{bool}",
-            description: "1 when the negotiated target version is below the sender's current version (mixed-version fleet), else 0.");
+            description: "1 when the negotiated target version is below the sender's current version and the shipper is down-stamping frames, else 0; tagged by tree, peer and tenant.");
     }
 
     /// <summary>

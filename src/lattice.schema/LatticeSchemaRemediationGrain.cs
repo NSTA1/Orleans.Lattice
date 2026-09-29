@@ -17,9 +17,9 @@ namespace Orleans.Lattice.Schema;
 /// entries, transforming each value, revalidating it, and writing it into the
 /// destination - aborting and discarding the partial destination on the first
 /// offending value;</description></item>
-/// <item><description>cuts over atomically by repointing the logical tree's alias
-/// (<see cref="ILatticeRegistry.SetAliasAsync"/>) to the destination and installing
-/// the target policy so subsequent writes are enforced.</description></item>
+/// <item><description>cuts over by installing the target policy, then repointing
+/// the logical tree's alias (<see cref="ILatticeRegistry.SetAliasAsync"/>) to the
+/// destination so subsequent writes are enforced.</description></item>
 /// </list>
 /// The coordinator mirrors <c>TreeResizeGrain</c>'s durability discipline: it
 /// persists each phase transition before performing that phase's external side
@@ -470,13 +470,16 @@ internal sealed class LatticeSchemaRemediationGrain(
         LatticeSchemaEnvelope.IsEnveloped(rewritten) ? LatticeSchemaEnvelope.StripToBody(rewritten) : rewritten;
 
     /// <summary>
-    /// Atomically repoints the logical tree to the destination, arms the source
-    /// tree's shards to redirect stale logical-alias-routed traffic onto the
-    /// destination (so an already-active routing activation self-heals instead of
-    /// serving the pre-remediation snapshot), and installs the target policy.
-    /// Mirrors the backup shadow-cutover commit. Idempotent: re-running after a
-    /// mid-cutover restart repeats the same alias swap, shard redirects (idempotent
-    /// per operation id), and policy write.
+    /// Installs the target policy, repoints the logical tree to the destination,
+    /// and arms the source tree's shards to redirect stale logical-alias-routed
+    /// traffic onto the destination (so an already-active routing activation
+    /// self-heals instead of serving the pre-remediation snapshot). Mirrors the
+    /// backup shadow-cutover commit. Idempotent: re-running after a mid-cutover
+    /// restart repeats the same policy write, alias swap, and shard redirects
+    /// (idempotent per operation id). If <c>ITreeOwnershipGuard</c> refuses
+    /// the alias swap, the remediation remains in Cutover with the target policy
+    /// already installed and the alias reservation still held for retry or
+    /// operator repair.
     /// </summary>
     private async Task CutoverAsync()
     {

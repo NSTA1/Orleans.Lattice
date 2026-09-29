@@ -1349,14 +1349,12 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("observer", observerStartTicks);
 
-        // Forward the projection-hash delta (if any) to the parent
-        // internal node so the chained subtree fold stays current.
-        // No-op when the running hash did not change (dominated
-        // re-application) or when this leaf has no parent (flat-tree
-        // root-is-leaf shape). Wrapped in the commit-step recorder so
-        // the per-write parent-digest RPC is attributable on
-        // LeafCommitDuration alongside the wal / apply / observer
-        // stages.
+        // Hand the projection-digest delta (if any) to the parent so the
+        // chained subtree fold stays current. With the default coalescing
+        // window this schedules or joins the delayed publish rather than
+        // sending the cross-grain call inline. When the digest did not change,
+        // this leaf has no parent, or digest maintenance is off, the same step
+        // covers the best-effort byte-footprint publish instead.
         var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAfterWriteAsync(splitResult);
         RecordCommitStep("digest", digestStartTicks);
@@ -2159,11 +2157,10 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("observer", observerStartTicks);
 
-        // Forward the projection-hash delta to the parent internal
-        // node. See CommitSetAsync for the no-op semantics. Wrapped in
-        // the commit-step recorder so the per-write parent-digest RPC
-        // is attributable on LeafCommitDuration alongside the wal /
-        // apply / observer stages.
+        // Hand the projection-digest delta to the parent. See CommitSetAsync
+        // for the coalescing, no-op, and byte-footprint fallback semantics.
+        // The commit-step recorder attributes this hand-off alongside the wal,
+        // apply, and observer stages.
         var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAfterWriteAsync(relocatedSplit);
         RecordCommitStep("digest", digestStartTicks);
@@ -2293,13 +2290,13 @@ internal sealed partial class BPlusLeafGrain(
         // would skew the histogram for the legitimate per-key emit
         // step on Set / Delete.
 
-        // Forward the projection-hash delta (an XOR-fold over every
-        // tombstoned key's contribution swap) to the parent internal
-        // node. A single publication covers the whole range. Wrapped
-        // in the commit-step recorder so the per-range parent-digest
-        // RPC is attributable on LeafCommitDuration alongside the wal
-        // / apply stages (DeleteRange has no per-leaf observer step;
-        // see the comment above).
+        // Hand the projection-digest delta (an XOR-fold over every tombstoned
+        // key's contribution swap) to the parent. With the default coalescing
+        // window this schedules or joins the delayed publish rather than
+        // sending the cross-grain call inline. The same recorded step covers a
+        // best-effort byte-footprint publish when there is no digest publish to
+        // send. DeleteRange has no per-leaf observer step; see the comment
+        // above.
         var digestStartTicks = Stopwatch.GetTimestamp();
         await PublishDigestUpwardAfterWriteAsync(relocatedSplit);
         RecordCommitStep("digest", digestStartTicks);

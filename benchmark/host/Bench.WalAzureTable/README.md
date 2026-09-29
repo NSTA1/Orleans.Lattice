@@ -19,7 +19,9 @@ that age differently:
 
 1. **Strict monotonicity under concurrent appends.** This half is the
    correctness invariant - it survived the redesign unchanged and is
-   independently verifiable. The probe asserts it directly.
+   independently verifiable. The probe asserts its no-clobber form
+   directly: a sampled head never falls below an earlier sample on the
+   same shard.
 
 2. **"Throughput uplift over today's path proportional to
    partition-server count."** "Today's path" referred to the
@@ -49,8 +51,10 @@ number.** It is the right place to ship two other things:
   and the parallelism precondition is broken regardless of what any
   speedup-number looks like.
 
-- A **strict monotonicity assertion** on `GetHighestOffsetAsync`
-  sampled across the burst, per shard, with zero violations.
+- A **monotonicity assertion** on `GetHighestOffsetAsync`
+  sampled across the burst, per shard, with zero violations: a sampled
+  head may repeat, but it must never fall below an earlier sample on
+  the same shard.
 
 Quantitative uplift over a single-partition baseline needs a real
 Azure Tables account (or a multi-server emulator) and is out of scope
@@ -93,7 +97,7 @@ sweep point plus a top-level `success` flag.
 | `batches/s` | The same throughput counted in 8-entry batches (`entries/s` divided by 8), reported as `batches_per_second` in the JSON. |
 | `scale_vs_c1` | Throughput at concurrency `c` divided by throughput at `c = 1`. On Azurite this hovers near `1.0x`; on a real Azure Tables account this should grow with concurrency until partition-server count or per-shard supply runs out. |
 | `distinct batch-parts` | Observed-vs-expected count of `_b_\|...` partition keys in the table after the burst (`distinct_batch_partition_count` / `expected_distinct_batch_partition_count` in the JSON). **Must equal `expected`** - if not, the schema-level precondition for partition-server parallelism is broken. |
-| `monotonicity` | Either `STRICT (N samples)` or a violation count (`monotonicity_samples` / `monotonicity_violations` in the JSON). Must be `STRICT`. |
+| `monotonicity` | Either `STRICT (N samples)` or a violation count (`monotonicity_samples` / `monotonicity_violations` in the JSON). Must be `STRICT`, which means no sampled head fell below an earlier sample on its shard. |
 | `total_entries_read_back`, `final_heads_per_shard` (JSON only) | The read-back check: after the burst the probe reads every shard back, and the run exits with code `3` unless all 1024 entries come back and every shard's final head is offset 127. |
 
 ## Exit codes
@@ -129,9 +133,10 @@ A passing run proves:
 1. The redesigned provider stamps every batch into its own Azure
    Table partition - the schema-level precondition for partition-server
    parallelism on a real Azure Tables account.
-2. `GetHighestOffsetAsync` reports a strictly monotonic sequence per
-   shard during concurrent appends, so concurrent batches do not
-   clobber the high-water mark.
+2. `GetHighestOffsetAsync` never reports a lower offset than an
+   earlier sample on the same shard during concurrent appends (a
+   non-decreasing sequence), so concurrent batches do not clobber the
+   high-water mark.
 3. The full burst round-trips through read-back with every shard's
    tail at the expected offset.
 

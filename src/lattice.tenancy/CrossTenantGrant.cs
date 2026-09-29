@@ -35,8 +35,9 @@ public readonly record struct CrossTenantGrant
     public TenantGranteeKind GranteeKind { get; init; }
 
     /// <summary>
-    /// The scope of the granting tenant's data the grant applies to - a tree name
-    /// or tree-name prefix, interpreted by the enforcement layer.
+    /// The scope of the granting tenant's data the grant applies to - a full
+    /// <c>t/{tenant}/...</c> tree id or a <c>/</c>-boundary prefix of one,
+    /// interpreted by the enforcement layer.
     /// </summary>
     [Id(2)]
     public string Scope { get; init; }
@@ -66,7 +67,7 @@ public readonly record struct CrossTenantGrant
     /// </summary>
     /// <param name="grantee">The subject id or tenant id the grant is issued to. Must not be <c>null</c>.</param>
     /// <param name="granteeKind">Whether <paramref name="grantee"/> is a subject or a tenant.</param>
-    /// <param name="scope">The scope (tree name or prefix) the grant applies to. Must not be <c>null</c>.</param>
+    /// <param name="scope">The full <c>t/{tenant}/...</c> tree id or <c>/</c>-boundary prefix the grant applies to. Must not be <c>null</c>.</param>
     /// <param name="operations">The operations the grant authorizes.</param>
     /// <returns>The constructed grant.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="grantee"/> or <paramref name="scope"/> is <c>null</c>.</exception>
@@ -82,7 +83,7 @@ public readonly record struct CrossTenantGrant
     /// </summary>
     /// <param name="grantee">The subject id or tenant id the grant is issued to. Must not be <c>null</c>.</param>
     /// <param name="granteeKind">Whether <paramref name="grantee"/> is a subject or a tenant.</param>
-    /// <param name="scope">The scope (tree name or prefix) the grant applies to. Must not be <c>null</c>.</param>
+    /// <param name="scope">The full <c>t/{tenant}/...</c> tree id or <c>/</c>-boundary prefix the grant applies to. Must not be <c>null</c>.</param>
     /// <param name="operations">The operations the grant authorizes.</param>
     /// <param name="state">The lifecycle state to create the grant in.</param>
     /// <returns>The constructed grant.</returns>

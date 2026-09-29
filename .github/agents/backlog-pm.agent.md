@@ -53,10 +53,13 @@ value from `lattice_list_regions` rather than assuming it.
 These override or extend the base for Orleans.Lattice only.
 
 1. **GitHub authentication.** This repository's name contains "lattice", so
-   every `gh` call runs as **NSTA1**: clear the ambient token
-   (`$env:GH_TOKEN=''`) then `gh auth switch --user NSTA1`. A `gh` call under the
-   ambient identity may act as the wrong account, and pull-request creation can
-   `403`.
+   every `gh` call runs as **NSTA1**: put its token on each command
+   (`$env:GH_TOKEN = (gh auth token --user NSTA1)`) rather than using
+   `gh auth switch`, which changes the active account for every other session
+   sharing this machine's `gh` configuration, and push with that token in the
+   remote URL and the git credential helper disabled, as the base and
+   `{conventionsDoc}` describe. A `gh` call under the ambient identity may act as
+   the wrong account, and pull-request creation can `403`.
 
 2. **Never round-trip an issue or pull-request body through PowerShell strings.**
    Write the full markdown to a file and pass `--body-file`. Capturing a body
@@ -67,8 +70,8 @@ These override or extend the base for Orleans.Lattice only.
    any tracked text file. The em-dash and mojibake gates enforce the damaging
    cases through tests in the required `build-and-test` check; other non-ASCII
    is not gated, so keep to plain ASCII by discipline. The gates enumerate
-   **tracked** files, so running them before
-   committing a new file is a false green: commit first, then run them.
+   **tracked** files (the git index), so running them before a new file is
+   staged is a false green: `git add` it (or commit) first, then run them.
 
 4. **Issue and pull-request labels.** Apply a release-notes category
    (`enhancement`, `bug`, `documentation`, `ci`, `dependencies`, `breaking`) plus

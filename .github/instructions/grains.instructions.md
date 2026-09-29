@@ -6,7 +6,7 @@ applyTo: "src/lattice/BPlusTree/Grains/**"
 
 ## Grain Structure
 
-All grain implementations are **`internal sealed`** (exposed only via interfaces) and use **primary constructors** for DI:
+Every concrete grain implementation is **`internal sealed`** (exposed only via interfaces) and uses a **primary constructor** for DI; the shared abstract bases `CoordinatorGrain<TSelf>` and `TtlGrain<TSelf>` are `internal abstract`:
 
 ```csharp
 internal sealed partial class MyGrain(

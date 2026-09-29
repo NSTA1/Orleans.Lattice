@@ -26,10 +26,9 @@ internal sealed class ShadowForwardState
     /// Physical tree ID of the destination tree. Each mirrored mutation on the
     /// source shard goes to <c>{DestinationPhysicalTreeId}/{shardIndex}</c>,
     /// where <c>shardIndex</c> is the source shard's own index. The destination
-    /// is registered with the source's pinned shard count and no <c>ShardMap</c>
-    /// of its own, so it routes by the default map for that count; the
-    /// same-index projection matches the destination's routing only while the
-    /// source still uses that default map.
+    /// is registered with the source's pinned shard count, routing map and split
+    /// allocation mark, so the same-index projection lands every key on the
+    /// shard that owns it on both trees.
     /// </summary>
     [Id(0)] public string DestinationPhysicalTreeId { get; set; } = "";
 

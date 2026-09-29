@@ -20,7 +20,7 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 - **Out-of-cluster by construction.** The Explorer reaches a cluster purely over its gRPC endpoints, so it can be deployed and scaled independently and never taxes Orleans membership or the silo's activation budget.
 - **Fail-closed and capability-gated.** Each plugin declares an access gate resolving one of four states. `Allowed` renders normally; `AuthenticationRequired` stays prominent and clickable, inviting sign-in; `Denied` renders **visible but demoted**, grouped below a divider and stating the permission it needs and who to ask; `Unavailable` renders no entry, with the absence explained in a capabilities affordance. The gating is advisory and the server remains the sole enforcement point, which is exactly why a denied area is shown rather than hidden - see [Navigation visibility policy](navigation-visibility-policy.md). A plugin leaves no trace at all - neither a rail entry nor a mention in the capabilities affordance - only when the head did not register it: registration is the whole of the opt-in, and there is no per-area option flag.
 - **Head-agnostic core.** The connection, configuration, session, authentication, tenant-scoping, and navigation services live in `Orleans.Lattice.Explorer.Core` and depend only on the public read-only state-API gRPC client, so every head renders the same behaviour. The four-state access model the areas are gated by lives in `Orleans.Lattice.Explorer.Plugins.Abstractions`.
-- **Embeddable without wiring.** The shared UI ships its static web assets at `_content/Orleans.Lattice.Explorer.UI/`, served automatically; a host mounts the whole console with two extension calls under a configurable base path.
+- **Embeddable without wiring.** The shared UI ships its static web assets at `_content/Orleans.Lattice.Explorer.UI/`, served automatically by a published host (a host run from its build output outside the Development environment adds one call - see [Package shape](running-the-explorer.md#package-shape)); a host mounts the whole console with two extension calls under a configurable base path.
 
 ## Features
 
@@ -40,10 +40,10 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 
 Run the bundled standalone head - the `Orleans.Lattice.Explorer.WebHost` process is built on the two extension calls below (its `Program` adds only the standard exception-handler, HSTS, HTTPS-redirection, and antiforgery middleware):
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Explorer.Web;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeExplorerWeb();
 
 var app = builder.Build();
@@ -53,10 +53,11 @@ app.Run();
 
 Embed the console in an existing ASP.NET application, mounted under a subpath and seeded with a target endpoint so there is no interactive first-run step:
 
-```csharp
+```csharp verify
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 
+var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeExplorerWeb(options =>
 {
     options.BasePath = "/explorer";
@@ -67,7 +68,7 @@ builder.Services.AddLatticeExplorerWeb(options =>
 // opt-in, and a head that does not register it renders no Schema area.
 builder.Services.AddExplorerSchemaPlugin();
 
-// ...after building the app:
+var app = builder.Build();
 app.MapLatticeExplorer();
 ```
 

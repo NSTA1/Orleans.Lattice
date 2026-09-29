@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// HTTP health probes, the Prometheus scrape endpoint, and in the azure profile
 /// the scaling scrape). It composes
 /// the already-shipped seams - the core silo, the file/Azure WAL, the MCP binding
-/// with the repository-context tool module, the Onyx embedding provider, and the
+/// with the repository-context tool module, the embedding provider client, and the
 /// membership/auth stack - behind an environment-selected durability profile with
 /// on-host-mount persistence, per-tree compaction on the churn trees, distinct
 /// liveness/readiness probes, and graceful shutdown that drains the WAL.
@@ -563,7 +563,7 @@ public static class RepoContextHostBuilder
         // it.
         builder.Services.AddTreeAdminTools(enableLifecycle: true);
 
-        // The default embedding provider points at the separate Onyx companion
+        // The default embedding provider points at the separate embedding companion
         // container, preserving the MCP-only single-listener surface.
         builder.Services.AddOnyxEmbeddingProvider(options =>
         {

@@ -23,6 +23,13 @@ maintains that tree as it grows, whereas `BulkLoadAsync` computes the final
 tree shape up front and writes it once. The [efficiency
 comparison](#efficiency-compared-with-setmanyasync) below makes that concrete.
 
+Neither bulk path applies the write limits `SetManyAsync` enforces:
+`BulkLoadAsync` (both forms) and `BulkAppendChunkAsync` check no entry against
+the optional write-size bounds (`LatticeOptions.MaxKeyLength`,
+`LatticeOptions.MaxValueSizeBytes`), and the per-tree admission caps
+(`LatticeOptions.MaxLiveKeys`, `LatticeOptions.MaxEstimatedBytes`) never refuse
+them. Validate sizes in the loader when those bounds matter.
+
 ## `SetManyAsync` - batched writes into a live tree
 
 `SetManyAsync` inserts or updates a batch of key-value pairs against a tree

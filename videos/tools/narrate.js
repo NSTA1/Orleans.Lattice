@@ -395,5 +395,5 @@ console.log(
 );
 const unverified = checks.map((check, index) => (check && !check.verified ? index + 1 : null)).filter(Boolean);
 if (unverified.length > 0) {
-  console.log(`narrate: no recogniser heard cue(s) ${unverified.join(", ")} exactly; cues.json has what they heard. Listen before publishing.`);
+  console.log(`narrate: cue(s) ${unverified.join(", ")} were not heard exactly by both recognisers, or have a pace or sound problem; cues.json has details. Listen before publishing.`);
 }

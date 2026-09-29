@@ -71,11 +71,15 @@ gate will tell you if you forget.
   allow fallback.
 - The `lattice_capabilities` meta-tool is the only ungated advertisement; do not
   widen the ungated set.
-- Discovery must not advertise a capability the caller does not hold. An
-  operation that names no tree (`LatticeOperation.Telemetry`) is carried only
-  from an Allow rule written at cluster-wide scope (`LatticeScope.ClusterWideTreeId`),
-  never from a rule scoped to one tree, which can never confer the scopeless
-  capability (#3645).
+- Discovery must not advertise a capability the caller does not hold. The two
+  scopeless operations, which name no tree (`LatticeOperation.Telemetry` and
+  `LatticeOperation.AppInstall`), are carried only from an Allow rule written at
+  cluster-wide scope (`LatticeScope.ClusterWideTreeId`), never from a rule scoped to
+  one tree, which can never confer a scopeless capability (#3645, #3863). Inside a
+  group the caller may use, the built-in permission resolver's reported operations
+  also set a per-tool minimum: a tool is withheld when the caller holds none of the
+  operations it requires, so a caller holding only a read grant is offered neither
+  a mutating data tool (#3863) nor a mutating repository-context tool.
 - An asserted active tenant is validated, never trusted. The region catalog
   re-resolves the caller-supplied assertion (the `lattice-active-tenant` header by
   default) through `ITenantContextResolver` - the validating seam the data plane
@@ -133,6 +137,16 @@ gate will tell you if you forget.
   circuit), never singleton - a process-global auth session leaks one operator's
   credential to every circuit. When adding an Explorer service, confirm no singleton
   or hosted service captures the scoped auth/connection graph.
+- A sign-in is bound to the endpoint it was minted for. Repointing the console at a
+  different endpoint signs out and clears the stored credential rather than
+  re-applying it, and an endpoint that is not recognisably the same counts as
+  different. The clear must not rest on deleting the credential cookie, which a
+  Blazor circuit cannot do once its response has started: the cookie credential
+  store revokes the presented value and refuses a revoked value on read (#3800).
+  That store is a singleton holding no credential in memory - it reads each
+  browser's own encrypted cookie from the ambient request - and its revocation set
+  must stay process-wide, because a per-circuit set would forget the revocation on
+  the next launch.
 - The web head emits security response headers (content-security-policy,
   x-content-type-options, x-frame-options / frame-ancestors, referrer-policy, and
   the rest of the hardening set) via middleware on the Explorer branch, using
@@ -163,7 +177,19 @@ gate will tell you if you forget.
   delete does not disclose whether the rule exists.
 - App MCP tools are gated per tool on the declared role's compiled grants, and the
   same evaluation runs when a tool is advertised and again when it is invoked, against
-  the current registry snapshot - the lock-step rule of the MCP surface above.
+  the current registry snapshot - the lock-step rule of the MCP surface above. Only an
+  unfiltered allow holds a role's operation on its scope; a key-filtered decision
+  fails closed, on a prefix scope exactly as on a tree scope (#3863).
+- Alias changes are bounded by tree ownership. The tree registry consults the core
+  `ITreeOwnershipGuard` seam on every alias assignment - system-origin maintenance
+  included - after its namespace and target-control checks: a denial throws
+  `LatticeTreeOwnershipDeniedException`, a default decision denies, and a guard
+  failure propagates without writing the alias. The apps package backs the seam
+  with its tree ownership ledger (the reserved `sys-app-trees` tree), so for every
+  caller an alias is allowed only when the logical tree and the tree its physical
+  target derives from (or the target itself) have the same owner - the same
+  install, or no app at all; a host without the apps package gets an allow-all
+  guard. Do not add an alias write that bypasses the guard.
 - The gRPC binding is default-deny: `DenyAppsApiAuthorizer` is registered unless the
   host supplies its own `ILatticeAppsApiAuthorizer`.
 

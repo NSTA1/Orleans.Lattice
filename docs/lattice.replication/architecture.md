@@ -119,8 +119,9 @@ flowchart LR
 
 8. **Dead-letter quarantine.** An entry whose apply keeps failing is
    quarantined per tree after a configurable retry budget, and entries the
-   merge-mode or tenant-isolation gate refuses, the causal-apply buffer evicts,
-   or the sender cannot encode are parked at once, so replication continues
+   merge-mode or tenant-isolation gate refuses, the causal-apply buffer evicts
+   or fails to apply when it drains, or the sender cannot encode are parked at
+   once, so replication continues
    past them. See
    [`dead-letter-queue.md`](dead-letter-queue.md).
 

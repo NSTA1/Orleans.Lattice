@@ -366,8 +366,8 @@ public static class LatticeReplicationMetrics
     /// timestamp from a faster-moving peer reports as <c>0</c> rather than
     /// a negative sample). Recorded once per successfully applied point
     /// operation (<see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>);
-    /// range deletes carry <see cref="HybridLogicalClock.Zero"/> by design
-    /// and do not contribute. Tagged by <see cref="TagTree"/> and
+    /// range deletes apply through the range path, where one issue HLC covers
+    /// a whole key range, and do not contribute. Tagged by <see cref="TagTree"/> and
     /// <see cref="TagPeer"/> (the entry's <see cref="WalRecord.OriginClusterId"/>
     /// , which under transitive replication may differ from the immediate
     /// transport hop).
@@ -398,7 +398,8 @@ public static class LatticeReplicationMetrics
     /// Incremented once per redundant entry as the shipper drains it
     /// onto the wire, only when
     /// <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/>
-    /// is set (the counter never fires under the default-off behaviour).
+    /// is set. It fires by default and falls silent only when that option is
+    /// set to <see langword="false"/>.
     /// Pairs with <see cref="WalEntriesShipped"/> so operators can read
     /// the redundant fraction directly: a high ratio signals idempotent
     /// upstream retry logic re-sending the same value, which is the
@@ -544,7 +545,8 @@ public static class LatticeReplicationMetrics
     /// before they reach the cross-cluster wire. Incremented once per
     /// elided entry as the shipper compacts a drained batch, only when
     /// <see cref="LatticeReplicationOptions.PreShipCoalescingEnabled"/>
-    /// is set (the counter never fires under the default-off behaviour).
+    /// is set. It fires by default and falls silent only when that option is
+    /// set to <see langword="false"/>.
     /// <para>
     /// Coalescing collapses a hot key rewritten several times within a
     /// single drained batch down to the single version a last-writer-wins
@@ -891,7 +893,7 @@ public static class LatticeReplicationMetrics
     /// (<c>min(localCurrent, peerAdvertised)</c>, or the conservative
     /// unknown-peer floor until the peer advertises a capability).
     /// Backed by <see cref="WireVersionNegotiationState"/> and tagged
-    /// with <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// with <see cref="TagTree"/>, <see cref="TagPeer"/>, and the tenant tag.
     /// </summary>
     public const string WireVersionNegotiatedName = "orleans.lattice.replication.wire_version.negotiated";
 
@@ -900,10 +902,11 @@ public static class LatticeReplicationMetrics
     /// observable gauge. Reports <c>1</c> when the negotiated target
     /// version is strictly below the sender's current wire version and
     /// <c>0</c> otherwise, so operators can see at a glance when a fleet
-    /// is running mixed wire versions during a rolling upgrade (a future
-    /// re-encode seam would down-encode while this reads <c>1</c>).
+    /// is running mixed wire versions during a rolling upgrade. While this
+    /// reads <c>1</c>, the shipper stamps the negotiated version on the
+    /// frame header after validating that the batch can be down-encoded.
     /// Backed by <see cref="WireVersionNegotiationState"/> and tagged
-    /// with <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// with <see cref="TagTree"/>, <see cref="TagPeer"/>, and the tenant tag.
     /// </summary>
     public const string WireVersionDowngradeActiveName = "orleans.lattice.replication.wire_version.downgrade_active";
 
@@ -1981,8 +1984,8 @@ public static class LatticeReplicationMetrics
     public const string SagaReasonInfeasible = "infeasible";
 
     /// <summary>
-    /// <see cref="TagReason"/> value on the participant vote counter: a build
-    /// precondition failed (a missing backup or base in the manifest chain) - a
+    /// <see cref="TagReason"/> value on the participant vote counter: restore
+    /// validation failed while building the participant's shadow, producing a
     /// permanent, non-retryable refusal.
     /// </summary>
     public const string SagaReasonPrecondition = "precondition";
@@ -2038,7 +2041,8 @@ public static class LatticeReplicationMetrics
     /// prepare with the vote outcome carried by <see cref="TagReason"/>
     /// (<see cref="SagaReasonCommit"/>, <see cref="SagaReasonInfeasible"/>,
     /// <see cref="SagaReasonPrecondition"/>, <see cref="SagaReasonBuildFailed"/>,
-    /// or <see cref="SagaReasonEngineUnavailable"/>). Lets operators watch the
+    /// <see cref="SagaReasonNotReplicated"/>, or
+    /// <see cref="SagaReasonEngineUnavailable"/>). Lets operators watch the
     /// commit-vote fraction and the distribution of abort refusals.
     /// </summary>
     public static readonly Counter<long> SagaParticipantVotes =
@@ -2051,11 +2055,12 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of participant commits (the fenced cutover alias swap), incremented
     /// once per committed participant and tagged by <see cref="TagReason"/>
-    /// (<see cref="SagaReasonSingle"/> or <see cref="SagaReasonSet"/>).
+    /// (<see cref="SagaReasonSingle"/>, <see cref="SagaReasonSet"/>, or
+    /// <see cref="SagaReasonNotReplicated"/>).
     /// </summary>
     public static readonly Counter<long> SagaParticipantCommits =
         Meter.CreateCounter<long>("orleans.lattice.replication.saga.participant.commits", unit: "{commit}",
-            description: "Participant commits (cutover alias swaps), tagged by reason (single/set).");
+            description: "Participant commits (cutover alias swaps), tagged by reason (single/set/not-replicated).");
 
     /// <summary>Canonical name of the <see cref="SagaParticipantCommits"/> counter.</summary>
     public const string SagaParticipantCommitsName = "orleans.lattice.replication.saga.participant.commits";
@@ -2063,7 +2068,8 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of participant aborts (compensation / rollback), incremented once
     /// per aborted participant and tagged by <see cref="TagReason"/>
-    /// (<see cref="SagaReasonSingle"/>, <see cref="SagaReasonSet"/>, or
+    /// (<see cref="SagaReasonSingle"/>, <see cref="SagaReasonSet"/>,
+    /// <see cref="SagaReasonNotReplicated"/>, or
     /// <see cref="SagaReasonEngineUnavailable"/>).
     /// </summary>
     public static readonly Counter<long> SagaParticipantAborts =

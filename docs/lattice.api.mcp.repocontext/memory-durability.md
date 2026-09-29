@@ -95,7 +95,7 @@ on an ordinary restart where the memory is already there.
 A restore also leaves a record of what it did. Before its first record lands it
 writes a restore-state marker into the memory tree reading *partial*, and it stamps
 that marker complete only after the tree has been counted and found to hold at
-least what the snapshot carried. An import that dies part-way therefore leaves the
+least as many records as the import wrote. An import that dies part-way therefore leaves the
 marker reading partial, and the next `auto` start heals that tree instead of
 declining because it is non-empty. The marker sits outside every repository's key
 range, so it is never exported into the archive and never counts as memory. Each
@@ -178,11 +178,13 @@ than it may look.
 * **An archive inside the data volume protects nothing.** If the configured
   directory resolves under the data root, it dies with the thing it is meant to
   outlive. The host detects that case and says so, loudly, at startup.
-* **It is not the scheduled whole-store backup of issue #2602.** That mechanism
-  owns manifests, retention, and operator-driven restore of the entire store.
+* **It is not the scheduled memory backup of issue #2602.** That mechanism
+  captures the same memory tree to an external blob sink, with manifests and
+  retention, and restores only the backup id an operator names (see
+  [Agent-memory backup and recovery](container.md#agent-memory-backup-and-recovery)).
   This one owns automatic restore-on-empty for memory alone. **Only this
-  mechanism restores automatically at startup**; the backup path does not
-  auto-heal, so the two cannot race to repopulate the same store.
+  mechanism restores automatically at startup**; the backup path never restores
+  on its own initiative.
 
 ## Reference
 

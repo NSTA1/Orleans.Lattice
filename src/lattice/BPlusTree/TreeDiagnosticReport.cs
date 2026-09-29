@@ -20,7 +20,7 @@ public readonly record struct TreeDiagnosticReport
     /// <summary>Number of physical shards currently owning virtual slots.</summary>
     [Id(1)] public int ShardCount { get; init; }
 
-    /// <summary>Total virtual slot count (fixed at tree creation, always 4096 for current trees).</summary>
+    /// <summary>Total virtual slot count: <c>4096</c> by default, or the count an installed app declared for the tree.</summary>
     [Id(2)] public int VirtualShardCount { get; init; }
 
     /// <summary>Sum of <see cref="ShardDiagnosticReport.LiveKeys"/> across all shards.</summary>

@@ -67,6 +67,7 @@ These shape persistence and maintenance.
 | `IngestSliceBudget` | 5 seconds (`DefaultIngestSliceBudget`) | Wall-clock ceiling on one build step: the step checkpoints and returns at the first source item that finds the budget spent, and the budget is also a deadline raced against each source read, so a slow or stalled source cannot hold the step. A non-positive value removes the bound, leaving `IngestBatchSize` as the only one. |
 | `TimeProvider` | `TimeProvider.System` | The clock `IngestSliceBudget` is measured against; a test substitutes a fake. Must not be `null`. |
 | `KeyReservationBlock` | `1024` | How many identifiers the key dictionary reserves per durable watermark write. A crash burns the remainder of a block rather than reissuing. |
+| `BuildObserver` | `null` | An `IVectorIndexBuildObserver` the build calls once per ingest slice, after the slice has checkpointed (a slice that faults reports nothing), with a `VectorIndexBuildSliceTimings`: the time the slice spent waiting on the source, assigning identifiers to keys, inserting into the in-memory index, and writing its batched identifier-mapping records, plus how many items it consumed. The package declares no meter or instruments of its own, so this is the seam a host publishes build-stage timings through on its own meter; the repository-context host binds one (see [Retrieval economics](../lattice.api.mcp.repocontext/retrieval-economics.md)). While it is `null` the build takes no stage samples at all, because each sample is a read of the same clock `IngestSliceBudget` is measured against. |
 
 `KeyPrefix` and `TimeProvider` reject `null`, and `MaxItemsPerChunk`,
 `IngestBatchSize`, and `KeyReservationBlock` reject a value that is not positive,
@@ -74,7 +75,8 @@ each on assignment; `IngestSliceBudget` accepts any value. `Validate()`, which
 opening an index runs, requires `Index` to be set and validates it. Opening also
 rejects a source whose dimensionality differs from `Index.Dimensions`, and copies
 the options, so later changes to the instance have no effect.
-`DurableVectorIndexOptions.Clone()` is that copy, and clones `Index` with it.
+`DurableVectorIndexOptions.Clone()` is that copy: it clones `Index` with it and
+carries `TimeProvider` and `BuildObserver` across by reference.
 
 ### Give the index its own tree, or at least its own prefix
 

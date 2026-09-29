@@ -8,8 +8,9 @@ namespace Orleans.Lattice.Replication;
 /// physical-identity swap into an immediate, event-driven rebind of every
 /// cross-cluster shipper for the affected logical tree. The core registry fires
 /// <see cref="ITreeAliasObserver.OnTreeAliasChangedAsync"/> from its single
-/// alias-mutation choke point when a shadow-cutover restore, resize, or reshard
-/// repoints a logical tree onto a new physical WAL; this observer fans the new
+/// alias-mutation choke point when a shadow-cutover restore, resize, schema
+/// remediation, or operator alias change repoints a logical tree onto a new
+/// physical WAL; this observer fans the new
 /// physical id out to the per-peer shipper grains
 /// (<c>{logicalTree}/{peer}</c>) so they rebind on their next tick without
 /// re-reading the registry.

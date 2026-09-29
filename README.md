@@ -354,7 +354,7 @@ Use these documents for day-to-day use and operations:
 - [Online Reshard](docs/lattice/online-reshard.md) - `ReshardAsync`: growing a tree's physical shard count while it keeps serving reads and writes.
 - [Tree Sizing](docs/lattice/tree-sizing.md) - `ResizeAsync`: changing a live tree's `MaxLeafKeys` and `MaxInternalChildren`, its phase machine, and its undo window.
 - [Tree Deletion](docs/lattice/tree-deletion.md) - soft delete with a configurable retention window, recovery, and manual purge.
-- [Tree Registry](docs/lattice/tree-registry.md) - the built-in registry of every user tree and its per-tree configuration overrides, aliases, and shard maps.
+- [Tree Registry](docs/lattice/tree-registry.md) - the built-in registry of every user tree and its per-tree configuration overrides, aliases, shard maps, and the optional `ITreeOwnershipGuard` seam that bounds alias changes.
 - [Retry Policy](docs/lattice/retry-policy.md) - the opt-in retry surface for transient storage faults, and the idempotency-key contract that makes a retry safe.
 - [Queues](docs/lattice/queues.md) - the public `ILatticeQueue<T>` cluster-internal FIFO primitive, bounded-queue eviction, and throughput guidance.
 - [Compression](docs/lattice/compression.md) - the public `ILatticeCompressor` seam, `AddLatticeCompressor` registration, tag-space partitioning, and how to plug in a custom algorithm.

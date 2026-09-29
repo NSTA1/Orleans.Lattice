@@ -13,9 +13,10 @@ namespace Orleans.Lattice.Dashboards;
 /// <c>orleans.lattice.replication</c>, <c>orleans.lattice.replication.grpc</c>,
 /// <c>orleans.lattice.auth</c>, <c>orleans.lattice.membership</c>,
 /// <c>orleans.lattice.backup</c>, <c>orleans.lattice.scaling</c>, and
-/// <c>orleans.lattice.tenancy</c> meters over a Prometheus data source. Import
-/// the JSON in Grafana via <em>Dashboards - New - Import</em> or drop it into a
-/// provisioning directory referenced by
+/// <c>orleans.lattice.tenancy</c> meters, plus the
+/// <c>Orleans.Lattice.Api.Mcp.RepoContext</c> meter, over a Prometheus data
+/// source. Import the JSON in Grafana via <em>Dashboards - New - Import</em> or
+/// drop it into a provisioning directory referenced by
 /// <c>Provisioning/dashboards.yaml</c>.
 /// </para>
 /// <para>

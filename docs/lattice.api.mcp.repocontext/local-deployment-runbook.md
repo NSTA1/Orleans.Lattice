@@ -30,9 +30,12 @@ Read `repocontext.ann.build.slice` alongside `repocontext.ann.vectors`, selectin
 the same `repository` and `space`. A first coordinator step compares against the
 progress observed immediately after opening the index, including a cached or
 durably restored index. Merely holding old vectors is not an `advanced` step.
-`advanced` means vectors or persisted partitions increased between two readings;
-check the held-vector gauge for ingest advancement and partition persistence when
-the build is committing. A phase-only change is `churned`; no change is `idle`.
+`advanced` means the held vector count or the trained partition count
+(`VectorIndexBuildProgress.PartitionsTotal`, the figure `repocontext.ann.partitions`
+reports) rose between two readings; persisting partitions does not count. Read ingest
+advancement from the held-vector gauge, and partition persistence from
+`ann.partitionsPersisted` in a `repocontext_health` call that names the repository.
+A phase-only change is `churned`; no change is `idle`.
 Repeated churn with flat held counts is a livelock diagnostic, not proof of useful
 ingest. `starved` and `VectorIndexBuildProgress.IsStarvedBySource` remain the
 authoritative source-deadline signals; lifetime deadline counts are per index
@@ -54,6 +57,17 @@ than a broken snapshot. The reason tag changes the label set: migrate exact-labe
 consumers by aggregating it away. See the complete outcomes and legal reasons in
 [retrieval economics](retrieval-economics.md).
 
+To time a build end to end rather than read it from telemetry, run
+`pwsh -File ./scripts/Invoke-AnnBuildProbe.ps1 -RepoPath /workspace/<repo>` from
+`samples/RepoContextContainer`. It registers the repository over MCP, retrying while
+the endpoint comes up, then polls `repocontext_health` for it every `-PollSeconds`
+(default 10) until the plane reads `Ready` with `ann.vectorsIndexed` at or above a
+non-zero `vectorCoverage.count`, and reports the wall-clock time to converge with the
+sample series (`-JsonOutputPath` saves them). It exits `0` on convergence and `2` when
+`-MaxWaitMinutes` (default 60) elapses first, which is a result rather than a harness
+fault. `-BaseUri` defaults to `http://localhost:8080`, and the MCP client it speaks
+through is the shared `scripts/_mcpClient.ps1`.
+
 ### Before you start the stack
 
 **Every resource knob is now derived per-deployment, and the stack will refuse to
@@ -62,7 +76,7 @@ start until you have derived them (#2779).** This changes the startup sequence:
 ```bash
 cd samples/RepoContextContainer
 pwsh -File ./scripts/New-TuningEnv.ps1      # writes .env - REQUIRED, and not optional
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.tuning.yml up -d
 ```
 
 Skipping the first command does not produce a degraded stack, it produces no stack:
@@ -77,8 +91,15 @@ forward for anyone who did not know to override it.
 The memory grant in particular is derived from the **indexed corpus**, not from host
 RAM: the requirement is a property of the repository being indexed, so a fixed
 fraction of host memory grants far too much on a large machine and far too little on a
-small one for the identical corpus. Re-run the script after a substantial change in
-corpus size, or when moving the deployment to a different host.
+small one for the identical corpus. Re-run the script with `-Force` after a substantial
+change in corpus size, or when moving the deployment to a different host.
+
+The script writes only the knobs it derives. `REPO_PATH` and
+`REPOCONTEXT_MEMORY_ARCHIVE_PATH` belong in the same `.env` and are never derived (see
+[Where the setting actually lives](#where-the-setting-actually-lives)), and the base
+compose file refuses to start without the second. When `.env` already exists the script
+leaves it untouched and only adjudicates it; `-Force` replaces the derived knobs and
+carries every other key in the file across.
 
 #### `${VAR:?...}` checks presence, not meaning (#2863)
 
@@ -279,7 +300,9 @@ leaves every output surface looking healthy while every answer is wrong.
 
 ### Where the setting actually lives
 
-`REPO_PATH` is **not** in either compose file and never was. It lives in
+No value for `REPO_PATH` is set in either compose file, and none ever was: the base
+file only references it, with the fallback default described under
+[The worktree trap](#the-worktree-trap). The value lives in
 `samples/RepoContextContainer/.env`, which Docker Compose auto-loads from the
 directory it is **invoked from**, on every `up`, regardless of your shell
 environment. That file is gitignored. A tracked

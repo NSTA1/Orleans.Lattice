@@ -25,9 +25,10 @@ public enum TreeHistoryRetentionMode
     FullValue = 1,
 
     /// <summary>
-    /// Store full value bytes for revisions still recent at apply time (within the
-    /// configured window) and metadata only for older revisions. Bounds full-byte
-    /// storage to the recent tail while keeping an unbounded metadata-only timeline.
+    /// Store full value bytes for revisions whose wall-clock timestamp is within
+    /// the configured hybrid full-value window when the row is written, and
+    /// metadata only for rows already older than that. Rows are never reshaped
+    /// later just because they aged past the window.
     /// </summary>
     Hybrid = 2,
 }

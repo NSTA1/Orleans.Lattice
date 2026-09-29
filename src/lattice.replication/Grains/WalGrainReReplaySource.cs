@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// is constructed with, and does not resolve a registry alias. The outbound
 /// shipper instead addresses the WAL by the tree's resolved physical id, which is
 /// what the WAL is keyed by after an alias swap (shadow-cutover restore, resize,
-/// reshard), so for an aliased tree constructed with its logical name this source
+/// schema remediation, or operator alias change), so for an aliased tree constructed with its logical name this source
 /// reads the partitions of that name rather than the physical tree's. It reads
 /// oldest-first per partition up to a bounded budget shared across partitions; a
 /// partition whose oldest retained entry sits at a sequence greater than zero is

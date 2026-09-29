@@ -29,7 +29,9 @@ tenant, Telemetry) ship in their own plugin packages.
   instead, so a plugin composes them without referencing this package.
 - The packaged **static web assets** (the shell and appearance stylesheets, the
   first-paint appearance script, and the favicon). A referencing app serves them
-  automatically at `_content/Orleans.Lattice.Explorer.UI/` with no extra wiring.
+  at `_content/Orleans.Lattice.Explorer.UI/` with no extra wiring when it is
+  published or runs under the Development environment; a host run from its build
+  output under any other environment calls `builder.WebHost.UseStaticWebAssets()`.
 
 ## Usage
 

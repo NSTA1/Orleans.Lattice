@@ -15,7 +15,8 @@ namespace VehicleFleetSimulator.Benchmark.Sink;
 /// <c>Orleans.Lattice</c> tree. Implements the §3 contract in <c>benchmark/benchmark-scenarios.md</c>:
 /// the producer's <c>PublishTelemetryAsync</c> path is a non-blocking channel write; a
 /// long-running drain task (started as an <see cref="IHostedService"/>) batches drained samples
-/// into <c>SetAsync</c> calls off the <c>VehicleGrain</c> turn.
+/// into <c>SetManyAsync</c> calls off the <c>VehicleGrain</c> turn, except that
+/// timestamped event-log keys use <c>SetAsync</c> so they can carry a TTL.
 /// </summary>
 /// <remarks>
 /// <para>

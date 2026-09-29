@@ -10,9 +10,9 @@ using Orleans.Lattice;
 // TreeRegistry
 // ---------------------------------------------------------------------------
 // Lattice keeps an internal registry of every user tree. A tree registers
-// itself automatically on its first write, so you can discover all trees in a
-// cluster - and their per-tree configuration - without maintaining a list
-// yourself.
+// itself automatically on first use, including reads and writes, so you can
+// discover all trees in a cluster - and their per-tree configuration - without
+// maintaining a list yourself.
 //
 // This sample:
 //   1. declares per-tree option overrides at startup (ConfigureLattice),

@@ -60,8 +60,9 @@ namespace Orleans.Lattice.GrainIndex;
 /// exact with respect to the index: it is precisely the set of grains whose
 /// indexed entries satisfy the predicate.
 /// <see cref="GrainIndexQueryExecution.SnapshotCursor"/> additionally pins the
-/// index state for the whole scan. The query surface is deliberately free of any
-/// promise about grain state itself, which leaves room for an opt-in
+/// index state for each key range while that range is scanned. The query surface
+/// is deliberately free of any promise about grain state itself, which leaves
+/// room for an opt-in
 /// linearizable mode should Lattice later back grain state directly.
 /// </para>
 /// </remarks>

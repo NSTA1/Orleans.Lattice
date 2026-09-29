@@ -15,9 +15,10 @@ deployment. Tenants that share a cluster (or a set of replicated clusters) are:
   trees (durable bytes, live keys, resident memory, tree count, request rate) and an
   optional burst allowance whose overage is explicitly metered, both adjustable at
   runtime through the control plane. Its tenant record also carries a physical
-  placement binding (a dedicated WAL provider and/or silo placement filter); the
-  control plane creates every tenant on the shared placement, and a binding is
-  immutable in effect once the tenant's trees are placed.
+  placement binding (a dedicated WAL provider and/or a silo placement filter - the
+  filter is recorded but not acted on); the control plane creates every tenant on
+  the shared placement, and a binding is immutable in effect once the tenant's trees
+  are placed.
 
 It is a **companion package**, following the same model as `lattice.auth` and
 `lattice.schema`: the tenancy logic (registry, compiled quota/isolation policy,
@@ -106,7 +107,9 @@ siloBuilder.ConfigureLatticeTenancy(options =>
   treated as qualified: an app tree `a/{app}/{tree}` is an ordinary unqualified name,
   so it composes to `t/{tenantId}/a/{app}/{tree}` and each tenant gets its own copy of
   an installed app (with tenancy off it stays the bare `a/{app}/{tree}`). An app that
-  declares replication enrols each tenant's composed trees per install, and they are
+  declares replication enrols each tenant's composed trees per install, through the
+  runtime replication configuration (see
+  [Replication intent](../lattice.apps/README.md#replication-intent)), and they are
   admitted by the tenant replication isolation gate like any other tenant tree. Compose and inspect tenant tree ids with the core
   `LatticeTenantTrees` helper:
 
@@ -210,7 +213,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   scope a name. This is what makes
   `services.GetLatticeAsync("orders")` address `t/acme/orders` for a caller acting
   as `acme` and `t/globex/orders` for one acting as `globex`, rather than handing
-  both the same physical tree. **Every external API facade does the same**: the
+  both the same physical tree. **The tree-addressing API facades do the same**: the
   data, state, tree-administration, schema, replication, and backup facades resolve
   the caller-supplied name through the `ResolveEffectiveTreeIdAsync` extension
   `LatticeTenantExtensions` adds over `ITenantContextResolver` (the interface
@@ -366,16 +369,20 @@ never suddenly throttles an existing workload.
   grains directly, is charged per page. A turn the access gate never adjudicated -
   a system-origin turn, or authorised view-maintenance traffic - is never charged,
   because there is no validated tenant to charge it to.
-- **Tree creation is admitted.** `MaxTreeCount` is charged where a tree is actually
-  created, so the one dimension whose whole purpose is to bound tree creation binds
-  at the point of creation. It is enforced once, at the tree-administration facade
-  every create funnels through, rather than additionally at the tenant-scoped
-  facade above it: admission consumes a rate token, so evaluating it at both layers
-  would bill a single create twice. The ceiling is checked against an authoritative
-  count of the tenant's registered trees read at the moment of the create, not
-  against the metered sample, so it binds even for a tenant that has never been
-  metered; creates that read the count concurrently can each be admitted, so the cap
-  can be overshot by at most the number of creates in flight.
+- **Tree creation is admitted.** `MaxTreeCount` is charged where a tree is
+  explicitly created, so the one dimension whose whole purpose is to bound tree
+  creation binds at the point of creation. It is enforced once, at the
+  tree-administration facade every explicit create funnels through, rather than
+  additionally at the tenant-scoped facade above it: admission consumes a rate token,
+  so evaluating it at both layers would bill a single create twice. The ceiling is
+  checked against an authoritative count of the tenant's registered trees read at
+  the moment of the create, not against the metered sample, so it binds even for a
+  tenant that has never been metered; creates that read the count concurrently can
+  each be admitted, so the cap can be overshot by at most the number of creates in
+  flight. A tree the data plane registers implicitly on first use - for example the
+  first write to a new name - never passes that check: it is bounded only by the
+  metered tree count an ordinary write is admitted against, so implicit creation can
+  overshoot the cap until the next metering sample lands.
 - **The reserved `sys-` namespace is closed to tenants.** Tenant scoping composes
   the active tenant into a tree name, and deliberately passes an already-qualified
   name through uncomposed so it is never double-composed. The reserved `sys-`
@@ -462,7 +469,8 @@ footprint breach that will not clear on its own.
 
 ## Store write contention
 
-Every write to the three `sys-tenant-*` stores is an optimistic read-merge-write:
+Each of the three `sys-tenant-*` stores' write paths - `ITenantRegistry.PutAsync`, the
+usage-slot publish, and the overage accrual - is an optimistic read-merge-write:
 the store reads the tenant's record with its version, folds the change in with the
 record's CRDT join, and writes back only if the version has not moved. A write that
 loses that race re-reads (now seeing the competing write) and merges again, at once
@@ -474,7 +482,7 @@ write contention on one tenant.
 
 | Exception | Raised by | What happens |
 |---|---|---|
-| `TenantRegistryConcurrencyException` | `ITenantRegistry.PutAsync`: every registry write, including every mutation the [tenant-administration facades](../lattice.api.tenantadmin/README.md) make | The change is not applied and the exception reaches the caller, which may retry. The tenant-administration gRPC binding has no arm for it, so a remote caller sees `Internal`. |
+| `TenantRegistryConcurrencyException` | `ITenantRegistry.PutAsync`, which every record change the [tenant-administration facades](../lattice.api.tenantadmin/README.md) make is written through (`DeleteAsync` removes a record outright and never raises it) | The change is not applied and the exception reaches the caller, which may retry. The tenant-administration gRPC binding has no arm for it, so a remote caller sees `Internal`. |
 | `TenantUsageConcurrencyException` | The metering cycle's usage-slot publish | Caught and logged for that tenant: its overage accrual is skipped for the tick too, the rest of the pass continues, and the next tick retries. |
 | `TenantOverageConcurrencyException` | The metering cycle's overage accrual | Caught and logged for that tenant: that tick's overage is not recorded - the tally is a per-tick sum, so it is not recovered later - and the next tick accrues as normal. |
 
@@ -515,7 +523,8 @@ shown today.
   fail-closed answer "is this tenant resident here?". A tenant's data is shipped to peers like any other replicated
   tree; the receiving region refuses (and dead-letters) a replicated write for a
   tenant that is not `Online` there, so the data lands only where the tenant is
-  online.
+  online. The same gate refuses and dead-letters a replicated write for a tenant the
+  receiving region does not know or holds suspended.
 - **Symmetric multi-master.** An `Online` region is a full read-write replica; there
   is no primary or leader. Enforcement ties in at the gate (a tenant not `Online` in
   the serving region is refused) and the replication apply path (a tenant's
@@ -620,7 +629,8 @@ is bounded** - an unbounded (`null`) ceiling contributes no series at all, so "n
 series" reads as "unlimited on that dimension" rather than "zero".
 `quota.burst_percent` is emitted for every tenant, `0` when it has no burst
 allowance. Usage gauges reflect the last landed metering sample (see
-`MeterInterval` above); a registered tenant with no sample yet reports zero usage
+`MeterInterval` above), folded across every published cluster slot whatever the
+enforcement scope; a registered tenant with no sample yet reports zero usage
 rather than no series, so a zero reading can also mean "not yet metered" - and the
 reserved `default` tenant, which is never metered, always reads zero usage. The
 `overage.*` gauges are the billing-ready tallies: they are grow-only converged sums,
@@ -711,7 +721,8 @@ also match the `_lattice_` and `sys-` platform trees.
   and allowed-region set - it can neither raise its own caps, widen its allowed
   regions, nor reach another tenant.
 - **Enable-gated.** No tenant can be created unless the feature is enabled, and every
-  mutating control-plane tool is contributed only when the host opts writes in.
+  tenant-administration control tool is contributed only when the host opts control
+  in (`EnableTenantAdminControlTools`).
 
 ## Tenant-aware surfaces
 

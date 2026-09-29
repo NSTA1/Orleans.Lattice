@@ -166,9 +166,12 @@ Key properties:
 - **Per-backup overrides.** An operator can enable or disable monitoring and set a
   custom interval per backup with `ConfigureBackupHealthAsync`, trigger an on-demand
   check with `CheckBackupHealthAsync`, and read the last stored report with
-  `GetBackupHealthAsync`. A backup is re-verified only when a sweep runs, so its
-  effective interval is its configured one rounded up to a whole number of sweep
-  periods: an interval shorter than the sweep cadence takes effect as the cadence.
+  `GetBackupHealthAsync`. A backup is re-verified only by a sweep that finds its
+  interval fully elapsed since its last check, and that check was timestamped
+  part-way through an earlier sweep. So an interval shorter than the sweep cadence
+  takes effect as the cadence, and an interval equal to a whole number of sweep
+  periods - including the default, which equals the cadence - can take effect one
+  sweep period later than configured.
 - **Peer visibility for replicated trees.** For a backup of a replicated tree, each
   sweep also refreshes the cross-cluster sink-sharing verdict, and the report carries
   it as `PeerVisibility` plus the `PeerUnconfirmedClusterIds` that could not see the

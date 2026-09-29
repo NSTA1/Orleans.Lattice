@@ -29,7 +29,8 @@ transports bind over it, and it costs nothing until it is registered.
 
 Every operation that touches backup data authorizes its scope through the same
 backup access gate the engine uses, before touching data (the capability probe
-and the health-monitoring availability flag are advisory and never refuse). A
+reports each grant as an allowed / denied flag, and the health-monitoring
+availability flag checks no grant). A
 capture / incremental / restore authorizes its target scope (a restore whose
 target cannot be resolved authorizes the reserved backup catalog tree instead,
 so the check is never skipped); a list / describe /

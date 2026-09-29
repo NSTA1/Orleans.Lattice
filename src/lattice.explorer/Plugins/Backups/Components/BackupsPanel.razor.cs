@@ -333,8 +333,8 @@ public partial class BackupsPanel : ComponentBase
         _subTabRestored = true;
 
         // Validated against the surfaces this area actually offers, and a
-        // remembered slug that resolves to none of them is forgotten rather than
-        // left to be rejected again on every later visit.
+        // remembered slug that resolves to none of them is abandoned for this
+        // visit rather than restored.
         var restored = Preferences.Resolve(
             BackupsPluginKeys.SurfacePreference,
             BackupsSurfaces.New,

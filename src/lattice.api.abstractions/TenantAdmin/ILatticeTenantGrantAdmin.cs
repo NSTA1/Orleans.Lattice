@@ -103,7 +103,7 @@ public interface ILatticeTenantGrantAdmin
     /// </remarks>
     /// <param name="granterTenantId">The tenant offering its data. Must be a valid, non-empty tenant id.</param>
     /// <param name="granteeTenantId">The tenant the grant is offered to. Must be a valid, non-empty tenant id, and different from <paramref name="granterTenantId"/>.</param>
-    /// <param name="scope">The scope of the granting tenant's data the grant covers - a tree name or tree-name prefix. Must not be <c>null</c>, empty, or whitespace.</param>
+    /// <param name="scope">The scope of the granting tenant's data the grant covers - a full <c>t/{tenant}/...</c> tree id or a <c>/</c>-boundary prefix of one. Must not be <c>null</c>, empty, or whitespace.</param>
     /// <param name="operations">The operations the grant will authorize once active. Must not be <see cref="TenantGrantAccess.None"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The change result, carrying the pending grant as committed.</returns>

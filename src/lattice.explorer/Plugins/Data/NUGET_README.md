@@ -1,9 +1,10 @@
 # Orleans.Lattice.Explorer.Plugins.Data
 
 The key and value drill-down per-selection surface for the Orleans.Lattice
-Explorer, shipped as a self-contained plugin: a cursor-paged key browser with a
-starts-with key search, an optional tag-index filter, a value inspector that
-live-follows the selected key, and decoded CRDT current state for a typed entry.
+Explorer, shipped as a self-contained plugin: a cursor-paged key browser (a live
+cursor by default, or an opt-in consistent snapshot) with a starts-with key
+search, an optional tag-index filter, a value inspector that live-follows the
+selected key, and decoded CRDT current state for a typed entry.
 
 Register it on a head with:
 

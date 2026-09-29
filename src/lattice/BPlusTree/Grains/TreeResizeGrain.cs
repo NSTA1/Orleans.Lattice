@@ -577,12 +577,14 @@ internal sealed class TreeResizeGrain(
         // previously-pinned ShardCount so the registry resolver does not
         // see a null pin on the logical tree after the swap.
         //
-        // Build the entry from the logical tree's current one rather than from
-        // scratch, so the tree's own configuration - PublishEvents, projection
-        // digest maintenance and its latch, history retention, and the cache
-        // and WAL retention ceilings, all set against the logical id - survives
-        // the resize. Only the retired physical tree's WAL layout is dropped,
-        // since the resized copy carries its own. The
+        // Build the entry from the logical tree's current registry row rather
+        // than from scratch, so registry-persisted overrides - PublishEvents,
+        // projection digest maintenance and its latch, history retention, and
+        // the cache and WAL retention ceilings - survive the resize. Host-level
+        // named options do not move with the alias: shard roots, leaves and WAL
+        // partitions of the resized physical copy resolve those under the copy's
+        // own id. Only the retired physical tree's WAL layout is dropped, since
+        // the resized copy carries its own. The
         // current alias is kept too, so a second resize never briefly routes the
         // logical tree back to its long-retired first physical copy between
         // this write and the alias flip below.

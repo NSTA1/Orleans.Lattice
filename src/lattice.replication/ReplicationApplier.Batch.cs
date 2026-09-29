@@ -559,8 +559,8 @@ internal sealed partial class ReplicationApplier
     /// <para>The per-entry classification is preserved exactly:</para>
     /// <list type="bullet">
     ///   <item><description>Range-delete entries bypass HWM dedup and
-    ///   apply unconditionally (they carry <see cref="HybridLogicalClock.Zero"/>
-    ///   by design).</description></item>
+    ///   apply through the range path because one issue HLC covers a whole
+    ///   key range rather than one point write.</description></item>
     ///   <item><description>Point entries are deduped against the
     ///   snapshot-pinned causal floor (single
     ///   <see cref="IReplicationHighWaterMarkGrain.GetPinnedFloorAsync"/>

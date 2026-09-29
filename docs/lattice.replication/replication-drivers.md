@@ -63,7 +63,7 @@ cap, and resets the delay on the first successful activation. The loop
 only exits when every pending grain is active or the host's
 `stoppingToken` is cancelled.
 
-```csharp
+```csharp verify
 // Hosts opt into the drivers transparently - registration is part
 // of AddLatticeReplication.
 siloBuilder.AddLatticeReplication(opts =>
@@ -167,9 +167,9 @@ the coordinated-restore saga's dispatcher and write fence - also read
 the options-backed default topology. That component is the
 `TryAddSingleton`-registered default `IReplicationTopology` and it
 turns each `IOptionsMonitor<LatticeReplicationOptions>.OnChange`
-reload into a diff against the last-projected set, deduplicates and
-trims whitespace, and emits one `PeerChanged` event per net add and
-net remove. Hosts that take no action see the same behaviour the
+reload into a diff against the last-projected set (dropping empty,
+whitespace-only, and duplicate peer ids), and emits one `PeerChanged`
+event per net add and net remove. Hosts that take no action see the same behaviour the
 options surface used to provide - peers configured in
 `ReplicationPeers` are the peers the pipeline ships to - because the
 default topology is a faithful projection of those options.
@@ -219,17 +219,21 @@ empty topology rather than a surprising re-emergence of a stale list.
 A shipper grain bound at activation time to `(tree, peer)` **stays
 bound for its activation lifetime**, even if the peer is removed from
 the topology. Removal events deliberately do not tear down the shipper
-so it can drain its remaining backlog before deactivation. The
-backpressure path is:
+so it can drain its remaining backlog, but nothing retires it
+afterwards either. The backpressure path is:
 
 - Doorbells and fall-off probes immediately stop firing for the
   removed peer (those consumers read live topology snapshots).
-- The shipper grain continues to pump its existing backlog through the
-  configured transport. If the transport can no longer reach the peer
-  the shipper's exponential backoff and DLQ paths handle the failure
-  the same way they handle any other transient outage.
-- Orleans eventually deactivates the idle shipper via standard
-  collection rules.
+- The shipper grain does not read the topology, so it keeps pumping
+  the tree's WAL - its existing backlog and every later local write -
+  through the configured transport on its phase timer. If the transport
+  can no longer reach the peer, the shipper's exponential backoff
+  handles the failure the same way it handles any other transient
+  outage.
+- The shipper treats itself as always in progress, so its 90 s
+  keepalive reminder is never unregistered: Orleans may collect an
+  idle activation, but the reminder reactivates it and re-arms the
+  phase timer, so a removed peer's shipper keeps running.
 
 This is intentional: tearing down the shipper on `Removed` would lose
 any in-flight batch and any cursor advance that had not yet been
@@ -242,9 +246,9 @@ transport's responsibility, not the topology's.
 | Scenario | Membership-sensitive behaviour | Notes |
 |---|---|---|
 | Default topology; peer added to `ReplicationPeers` | Activated + ringed + probed on next tick | Standard option-driven flow. |
-| Default topology; peer removed from `ReplicationPeers` | Doorbell + probe stop on next tick; shipper drains | The shipper drains then idles out via Orleans collection. |
+| Default topology; peer removed from `ReplicationPeers` | Doorbell + probe stop on next tick; shipper keeps shipping | The shipper is not retired; its keepalive reminder keeps it running (see above). |
 | Custom topology emits `Added`; `ReplicationPeers` unchanged | Activated + ringed + probed on next tick | `ReplicationPeers` is inert; the topology is authoritative. |
-| Custom topology emits `Removed`; `ReplicationPeers` still lists the peer | Doorbell + probe stop on next tick; shipper drains | The options list does not resurrect the peer. |
+| Custom topology emits `Removed`; `ReplicationPeers` still lists the peer | Doorbell + probe stop on next tick; shipper keeps shipping | The options list does not resurrect the peer. |
 | `ReplicationPeers` lists a peer the custom topology never publishes | No activation, no doorbell, no probe | The options list is read only by the default topology. |
 
 #### Why not `IObservable<PeerChanged>`?
@@ -343,10 +347,12 @@ collapse steady-state throughput under a write burst.
 
 A shipper tails the **physical** WAL of its logical source tree, and the
 persisted per-partition resume cursors are absolute offsets into *that*
-physical log. When a shadow-cutover restore, a resize, or a reshard repoints
-the logical tree's registry alias to a freshly minted physical tree, the
-shipper must reset those cursors and re-ship from the new physical log start,
-or it would keep tailing the retired identity's orphaned WAL.
+physical log. When the logical tree's registry alias changes - a shadow-cutover
+restore or its revert, a resize or its undo, a schema remediation, or an
+operator alias change - the shipper must reset those cursors and re-ship from
+the new physical log start, or it would keep tailing the retired identity's
+WAL. An online reshard changes the tree's shard map, not its alias, so it
+does not trigger a rebind.
 
 Detection is **event-driven, not polled**. The alias swap is performed by an
 identifiable producer that writes the repoint into the tree registry; the
@@ -853,11 +859,11 @@ shows which driver is the source of each.
 
 | Metric | Source | When it fires |
 |---|---|---|
-| `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Outbound batch acknowledged (a custom transport does not emit it). |
+| `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest retained entry that peer authored in the local WAL. |
-| `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
+| `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
 | `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
 
