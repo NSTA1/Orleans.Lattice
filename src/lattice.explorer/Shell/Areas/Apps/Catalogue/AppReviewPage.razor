@@ -1,0 +1,159 @@
+@page "/apps/catalogue/{p2}/{p3}"
+@page "/t/{tenant}/apps/catalogue/{p2}/{p3}"
+@inherits ExplorerPage
+
+@*
+    The pre-install review and staged install (/apps/catalogue/{source}/{slug}[@version]).
+    It is also the flow's resumable status page: the flow lives in the circuit, so
+    leaving mid-install and coming back shows the stage it reached. Nothing here is
+    framed; app lifecycle is shell-owned native UI (epic decision E3).
+*@
+
+<PageTitle>@(_flow?.DisplayName ?? _slug) - Apps - Orleans.Lattice Explorer</PageTitle>
+
+@if (_flow is null)
+{
+    return;
+}
+
+<link rel="stylesheet" href="@AppsCatalogueAssets.Stylesheet" />
+
+<CascadingValue Value="_flow">
+    <div class="lt-apps-heading">
+        <AppIcon Slug="@_flow.Key.Slug" DataUrl="@AppsPresentation.IconDataUrl(_flow.Icon)" Large="true" />
+        <h1 class="lt-shell-page-title">@_flow.DisplayName</h1>
+    </div>
+    <p class="lt-shell-page-lede">@Lede</p>
+
+    <AppInstallSteps />
+
+    @switch (_flow.Stage)
+    {
+        case AppInstallStage.Resolving:
+            <LtSkeleton Lines="6" Label="@($"Reading {_flow.Key.Slug} from {_flow.Key.SourceKey}")" />
+            break;
+
+        case AppInstallStage.Acquiring:
+            <p class="lt-apps-status" role="status">Acquiring @_flow.Key.Slug from @SourceName. The app is fetched before it can be reviewed; nothing is installed yet.</p>
+            break;
+
+        case AppInstallStage.Verifying:
+            <p class="lt-apps-status" role="status">Verifying @_flow.Key.Slug against its manifest digests.</p>
+            break;
+
+        case AppInstallStage.NotFound:
+            <LtEmptyState Title="Not offered" HeadingLevel="2">
+                @SourceName does not offer @_flow.Key.Slug@(_flow.Key.Version is { } version ? $" v{version}" : string.Empty).
+                <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
+            </LtEmptyState>
+            break;
+
+        case AppInstallStage.Failed:
+            <div class="lt-apps-error" role="alert">
+                <p>@_flow.Error</p>
+                <div class="lt-apps-actions">
+                    <LtButton OnClick="_flow.Back">@(_flow.ResumeStage is AppInstallStage.Resolving or AppInstallStage.Acquiring ? "Try again" : "Back")</LtButton>
+                    <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
+                </div>
+            </div>
+            break;
+
+        case AppInstallStage.Review:
+            @if (_flow.Drift.Count > 0 || _flow.Installed?.State == AppLifecycleState.Failed)
+            {
+                <section class="lt-apps-attention" aria-labelledby="lt-apps-drift" data-lt-drift="true">
+                    <h2 id="lt-apps-drift" class="lt-apps-attention__title"><LtStatusPill State="LtStateRole.Drift" Text="Consent drift" /></h2>
+                    @if (_flow.Drift.Count > 0)
+                    {
+                        <p>The recorded consent no longer covers what v@(_flow.Installed?.Version) asks for, so it cannot activate:</p>
+                        <ul class="lt-apps-list">
+                            @foreach (var issue in _flow.Drift)
+                            {
+                                <li>@issue.Text</li>
+                            }
+                        </ul>
+                    }
+                    else
+                    {
+                        <p>Its last activation failed. Review what it asks for and re-consent.</p>
+                    }
+                    @if (_flow.Mode == AppInstallMode.Reconsent && CanInstall)
+                    {
+                        <LtButton OnClick="_flow.Begin">Re-consent</LtButton>
+                    }
+                </section>
+            }
+
+            <AppUpgradeDiffView />
+            <AppReviewDetails />
+
+            <div class="lt-apps-actions">
+                @if (CanInstall && !_flow.IsBlocked)
+                {
+                    @switch (_flow.Mode)
+                    {
+                        case AppInstallMode.Install:
+                            <LtButton OnClick="_flow.Begin">Install...</LtButton>
+                            break;
+                        case AppInstallMode.Upgrade:
+                            <LtButton OnClick="_flow.Begin" data-lt-command="@AppsArea.UpgradeCommandId(_flow.Key.Slug)">Upgrade to v@(_flow.Descriptor!.Version)...</LtButton>
+                            break;
+                        default:
+                            @if (_flow.Drift.Count == 0 && _flow.Installed?.State != AppLifecycleState.Failed)
+                            {
+                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="_flow.Begin">Edit consent...</LtButton>
+                            }
+                            break;
+                    }
+                }
+                <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
+            </div>
+            @if (_flow.IsBlocked)
+            {
+                <p class="lt-apps-hint">It cannot be installed here: one of its trees cannot be owned by it.</p>
+            }
+
+            <AppLifecycleActions OnChanged="ReloadAsync" />
+            break;
+
+        case AppInstallStage.BindRoles:
+            <AppRoleBindingStep />
+            break;
+
+        case AppInstallStage.ConfirmCeiling:
+            <AppCeilingStep />
+            break;
+
+        case AppInstallStage.Installing:
+            <p class="lt-apps-status" role="status">@(_flow.Mode switch { AppInstallMode.Upgrade => "Upgrading", AppInstallMode.Reconsent => "Recording the consent of", _ => "Installing" }) @_flow.DisplayName. You can leave this page; it will still be here when you come back.</p>
+            break;
+
+        case AppInstallStage.Enabling:
+            <p class="lt-apps-status" role="status">Enabling @_flow.DisplayName.</p>
+            break;
+
+        case AppInstallStage.Installed:
+            <div class="lt-apps-status" role="status">
+                <p>@_flow.DisplayName v@(_flow.Descriptor!.Version) is @(_flow.Mode == AppInstallMode.Reconsent ? "re-consented" : "installed") and not enabled yet.</p>
+                <div class="lt-apps-actions">
+                    @if (Access.Current?.Control.CanEnable == true)
+                    {
+                        <LtButton OnClick="() => _flow.EnableAsync()">Enable now</LtButton>
+                    }
+                    <a class="lt-apps-link" href="@Href(AppsRoutes.App(Address.Tenant, _flow.Key.Slug))">Go to the app</a>
+                    <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
+                </div>
+            </div>
+            break;
+
+        case AppInstallStage.Enabled:
+            <div class="lt-apps-status" role="status">
+                <p>@_flow.DisplayName v@(_flow.Descriptor!.Version) is enabled.</p>
+                <div class="lt-apps-actions">
+                    <a class="lt-apps-link" href="@Href(AppsRoutes.App(Address.Tenant, _flow.Key.Slug))">Go to the app</a>
+                    <a class="lt-apps-link" href="@Href(AppsRoutes.Catalogue(Address.Tenant, AppsCatalogueView.Default))">Back to the catalogue</a>
+                </div>
+            </div>
+            break;
+    }
+</CascadingValue>

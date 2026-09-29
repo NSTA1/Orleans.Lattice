@@ -1,0 +1,31 @@
+@*
+    The Apps area's two views as a row of links: "Your apps" for everyone, and
+    "Catalogue" only for an AppInstall holder. They are links, not tabs, because
+    each view has its own address. The current one carries aria-current and the
+    marker underline, paired with weight.
+*@
+<nav class="lt-apps-tabs" aria-label="Apps views">
+    <a class="lt-apps-tabs__link" href="@YourAppsHref" aria-current="@(CatalogueCurrent ? null : "page")">Your apps</a>
+    @if (ShowCatalogue)
+    {
+        <a class="lt-apps-tabs__link" href="@CatalogueHref" aria-current="@(CatalogueCurrent ? "page" : null)">Catalogue</a>
+    }
+</nav>
+
+@code {
+    /// <summary>The base-relative link to "Your apps".</summary>
+    [Parameter, EditorRequired]
+    public string YourAppsHref { get; set; } = string.Empty;
+
+    /// <summary>The base-relative link to the catalogue.</summary>
+    [Parameter, EditorRequired]
+    public string CatalogueHref { get; set; } = string.Empty;
+
+    /// <summary>Whether the catalogue view is offered; a caller without AppInstall never sees it.</summary>
+    [Parameter]
+    public bool ShowCatalogue { get; set; }
+
+    /// <summary>Whether the catalogue is the current view.</summary>
+    [Parameter]
+    public bool CatalogueCurrent { get; set; }
+}

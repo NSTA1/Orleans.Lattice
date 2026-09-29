@@ -1,0 +1,73 @@
+@*
+    The staged flow drawn as a row of stops. Acquiring and Verifying appear only for
+    a source that advertises RequiresAcquisition; Bind roles is skipped by a
+    re-consent. The current stop carries aria-current="step" and the marker node.
+*@
+@if (Flow is not null)
+{
+    <ol class="lt-apps-steps" aria-label="Install steps">
+        @foreach (var (stage, text) in Stops)
+        {
+            <li class="lt-apps-steps__step" @key="stage" data-lt-stage="@stage" aria-current="@(stage == Current ? "step" : null)">
+                <LtNode Kind="@(IsDone(stage) ? LtNodeKind.Filled : LtNodeKind.Hollow)" />
+                <span>@text</span>
+            </li>
+        }
+    </ol>
+}
+
+@code {
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+
+    private AppInstallStage Current => Flow!.Stage == AppInstallStage.Failed && Flow.ResumeStage is { } resume
+        ? resume
+        : Flow!.Stage switch
+        {
+            AppInstallStage.Resolving => AppInstallStage.Review,
+            AppInstallStage.Enabling or AppInstallStage.Installed => AppInstallStage.Enabled,
+            var stage => stage,
+        };
+
+    private IEnumerable<(AppInstallStage Stage, string Text)> Stops
+    {
+        get
+        {
+            if (Flow!.RequiresAcquisition)
+            {
+                yield return (AppInstallStage.Acquiring, "Acquire");
+                yield return (AppInstallStage.Verifying, "Verify");
+            }
+
+            yield return (AppInstallStage.Review, "Review");
+            if (Flow.Mode != AppInstallMode.Reconsent)
+            {
+                yield return (AppInstallStage.BindRoles, "Bind roles");
+            }
+
+            yield return (AppInstallStage.ConfirmCeiling, "Confirm ceiling");
+            yield return (AppInstallStage.Installing, Flow.Mode switch
+            {
+                AppInstallMode.Upgrade => "Upgrade",
+                AppInstallMode.Reconsent => "Record consent",
+                _ => "Install",
+            });
+            yield return (AppInstallStage.Enabled, "Enable");
+        }
+    }
+
+    private bool IsDone(AppInstallStage stage) =>
+        Order(stage) < Order(Current) || (stage == AppInstallStage.Enabled && Flow!.Stage == AppInstallStage.Enabled);
+
+    private static int Order(AppInstallStage stage) => stage switch
+    {
+        AppInstallStage.Acquiring => 0,
+        AppInstallStage.Verifying => 1,
+        AppInstallStage.Resolving or AppInstallStage.Review => 2,
+        AppInstallStage.BindRoles => 3,
+        AppInstallStage.ConfirmCeiling => 4,
+        AppInstallStage.Installing => 5,
+        AppInstallStage.Installed => 6,
+        _ => 7,
+    };
+}
