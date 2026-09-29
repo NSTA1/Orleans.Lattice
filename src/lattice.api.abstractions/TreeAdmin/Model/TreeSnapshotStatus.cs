@@ -10,8 +10,9 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// A snapshot is self-completing and reminder-durable (it drains the source tree
 /// shard-by-shard into the destination and, in <see cref="TreeSnapshotMode.Online"/>
 /// mode, shadow-forwards live writes until the drain converges, then clears itself),
-/// so this status surfaces the observable idle/in-flight signal rather than the
-/// coordinator's internal phase machine.
+/// so this status surfaces the observable idle/in-flight signal and a coarse,
+/// durable progress measure (<see cref="Phase"/>, <see cref="CopiedShardCount"/> and
+/// <see cref="ShardCount"/>) rather than the coordinator's internal phase machine.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -41,4 +42,26 @@ public sealed record TreeSnapshotStatus
     /// or <see langword="null"/> for a standalone status read.
     /// </summary>
     [Id(3)] public TreeSnapshotMode? RequestedMode { get; init; }
+
+    /// <summary>
+    /// The step the snapshot has durably reached while it runs, or
+    /// <see langword="null"/> when nothing is in flight, or when the status comes
+    /// from a build that does not report it.
+    /// </summary>
+    [Id(4)] public TreeSnapshotPhase? Phase { get; init; }
+
+    /// <summary>
+    /// The source shards whose copy has durably finished, read against
+    /// <see cref="ShardCount"/>. It never runs ahead of what a resumed snapshot
+    /// would start from. 0 when nothing is in flight.
+    /// </summary>
+    [Id(5)] public int CopiedShardCount { get; init; }
+
+    /// <summary>
+    /// The source shards the running snapshot copies, or <see langword="null"/>
+    /// when it is not known: nothing is in flight, or the status comes from a
+    /// build that does not report progress. A caller should then show the
+    /// <see cref="Phase"/> without a percentage.
+    /// </summary>
+    [Id(6)] public int? ShardCount { get; init; }
 }

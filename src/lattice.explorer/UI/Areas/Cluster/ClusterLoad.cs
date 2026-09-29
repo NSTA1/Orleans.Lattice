@@ -31,6 +31,15 @@ internal sealed class ClusterLoad<T>
     /// <summary>Whether the read has not answered yet.</summary>
     public bool IsLoading => Value is null && Error is null;
 
+    /// <summary>A read that answered with <paramref name="value"/>.</summary>
+    /// <param name="value">The value read.</param>
+    /// <returns>The load.</returns>
+    public static ClusterLoad<T> Loaded(T value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new ClusterLoad<T>(value, null, denied: false);
+    }
+
     /// <summary>Runs a read, turning any fault other than this page's own cancellation into a failed load.</summary>
     /// <param name="read">The read.</param>
     /// <param name="cancellationToken">The page's token.</param>

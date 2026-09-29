@@ -73,7 +73,8 @@ internal sealed class TreeResizeGrain(
     /// The resize fields the interleaved reads report, as last persisted.
     /// </summary>
     private readonly record struct DurableResize(
-        bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId)
+        bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId,
+        ResizePhase Phase, int CopyShardCount)
     {
         public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
     }
@@ -102,7 +103,8 @@ internal sealed class TreeResizeGrain(
 
     private DurableResize CaptureResize() => new(
         state.State.InProgress, state.State.Complete, state.State.OperationId,
-        state.State.OldPhysicalTreeId, state.State.SnapshotTreeId);
+        state.State.OldPhysicalTreeId, state.State.SnapshotTreeId,
+        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount);
 
     private DurableIntent CaptureIntent() => new(
         undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
@@ -1166,6 +1168,51 @@ internal sealed class TreeResizeGrain(
     /// </remarks>
     public Task<bool> IsIdleAsync() =>
         Task.FromResult(!DurableResizeState.InProgress);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Answers from the resize state as last persisted, and in the snapshot phase
+    /// from the snapshot coordinator's own persisted progress, counted only when
+    /// that snapshot is the one this resize started.
+    /// </remarks>
+    public async Task<ResizeProgress> GetProgressAsync()
+    {
+        var resize = DurableResizeState;
+        if (!resize.InProgress)
+        {
+            return new ResizeProgress(false, resize.Phase, 0, 0);
+        }
+
+        var copyShards = resize.CopyShardCount;
+        var total = copyShards > 0 ? copyShards + ResizeProgress.StepsAfterCopy : 0;
+        var completed = resize.Phase switch
+        {
+            ResizePhase.Swap => copyShards,
+            ResizePhase.Reject => copyShards + 1,
+            ResizePhase.Cleanup => copyShards + 2,
+            _ => await CopiedShardsAsync(resize, copyShards),
+        };
+
+        return new ResizeProgress(true, resize.Phase, total == 0 ? 0 : Math.Min(completed, total), total);
+    }
+
+    private async Task<int> CopiedShardsAsync(DurableResize resize, int copyShards)
+    {
+        if (resize.OldPhysicalTreeId is not { } oldPhysical || resize.OperationId is not { } operationId)
+        {
+            return 0;
+        }
+
+        var snapshot = await grainFactory.GetGrain<ITreeSnapshotGrain>(oldPhysical).GetProgressAsync();
+        if (!string.Equals(snapshot.OperationId, operationId, StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        return snapshot.InProgress
+            ? Math.Min(snapshot.CopiedShardCount, copyShards)
+            : snapshot.Complete ? copyShards : 0;
+    }
 
     /// <inheritdoc />
     /// <remarks>

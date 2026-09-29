@@ -67,29 +67,33 @@ public partial class ClusterReshardPage : IDisposable
         {
             Poller.Follow(RefreshAsync);
         }
+        else
+        {
+            _poller?.Stop();
+        }
     }
 
-    private async Task<bool> RefreshAsync(CancellationToken cancellationToken)
+    private async Task<ClusterPollOutcome> RefreshAsync(CancellationToken cancellationToken)
     {
         var status = await ClusterLoad<TreeReshardStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().GetReshardStatusAsync(TreeId, ct),
             cancellationToken);
-        var running = status.Value?.InProgress ?? !status.Denied;
+        if (status.Value is not { } value)
+        {
+            return status.Denied ? ClusterPollOutcome.Settled : ClusterPollOutcome.Failed;
+        }
+
         await InvokeAsync(() =>
         {
-            if (status.Value is { } value)
+            if (!value.InProgress && _status.Value is { InProgress: true })
             {
-                if (!value.InProgress && _status.Value is { InProgress: true })
-                {
-                    Toasts.Show($"Reshard complete: {ClusterFormat.Plural(value.CurrentPhysicalShardCount, "physical shard")}.", LtToastTone.Success);
-                }
-
-                _status = status;
+                Toasts.Show($"Reshard complete: {ClusterFormat.Plural(value.CurrentPhysicalShardCount, "physical shard")}.", LtToastTone.Success);
             }
 
+            _status = status;
             StateHasChanged();
         });
-        return running;
+        return value.InProgress ? ClusterPollOutcome.Running : ClusterPollOutcome.Settled;
     }
 
     private void Review(TreeReshardStatus status)
@@ -140,7 +144,9 @@ public partial class ClusterReshardPage : IDisposable
     }
 
     private static string StatusSentence(TreeReshardStatus status) =>
-        status.InProgress
-            ? $"Resharding to {ClusterFormat.Plural(status.RequestedShardCount ?? status.CurrentPhysicalShardCount, "physical shard")}."
-            : "No reshard is running.";
+        !status.InProgress
+            ? "No reshard is running."
+            : (status.TargetShardCount ?? status.RequestedShardCount) is { } target
+                ? $"Resharding to {ClusterFormat.Plural(target, "physical shard")}."
+                : "A reshard is running.";
 }

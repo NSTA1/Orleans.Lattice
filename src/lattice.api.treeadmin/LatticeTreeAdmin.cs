@@ -1157,10 +1157,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // successfully and only then be denied while projecting the result -
         // throwing *after* the mutation had already been applied.
         bool complete;
+        ReshardProgress progress;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
                 .IsReshardCompleteAsync()
+                .ConfigureAwait(false);
+            progress = await _grainFactory.GetGrain<ITreeReshardGrain>(effectiveTreeId)
+                .GetProgressAsync()
                 .ConfigureAwait(false);
         }
 
@@ -1168,6 +1172,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .GetShardMapAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
+        var running = !complete && progress.InProgress;
         return new TreeReshardStatus
         {
             TreeId = reportedTreeId,
@@ -1176,6 +1181,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             VirtualShardCount = map?.VirtualShardCount ?? 0,
             MapVersion = map?.Version ?? 0,
             RequestedShardCount = requestedShardCount,
+            TargetShardCount = running && progress.TargetShardCount > 0 ? progress.TargetShardCount : null,
+            StartPhysicalShardCount = running && progress.StartShardCount > 0 ? progress.StartShardCount : null,
         };
     }
 
@@ -2150,21 +2157,47 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // for why this internal continuation carries system origin instead of
         // re-authorizing at the grain's Read gate.
         bool complete;
+        SnapshotProgress progress;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
                 .IsSnapshotCompleteAsync()
                 .ConfigureAwait(false);
+            progress = await _grainFactory.GetGrain<ITreeSnapshotGrain>(effectiveTreeId)
+                .GetProgressAsync()
+                .ConfigureAwait(false);
         }
 
+        var running = !complete && progress.InProgress;
         return new TreeSnapshotStatus
         {
             TreeId = reportedTreeId,
             InProgress = !complete,
             RequestedDestinationTreeId = requestedDestinationTreeId,
             RequestedMode = requestedMode,
+            Phase = running ? ToSnapshotPhase(progress.Phase) : null,
+            CopiedShardCount = running ? progress.CopiedShardCount : 0,
+            ShardCount = running && progress.ShardCount > 0 ? progress.ShardCount : null,
         };
     }
+
+    /// <summary>Maps the core snapshot engine's phase onto the transport-agnostic <see cref="TreeSnapshotPhase"/>.</summary>
+    private static TreeSnapshotPhase ToSnapshotPhase(SnapshotPhase phase) => phase switch
+    {
+        SnapshotPhase.Lock => TreeSnapshotPhase.LockSource,
+        SnapshotPhase.ShadowBegin => TreeSnapshotPhase.BeginForwarding,
+        SnapshotPhase.Unmark => TreeSnapshotPhase.UnlockSource,
+        _ => TreeSnapshotPhase.Copy,
+    };
+
+    /// <summary>Maps the core resize coordinator's phase onto the transport-agnostic <see cref="TreeResizePhase"/>.</summary>
+    private static TreeResizePhase ToResizePhase(ResizePhase phase) => phase switch
+    {
+        ResizePhase.Swap => TreeResizePhase.Swap,
+        ResizePhase.Reject => TreeResizePhase.RejectOldShards,
+        ResizePhase.Cleanup => TreeResizePhase.RetireOldCopy,
+        _ => TreeResizePhase.Copy,
+    };
 
     /// <summary>Maps the transport-agnostic <see cref="TreeSnapshotMode"/> onto the core snapshot engine's mode.</summary>
     private static SnapshotMode ToSnapshotMode(TreeSnapshotMode mode) => mode switch
@@ -2214,17 +2247,25 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // system origin instead of re-authorizing at the grain's Read gate.
         bool complete;
         bool undoRequested;
+        ResizeProgress progress;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             var lattice = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
             complete = await lattice.IsResizeCompleteAsync().ConfigureAwait(false);
             undoRequested = await lattice.IsResizeUndoPendingAsync().ConfigureAwait(false);
+            progress = await _grainFactory.GetGrain<ITreeResizeGrain>(effectiveTreeId)
+                .GetProgressAsync()
+                .ConfigureAwait(false);
         }
 
         var entry = await _grainFactory.GetLatticeRegistry()
             .GetEntryAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
+        // An accepted undo is reported ahead of the resize it unwinds, and
+        // reports no units: the unwind is one idempotent step with no durable
+        // position inside it.
+        var running = !undoRequested && !complete && progress.InProgress;
         return new TreeResizeStatus
         {
             TreeId = reportedTreeId,
@@ -2234,6 +2275,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             RequestedMaxLeafKeys = requestedMaxLeafKeys,
             RequestedMaxInternalChildren = requestedMaxInternalChildren,
             UndoRequested = undoRequested,
+            Phase = undoRequested ? TreeResizePhase.Undo : running ? ToResizePhase(progress.Phase) : null,
+            CompletedUnits = running ? progress.CompletedUnits : 0,
+            TotalUnits = running && progress.TotalUnits > 0 ? progress.TotalUnits : null,
         };
     }
 

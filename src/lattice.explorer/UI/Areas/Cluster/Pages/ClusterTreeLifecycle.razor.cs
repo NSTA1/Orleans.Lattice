@@ -9,7 +9,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// A tree's lifecycle tab: its deletion status, and delete, recover, purge and
 /// alias - each behind a typed confirmation that states its consequence, and each
 /// hidden unless the capability probe grants it (delete, recover and purge need
-/// the TreeLifecycle grant; alias needs whole-tree admin authority).
+/// the TreeLifecycle grant; alias needs whole-tree admin authority). Purge is
+/// accept-then-poll: a running purge is followed with its shard progress until
+/// it completes.
 /// </summary>
 public partial class ClusterTreeLifecycle : IDisposable
 {
@@ -20,6 +22,7 @@ public partial class ClusterTreeLifecycle : IDisposable
 
     private readonly CancellationTokenSource _lifetime = new();
     private ClusterLoad<TreeDeletionStatus> _status = ClusterLoad<TreeDeletionStatus>.Loading;
+    private ClusterStatusPoller? _poller;
     private Verb _confirm;
     private bool _busy;
     private string? _aliasTarget;
@@ -54,18 +57,61 @@ public partial class ClusterTreeLifecycle : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    private TimeProvider Time { get; set; } = default!;
+
+    private ClusterStatusPoller Poller => _poller ??= new ClusterStatusPoller(Time);
+
     /// <inheritdoc />
     public void Dispose()
     {
+        _poller?.Dispose();
         _lifetime.Cancel();
         _lifetime.Dispose();
     }
 
     /// <inheritdoc />
     protected override async Task OnInitializedAsync() =>
-        _status = await ClusterLoad<TreeDeletionStatus>.RunAsync(
+        Show(await ClusterLoad<TreeDeletionStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().GetTreeDeletionStatusAsync(TreeId, ct),
-            _lifetime.Token);
+            _lifetime.Token));
+
+    private void Show(ClusterLoad<TreeDeletionStatus> status)
+    {
+        _status = status;
+        if (status.Value is { PurgeInProgress: true })
+        {
+            Poller.Follow(RefreshAsync);
+        }
+        else
+        {
+            _poller?.Stop();
+        }
+    }
+
+    private async Task<ClusterPollOutcome> RefreshAsync(CancellationToken cancellationToken)
+    {
+        var status = await ClusterLoad<TreeDeletionStatus>.RunAsync(
+            ct => Facades.RequireTreeAdmin().GetTreeDeletionStatusAsync(TreeId, ct),
+            cancellationToken);
+        if (status.Value is not { } value)
+        {
+            return status.Denied ? ClusterPollOutcome.Settled : ClusterPollOutcome.Failed;
+        }
+
+        await InvokeAsync(() =>
+        {
+            if (!value.PurgeInProgress && _status.Value is { PurgeInProgress: true })
+            {
+                Catalog.Invalidate();
+                Toasts.Show(value.PurgeComplete ? "Tree purged." : "The purge stopped before it finished.", value.PurgeComplete ? LtToastTone.Success : LtToastTone.Warning);
+            }
+
+            _status = status;
+            StateHasChanged();
+        });
+        return value.PurgeInProgress ? ClusterPollOutcome.Running : ClusterPollOutcome.Settled;
+    }
 
     private void Close(bool open)
     {
@@ -91,13 +137,17 @@ public partial class ClusterTreeLifecycle : IDisposable
     }
 
     private Task DeleteAsync() =>
-        RunAsync(ct => Facades.RequireTreeAdmin().DeleteTreeAsync(TreeId, ct), "Tree deleted. It can be recovered until its window closes.");
+        RunAsync(ct => Facades.RequireTreeAdmin().DeleteTreeAsync(TreeId, ct), _ => "Tree deleted. It can be recovered until its window closes.");
 
     private Task RecoverAsync() =>
-        RunAsync(ct => Facades.RequireTreeAdmin().RecoverTreeAsync(TreeId, ct), "Tree recovered.");
+        RunAsync(ct => Facades.RequireTreeAdmin().RecoverTreeAsync(TreeId, ct), _ => "Tree recovered.");
 
+    // Purge is accept-then-poll: the call can return while the shard walk still
+    // runs, so "purged" is said only once the status says the purge is complete.
     private Task PurgeAsync() =>
-        RunAsync(ct => Facades.RequireTreeAdmin().PurgeTreeAsync(TreeId, confirm: true, ct), "Tree purged.");
+        RunAsync(
+            ct => Facades.RequireTreeAdmin().PurgeTreeAsync(TreeId, confirm: true, ct),
+            status => status.PurgeComplete ? "Tree purged." : "Purge accepted. Its shards are being removed; this page follows it.");
 
     private async Task SetAliasAsync()
     {
@@ -120,18 +170,18 @@ public partial class ClusterTreeLifecycle : IDisposable
         }
     }
 
-    private async Task RunAsync(Func<CancellationToken, Task<TreeDeletionStatus>> verb, string done)
+    private async Task RunAsync(Func<CancellationToken, Task<TreeDeletionStatus>> verb, Func<TreeDeletionStatus, string> done)
     {
         _confirm = Verb.None;
         _busy = true;
         var result = await ClusterLoad<TreeDeletionStatus>.RunAsync(verb, _lifetime.Token);
         _busy = false;
 
-        if (result.Value is not null)
+        if (result.Value is { } value)
         {
-            _status = result;
+            Show(result);
             Catalog.Invalidate();
-            Toasts.Show(done, LtToastTone.Success);
+            Toasts.Show(done(value), value.PurgeInProgress ? LtToastTone.Info : LtToastTone.Success);
         }
         else
         {

@@ -1,0 +1,24 @@
+<div class="lt-progress" data-lt-progress="@ModeKey">
+    <div class="lt-progress__head">
+        <span class="lt-progress__phase">@(Phase ?? Label)</span>
+        @if (PercentText is { } percent)
+        {
+            <span class="lt-progress__figure">@percent</span>
+        }
+    </div>
+    <div class="lt-progress__track" role="progressbar" aria-label="@Label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@Percent" aria-valuetext="@ValueText">
+        @if (IsDeterminate)
+        {
+            <span class="lt-progress__fill" style="@FillStyle"></span>
+        }
+        @if (Segmented)
+        {
+            <span class="lt-progress__ticks" style="@TicksStyle"></span>
+        }
+    </div>
+    @if (!string.IsNullOrWhiteSpace(Detail))
+    {
+        <p class="lt-progress__detail">@Detail</p>
+    }
+    <span class="lt-visually-hidden" aria-live="polite">@_announcement</span>
+</div>

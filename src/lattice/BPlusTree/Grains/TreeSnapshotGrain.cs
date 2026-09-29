@@ -80,6 +80,50 @@ internal sealed class TreeSnapshotGrain(
     /// <inheritdoc />
     protected override string LogContext => $"tree {SourceTreeId}";
 
+    // What the interleaved GetProgressAsync answers from. Every transition
+    // mutates the in-memory state first, then awaits the write, and reverts the
+    // mutation if the write fails - so an interleaved read of the live state
+    // could report progress that is then rolled back. This copy moves only once
+    // a write has succeeded, and is captured at activation from the persisted
+    // state, so the progress it reports never runs ahead of disk.
+    private SnapshotProgress? _durableProgress;
+
+    private SnapshotProgress DurableProgress => _durableProgress ??= CaptureProgress();
+
+    private SnapshotProgress CaptureProgress()
+    {
+        var snapshot = state.State;
+        if (!snapshot.InProgress)
+        {
+            return new SnapshotProgress(false, snapshot.Complete, snapshot.OperationId, snapshot.Phase, 0, 0);
+        }
+
+        var total = snapshot.ShardIndices?.Length ?? snapshot.ShardCount;
+        var copied = Math.Min(total, snapshot.NextShardIndex + (snapshot.DrainedPositions?.Count ?? 0));
+        return new SnapshotProgress(true, snapshot.Complete, snapshot.OperationId, snapshot.Phase, copied, total);
+    }
+
+    /// <inheritdoc />
+    protected override Task OnActivateCoreAsync(CancellationToken cancellationToken)
+    {
+        _durableProgress = CaptureProgress();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Persists <see cref="TreeSnapshotState"/> and, only once the write has
+    /// succeeded, publishes the progress it records to <see cref="GetProgressAsync"/>.
+    /// </summary>
+    private async Task WriteSnapshotStateAsync()
+    {
+        var written = CaptureProgress();
+        await state.WriteStateAsync();
+        _durableProgress = written;
+    }
+
+    /// <inheritdoc />
+    public Task<SnapshotProgress> GetProgressAsync() => Task.FromResult(DurableProgress);
+
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null)
     {
@@ -280,7 +324,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.DrainedPositions = null;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSnapshotStateAsync();
         }
         catch
         {
@@ -336,7 +380,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.ShardRetries = 0;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSnapshotStateAsync();
         }
         catch
         {
@@ -497,7 +541,7 @@ internal sealed class TreeSnapshotGrain(
                         if (madeProgress) state.State.ShardRetries = 0;
                         try
                         {
-                            await state.WriteStateAsync();
+                            await WriteSnapshotStateAsync();
                         }
                         catch
                         {
@@ -541,7 +585,7 @@ internal sealed class TreeSnapshotGrain(
                     state.State.CopyCursorKey = null;
                     try
                     {
-                        await state.WriteStateAsync();
+                        await WriteSnapshotStateAsync();
                     }
                     catch
                     {
@@ -571,7 +615,7 @@ internal sealed class TreeSnapshotGrain(
                     state.State.CopyCursorKey = null;
                     try
                     {
-                        await state.WriteStateAsync();
+                        await WriteSnapshotStateAsync();
                     }
                     catch
                     {
@@ -600,7 +644,7 @@ internal sealed class TreeSnapshotGrain(
                 state.State.ShardRetries++;
                 try
                 {
-                    await state.WriteStateAsync();
+                    await WriteSnapshotStateAsync();
                 }
                 catch
                 {
@@ -876,7 +920,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.ShardRetries = 0;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSnapshotStateAsync();
         }
         catch
         {
@@ -1015,7 +1059,7 @@ internal sealed class TreeSnapshotGrain(
         if (progressed) state.State.ShardRetries = 0;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSnapshotStateAsync();
         }
         catch
         {
@@ -1091,7 +1135,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.DrainedPositions = null;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSnapshotStateAsync();
         }
         catch
         {
@@ -1217,7 +1261,7 @@ internal sealed class TreeSnapshotGrain(
         state.State.DrainedPositions = null;
         try
         {
-            await state.WriteStateAsync();
+            await WriteSnapshotStateAsync();
         }
         catch
         {

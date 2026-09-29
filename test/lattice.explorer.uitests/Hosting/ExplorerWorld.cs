@@ -150,6 +150,26 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Creates <paramref name="treeId"/> holding <paramref name="entries"/> keys, for a
+    /// test that needs a tree of its own to change - to delete or purge, say - without
+    /// touching the trees other fixtures read.
+    /// </summary>
+    /// <param name="treeId">The tree to create; it must not exist yet.</param>
+    /// <param name="entries">How many keys it holds.</param>
+    public async Task SeedTreeAsync(string treeId, int entries)
+    {
+        var grains = Head.Services.GetRequiredService<IGrainFactory>();
+        using (LatticeSystemOrigin.Enter())
+        {
+            var tree = grains.GetGrain<ILattice>(treeId);
+            for (var i = 0; i < entries; i++)
+            {
+                await tree.SetAsync($"key-{i:D3}", Encoding.UTF8.GetBytes($"value-{i:D3}"));
+            }
+        }
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {

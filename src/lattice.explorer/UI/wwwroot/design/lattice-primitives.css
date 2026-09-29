@@ -1418,6 +1418,101 @@ a.lt-chain__text:hover {
   }
 }
 
+/* Progress: an ink bar on a hairline track, its phase and percentage written
+   above it. A small total is cut into one segment per unit, as nodes on a
+   chain; an unknown total hatches the track and writes no percentage. */
+.lt-progress {
+  display: grid;
+  gap: var(--lt-space-2);
+  max-inline-size: var(--lt-measure);
+  margin-block: var(--lt-space-4);
+}
+
+.lt-progress__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--lt-space-2) var(--lt-space-4);
+}
+
+.lt-progress__phase {
+  font-weight: var(--lt-weight-label);
+}
+
+.lt-progress__figure {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--lt-weight-strong);
+}
+
+.lt-progress__track {
+  position: relative;
+  display: block;
+  block-size: 0.625rem;
+  overflow: hidden;
+  border: 1px solid var(--lt-op-control-border);
+  border-radius: var(--lt-radius-sm);
+  background: var(--lt-surface-sunken);
+}
+
+.lt-progress__fill {
+  display: block;
+  block-size: 100%;
+  background: var(--lt-op-switch-on);
+  transition: inline-size var(--lt-duration-slow) var(--lt-ease-out);
+}
+
+.lt-progress__ticks {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(100% / var(--lt-progress-segments) - 2px),
+    var(--lt-surface) calc(100% / var(--lt-progress-segments) - 2px),
+    var(--lt-surface) calc(100% / var(--lt-progress-segments)));
+}
+
+.lt-progress[data-lt-progress="indeterminate"] .lt-progress__track {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--lt-rule-strong) 0,
+      var(--lt-rule-strong) 2px,
+      transparent 2px,
+      transparent 8px),
+    var(--lt-surface-sunken);
+  background-size: 11.3px 11.3px, auto;
+  animation: lt-progress-hatch 1.6s linear infinite;
+}
+
+.lt-progress__detail {
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes lt-progress-hatch {
+  from {
+    background-position: 0 0, 0 0;
+  }
+
+  to {
+    background-position: 11.3px 0, 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lt-progress__fill {
+    transition: none;
+  }
+
+  .lt-progress[data-lt-progress="indeterminate"] .lt-progress__track {
+    animation: none;
+  }
+}
+
 /* ==========================================================================
    9. Forced colours - the platform's palette replaces ours; keep every cue
    ========================================================================== */
@@ -1472,5 +1567,29 @@ a.lt-chain__text:hover {
 
   .lt-combobox__list {
     border-color: CanvasText;
+  }
+
+  .lt-progress__track {
+    border-color: CanvasText;
+  }
+
+  .lt-progress__fill {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .lt-progress__ticks {
+    forced-color-adjust: none;
+    background: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(100% / var(--lt-progress-segments) - 2px),
+      Canvas calc(100% / var(--lt-progress-segments) - 2px),
+      Canvas calc(100% / var(--lt-progress-segments)));
+  }
+
+  .lt-progress[data-lt-progress="indeterminate"] .lt-progress__track {
+    forced-color-adjust: none;
+    background: repeating-linear-gradient(-45deg, CanvasText 0, CanvasText 2px, Canvas 2px, Canvas 8px);
   }
 }

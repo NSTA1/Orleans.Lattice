@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 
@@ -9,7 +10,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// <c>/cluster/trees/{tree-path}/resize</c>: the resumable status page of an
 /// online resize (E15). It stages a resize - capacity, review, typed
 /// confirmation - and its undo for a caller holding the TreeLifecycle grant, and
-/// follows the cluster's status while one runs.
+/// follows the cluster's status while one runs, with its progress. Undo is
+/// accept-then-poll: an accepted undo is followed until it has unwound.
 /// </summary>
 public partial class ClusterResizePage : IDisposable
 {
@@ -69,7 +71,7 @@ public partial class ClusterResizePage : IDisposable
     private void Show(ClusterLoad<TreeResizeStatus> status)
     {
         _status = status;
-        if (status.Value is { InProgress: true })
+        if (status.Value is { } value && IsActive(value))
         {
             Poller.Follow(RefreshAsync);
         }
@@ -79,28 +81,55 @@ public partial class ClusterResizePage : IDisposable
         }
     }
 
-    private async Task<bool> RefreshAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Whether a resize or an accepted undo is still under way. The undo flag is
+    /// read first: an undo of a finished resize unwinds with InProgress false.
+    /// </summary>
+    private static bool IsActive(TreeResizeStatus status) => status.UndoRequested || status.InProgress;
+
+    private async Task<ClusterPollOutcome> RefreshAsync(CancellationToken cancellationToken)
     {
         var status = await ClusterLoad<TreeResizeStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().GetResizeStatusAsync(TreeId, ct),
             cancellationToken);
-        var running = status.Value?.InProgress ?? !status.Denied;
+        if (status.Value is not { } value)
+        {
+            return status.Denied ? ClusterPollOutcome.Settled : ClusterPollOutcome.Failed;
+        }
+
         await InvokeAsync(() =>
         {
-            if (status.Value is { } value)
+            var previous = _status.Value;
+            if (previous is { UndoRequested: true } && !value.UndoRequested)
             {
-                if (!value.InProgress && _status.Value is { InProgress: true })
+                if (value.InProgress)
                 {
-                    Toasts.Show("Resize complete.", LtToastTone.Success);
+                    Toasts.Show("The undo could not be applied, so the resize carries on. Try the undo again, or let the resize finish.", LtToastTone.Warning);
                 }
-
-                _status = status;
+                else
+                {
+                    Toasts.Show("Resize undone.", LtToastTone.Success);
+                }
+            }
+            else if (previous is { InProgress: true, UndoRequested: false } && !IsActive(value))
+            {
+                Toasts.Show("Resize complete.", LtToastTone.Success);
             }
 
+            _status = ClusterLoad<TreeResizeStatus>.Loaded(KeepRequested(previous, value));
             StateHasChanged();
         });
-        return running;
+        return IsActive(value) ? ClusterPollOutcome.Running : ClusterPollOutcome.Settled;
     }
+
+    /// <summary>
+    /// A standalone status read does not echo the target a trigger asked for, so
+    /// a running resize keeps the target this page last saw rather than losing it.
+    /// </summary>
+    private static TreeResizeStatus KeepRequested(TreeResizeStatus? previous, TreeResizeStatus current) =>
+        current.InProgress && current.RequestedMaxLeafKeys is null && previous?.RequestedMaxLeafKeys is not null
+            ? current with { RequestedMaxLeafKeys = previous.RequestedMaxLeafKeys, RequestedMaxInternalChildren = previous.RequestedMaxInternalChildren }
+            : current;
 
     private void Close(bool open)
     {
@@ -150,15 +179,20 @@ public partial class ClusterResizePage : IDisposable
     {
         _confirm = Verb.None;
         _busy = true;
+        var previous = _status.Value;
         var undone = await ClusterLoad<TreeResizeStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().UndoTreeResizeAsync(TreeId, ct),
             _lifetime.Token);
         _busy = false;
 
-        if (undone.Value is not null)
+        if (undone.Value is { } value)
         {
-            Toasts.Show("Resize undone.", LtToastTone.Success);
-            Show(undone);
+            // Undo is accept-then-poll: the call returns once the undo is
+            // persisted, and UndoRequested says whether it is still unwinding.
+            Toasts.Show(
+                value.UndoRequested ? "Undo accepted. It is unwinding the resize; this page follows it." : "Resize undone.",
+                value.UndoRequested ? LtToastTone.Info : LtToastTone.Success);
+            Show(ClusterLoad<TreeResizeStatus>.Loaded(KeepRequested(previous, value)));
         }
         else
         {
@@ -169,8 +203,19 @@ public partial class ClusterResizePage : IDisposable
     private static bool Parse(string? text, int minimum, out int value) =>
         int.TryParse(text?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out value) && value >= minimum;
 
-    private static string StatusSentence(TreeResizeStatus status) =>
-        status.InProgress
-            ? $"Resizing to {ClusterFormat.Count(status.RequestedMaxLeafKeys ?? status.CurrentMaxLeafKeys)} keys per leaf and {ClusterFormat.Count(status.RequestedMaxInternalChildren ?? status.CurrentMaxInternalChildren)} children per node."
-            : "No resize is running.";
+    private static (LtStateRole State, string Text) Stage(TreeResizeStatus status) => status switch
+    {
+        { UndoRequested: true } => (LtStateRole.Lagging, "Undoing"),
+        { InProgress: true } => (LtStateRole.Lagging, "Running"),
+        _ => (LtStateRole.Healthy, "Idle"),
+    };
+
+    private static string StatusSentence(TreeResizeStatus status) => status switch
+    {
+        { UndoRequested: true } => "An undo was accepted and is unwinding the resize. The tree returns to its old size when it finishes.",
+        { InProgress: true, RequestedMaxLeafKeys: { } leaf } =>
+            $"Resizing to {ClusterFormat.Count(leaf)} keys per leaf and {ClusterFormat.Count(status.RequestedMaxInternalChildren ?? status.CurrentMaxInternalChildren)} children per node.",
+        { InProgress: true } => "A resize is running. The new size takes effect when the copy is swapped in.",
+        _ => "No resize is running.",
+    };
 }

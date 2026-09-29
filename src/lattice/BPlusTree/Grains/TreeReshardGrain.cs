@@ -215,6 +215,7 @@ internal sealed class TreeReshardGrain(
         var prevOperationId = state.State.OperationId;
         var prevPhase = state.State.Phase;
         var prevTargetShardCount = state.State.TargetShardCount;
+        var prevStartShardCount = state.State.StartShardCount;
 
         if (state.State.Complete) state.State.Complete = false;
 
@@ -222,6 +223,7 @@ internal sealed class TreeReshardGrain(
         state.State.OperationId = Guid.NewGuid().ToString("N");
         state.State.Phase = ReshardPhase.Migrating;
         state.State.TargetShardCount = newShardCount;
+        state.State.StartShardCount = currentCount;
         try
         {
             await state.WriteStateAsync();
@@ -233,6 +235,7 @@ internal sealed class TreeReshardGrain(
             state.State.OperationId = prevOperationId;
             state.State.Phase = prevPhase;
             state.State.TargetShardCount = prevTargetShardCount;
+            state.State.StartShardCount = prevStartShardCount;
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"), tenantTag);
             throw;
         }
@@ -319,6 +322,12 @@ internal sealed class TreeReshardGrain(
 
     /// <inheritdoc />
     public Task<bool> IsIdleAsync() => Task.FromResult(!state.State.InProgress);
+
+    /// <inheritdoc />
+    public Task<ReshardProgress> GetProgressAsync() =>
+        Task.FromResult(state.State.InProgress
+            ? new ReshardProgress(true, state.State.TargetShardCount, state.State.StartShardCount)
+            : new ReshardProgress(false, 0, 0));
 
     /// <summary>
     /// Processes a single phase of the reshard. Exposed as <c>internal</c> for
