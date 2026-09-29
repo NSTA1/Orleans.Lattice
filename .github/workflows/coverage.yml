@@ -251,6 +251,8 @@ jobs:
             | sha256sum --check --strict
 
       - name: Test with coverage
+        # The upload step reads this step's `complete` output; see below.
+        id: test
         # The digest-settle integration oracles need a wider convergence budget
         # on a loaded runner; see the equivalent step in ci.yml for the rationale.
         env:
@@ -283,20 +285,50 @@ jobs:
           # coverage even when a sibling is broken, and still fails the run.
           failed=()
           flaky=()
+          # Suites whose coverage report cannot be trusted. Distinct from `failed`:
+          # a suite with a named failing test ran to completion, so its report is
+          # whole and is still uploaded. A suite whose test host crashed or hung
+          # was killed mid-run, and coverlet still writes a coverage.cobertura.xml
+          # for it - but with the hit counts the dead process never flushed, so
+          # the whole assembly under test reads as uncovered. Uploading that is
+          # not "a bit stale", it is wrong: on 29 September a hang in
+          # Orleans.Lattice.Tests uploaded the core library at near zero and
+          # main's coverage fell from 93.5% to 78.7% with no code change.
+          incomplete=()
+          mkdir -p test-logs
 
           runSuite() {
             local proj="$1" name="$2" label="$3" filter="$4"
+            # The console log is kept outside coverage/, the directory Codecov
+            # uploads from, so it can never be mistaken for a report.
+            local out="test-logs/${name}-${label}.log"
+            local before after rc
             # Clear this suite's result file first, so that if the run dies without
             # producing one, the retry step finds nothing rather than reading a
             # stale file and retrying the wrong thing. A crashed or hung host is
             # exactly the case that must NOT be treated as a set of named failures.
             rm -f "coverage/${name}/${name}-${label}.trx"
+            before="$(find "coverage/${name}" -name coverage.cobertura.xml 2>/dev/null | wc -l)"
             dotnet test "$proj" --no-build --configuration Release \
               --filter "$filter" \
               --collect:"XPlat Code Coverage" \
               --results-directory "coverage/${name}" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}-${label}.trx"
+              --logger "trx;LogFileName=${name}-${label}.trx" 2>&1 | tee "$out"
+            rc=${PIPESTATUS[0]}
+            after="$(find "coverage/${name}" -name coverage.cobertura.xml 2>/dev/null | wc -l)"
+
+            # vstest reports a killed host as "The active test run was aborted",
+            # "Test Run Aborted." and "The Test Run was aborted because the host
+            # process exited unexpectedly"; a --blame-hang kill produces all three.
+            if grep -qiE 'test run (was )?aborted|test host process crashed' "$out"; then
+              echo "::error::${name} (${label}): the test host was aborted, so its coverage report is truncated. Coverage will not be uploaded for this run."
+              incomplete+=("${name} (${label}): test host aborted")
+            elif [ "$after" -le "$before" ]; then
+              echo "::error::${name} (${label}) produced no coverage report. Coverage will not be uploaded for this run."
+              incomplete+=("${name} (${label}): no coverage report")
+            fi
+            return "$rc"
           }
 
           # Retry exactly the tests that failed, once. Returns 0 when the retry
@@ -441,6 +473,29 @@ jobs:
             echo "::warning::${#flaky[@]} suite(s) passed only on retry: ${flaky[*]}"
           fi
 
+          # Decide whether the upload may run. Written before any `exit`, and read
+          # by the upload step as `== 'true'`, so a step that dies before reaching
+          # this line uploads nothing: the guard fails closed. A withheld upload
+          # leaves main's coverage at the last complete measurement, which is
+          # stale by a day; a partial one replaces it with a figure that is wrong.
+          if [ ${#incomplete[@]} -gt 0 ]; then
+            {
+              echo "### Coverage NOT uploaded"
+              echo
+              echo "These suites did not produce a complete coverage report, so uploading"
+              echo "this run would understate main's coverage. Codecov keeps the last"
+              echo "complete measurement until a run measures every suite."
+              echo
+              for f in "${incomplete[@]}"; do
+                echo "- \`${f}\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Coverage upload withheld: ${#incomplete[@]} suite(s) produced an incomplete report: ${incomplete[*]}"
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          fi
+
           if [ ${#failed[@]} -gt 0 ]; then
             {
               echo "### Failed suites"
@@ -457,10 +512,14 @@ jobs:
           fi
 
       - name: Upload coverage to Codecov
-        # Upload whatever was measured even when a project failed above. The
-        # point of this lane is to keep main's coverage current; discarding a
-        # complete report because one suite broke is how the badge went stale.
-        if: ${{ !cancelled() }}
+        # Upload even when a project failed above, provided every suite still
+        # produced a complete report: a named test failure leaves the report
+        # whole, and discarding it because one suite broke is how the badge went
+        # stale. A crashed or hung test host does not - its report reads the
+        # assembly under test as uncovered - so the test step withholds the
+        # upload by reporting `complete` as anything but 'true'.
+        # CiCoverageUploadCompletenessTests holds this in place.
+        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
         uses: codecov/codecov-action@v7
         with:
           # Add a CODECOV_TOKEN repository secret (from the Codecov project
