@@ -181,6 +181,7 @@ public class GrpcReplicationAuthIntegrationTests
         var headers = new global::Grpc.Core.Metadata
         {
             { LatticeReplicationGrpcMetadataNames.SecretHeader, Secret },
+            { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, "remote" },
         };
 
         using var call = invoker.AsyncUnaryCall(method.Push, host: null, options: new CallOptions(headers), request: MinimalBox());

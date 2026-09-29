@@ -71,6 +71,21 @@ internal static class SampleTestHost
     }
 
     /// <summary>
+    /// Fetches the console's server-rendered page at <paramref name="href"/>, a link as the console renders
+    /// it, following any redirect to its canonical address, as the automatically signed-in administrator.
+    /// </summary>
+    /// <param name="sample">The started sample.</param>
+    /// <param name="href">A link relative to the console's base address.</param>
+    /// <returns>The address the page was served at, and the page.</returns>
+    public static async Task<(Uri Address, string Html)> GetPageAsync(ExplorerSample sample, string href)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(1) };
+        using var response = await client.GetAsync(new Uri(sample.Console.Url, href));
+        response.EnsureSuccessStatusCode();
+        return (response.RequestMessage!.RequestUri!, await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
     /// Polls <paramref name="condition"/> until it holds or <paramref name="budget"/> elapses: replication is
     /// eventually consistent, so its effects are awaited, never assumed after a fixed delay.
     /// </summary>

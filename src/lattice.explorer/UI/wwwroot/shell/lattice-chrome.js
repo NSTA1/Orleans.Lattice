@@ -6,7 +6,9 @@
  *   - putting the chosen appearance on the document element, following the
  *     operating system's light or dark preference live when the operator chose
  *     "System", and remembering it for the first-paint script;
- *   - focusing and selecting the address input;
+ *   - focusing and selecting the address input, and focusing the chrome's
+ *     controls - only while they are still in the document, so a focus request
+ *     that lands after a render removed its element is a no-op;
  *   - reporting which width band the Shell root is in, so .NET can render the
  *     compact chrome without any stylesheet naming a width.
  *
@@ -98,11 +100,19 @@ export function applyAppearance(theme, contrast, density) {
 }
 
 export function focusAndSelect(element) {
-  if (element) {
+  if (element && element.isConnected) {
     element.focus();
     if (typeof element.select === 'function') {
       element.select();
     }
+  }
+}
+
+// Focuses an element only if it is still in the document. A focus request can land
+// after a render has removed its element; that must cost the focus, never the circuit.
+export function focusElement(element) {
+  if (element && element.isConnected) {
+    element.focus();
   }
 }
 

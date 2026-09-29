@@ -108,11 +108,21 @@ internal sealed class TenancyArea : IExplorerArea
     /// it carries a tenant root ("my tenant"), and the plain directory and
     /// administration pages never do.
     /// </summary>
+    /// <remarks>
+    /// The one exception is the reserved default tenant's workspace root,
+    /// <c>/t/default/tenancy</c>. The default tenant has no registry record, so
+    /// there is no workspace to show; its root is the tenant directory, which is
+    /// what a platform operator scoped there administers. It is therefore not
+    /// tenant-rooted and canonicalises to <c>/tenancy</c>, so the spine's stop
+    /// leads to the directory from every page. The rule depends on the address
+    /// alone, never on a verdict, so it cannot change while one is settling.
+    /// </remarks>
     /// <param name="address">An address in this area.</param>
     public bool IsTenantScopedAt(ExplorerAddress address)
     {
         ArgumentNullException.ThrowIfNull(address);
-        return address.Tenant is not null;
+        return address.Tenant is { } tenant
+            && !(!address.HasPath && string.Equals(tenant, TenantId.DefaultId, StringComparison.Ordinal));
     }
 
     /// <inheritdoc />

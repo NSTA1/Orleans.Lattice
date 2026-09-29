@@ -103,6 +103,46 @@ internal sealed class ExplorerAddress : IEquatable<ExplorerAddress>
 
     private ImmutableArray<string> PathSegments { get; }
 
+    /// <summary>Whether the address has any path segment below its area.</summary>
+    internal bool HasPath => !PathSegments.IsEmpty;
+
+    /// <summary>
+    /// How many route segments the address has as a URL path: <c>t</c> and the
+    /// tenant when it is tenant-rooted, the area, then every path segment.
+    /// </summary>
+    internal int RouteSegmentCount => (Tenant is null ? 0 : 2) + (Area is null ? 0 : 1) + PathSegments.Length;
+
+    /// <summary>The decoded route segment at <paramref name="index"/>, counted as <see cref="RouteSegmentCount"/> counts them.</summary>
+    /// <param name="index">The zero-based segment index.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a segment of this address.</exception>
+    internal string RouteSegmentAt(int index)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, RouteSegmentCount);
+
+        if (Tenant is { } tenant)
+        {
+            if (index < 2)
+            {
+                return index == 0 ? TenantSegment : tenant;
+            }
+
+            index -= 2;
+        }
+
+        if (Area is { } area)
+        {
+            if (index == 0)
+            {
+                return area;
+            }
+
+            index--;
+        }
+
+        return PathSegments[index];
+    }
+
     private ImmutableArray<KeyValuePair<string, string>> QueryParameters { get; }
 
     /// <summary>Creates an address from its decoded parts, validating each one.</summary>

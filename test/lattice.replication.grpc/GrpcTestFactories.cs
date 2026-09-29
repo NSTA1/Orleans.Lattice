@@ -53,4 +53,18 @@ internal static class GrpcTestFactories
             sp.GetRequiredService<Serializer<PeerHighWaterMarkRequest>>(),
             sp.GetRequiredService<Serializer<PeerHighWaterMarkResponse>>());
     }
+
+    /// <summary>
+    /// Builds <see cref="global::Grpc.Core.CallOptions"/> carrying the
+    /// transport-stamped origin-cluster header. Fixtures that invoke a
+    /// gated verb through a hand-rolled <c>CallInvoker</c> bypass
+    /// <c>GrpcChannelHardening</c>, which stamps this header on every
+    /// outbound call, so they must stamp it themselves to model a
+    /// conforming peer. The receiver refuses an unstamped call.
+    /// </summary>
+    public static global::Grpc.Core.CallOptions OriginOptions(string origin)
+        => new(new global::Grpc.Core.Metadata
+        {
+            { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, origin },
+        });
 }

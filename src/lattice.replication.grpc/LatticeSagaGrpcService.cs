@@ -180,13 +180,48 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
 
         // Peer authorization gate. The imperative saga calls mutate
         // participant state, so the caller's origin cluster must be a
-        // known/authorized peer before the handler runs. The transport
-        // stamps the origin header; fall back to the request's
-        // coordinator cluster id when the header is absent.
+        // known/authorized peer before the handler runs.
+        //
+        // The authorization input is the transport-stamped origin header and
+        // never the request body. A body field is chosen by the caller, so
+        // authorizing on it authorizes the caller against a name the caller
+        // picked: any party that clears the shared-secret interceptor could
+        // name an authorized peer and drive saga state on a participant. The
+        // interceptor cannot compensate, because it matches the presented
+        // secret against a flat, cluster-agnostic accepted set - "holds an
+        // accepted secret" and "is cluster X" are unrelated facts.
+        //
+        // Absent header is refused rather than falling back to the body:
+        // GrpcChannelHardening stamps the header unconditionally on every
+        // peer channel, so a conforming sender always carries it and only a
+        // hand-rolled caller omits it. Mirrors the sibling binding in
+        // LatticeReplicationGrpcService.EnsureOriginMatchesCaller - a gate
+        // applied to one verb of a family and not its siblings is not a gate,
+        // because the caller picks the verb.
         var origin = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
         if (string.IsNullOrWhiteSpace(origin))
         {
-            origin = request.CoordinatorClusterId;
+            _logger.LogWarning(
+                "Saga control {Operation} rejected for saga {SagaId} - the call carries no stamped origin cluster.",
+                operation, request.SagaId);
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                "Saga control calls must carry the transport-stamped origin cluster header. "
+                + "The coordinator cluster id declared in the request body is not an authorization input."));
+        }
+
+        // A present body origin must agree with the stamped one, so a caller
+        // cannot act on its own credential while attributing the saga to a
+        // third cluster. The body value remains the handler's attribution.
+        if (!string.IsNullOrWhiteSpace(request.CoordinatorClusterId)
+            && !string.Equals(origin, request.CoordinatorClusterId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Saga control {Operation} rejected for saga {SagaId} - the request declares coordinator "
+                + "'{Declared}' but the transport stamped origin '{Stamped}'.",
+                operation, request.SagaId, request.CoordinatorClusterId, origin);
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                "The coordinator cluster declared by the saga control call does not match the origin "
+                + "stamped on the call; a peer may only drive sagas it coordinates."));
         }
 
         var authorized = await _authorizer.IsAuthorizedAsync(origin, context.CancellationToken).ConfigureAwait(false);

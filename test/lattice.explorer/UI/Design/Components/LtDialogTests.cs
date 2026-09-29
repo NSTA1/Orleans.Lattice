@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
@@ -167,6 +168,23 @@ public sealed class LtDialogTests : ShellDesignTestContext
         await cut.InvokeAsync(cut.Instance.CloseAsync);
 
         Assert.That(observed, Is.EqualTo(new[] { false }));
+    }
+
+    [Test]
+    public void A_refused_focus_on_open_on_a_sentinel_or_on_close_leaves_the_dialog_alive()
+    {
+        // Every focus the dialog asks for is refused, as the browser refuses one whose element
+        // a later render removed. Escaping OnAfterRenderAsync or a handler, it would end the circuit.
+        JSInterop.SetupVoid("Blazor._internal.domWrapper.focus", _ => true)
+            .SetException(new JSException("Unable to focus an invalid element."));
+        var opener = new ElementReference("opener-ref", new WebElementReferenceContext(JSInterop.JSRuntime));
+
+        var cut = RenderOpen(p => p.Add(x => x.ReturnFocus, opener));
+        cut.FindAll(".lt-dialog__sentinel")[1].Focus();
+        cut.Render(p => p.Add(x => x.Open, false));
+        cut.Render(p => p.Add(x => x.Open, true));
+
+        Assert.That(cut.Find(".lt-dialog").GetAttribute("aria-modal"), Is.EqualTo("true"));
     }
 
     private IRenderedComponent<LtDialog> RenderOpen(Action<ComponentParameterCollectionBuilder<LtDialog>>? configure = null) =>

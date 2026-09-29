@@ -95,7 +95,7 @@ public class LatticeSagaGrpcServiceTests
         var service = CreateService(handler, DenyAuthorizer());
 
         var rpc = Assert.ThrowsAsync<RpcException>(async () =>
-            await service.Prepare(Request(), ContextWithOrigin("rogue")));
+            await service.Prepare(Request(coordinator: "rogue"), ContextWithOrigin("rogue")));
 
         Assert.Multiple(() =>
         {
@@ -111,7 +111,7 @@ public class LatticeSagaGrpcServiceTests
         var service = CreateService(handler, DenyAuthorizer());
 
         var rpc = Assert.ThrowsAsync<RpcException>(async () =>
-            await service.Commit(Request(), ContextWithOrigin("rogue")));
+            await service.Commit(Request(coordinator: "rogue"), ContextWithOrigin("rogue")));
 
         Assert.Multiple(() =>
         {
@@ -121,7 +121,48 @@ public class LatticeSagaGrpcServiceTests
     }
 
     [Test]
-    public async Task Authorization_falls_back_to_coordinator_cluster_id_when_origin_header_absent()
+    public void Authorization_refuses_when_origin_header_absent_and_never_reads_the_body()
+    {
+        // Regression: the gate previously fell back to the body-declared
+        // coordinator cluster id, so an unauthorized caller could name an
+        // authorized peer and drive saga state. The body is attribution,
+        // never an authorization input.
+        var handler = new RecordingHandler(new SagaControlResponse { SagaId = Saga, Phase = SagaPhase.Prepared });
+        var seen = new List<string?>();
+        var authorizer = Substitute.For<ISagaPeerAuthorizer>();
+        authorizer.IsAuthorizedAsync(Arg.Do<string?>(seen.Add), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        var service = CreateService(handler, authorizer);
+
+        var rpc = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.Prepare(Request(coordinator: Peer), ContextWithoutHeaders()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(seen, Is.Empty, "the body-declared coordinator must never reach the authorizer");
+            Assert.That(handler.PrepareCalls, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public void Authorization_refuses_when_body_coordinator_disagrees_with_stamped_origin()
+    {
+        var handler = new RecordingHandler(new SagaControlResponse { SagaId = Saga, Phase = SagaPhase.Prepared });
+        var service = CreateService(handler, AllowAuthorizer());
+
+        var rpc = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.Prepare(Request(coordinator: "victim"), ContextWithOrigin(Peer)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(handler.PrepareCalls, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
+    public async Task Authorization_uses_the_stamped_origin_cluster_id()
     {
         var handler = new RecordingHandler(new SagaControlResponse { SagaId = Saga, Phase = SagaPhase.Prepared });
         var seen = new List<string?>();
@@ -130,9 +171,38 @@ public class LatticeSagaGrpcServiceTests
             .Returns(Task.FromResult(true));
         var service = CreateService(handler, authorizer);
 
-        await service.Prepare(Request(coordinator: Peer), ContextWithoutHeaders());
+        await service.Prepare(Request(coordinator: Peer), ContextWithOrigin(Peer));
 
-        Assert.That(seen, Is.EqualTo(new[] { Peer }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Is.EqualTo(new[] { Peer }));
+            Assert.That(handler.PrepareCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Every_saga_verb_refuses_an_unstamped_call()
+    {
+        // The binding is uniform across the family: a gate applied to one verb
+        // and not its siblings is not a gate, because the caller picks the verb.
+        var handler = new RecordingHandler(new SagaControlResponse { SagaId = Saga });
+        var service = CreateService(handler, AllowAuthorizer());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Assert.ThrowsAsync<RpcException>(async () =>
+                await service.Prepare(Request(), ContextWithoutHeaders()))!.StatusCode,
+                Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(Assert.ThrowsAsync<RpcException>(async () =>
+                await service.Commit(Request(), ContextWithoutHeaders()))!.StatusCode,
+                Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(Assert.ThrowsAsync<RpcException>(async () =>
+                await service.Abort(Request(), ContextWithoutHeaders()))!.StatusCode,
+                Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(Assert.ThrowsAsync<RpcException>(async () =>
+                await service.GetStatus(Request(), ContextWithoutHeaders()))!.StatusCode,
+                Is.EqualTo(StatusCode.PermissionDenied));
+        });
     }
 
     [Test]

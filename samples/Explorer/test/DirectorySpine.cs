@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 
 namespace Orleans.Lattice.Samples.Explorer.Tests;
@@ -29,6 +30,24 @@ internal static partial class DirectorySpine
         return areas;
     }
 
+    /// <summary>The address each area's stop on the spine leads to, as the page renders it.</summary>
+    /// <param name="html">The page.</param>
+    public static IReadOnlyDictionary<string, string> ReadTargets(string html)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+
+        var targets = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match link in SpineTarget().Matches(html))
+        {
+            targets[link.Groups["area"].Value] = WebUtility.HtmlDecode(link.Groups["href"].Value);
+        }
+
+        return targets;
+    }
+
     [GeneratedRegex("""<a class="(?<class>[^"]*lt-shell-directory__link[^"]*)"[^>]*data-lt-command="go\.(?<area>[a-z-]+)""")]
     private static partial Regex SpineLink();
+
+    [GeneratedRegex("""<a class="[^"]*lt-shell-directory__link[^"]*"\s+href="(?<href>[^"]*)"[^>]*data-lt-command="go\.(?<area>[a-z-]+)""")]
+    private static partial Regex SpineTarget();
 }

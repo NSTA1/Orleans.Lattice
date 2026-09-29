@@ -74,6 +74,22 @@ internal sealed class ShellChromeInterop : IAsyncDisposable
             element).ConfigureAwait(false);
 
     /// <summary>
+    /// Focuses <paramref name="element"/> if it is still in the document. Unlike
+    /// <see cref="ElementReference"/>'s own focus, a request whose element a later render
+    /// has removed is a no-op rather than an exception that would end the circuit.
+    /// </summary>
+    /// <param name="element">The element to focus.</param>
+    public async ValueTask FocusAsync(ElementReference element) =>
+        await InvokeAsync(
+            static async (module, args) =>
+            {
+                await module.InvokeVoidAsync("focusElement", args).ConfigureAwait(false);
+                return true;
+            },
+            false,
+            element).ConfigureAwait(false);
+
+    /// <summary>
     /// Watches <paramref name="element"/>'s inline size and calls
     /// <paramref name="target"/>'s <c>OnViewportBand</c> with the index of the
     /// band it falls in - how many of <paramref name="edges"/> it has reached -

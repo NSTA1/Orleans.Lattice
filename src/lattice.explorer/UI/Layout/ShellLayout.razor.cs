@@ -449,7 +449,7 @@ public partial class ShellLayout : IAsyncDisposable
         }
         else
         {
-            await _directory.FocusAsync();
+            await Interop.FocusAsync(_directory);
         }
     }
 
@@ -461,7 +461,7 @@ public partial class ShellLayout : IAsyncDisposable
         }
     }
 
-    private async Task SkipToContentAsync() => await _content.FocusAsync();
+    private async Task SkipToContentAsync() => await Interop.FocusAsync(_content);
 
     private void OpenDirectory() => _directoryOpen = true;
 

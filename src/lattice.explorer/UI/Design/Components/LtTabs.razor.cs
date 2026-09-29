@@ -97,7 +97,7 @@ public partial class LtTabs
         if (_focusPending is { } id && _buttons.TryGetValue(id, out var button))
         {
             _focusPending = null;
-            await button.FocusAsync();
+            await button.FocusSafelyAsync();
         }
     }
 

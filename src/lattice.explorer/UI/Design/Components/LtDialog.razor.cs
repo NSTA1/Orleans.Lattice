@@ -120,12 +120,12 @@ public partial class LtDialog
         if (_focusOnRender && Open)
         {
             _focusOnRender = false;
-            await _dialog.FocusAsync();
+            await _dialog.FocusSafelyAsync();
         }
         else if (_returnFocusOnRender && ReturnFocus is { } target)
         {
             _returnFocusOnRender = false;
-            await target.FocusAsync();
+            await target.FocusSafelyAsync();
         }
     }
 
@@ -133,7 +133,7 @@ public partial class LtDialog
     /// <returns>A task that completes when the host has been told.</returns>
     public Task CloseAsync() => OpenChanged.InvokeAsync(false);
 
-    private async Task FocusDialogAsync() => await _dialog.FocusAsync();
+    private async Task FocusDialogAsync() => await _dialog.FocusSafelyAsync();
 
     private Task HandleKeyDownAsync(KeyboardEventArgs args) =>
         args.Key == "Escape" && DismissOnEscape ? CloseAsync() : Task.CompletedTask;

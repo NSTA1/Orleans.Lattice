@@ -39,13 +39,13 @@ services.AddTelemetryTools(o =>
 | `BackendAddress` | `Uri?` | none | The absolute base address of the read-only Prometheus / PromQL-compatible backend. A host that opts telemetry in must supply one. |
 | `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | How the proxy authenticates to the backend: `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer`. The static modes require the matching `Credential` member; `DynamicBearer` instead requires a registered `ITelemetryBackendTokenProvider`. |
 | `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The backend credential secret, consulted per `AuthMode`. Carries the backend credential only - never the caller's Lattice credential. |
-| `RequestTimeout` | `TimeSpan` | 30s | The per-request timeout for a backend call. Must be strictly positive. |
+| `RequestTimeout` | `TimeSpan` | 30s | The per-request timeout for a backend call. Must be strictly positive and no longer than `int.MaxValue` milliseconds (about 24.8 days), the longest finite timeout `HttpClient` accepts. |
 | `MaxRange` | `TimeSpan` | 24h | The largest window (`end - start`) a single range query may span. Must be strictly positive. |
 | `MaxStep` | `TimeSpan` | 1h | The largest resolution step a single range query may request. Must be strictly positive. |
 | `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll` exposes every backend metric; `DenyAllExceptAllowed` restricts the surface to `AllowedMetrics`. |
 | `AllowedMetrics` | `IList<string>` | empty | Exact names and/or `*`-wildcard patterns permitted under `DenyAllExceptAllowed`. Ignored under `ReadAll`. |
 
-The options are validated when they are first resolved - the binding registers no start-up validation, so a misconfiguration surfaces as an `OptionsValidationException` on first use rather than at host start: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric, with no null, empty, or whitespace entry.
+The options are validated when they are first resolved - the binding registers no start-up validation, so a misconfiguration surfaces as an `OptionsValidationException` on first use rather than at host start: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive (and the request timeout no longer than `HttpClient` accepts), each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric, with no null, empty, or whitespace entry.
 
 ## Backend authentication
 
