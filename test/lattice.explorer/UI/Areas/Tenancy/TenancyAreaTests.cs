@@ -71,6 +71,43 @@ public sealed class TenancyAreaTests : TenancyTestContext
     }
 
     [Test]
+    public void The_default_tenants_workspace_root_is_the_tenant_directory()
+    {
+        var area = CreateArea();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(area.IsTenantScopedAt(ExplorerAddress.Parse("/t/default/tenancy")), Is.False, "the default tenant has no registry record to show");
+            Assert.That(area.IsTenantScopedAt(ExplorerAddress.Parse("/t/default/tenancy?new=true")), Is.False);
+            Assert.That(area.IsTenantScopedAt(ExplorerAddress.Parse("/t/default/tenancy/members")), Is.True);
+            Assert.That(area.IsTenantScopedAt(ExplorerAddress.Parse("/t/acme/tenancy")), Is.True);
+            Assert.That(() => area.IsTenantScopedAt(null!), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public async Task An_operator_in_the_default_tenant_reaches_the_directory_from_every_page()
+    {
+        UseTenancyAs(TenantId.DefaultId, isOperator: true, allowSwitch: true);
+        await Services.GetRequiredService<ExplorerTenancy>().RefreshAsync();
+        var navigator = Services.GetRequiredService<ExplorerNavigator>();
+
+        var fromTenantRootedPage = navigator.Canonicalize(ExplorerAddress.ForArea(TenancyRoutes.AreaKey).WithTenant(TenantId.DefaultId));
+        var fromClusterWidePage = navigator.Canonicalize(ExplorerAddress.ForArea(TenancyRoutes.AreaKey));
+        var arrived = await navigator.ResolveAsync(TenancyRoutes.MyTenant(TenantId.DefaultId));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fromTenantRootedPage.Format(), Is.EqualTo("/tenancy"));
+            Assert.That(fromClusterWidePage.Format(), Is.EqualTo("/tenancy"));
+            Assert.That(arrived.RedirectTo?.Format(), Is.EqualTo("/tenancy"));
+            Assert.That(arrived.Notice, Is.Null);
+            Assert.That(navigator.Canonicalize(ExplorerAddress.Home).Format(), Is.EqualTo("/t/default"), "tenancy is still on for the operator");
+        });
+        await Switcher!.DidNotReceive().SwitchTenantAsync(Arg.Any<ExplorerTenantId>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void With_tenancy_on_the_directory_stays_plain_and_my_tenant_stays_rooted()
     {
         UseTenancyAs("acme");

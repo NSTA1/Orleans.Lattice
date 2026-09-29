@@ -122,6 +122,17 @@ public sealed class ShellPagesTests : ShellChromeTestContext
     }
 
     [Test]
+    public void Not_found_renders_under_the_layout_at_an_address_that_is_not_its_route()
+    {
+        Navigation.NavigateTo("access");
+        var cascaded = new ExplorerLocation(ExplorerAddress.Parse("/access"), [], EntriesLoaded: true, TenancyActive: false);
+
+        var cut = Render<NotFoundPage>(parameters => parameters.AddCascadingValue(cascaded));
+
+        cut.WaitUntil(() => Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Nothing lives at this address")));
+    }
+
+    [Test]
     public void A_page_reads_its_address_from_the_layout_or_else_from_the_url()
     {
         Navigation.NavigateTo("data/orders");

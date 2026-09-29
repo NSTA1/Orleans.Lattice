@@ -260,4 +260,37 @@ public sealed class ExplorerAddressTests
             Assert.That(two.Equals(null), Is.False);
         });
     }
+
+    [Test]
+    public void Route_segments_are_the_url_path_segments_decoded()
+    {
+        var rooted = ExplorerAddress.Parse("/t/acme/data/a%2Fb/c?key=k");
+        var plain = ExplorerAddress.Parse("/access");
+        var tenantHome = ExplorerAddress.Parse("/t/acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rooted.RouteSegmentCount, Is.EqualTo(5));
+            Assert.That(Enumerable.Range(0, rooted.RouteSegmentCount).Select(rooted.RouteSegmentAt), Is.EqualTo(new[] { "t", "acme", "data", "a/b", "c" }));
+            Assert.That(plain.RouteSegmentCount, Is.EqualTo(1));
+            Assert.That(plain.RouteSegmentAt(0), Is.EqualTo("access"));
+            Assert.That(tenantHome.RouteSegmentCount, Is.EqualTo(2));
+            Assert.That(tenantHome.RouteSegmentAt(1), Is.EqualTo("acme"));
+            Assert.That(ExplorerAddress.Home.RouteSegmentCount, Is.Zero);
+            Assert.That(() => plain.RouteSegmentAt(1), Throws.InstanceOf<ArgumentOutOfRangeException>());
+            Assert.That(() => plain.RouteSegmentAt(-1), Throws.InstanceOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [Test]
+    public void HasPath_is_whether_a_segment_follows_the_area()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ExplorerAddress.Parse("/t/acme/tenancy").HasPath, Is.False);
+            Assert.That(ExplorerAddress.Parse("/tenancy?new=true").HasPath, Is.False);
+            Assert.That(ExplorerAddress.Parse("/tenancy/acme").HasPath, Is.True);
+            Assert.That(ExplorerAddress.Home.HasPath, Is.False);
+        });
+    }
 }

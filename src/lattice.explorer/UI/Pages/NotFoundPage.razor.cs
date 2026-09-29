@@ -12,6 +12,9 @@ public partial class NotFoundPage
 
     private string RequestedText => Navigator.Current?.Format() ?? Navigator.CurrentRelativePath;
 
+    /// <summary>The router renders this page for any address nothing answers, and the layout for an area the caller may not see.</summary>
+    private protected override bool AnswersEveryAddress => true;
+
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync() =>
         _ancestor = await Navigator.GetNearestValidAncestorAsync(Navigator.Current);
