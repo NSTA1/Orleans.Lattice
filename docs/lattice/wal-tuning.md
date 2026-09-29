@@ -138,7 +138,9 @@ under its own key and pin partitions to them (see
 or move to a Premium account with a higher per-account throughput target.
 `WalPartitions` adds partitions to spread only for trees registered after
 the change; an existing tree keeps the count pinned at its first
-registration.
+registration until a resize, a shadow-cutover restore or a schema
+remediation moves it onto a new physical copy, which pins the silo-wide
+`WalPartitions` value in force when that copy is registered.
 
 **Throttle the producer before the regime fires.** The per-tree
 saturation back-pressure signal (`IWalSaturationSignal`,
@@ -208,7 +210,7 @@ For a single Azure Tables Standard storage account:
 |---|---|---|
 | 2 vCPU (Standard_D2as_v5 and smaller) | `8` | The silo is CPU-bound at the 4k:5 rung; the admission gate is not the binding constraint. Default 16 wastes admission depth on a CPU that cannot pull faster. |
 | 4 vCPU (Standard_D4as_v5) | `16` (default) | The sweet spot the default is tuned for. Silo CPU sits 55-75% of box at peak; admission depth is the binding constraint and 16 unblocks it without saturating the storage account. |
-| 8+ vCPU (Standard_D8as_v5 and larger) | `16` (still default) | The single-account ceiling, not the silo, is the binding constraint at this SKU. Measured envelope on D8as_v5 + single Azure Tables Standard account: **~22-24 ke/s** at 6k:5 with `WalMaxPendingBatches=16`, `WalPartitions=8` - only ~10-15% above the D4as_v5 baseline at the same defaults (~21 ke/s at 4k:5). Lifting `WalMaxPendingBatches` to 32 against the same account is strictly worse (the cycle 31 A/B at `WalPartitions=16` showed per-partition throughput collapsing 64% and 36k failed batches in 45 s). The recovery is spreading the tree's WAL partitions across accounts with named providers and pinned placement (see [WAL Storage Providers](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement)), not a higher cap. |
+| 8+ vCPU (Standard_D8as_v5 and larger) | `16` (still default) | The single-account ceiling, not the silo, is the binding constraint at this SKU. Measured envelope on D8as_v5 + single Azure Tables Standard account: **~22-24 ke/s** at 6k:5 with `WalMaxPendingBatches=16`, `WalPartitions=8` - only ~10-15% above the D4as_v5 baseline at the same defaults (~21 ke/s at 4k:5). Lifting `WalMaxPendingBatches` to 32 against the same account doubles the concurrent flushes to 256, a pressure the section 31 A/B measured as strictly worse when it reached the same 256 by raising `WalPartitions` to 16: per-partition throughput collapsed 64% and about 36.9k entries failed in a 45 s run. The recovery is spreading the tree's WAL partitions across accounts with named providers and pinned placement (see [WAL Storage Providers](wal-storage-providers.md#multi-account-fan-out-named-providers-and-pinned-placement)), not a higher cap. |
 
 For a Premium Azure Tables account, or a fan-out of a tree's partitions
 across multiple Standard accounts through named providers and pinned

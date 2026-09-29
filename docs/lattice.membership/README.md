@@ -82,8 +82,46 @@ The JWT authenticator reads a credential's token issuer only when the credential
 
 A host that authenticates its own way registers a custom `ILatticeCredentialAuthenticator`:
 
-```csharp
-siloBuilder.Services.AddSingleton<ILatticeCredentialAuthenticator, MyAuthenticator>();
+```csharp verify
+using Orleans.Lattice;
+using Orleans.Lattice.Membership;
+
+public sealed class MyAuthenticator : ILatticeCredentialAuthenticator
+{
+    public bool CanHandle(in LatticeCredential credential)
+        => string.Equals(credential.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase);
+
+    public ValueTask<LatticePrincipal?> AuthenticateAsync(
+        LatticeCredential credential,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<LatticePrincipal?>(new LatticePrincipal("alice", "custom"));
+}
+```
+
+```csharp verify
+using Orleans.Hosting;
+using Orleans.Lattice;
+using Orleans.Lattice.Membership;
+
+public static class MembershipAuthenticationRegistration
+{
+    public static ISiloBuilder AddCustomAuthenticator(ISiloBuilder siloBuilder)
+    {
+        siloBuilder.Services.AddSingleton<ILatticeCredentialAuthenticator, MyAuthenticator>();
+        return siloBuilder;
+    }
+
+    private sealed class MyAuthenticator : ILatticeCredentialAuthenticator
+    {
+        public bool CanHandle(in LatticeCredential credential)
+            => string.Equals(credential.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase);
+
+        public ValueTask<LatticePrincipal?> AuthenticateAsync(
+            LatticeCredential credential,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<LatticePrincipal?>(new LatticePrincipal("alice", "custom"));
+    }
+}
 ```
 
 ## Managing the directory
@@ -118,7 +156,7 @@ The directory is a trusted, silo-side seam: it runs its reads and writes under s
 | `RemoveGroupAsync(string groupId, CancellationToken)` | `Task` | Removes a group record; a no-op when it does not exist. Leaves the group's membership edges in place (see below). |
 | `AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind, CancellationToken)` | `Task` | Makes `memberId` a direct member of `groupId`; `memberKind` defaults to `User`. Idempotent. |
 | `RemoveMemberAsync(string groupId, string memberId, CancellationToken)` | `Task` | Removes a membership edge; a no-op when it does not exist. |
-| `GroupsOfAsync(string memberId, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The member's full transitive group closure (nested groups walked with cycle detection), excluding the member itself. |
+| `GroupsOfAsync(string memberId, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The member's full transitive group closure (nested groups walked with cycle detection), excluding the member itself unless a membership cycle leads back to it. |
 | `ExpandGroupsAsync(IReadOnlyCollection<string> seedGroups, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The transitive closure of a set of seed groups, including the seeds; a seed the directory does not know contributes only itself. |
 | `MembersOfAsync(string groupId, CancellationToken)` | `Task<IReadOnlyCollection<string>>` | The group's direct members (users and nested groups). |
 

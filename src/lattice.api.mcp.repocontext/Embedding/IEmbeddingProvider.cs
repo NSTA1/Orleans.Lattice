@@ -3,8 +3,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <summary>
 /// The pluggable embedding seam for the repository-context surface: text in,
 /// vectors out, alongside the <see cref="EmbeddingSpace"/> the provider operates
-/// in. A host binds the shipped default (a thin client for the companion Onyx
-/// model-server container) or swaps in its own implementation (OpenAI, Azure
+/// in. A host binds the shipped default (a thin client for the companion embedding
+/// container) or swaps in its own implementation (OpenAI, Azure
 /// OpenAI, a self-hosted endpoint) via configuration, without any other part of
 /// the repository-context surface changing.
 /// </summary>
@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </para>
 /// <para>
 /// Implementations should be safe to call concurrently: the shipped default
-/// batches texts into a single request and the Onyx model server already serves
+/// batches texts into a single request and the shipped companion images serve
 /// concurrent embed calls.
 /// </para>
 /// </remarks>

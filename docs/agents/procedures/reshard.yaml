@@ -13,7 +13,7 @@ surfaces:
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
   - id: grow-only-target
-    check: "Target shard count is at least 2, at most 4096, and not below the current physical shard count."
+    check: "Target shard count is at least 2, at most the smaller of 4096 and the tree's virtual slot count, and not below the current physical shard count."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
   - id: no-resize
     check: "No resize is already in flight."

@@ -26,8 +26,9 @@ dotnet run -c Release --no-build --project benchmark/host/Bench.Microbench/Orlea
     -- --filter "*Ship*"
 ```
 
-The harness reads only its own switches (`--results`, `--filter`, `--baseline`,
-`--tolerance` and `--suite`) and forwards nothing else to BenchmarkDotNet, so
+The harness reads only its own switches (`--results` / `-r`, `--filter` / `-f`,
+`--baseline`, `--tolerance` and `--suite`) and forwards nothing else to
+BenchmarkDotNet, so
 the command runs at the default `BENCH_MICROBENCH_FIDELITY=quick`
 (`Job.ShortRun`: 1 launch, 3 warmup, 3 measured iterations) with the memory
 diagnoser always on. BenchmarkDotNet switches such as `--memory` or

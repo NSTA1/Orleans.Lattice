@@ -54,7 +54,8 @@ public static class LatticeCrossTreeAtomicWriteExtensions
     /// <param name="batches">Per-tree slices to commit atomically. Tree ids must be distinct and non-empty, and the keys within each tree's slice must be distinct.</param>
     /// <param name="operationId">Required cross-tree idempotency key. Must not contain '/'.</param>
     /// <param name="cancellationToken">Cancellation observed before dispatch.</param>
-    /// <exception cref="ArgumentException"><paramref name="operationId"/> is null, empty, whitespace, or contains '/'; a tree id is null, empty, or repeated; or a tree's slice repeats a key, or carries a null key or a null upsert value. A rejected batch stages no write and persists no saga state.</exception>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is null, empty, whitespace, or contains '/'; a tree id is null, empty, or repeated; a tree's slice repeats a key, or carries a null key or a null upsert value; or an entry exceeds its tree's <see cref="LatticeOptions.MaxKeyLength"/> or <see cref="LatticeOptions.MaxValueSizeBytes"/>. A rejected batch stages no write and persists no saga state.</exception>
+    /// <exception cref="LatticeQuotaExceededException">A tree whose slice carries an upsert has reached its <see cref="LatticeOptions.MaxLiveKeys"/> or <see cref="LatticeOptions.MaxEstimatedBytes"/> cap. The refused batch stages no write and persists no saga state; a slice that only deletes is never refused.</exception>
     public static Task<CrossTreeAtomicWriteOutcome> SetManyAtomicAsync(
         this IGrainFactory factory,
         IReadOnlyList<LatticeTreeBatch> batches,

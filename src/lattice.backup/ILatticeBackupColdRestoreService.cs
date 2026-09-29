@@ -46,6 +46,9 @@ public interface ILatticeBackupColdRestoreService
     /// pre-apply validation (a broken base chain or a missing / tampered artifact).
     /// </exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    /// <exception cref="ArgumentException">The delegated restore rejects the target tree id.</exception>
+    /// <exception cref="InvalidOperationException">The target tree cannot change aliases because another alias-changing operation or a delete is in progress.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias swap.</exception>
     Task<LatticeRestoreResult> ColdRestoreAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);

@@ -91,6 +91,35 @@ public sealed class WalGrainReReplaySourceTests
     }
 
     [Test]
+    public async Task ReadAsync_reports_a_trimmed_partition_the_read_budget_never_reached()
+    {
+        // The read budget is shared (partitionCount * pageSize), so an untrimmed
+        // partition zero that holds a whole budget of entries exhausts it before
+        // partition one is read. The trim signal must still cover partition one:
+        // it is what tells the repair engine the WAL can no longer fill the gap,
+        // and a partition left unexamined is silently reported as untrimmed.
+        var factory = Substitute.For<IGrainFactory>();
+        var zero = Substitute.For<IWalShardGrain>();
+        zero.ReadAsync(0, 2, Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<WalShardPage>(Page([Seq(0, 10), Seq(1, 20)], next: 2)));
+        zero.ReadAsync(2, 2, Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<WalShardPage>(Page([Seq(2, 30), Seq(3, 40)], next: 4)));
+        factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(zero);
+        Partition(factory, 1, Page([Seq(9, 500)], next: 10));
+
+        var source = new WalGrainReReplaySource(factory, Tree, partitionCount: 2, pageSize: 2);
+        var result = await source.ReadAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.WasTrimmed, Is.True);
+            Assert.That(result.OldestRetainedHlc.WallClockTicks, Is.EqualTo(500));
+            Assert.That(result.Entries.Select(e => e.Timestamp.WallClockTicks).ToArray(), Is.EqualTo(new long[] { 10, 20, 30, 40 }),
+                "probing a starved partition's trim point must not collect entries past the budget");
+        });
+    }
+
+    [Test]
     public async Task ReadAsync_treats_an_empty_partition_as_untrimmed()
     {
         var factory = Substitute.For<IGrainFactory>();

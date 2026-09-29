@@ -79,7 +79,7 @@ Both clusters ready and peered over gRPC.
     carol -> (hidden)  (low-privilege: soft-denied)
   Range read of the whole tree returns only authorized keys:
     bob   sees 4 keys (auditor: all)
-    alice sees 2 keys (stations + own config key)
+    alice sees 2 keys (her station keys)
     carol sees 0 keys (nothing)
 
 == Act 4: a revoke on site-a converges to site-b ==

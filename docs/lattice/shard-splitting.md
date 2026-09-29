@@ -284,10 +284,12 @@ semantics and apply on the shard axis regardless.
 * **Latency**: when no split has ever occurred, scans take the same
   fast path as before (one round-trip per shard). The reconciliation
   passes only run when a shard actually reports moved slots.
-* **System trees**: the lattice registry tree itself bypasses the
-  reconciliation path (it never participates in adaptive splits, and
-  reading its own shard map would deadlock). It uses the simple
-  fan-out-and-sum count instead.
+* **System trees**: a reserved system tree - the lattice registry tree
+  among them - bypasses the reconciliation path. It never participates in
+  adaptive splits and routes by the default shard map without reading one
+  from the registry (for the registry tree that read would deadlock), so
+  its internal scans fan out with no moved-slot tracking. The public count
+  and scan surface refuses system trees outright.
 
 ## Autonomic detection
 

@@ -81,9 +81,11 @@ three-minute episode takes the better part of an hour on a laptop, and a
 re-run speaks only the cues that changed. `VIDEOS_VOICE_THREADS` sets how many
 CPU threads it uses (8 by default).
 
-The first engine, Kokoro, remains available for auditions (`"provider":
-"kokoro"`; `pip install kokoro-onnx soundfile`, and `HYPERFRAMES_PYTHON` when
-the CLI cannot find that interpreter).
+The first engine, Kokoro, remains available for the voice audition set
+(`npm run voice:samples`) and for comparison (`"provider": "kokoro"`;
+`pip install kokoro-onnx soundfile`, and `HYPERFRAMES_PYTHON` when the CLI
+cannot find that interpreter). Takes (`npm run audition`) are for the
+Chatterbox voice only.
 
 ## Production, review and release
 
@@ -112,8 +114,10 @@ when none is open, makes the next item and opens its pull request to `main`.
   - the video, playing in place from a review copy attached to the pull
     request;
   - its length, size, loudness and cut;
-  - the moments to listen to, and why: a take picked by ear, a clip no
-    recogniser heard exactly, words the voice has not said before, and lines
+  - the moments to listen to, and why: a take picked by ear, a clip that did
+    not pass its checks (a recogniser did not hear it exactly, or it is too
+    slow, too fast or carries a stray sound), a clip heard exactly only after
+    more than one attempt, words the voice has not said before, and lines
     changed since the published cut;
   - the script with its timings, and the takes there are to pick from;
   - the claims and their sources;
@@ -157,7 +161,7 @@ when none is open, makes the next item and opens its pull request to `main`.
 | `npm run audition -- <slug> <cue>... [--takes N]` | several takes of a line (4 by default), each checked, on a page to listen and pick from; `--pick <cue>=<take>` uses a take in the narration. Takes and picks stay on this machine, under `renders/` and in the state directory; only the published cut is committed |
 | `npm run phonemes -- <slug>` | for the Kokoro engine: how its phonemizer will read each cue, with words that have two readings flagged (`--flagged` for only those cues) |
 | `npm run timeline -- <slug>` | stamp the narration's timeline into the episode's composition (`--check` fails if it is out of date) |
-| `npm run review -- <slug>` | a local review page for the episode's latest render: the player with captions, its size, bit rate and delivered loudness, and the transcript (serve `videos/` over HTTP to watch it) |
+| `npm run review -- <slug>` | a local review page for a render of the episode (its `-high` render first, or the file `--video` names): the player with captions, its size, bit rate and delivered loudness, and the transcript (serve `videos/` over HTTP to watch it) |
 | `npm run voice:samples` | the voice audition set, under `renders/voice-samples/` |
 | `npm run snippets` | copy the compiled snippets from the companion pages into the compositions |
 | `npm run snippets:check` | fail if a composition's code has drifted from its companion page |
@@ -215,7 +219,7 @@ videos/
     episode.json                    its path, its place on it, the series items it completes, its poster's moment, and its published cut
     composition.html                the episode: shared scenes, its words, stamped timing
     assets/                         media no other episode uses, if any
-  voice/                            the series voice: its settings, reference clip, Python environment and lexicon;
+  voice/                            the series voice: its settings, reference clip, Python requirements and lexicon;
                                     the Kokoro audition candidates, their audition script and heteronyms
   tools/                            workspace tooling and its tests
   renders/, snapshots/              output, never committed: renders, narration, takes, review pages

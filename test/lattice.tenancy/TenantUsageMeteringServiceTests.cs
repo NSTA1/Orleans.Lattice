@@ -866,9 +866,24 @@ public sealed class TenantUsageMeteringServiceTests
         await service.StartAsync(CancellationToken.None);
         // Wait until MeterOnceAsync is inside the registry enumeration.
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
         // Stopping cancels the token; the OCE propagates through MeterOnceAsync
         // and is caught by the when-guard on lines 166-168.
-        await service.StopAsync(CancellationToken.None);
+        //
+        // Bounded and asserted rather than simply awaited. The bare await this
+        // replaces left the test with no assertion at all, so the two regressions
+        // it is actually positioned to catch were both invisible: a shutdown that
+        // never completes hung the run instead of failing it, and one that
+        // surfaced a fault failed with no statement of what was expected. Note
+        // what this deliberately does not claim - StopAsync swallows
+        // OperationCanceledException itself, so it cannot distinguish a loop that
+        // absorbed the cancellation from one that propagated it; the drain
+        // completing cleanly and promptly is the whole of what is observable
+        // from outside the service.
+        Assert.DoesNotThrowAsync(
+            () => service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)),
+            "StopAsync must drain the metering loop and return promptly once the "
+            + "stopping token is cancelled");
     }
 
     // ---- Stream helpers ----

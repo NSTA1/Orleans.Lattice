@@ -87,7 +87,7 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             }
         }
 
-        if (options.ThrottledBatchRatio is < 0d or > 1d)
+        if (options.ThrottledBatchRatio is < 0d or > 1d || double.IsNaN(options.ThrottledBatchRatio))
         {
             failures.Add($"{nameof(LatticeViewOptions.ThrottledBatchRatio)} must be within [0, 1] (was {options.ThrottledBatchRatio}).");
         }

@@ -249,6 +249,12 @@ This is bench-side harness work, in scope for the optimisation agent. If
 the existing OTel sink is already wildcard, path (a) is free; otherwise
 path (b) is the right cost-vs-effort trade.
 
+> **Note (added later):** the silo registers no OpenTelemetry exporter, so path (a)
+> was not available. The counters reach the cohort log through the `[phaseA]`
+> reporter (`Silo/PhaseADiagnosticReporter.cs`), which listens to the meter in-process
+> and prints its allow-listed instruments, the G-024 ones included, every
+> `BENCH_PHASEA_REPORT_SEC` seconds (default 10).
+
 ## 11. Decision table for the cohort result
 
 The four observable signals from a single saturation-rung cohort

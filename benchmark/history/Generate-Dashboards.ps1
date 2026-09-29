@@ -585,10 +585,11 @@ if ($invalidKpis.Count -gt 0) {
 Write-Host ("[validate] all {0} persona KPI(s) resolve to known aliases or auto-discovery shapes" -f ($Personas.Values | ForEach-Object { $_.Kpis.Count } | Measure-Object -Sum).Sum) -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
-# Drift check vs scenarios/*.env. Fatal both ways: a persona referencing a
+# Drift check vs scenarios/*.env. Warning-only both ways: a persona referencing a
 # scenario that has no .env on disk would render a dashboard with no data,
 # and a scenario file with no persona means runs of it never appear on any
-# dashboard (silent data loss for the operator).
+# dashboard (silent data loss for the operator). KPI validation above is the
+# fatal pre-emit check.
 # ---------------------------------------------------------------------------
 
 $scenarioRoot = Join-Path $repoRoot 'benchmark/scenarios'

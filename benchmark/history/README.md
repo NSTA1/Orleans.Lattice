@@ -81,7 +81,7 @@ that block on the docker-compose scenarios:
    `benchmark.ps1`.
 3. **`$ScalarAliases` entries** in `benchmark.ps1` - short, stable names copied from
    auto-discovered keys after capture, with no extra query (for example
-   `replication_ship_p95_ms`, which the Replication dashboard's headline tiles read).
+   `replication_ship_p95_ms`, which the Replication dashboard's headline KPI panels read).
 
 The `microbench` scenario uses none of these: its BenchmarkDotNet exporter writes
 `microbench_<workload>_<stat>` keys into `results.json` directly.
@@ -105,7 +105,7 @@ per-run barcharts (the Overview's tiles carry no drill-down links).
 | `lat-hist-read-heavy`                | `read-heavy-random`, `read-heavy-ordered`                                                                               | GetAsync-dominant load (95:5 read:write) across random and sequential keys.   |
 | `lat-hist-read-write-mix`            | `read-write-mix-random`, `read-write-mix-ordered`                                                                       | Balanced 50:50 read/write (YCSB-A shape) across random and sequential keys.   |
 | `lat-hist-microbench`                | `microbench`                                                                                                            | BenchmarkDotNet ILattice micro-suite (in-process, no Orleans cluster).        |
-| `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Foreground commit path: WAL-append + in-memory Apply percentiles. The legacy shadow-write tile is retained for backwards comparison, but the commit step it reads was removed in v3.4.0, so no run since pushes a value for it: it can show only pre-v3.4.0 history, never a fresh zero. |
+| `lat-hist-wal-performance`          | `current-state-single-peer`, `replication-backpressure`, `receiver-crash`, `bidirectional-replication`, `replication-key-filter` | Foreground commit path: WAL-append + in-memory Apply percentiles. The legacy shadow-write KPI is retained for backwards comparison, but the commit step it reads was removed in v3.4.0, so no run since pushes a value for it: it can show only pre-v3.4.0 history, never a fresh zero. |
 | `lat-hist-atomic-writes`             | `microbench` (the `SetManyAtomic` benchmarks) plus cluster-side saga health | `SetManyAtomicAsync` saga cost and saga health. Hand-maintained; `Generate-Dashboards.ps1` does not produce it. Its saga-health panels query the raw `orleans_lattice_atomic_write_completed_total` series, which the history push never writes (it imports only `bench_*` scalars), so they render empty on this stack. |
 
 The 95:5 and 50:50 read:write shapes are nominal. Each read-heavy and

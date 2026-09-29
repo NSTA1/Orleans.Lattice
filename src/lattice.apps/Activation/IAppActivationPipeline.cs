@@ -10,9 +10,10 @@ namespace Orleans.Lattice.Apps;
 /// <para>
 /// Every activation problem - an invalid or over-ceiling manifest, a missing source, a
 /// missing membership or authorization registration, a tree or rule write failure - is
-/// returned as a failed <see cref="AppActivationOutcome"/> and recorded against the app, never
-/// thrown. Runs for one tenant's app are serialized cluster-wide. Only argument validation
-/// and an <see cref="LatticeAuthorizationDeniedException"/> for a caller without
+/// returned as a failed <see cref="AppActivationOutcome"/> and, when the activation-status record
+/// can be read and written, recorded against the app. An unreadable status is not overwritten, and
+/// a failed status write is logged rather than thrown. Runs for one tenant's app are serialized
+/// cluster-wide. Only argument validation and an <see cref="LatticeAuthorizationDeniedException"/> for a caller without
 /// <see cref="LatticeOperation.AppInstall"/> throw.
 /// </para>
 /// <para>

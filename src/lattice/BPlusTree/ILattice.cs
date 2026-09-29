@@ -138,12 +138,10 @@ public interface ILattice : IGrainWithStringKey
     /// so this surface deliberately omits the optimistic-CAS guard that
     /// <see cref="SetIfVersionAsync"/> carries. Hosts using OR-Map at
     /// this tree must register the matching <c>(TKey, TValue)</c> via
-    /// <c>ISiloBuilder.AddOrMapShape</c>; closed-shape modes
-    /// (<see cref="LatticeMergeMode.OrSet"/>,
-    /// <see cref="LatticeMergeMode.PnCounter"/>,
-    /// <see cref="LatticeMergeMode.VersionVector"/>,
-    /// <see cref="LatticeMergeMode.MvRegister"/>) resolve through the
-    /// registry's global fallback without per-tree registration.
+    /// <c>ISiloBuilder.AddOrMapShape</c>; every CRDT mode except
+    /// <see cref="LatticeMergeMode.LwwRegister"/> and
+    /// <see cref="LatticeMergeMode.OrMap"/> is a closed shape that resolves
+    /// through the registry's global fallback without per-tree registration.
     /// <see cref="LatticeMergeMode.LwwRegister"/> is rejected with
     /// <see cref="ArgumentException"/>.
     /// </summary>
@@ -297,9 +295,14 @@ public interface ILattice : IGrainWithStringKey
     /// </para>
     /// <para>
     /// Throws <see cref="ArgumentException"/> when <paramref name="entries"/>
-    /// contains duplicate keys or null values. Throws
-    /// <see cref="InvalidOperationException"/> if a write fails and the saga
-    /// aborts - the original failure's message is included.
+    /// contains duplicate keys, null values, or an entry that violates
+    /// <see cref="LatticeOptions.MaxKeyLength"/> or
+    /// <see cref="LatticeOptions.MaxValueSizeBytes"/>. An enforcing
+    /// <see cref="LatticeOptions.MaxLiveKeys"/> or
+    /// <see cref="LatticeOptions.MaxEstimatedBytes"/> cap throws
+    /// <see cref="LatticeQuotaExceededException"/> before the saga starts.
+    /// Throws <see cref="InvalidOperationException"/> if a write fails and the
+    /// saga aborts - the original failure's message is included.
     /// </para>
     /// </summary>
     /// <param name="entries">The key-value pairs to write atomically.</param>
@@ -339,9 +342,11 @@ public interface ILattice : IGrainWithStringKey
     /// <b>Retention.</b> Completed saga state is retained for
     /// <see cref="LatticeOptions.AtomicWriteRetention"/> (default 48h) so
     /// delayed retries within the window still observe the original
-    /// outcome. After the retention window the saga is purged and the
-    /// same <paramref name="operationId"/> becomes eligible for a fresh
-    /// saga.
+    /// outcome. The entry write-size and quota checks run before the retry
+    /// can re-attach, so a retry can be refused by a current bound before it
+    /// observes the original outcome. After the retention window the saga is
+    /// purged and the same <paramref name="operationId"/> becomes eligible
+    /// for a fresh saga.
     /// </para>
     /// </summary>
     /// <param name="entries">The key-value pairs to write atomically.</param>
@@ -392,7 +397,7 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
     /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when the combined batch contains a duplicate or null key, or a null upsert value.</exception>
     /// <exception cref="LatticeIdempotencyKeyMismatchException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when a write fails and compensation completes.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when a write fails and compensation completes, including a delete key that violates <see cref="LatticeOptions.MaxKeyLength"/> inside the saga.</exception>
     /// <remarks>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
     /// call does not hold a stateless-worker turn while it awaits its saga. The
@@ -420,8 +425,12 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="AtomicWriteOutcome.PreconditionFailed"/> with nothing
     /// committed; when all match it returns
     /// <see cref="AtomicWriteOutcome.Committed"/>. A precondition miss is
-    /// reported as a value, not an exception. Genuine write failures still
-    /// throw and compensate exactly as in <see cref="SetManyAtomicAsync"/>.
+    /// reported as a value, not an exception. The entry write-size and quota
+    /// checks run before the saga starts and can throw
+    /// <see cref="ArgumentException"/> or
+    /// <see cref="LatticeQuotaExceededException"/> without evaluating the
+    /// predicate. Genuine write failures still throw and compensate exactly as
+    /// in <see cref="SetManyAtomicAsync"/>.
     /// <para>
     /// Intended to be reached through the typed
     /// <c>SetManyAtomicAsync&lt;T&gt;</c> extension, which compiles the
@@ -447,6 +456,8 @@ public interface ILattice : IGrainWithStringKey
     /// Re-attaching with the same <paramref name="operationId"/> returns the
     /// original memoized <see cref="AtomicWriteOutcome"/> without re-evaluating
     /// the predicate against possibly-moved data; the predicate must be pure.
+    /// The entry write-size and quota checks still run first, so a retry can be
+    /// refused by a current bound before it observes the memoized outcome.
     /// </summary>
     /// <remarks>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the
@@ -509,8 +520,13 @@ public interface ILattice : IGrainWithStringKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the number of live (non-tombstoned) keys in each shard as an ordered list.
-    /// The list index corresponds to the shard index (0-based).
+    /// Returns the number of live (non-tombstoned) keys in each physical shard as
+    /// an ordered list: one count per shard, in ascending physical shard-index
+    /// order - the order of <see cref="ShardMap.GetPhysicalShardIndices"/>. A list
+    /// position is a physical shard index only while those indices run
+    /// contiguously from <c>0</c>, which an adaptive split preserves but a shard
+    /// consolidation that folds a shard away does not; read the indices from
+    /// <see cref="GetRoutingAsync(CancellationToken)"/> to address a shard.
     /// Useful for diagnostics and load-balancing analysis.
     /// </summary>
     Task<IReadOnlyList<int>> CountPerShardAsync(CancellationToken cancellationToken = default);
@@ -693,9 +709,9 @@ public interface ILattice : IGrainWithStringKey
     Task PurgeTreeAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Resizes the tree by creating an online snapshot with new
-    /// <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/> and <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxInternalChildren"/>
-    /// values into a new physical tree, then swapping the tree alias so that all
+    /// Resizes the tree by creating an online snapshot with new leaf and
+    /// internal-node sizing values into a new physical tree, then swapping the
+    /// tree alias so that all
     /// subsequent reads and writes are redirected to the resized tree. The old
     /// physical tree is soft-deleted and will be purged after the configured
     /// <see cref="LatticeOptions.SoftDeleteDuration"/>.
@@ -712,14 +728,11 @@ public interface ILattice : IGrainWithStringKey
     /// leaf grain IDs, which create fresh cache grain instances.
     /// </para>
     /// <para>
-    /// The copy is the same index-for-index shard copy <see cref="SnapshotAsync"/>
-    /// performs, with the same limit: it reproduces the tree only while the tree
-    /// still routes keys by the default mapping for its pinned shard count. After
-    /// an adaptive shard split, or a reshard of a tree that holds data, has
-    /// changed that mapping, a physical shard at or above the pinned count is
-    /// not carried into the resized tree, and a key that the current mapping
-    /// places on a different shard from the default mapping is not guaranteed
-    /// to be readable at its current value afterwards.
+    /// The copy is the same shard copy <see cref="SnapshotAsync"/> performs: it
+    /// follows the tree's shard map, so every physical shard the map routes to -
+    /// including one an adaptive shard split added above the pinned shard count -
+    /// is copied and shadow-forwarded, and the alias swap carries the map over to
+    /// the resized tree.
     /// </para>
     /// </summary>
     /// <param name="newMaxLeafKeys">The new maximum number of keys per leaf node. Must be greater than 1.</param>
@@ -767,18 +780,14 @@ public interface ILattice : IGrainWithStringKey
     /// not reflected on the destination.
     /// </para>
     /// <para>
-    /// In both modes the copy, and online the shadow forward, address the
-    /// source's physical shards by index, from <c>0</c> to one less than its
-    /// pinned shard count, writing each into the destination shard with the same
-    /// index, and the destination starts with the default mapping of keys to
-    /// that many shards rather than a copy of the source's current mapping. The
-    /// result therefore reproduces the source only while the source still routes
-    /// keys by that default mapping, which an adaptive shard split, or a reshard
-    /// of a tree that holds data, replaces: a physical shard at or above the
-    /// pinned count, such as one a shard split added, is neither copied nor
-    /// shadow-forwarded, and a key that the source's current mapping places on
-    /// a different shard from the default mapping is not guaranteed to be
-    /// readable from the destination at its current value.
+    /// In both modes the destination is registered with the source's shard map
+    /// and split allocation mark, captured when the snapshot starts, and the
+    /// copy - and online the shadow forward - addresses every physical shard
+    /// that map routes to, including one an adaptive shard split added above
+    /// the pinned shard count, writing each into the destination shard with the
+    /// same index. An entry is copied only when the map routes its key to the
+    /// shard it was read from, so the stale copies a split leaves behind on the
+    /// shard that gave its keys up are not carried over.
     /// </para>
     /// <para>
     /// The destination tree must not already exist: the snapshot creates it,
@@ -924,15 +933,18 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="IsReshardCompleteAsync"/>.
     /// <para>
     /// <b>Grow-only on a populated tree.</b> <paramref name="newShardCount"/>
-    /// must be at least <c>2</c> and at most
+    /// must be at least <c>2</c> and at most the smaller of
     /// <see cref="Orleans.Lattice.BPlusTree.LatticeConstants.DefaultVirtualShardCount"/>
-    /// (4096); a value outside that range throws
+    /// (4096) and the number of virtual slots in the tree's
+    /// <see cref="ShardMap"/> (fewer on a tree an installed app created with a
+    /// declared virtual shard count); a value outside that range throws
     /// <see cref="ArgumentOutOfRangeException"/>. A request for the count the
     /// tree already has is a no-op, and a smaller count than the current
     /// number of distinct physical shards throws
     /// <see cref="ArgumentOutOfRangeException"/> (shrinking is not supported).
     /// An observably empty tree is instead re-pinned directly to any count in
-    /// range, smaller or larger, without running a migration. Throws
+    /// range, smaller or larger, without running a migration; its shard map is
+    /// rebuilt over the same virtual slot count. Throws
     /// <see cref="InvalidOperationException"/> when a resize is in flight.
     /// </para>
     /// <para>
@@ -1397,12 +1409,12 @@ public interface ILattice : IGrainWithStringKey
     /// page against that same snapshot, so a multi-page scan is
     /// linearizable against atomic-write sagas committing concurrently
     /// with the cursor. The captured snapshot is pinned by the
-    /// per-tree TxRegistry against tombstone-prune eviction for the
-    /// cursor's lifetime; a step past
+    /// tree's saga-decision registry shards against tombstone-prune eviction
+    /// for the cursor's lifetime; a step past
     /// <see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/> throws
     /// <see cref="LatticeCursorSnapshotExpiredException"/>, and opening a
-    /// point-in-time cursor when the registry-wide pin footprint cap
-    /// would be exceeded throws
+    /// point-in-time cursor when any touched registry shard would exceed its
+    /// pin footprint cap throws
     /// <see cref="LatticeCursorRegistryPinExhaustedException"/>.
     /// </param>
     /// <param name="cancellationToken">Cancels the open before any state is persisted.</param>

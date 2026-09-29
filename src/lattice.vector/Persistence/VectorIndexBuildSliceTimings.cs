@@ -13,9 +13,12 @@ namespace Orleans.Lattice.Vector.Persistence;
 /// previously had to be made by reading the source rather than from telemetry.
 /// </para>
 /// <para>
-/// Durations are accumulated across the items of a single slice, so they sum to
-/// slightly less than the slice's elapsed time - the remainder is the loop's own
-/// bookkeeping and is deliberately not apportioned.
+/// Durations are accumulated across the items of a single slice, but they do not
+/// cover the whole slice: the source count taken while the expected count is still
+/// unknown, releasing the source enumerator, the ingest checkpoint that persists
+/// vector chunks and build state, and the loop's own bookkeeping belong to no
+/// stage. The observer is called only after the checkpoint and build-state write;
+/// a slice that throws records nothing.
 /// </para>
 /// </summary>
 /// <param name="SourceWait">Time awaiting the source enumerator for items.</param>

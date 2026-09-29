@@ -30,8 +30,10 @@ Each revision is stored as a `HistoryRow` carrying the kind of mutation
 (a set, a delete, a CRDT delta, or a range-tombstone marker), the originating
 cluster, and - for last-writer-wins values - a content hash and length plus,
 depending on the retention mode, the value bytes themselves. A CRDT mutation is
-recorded as its author delta (the compact, doubling-free history), never as full
-state.
+recorded as its author delta (the compact, doubling-free history); only one that
+carries no delta - an anti-entropy or bootstrap resync that ships the full state -
+is recorded as a set of that state, which the retention mode shapes like any
+other set.
 
 ## Enabling history on a tree
 
@@ -73,12 +75,13 @@ rebuilds existing rows.
 |------|-----------------|----------|
 | `MetadataOnly` (default) | Stripped to a content hash and length. | The timeline and change detection matter, not past values: history reads never return the stripped bytes (the write-ahead-log fallback read applies the same rule). |
 | `FullValue` | Stored verbatim per revision. | Point-in-time values must be served directly from the history view. |
-| `Hybrid` | Stored verbatim for recent revisions, stripped to metadata beyond a short window. | A recent full-value tail is needed, with an unbounded metadata-only timeline behind it. |
+| `Hybrid` | Stored verbatim when the maintainer applies the revision within a short window of its write; stripped to metadata when it applies it later (a backlog or a catch-up replay). | Point-in-time values are wanted for promptly applied revisions without paying for them on a backlog. A stored row keeps its shape, so this does not confine full values to a recent tail. |
 
 CRDT revisions are always stored as their delta regardless of mode - the delta
-*is* the compact history.
+*is* the compact history - except a full-state resync, which is stored as a set
+(see [How it works](#how-it-works)).
 
-Under `Hybrid` the "short window" is set by `LatticeViewOptions.HistoryHybridFullValueWindow` (default 5 minutes): a revision keeps its full value bytes only while its apply-time age is within this window, and older revisions are shaped to metadata.
+Under `Hybrid` the "short window" is set by `LatticeViewOptions.HistoryHybridFullValueWindow` (default 5 minutes): a revision keeps its full value bytes when its age at the moment the maintainer applies it is within this window, and one applied later is shaped to metadata. The decision is made once, when the row is written - a stored row is never re-shaped as it ages - so under promptly drained traffic almost every revision keeps its bytes, and only an age bound limits them. The write-ahead-log fallback read applies the same rule at read time instead, so there a revision older than the window reads as metadata.
 
 An optional **age bound** (a positive retention window) stamps each revision row
 with an absolute expiry of `now + window`; the normal entry-expiry path reaps old
@@ -160,6 +163,16 @@ This window is bounded by WAL garbage collection, so it sets `Truncated` and
 partial window is never presented as a full history. Enable a history view when a
 durable, retention-bounded timeline is required.
 
+The fallback also reads the retained log raw, which the history view does not. The
+view holds an atomic batch's staged writes back until the batch commits, discards
+them if it aborts, and skips the records compaction writes. The fallback lists a
+staged write as a revision whether its batch later commits, aborts or is still in
+flight, so an aborted batch's writes appear as revisions that never took effect. It
+also lists the reap mark compaction writes when it removes a deleted or expired entry
+past its grace period as a further delete revision, stamped with that entry's own
+clock: a compacted delete appears twice, and a reaped expired entry shows a delete
+nobody issued.
+
 ## The accumulative guard
 
 An ordinary materialised view is rebuilt from *current* source state when its
@@ -181,8 +194,11 @@ knowingly re-derives the view from current source state (collapsing prior
 revisions) and is the escape hatch for genuine view-tree corruption. The flag does
 not suppress the maintainer's other rebuild triggers, and each of them collapses
 the timeline the same way: falling off the source write-ahead log (the view
-lagged past garbage collection), the atomic-staging backstop, a source-identity
-rebind after a restore or failover repoints the source, lag-budget eviction, and
+lagged past garbage collection), the atomic-staging backstop, a
+[source-identity rebind](materialised-views.md#source-identity-rebind) after an
+alias change (a resize or its undo, a shadow-cutover restore or its revert, a
+schema remediation, or an administrative alias change) repoints the source,
+lag-budget eviction, and
 `ReconcileAsync`, whose re-derivation from current source state differs from any
 timeline that still holds earlier revisions. Retention
 mode and window are deliberately kept out of the projection version: they encode

@@ -10,10 +10,11 @@ namespace Orleans.Lattice.Replication;
 /// receiver can pin the value at the same logical timestamp on apply,
 /// preserving the snapshot's as-of cut on every replica.
 /// <para>
-/// The first three slots (<c>[Id(0..2)]</c>) carry the committed
-/// projection: a live, non-tombstoned, non-expired value at its
-/// commit-time HLC. The trailing slots (<c>[Id(3..9)]</c>) are an
-/// additive widening that ships any saga the producer's tx registry
+/// Slots <c>[Id(0..2)]</c> carry the committed projection: a
+/// live, non-tombstoned, non-expired value at its commit-time HLC;
+/// <c>[Id(9)]</c> carries that row's absolute expiry. The other
+/// trailing slots (<c>[Id(3..8)]</c> and <c>[Id(10..11)]</c>) are
+/// additive widenings that ship any saga the producer's tx registry
 /// recorded as <see cref="Orleans.Lattice.BPlusTree.TxStatus.InFlight"/>
 /// at the snapshot's linearization point: such prepared per-key
 /// mutations are emitted as <see cref="SnapshotEntry"/> rows with
@@ -147,10 +148,12 @@ public readonly record struct SnapshotEntry
     /// <summary>
     /// Absolute UTC tick at which the entry expires, or <c>0</c> when the
     /// entry never expires. Mirrors <c>LwwValue.ExpiresAtTicks</c> and is
-    /// carried on committed and prepared rows alike, preserved verbatim
-    /// across the snapshot boundary so the receiver installs the same TTL
-    /// the source recorded (on its live row, or on its per-tx pending
-    /// bucket for a prepared mutation).
+    /// carried on committed and prepared rows alike. Last-writer-wins
+    /// receivers install that expiry verbatim; typed CRDT committed rows
+    /// are folded through the state-based merge path, which currently
+    /// writes the resulting key as durable even when this value is set.
+    /// Prepared rows carry the value into the receiver's per-tx pending
+    /// bucket.
     /// </summary>
     [Id(9)] public long ExpiresAtTicks { get; init; }
 

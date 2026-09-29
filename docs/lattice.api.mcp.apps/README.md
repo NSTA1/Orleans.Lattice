@@ -80,7 +80,9 @@ registration would let a second contribution shadow the first.
 Like every other Lattice MCP tool, app tools are offered only to an authenticated
 caller. Every app tool is advertised to a caller only when the shared access gate allows
 the caller **every** operation of the tool's declared role on at least one of that
-role's scopes. The scopes are resolved exactly as the role compiler resolves them -
+role's scopes. Only an unfiltered allow holds an operation: a key-filtered allow, which
+admits only some keys of the scope, never does, on a prefix scope as on a tree scope.
+The scopes are resolved exactly as the role compiler resolves them -
 the app's own `a/{app}/{tree}`, an adopted tree, or another app's tree - and composed
 for the caller's active tenant. Because the session's tool collection serves both
 `tools/list` and `tools/call`, a tool withheld at advertisement is unreachable at

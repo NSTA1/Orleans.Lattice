@@ -41,7 +41,7 @@ The check classifies every `(tree, peer)` pair captured in telemetry against thr
 | `LastContactSeconds` | `ReplicationPeerSnapshot.LastContactSeconds` (age of last successful contact) | 30 s | 300 s |
 | `ConsecutiveErrors` | `ReplicationPeerSnapshot.ConsecutiveErrors` (failure streak since last success) | 5 | 50 |
 
-The `EntriesBehind`, `LastContactSeconds`, and `ConsecutiveErrors` tiers above classify **outbound** snapshot rows only - inbound rows carry zero `EntriesBehind` by construction and the inbound counterparts of the contact / error tiers are exposed separately as the **inbound silence** signal:
+The `EntriesBehind`, `LastContactSeconds`, and `ConsecutiveErrors` tiers above classify **outbound** snapshot rows only - inbound rows carry zero `EntriesBehind` by construction, and no tier classifies an inbound row's `ConsecutiveErrors` streak. The inbound counterpart of the contact tier is exposed separately as the **inbound silence** signal:
 
 | Property | Description | Default |
 |---|---|---|
@@ -49,6 +49,8 @@ The `EntriesBehind`, `LastContactSeconds`, and `ConsecutiveErrors` tiers above c
 | `InboundCriticalAfter` | Duration of inbound silence after which the row contributes `Unhealthy` to the aggregate verdict. | `Timeout.InfiniteTimeSpan` (disabled) |
 
 The inbound signal is opt-in - a host that wants readiness gating on inbound liveness configures finite thresholds. A peer that this silo only ships to (and never receives from) produces no inbound rows and is excluded from this signal regardless of the configured thresholds. Inbound rows appear in the `degradedPeers` / `unhealthyPeers` arrays with the label suffix `" (inbound)"` so dashboards can distinguish them from outbound rows.
+
+An inbound row's silence is the time since this silo last finished applying inbound entries the peer authored. Every receive path records it - a multi-entry batch once per per-origin run, and a single-entry push (the usual shape from a low-rate sender) or a batch applied entry by entry once per entry. An empty liveness-probe push applies nothing and does not refresh it, so on a link that carries no writes the inbound silence keeps growing even while the peer is healthy: size finite thresholds above the longest write gap you expect from each peer. A row that has only ever recorded failed applies has no successful contact (`NaN`) and is skipped by this signal.
 
 Because the shipper records `EntriesBehind` from a single drain, the reading never exceeds the effective ship batch size (at most `ShipBatchSize`, default 256). With the default `ShipBatchSize` the default 1 000 / 10 000 bounds therefore cannot trip; a host that relies on this signal sets bounds below its ship batch size.
 

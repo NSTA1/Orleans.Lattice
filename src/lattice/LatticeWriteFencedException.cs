@@ -5,9 +5,10 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Thrown by the shard-root write path when the target tree is
 /// <b>write-fenced</b> for the duration of a cross-cluster saga (for example a
-/// restore cutover). While the fence is engaged every mutation to the tree is
-/// refused cluster-wide so no post-cut writer can race the cutover; reads are
-/// unaffected.
+/// restore cutover). While the fence is engaged the per-key write gates refuse
+/// point, batch, conditional and typed-CRDT mutations so a post-cut writer on
+/// those paths cannot race the cutover; reads are unaffected. Range deletes,
+/// bulk appends and merge applies do not consult this fence.
 /// <para>
 /// <b>Caller contract.</b> This is transient back-pressure, not a durable
 /// failure: the refused mutation was never committed. Callers should back off

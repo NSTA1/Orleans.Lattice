@@ -63,8 +63,9 @@ This is a deliberate trade. The wins:
   commit. The in-memory projection has no independent durability guarantee;
   it is reconstructed from the WAL on activation.
 - **Replay-driven recovery.** Activation rebuilds the in-memory projection from
-  the leaf's latest durable snapshot plus a replay of the WAL tail past its
-  projection checkpoint. The WAL entry is the only thing a foreground commit
+  the leaf's latest durable snapshot plus a replay of the WAL past the offsets
+  that snapshot covers - or of the whole readable WAL when the leaf has no
+  usable snapshot. The WAL entry is the only thing a foreground commit
   must make durable before it returns; nothing else holds a second copy of the
   value that has to be kept in step with it.
 - **Replication coupling.** A peer's change feed and the local commit log are
@@ -73,10 +74,13 @@ This is a deliberate trade. The wins:
 
 The cost:
 
-- **Cold-activation replay cost is bounded by retention.** A leaf that hasn't
-  been activated since the last GC cutoff replays from the trim watermark
-  forward. The projection-checkpoint mechanism (below) keeps the typical replay
-  to the last few hundred entries.
+- **Cold-activation replay cost is bounded by snapshot coverage and
+  retention.** A cold activation replays the WAL past the offsets the leaf's
+  latest snapshot covers, or the whole readable window when it has no
+  snapshot, so the size of a replay depends on how recently the leaf captured
+  a snapshot (its checkpoint persists drive those captures; see
+  [`projection-rebuild.md`](projection-rebuild.md#snapshot-on-fall-off-safety-net))
+  and on how much WAL is retained.
 - **The WAL provider must be durable.** The default `InMemoryWalStorageProvider`
   is fine for tests and single-process samples but is not crash-safe; production
   deployments register a durable provider through its package's registration
@@ -130,11 +134,16 @@ The pipeline is implemented in
 [`BPlusLeafGrain.CommitSetAsync`](../../src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs)
 and the mirror paths for `DeleteAsync`, `DeleteRangeAsync`, `MergeEntriesAsync`,
 `MergeManyAsync`, and `CompactTombstonesAsync`. The `wal`, `apply` and
-`observer` steps - plus `digest`, the awaited projection-digest publish to the
-parent internal node - record their elapsed wall-clock duration to the
-`orleans.lattice.leaf.commit.duration` histogram tagged by `step`; `build` is
-not timed separately. The `orleans.lattice.leaf.write.duration` histogram times
-the leaf's grain-state persists with a `tree` tag only, and additionally carries
+`observer` steps - plus `digest`, which hands the write's projection-digest
+change to the parent internal node - record their elapsed wall-clock duration
+to the `orleans.lattice.leaf.commit.duration` histogram tagged by `step`;
+`build` is not timed separately. With the default
+[`DigestCoalescingWindowMs`](configuration.md#digestcoalescingwindowms)
+(5 ms) a write that changes the digest schedules, or joins, a publish the
+leaf sends when the window elapses, outside the commit, so the `digest` step
+includes the cross-grain publish itself only when the window is `0`. The
+`orleans.lattice.leaf.write.duration` histogram times the leaf's grain-state
+persists with no `kind` tag, and additionally carries
 `kind`-tagged samples that time the WAL appends of merge traffic
 (`kind=merge`), tombstone compaction (`kind=compact`) and the cross-migration
 LWW backstop (`kind=backstop`). Ordinary set and delete commits carry no `kind`
@@ -321,8 +330,13 @@ durable write to the steady-state checkpoint path:
   landed. Every subsequent advance uses the debounced fire-and-forget
   mirror.
 - **Graceful deactivation.** On deactivation, after its final checkpoint
-  flush, the leaf *awaits* a durable pin write of its current frontier, so
-  a leaf can never go dormant on a clean shutdown (and then have the WAL
+  flush (which publishes the pin it persists) and a snapshot capture for any
+  checkpointed partition no snapshot covers yet, the leaf *awaits* a durable
+  pin write of its current frontier. It skips that pin-store call, counting
+  the skip on `orleans.lattice.leaf.deactivation.barrier.elided`, only when
+  a pin this same deactivation already had acknowledged covers every
+  partition. So a
+  leaf can never go dormant on a clean shutdown (and then have the WAL
   trimmed past its checkpoint across a restart) without leaving a correct
   durable floor behind.
 
@@ -647,12 +661,14 @@ but the cache starts empty or a WAL prefix has been trimmed (see
 [Snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net)).
 Three cases:
 
-- **Tail replay.** The last persisted projection checkpoint is at offset *N*,
-  the newest WAL entry is at offset *M* (the WAL head, the next offset to be
-  assigned, is `M + 1`), and `M - N` is bounded by the checkpoint
-  interval. The leaf reads entries `(N, M]` in bounded slices and applies
-  each to its projection. Replay is in-process and typically completes in a
-  few milliseconds.
+- **Tail replay.** The leaf's latest snapshot covers the WAL through offset
+  *N* - the checkpoint the capture stamped, to which activation resets the
+  leaf's checkpoint - and the newest WAL entry is at offset *M* (the WAL head,
+  the next offset to be assigned, is `M + 1`). The leaf reloads the snapshot,
+  reads entries `(N, M]` in bounded slices and applies each to its
+  projection, so `M - N` grows with the time since the last snapshot
+  capture rather than with the checkpoint interval. Replay is in-process and
+  typically completes in a few milliseconds.
 - **Fresh-leaf tail replay.** A leaf created mid-run by a split (or by the
   first write to a virgin shard) has no checkpoint yet: a never-assigned
   checkpoint reads as the -1 "nothing applied" sentinel on every partition
@@ -664,7 +680,11 @@ Three cases:
   so the leaf applies only its own records - and a provider that classifies
   records before decoding them decodes only those (see below). The read
   itself still walks the whole retained window, in `WalReplaySliceBudget`-sized
-  slices.
+  slices. A leaf that has checkpointed but has no usable snapshot replays the
+  same whole window, because its cache starts empty; for it a separate guard
+  compares the oldest readable offset with its durable checkpoint and refuses
+  the leaf when an offset it still needs has been trimmed (the genuine-loss
+  case below).
 - **Genuine loss.** The persisted checkpoint is older than the WAL trim
   watermark - the entries it would replay are no longer available - and no
   snapshot covers the gap. Activation refuses the leaf with
@@ -723,16 +743,18 @@ durably whenever the elapsed wall-clock time since the last flush reaches
 `MaterialiserCheckpointInterval` (default: 5 seconds) **or** the count of
 unflushed advances reaches `MaterialiserCheckpointEntries` (default: 5 000),
 whichever happens first. The checkpoint is a single grain-state write of the
-leaf's persisted row, which records the WAL offset of the last applied mutation
-for each WAL partition together with the leaf's hybrid-logical clock and
+leaf's persisted row, which records for each WAL partition the highest offset
+the leaf has worked through - replay advances it past other leaves' records as
+well as its own - together with the leaf's hybrid-logical clock and
 version vector. It does **not** capture entry values: the persisted leaf row
 has carried no per-key entries since the leaf-state collapse, and its former
 entries slot is reserved; the only mutations it can carry are the unresolved
 saga prepares and deferred terminals of the replay ledger (see
 [Resumable cold replay](projection-rebuild.md#resumable-cold-replay)). On the
-next activation the leaf rehydrates its
-entries from its latest durable snapshot and replays the WAL from the
-checkpoint offset rather than from zero.
+next activation the leaf rehydrates its entries from its latest durable
+snapshot and replays the WAL only past the offsets that snapshot covers - the
+checkpoint a capture stamps - rather than from zero; a partition no snapshot
+covers is replayed from the start of its readable window.
 
 Both triggers are evaluated as each advance is recorded. An advance that
 arrives inside the interval and below the entry count - typically the last
@@ -987,6 +1009,15 @@ siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.FromMinutes(5));
 siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.Zero); // disable
 ```
 
+A pass whose cursor floor is held by dormant leaves also drives those leaves
+forward: when an unusable durable pin blocks the floor, or a dormant pin the
+scheduler can repair holds it, the scheduler touches the leaves behind those
+pins in a bounded reactivation sweep so their checkpoints, and with them the
+floor, can advance. The sweep's drives share the per-silo WAL replay permits
+with leaf activations; see
+[Starvation-drive admission](projection-rebuild.md#starvation-drive-admission)
+for how a pass sizes its fan-out to that share and what a refused drive costs.
+
 The scheduler composes with the replication maintenance grain:
 `RunOnceAsync` and the underlying `IWalStorageProvider.TrimAsync` are
 idempotent, and the pass never trims past the minimum consumer cursor or
@@ -1092,7 +1123,7 @@ catalogued in [Metrics](metrics.md), complete the picture.
 
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
-| `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` (one of `wal`, `apply`, `digest`, `observer`) | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is the in-memory merge plus any relocation or split it triggers; `digest` is the awaited projection-digest publish to the parent internal node; `observer` is the publish under the commit-log scope. |
+| `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` (one of `wal`, `apply`, `digest`, `observer`) | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is the in-memory merge plus any relocation or split it triggers; `digest` hands the write's projection-digest change to the parent internal node - with the default `DigestCoalescingWindowMs` it schedules, or joins, a publish sent when the window elapses, so it includes the cross-grain publish itself only when the window is `0`; `observer` is the publish under the commit-log scope. |
 
 The bundled Grafana dashboards consume these instruments directly; see
 [`../lattice.dashboards/README.md`](../lattice.dashboards/README.md).

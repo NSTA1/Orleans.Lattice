@@ -19,7 +19,10 @@ namespace Orleans.Lattice.Vector.Persistence;
 /// </summary>
 public interface IVectorIndexBuildObserver
 {
-    /// <summary>Called once per ingest slice, after the slice has finished.</summary>
+    /// <summary>
+    /// Called after a successful ingest slice has written its checkpoint. A slice
+    /// that faults is reported by the fault path and does not call the observer.
+    /// </summary>
     /// <param name="timings">Where that slice's time went.</param>
     void OnSliceCompleted(in VectorIndexBuildSliceTimings timings);
 }

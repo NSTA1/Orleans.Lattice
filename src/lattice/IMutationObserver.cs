@@ -2,8 +2,8 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Extensibility hook invoked synchronously from inside the Lattice grain
-/// write path after the mutation has been durably persisted and before the
-/// grain method returns. Intended for change-feed producers, replication
+/// write path after a published mutation has been durably persisted and before
+/// the grain method returns. Intended for change-feed producers, replication
 /// write-ahead logs, and external audit consumers.
 /// <para>
 /// Register observers in the silo DI container (for example via
@@ -52,36 +52,28 @@ namespace Orleans.Lattice;
 /// will reorder relative to concurrent callers. Prefer enqueue-and-drain
 /// for any follow-on Lattice writes.
 /// </para>
-/// <para><b>Coverage gaps.</b> Observers see every <i>originating</i>
-/// write (<see cref="MutationKind.Set"/>, <see cref="MutationKind.Delete"/>,
-/// <see cref="MutationKind.DeleteRange"/>) but deliberately do <b>not</b>
-/// see downstream convergence traffic: <c>MergeEntriesAsync</c> /
-/// <c>MergeManyAsync</c>, shard-split shadow-forward, saga compensation
-/// rollback replays, and snapshot / restore bulk loads are silent because
-/// they are replays of mutations already published at their origin. In a
-/// multi-cluster topology the replication package is responsible for
-/// surfacing cross-cluster events - the core hook is local-origin only.
+/// <para><b>Coverage.</b> Observers see foreground point, batch and range
+/// writes, including saga prepare-phase writes and cross-tree participant
+/// legs; non-migration merge traffic that represents external input, such
+/// as tree merges, online snapshot or resize copies into their destinations,
+/// merging backup restores, and replicated plain values; forwarded writes
+/// re-published on their destination; and replicated range deletes, CRDT
+/// deltas and prepared writes. Silent paths include bulk loads, offline
+/// snapshot copy, single full-backup restore into a new tree or shadow,
+/// internal key moves for leaf splits, shard splits and consolidations, WAL
+/// replay and snapshot loads at activation, prepared-write visibility at
+/// commit, saga terminal records and compaction records.
 /// </para>
 /// <para><b>DeleteRange shape.</b> A <see cref="MutationKind.DeleteRange"/>
-/// event is published <b>once per shard</b> that received the range
-/// (<i>not</i> once per tombstoned key and <i>not</i> once per user call),
-/// and is emitted <b>even when a given shard matched zero live keys</b>
-/// - replication consumers must propagate the range to peer clusters
-/// unconditionally because peer clusters may hold keys in it. A single
-/// <c>ILattice.DeleteRangeAsync</c> invocation against an N-shard tree
-/// therefore produces up to N identical-payload
-/// <see cref="MutationKind.DeleteRange"/> mutations (same
-/// <see cref="LatticeMutation.Key"/> / <see cref="LatticeMutation.EndExclusiveKey"/>),
-/// which is idempotent by design but noisy. Downstream consumers that
-/// need exactly-once delivery per user call must dedup on
-/// <c>(TreeId, Key, EndExclusiveKey)</c>. Contrast with the tree-event
-/// stream (<see cref="LatticeTreeEvent"/>), which collapses the fan-out
-/// into a single event at the <c>LatticeGrain</c> level.
-/// <see cref="LatticeMutation.Timestamp"/> is
-/// <c>HybridLogicalClock.Zero</c> because a single range may produce many
-/// per-leaf HLCs that cannot be faithfully collapsed into a single
-/// timestamp. Observers that need per-key granularity must scan the range
-/// themselves.
+/// event is published per bounded page per shard, not once per tombstoned key
+/// and not once per user call. A single <c>ILattice.DeleteRangeAsync</c>
+/// invocation against an N-shard tree can therefore produce several
+/// <see cref="MutationKind.DeleteRange"/> mutations per shard. Each event's
+/// <see cref="LatticeMutation.Key"/> is the page start, and all events from
+/// one user call share a transaction id; consumers that need to group them
+/// should use that id rather than the key range. The event timestamp is the
+/// producer's issue HLC. Observers that need per-key granularity must scan the
+/// range themselves.
 /// </para>
 /// <para><b>Ordering.</b> Within a single leaf grain, observer invocations
 /// for successive mutations on the same key are strictly ordered.
@@ -101,7 +93,7 @@ namespace Orleans.Lattice;
 public interface IMutationObserver
 {
     /// <summary>
-    /// Invoked once per durably-committed mutation. Implementations must
+    /// Invoked for a published durably committed mutation. Implementations must
     /// treat <paramref name="mutation"/> as immutable and should complete
     /// quickly; long-running work belongs on a background queue drained
     /// by an <c>IHostedService</c>.

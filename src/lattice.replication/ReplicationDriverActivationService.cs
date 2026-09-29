@@ -45,9 +45,9 @@ namespace Orleans.Lattice.Replication;
 /// long-lived <see cref="IReplicationTopology.Subscribe"/> subscription
 /// activates one shipper per <b>currently enrolled</b> replicated tree
 /// for every peer added at runtime. <see cref="PeerChangeKind.Removed"/>
-/// events do not trigger any teardown - the shipper grain stays
-/// activated to drain its remaining backlog, and the producer-side
-/// doorbell ring stops firing for the removed peer automatically because
+/// events do not trigger any teardown. Existing shippers keep running
+/// and continue to ship backlog and later local writes; a producer-side
+/// doorbell ring no longer targets the removed peer because
 /// <c>ShardedReplogSink</c> reads <see cref="IReplicationTopology.CurrentPeers"/>
 /// per WAL append.
 /// </para>
@@ -223,10 +223,10 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     {
         if (change.Kind != PeerChangeKind.Added)
         {
-            // Removed events do not trigger any teardown - the shipper
-            // grain stays activated to drain its remaining backlog, and
-            // the doorbell ring on ShardedReplogSink already keys off the
-            // live ReplicationPeers snapshot.
+            // Removed events do not trigger teardown. Existing shippers
+            // keep running and continue to ship backlog and later local
+            // writes; ShardedReplogSink simply stops ringing their
+            // doorbells because it reads IReplicationTopology.CurrentPeers.
             return;
         }
 

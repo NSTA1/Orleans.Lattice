@@ -70,7 +70,7 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
     /// Event-driven notification that the tree registry has swapped the source
     /// tree's logical alias to a new physical identity
     /// <paramref name="newPhysicalTreeId"/> (shadow-cutover restore, resize,
-    /// reshard). The shipper rebinds to the new physical WAL immediately - resets
+    /// schema remediation, or operator alias change). The shipper rebinds to the new physical WAL immediately - resets
     /// its per-partition resume cursors and drops cached shard-grain references so
     /// its next pump tick tails the new source log from its start - without
     /// reading the registry. This is the primary rebind path; the shipper's

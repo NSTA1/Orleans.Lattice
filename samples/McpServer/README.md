@@ -18,9 +18,11 @@ surface:
 > which the discovery core consults for every group tool when it builds the
 > tool list and again when a tool is called; `RequireAuthorization = false`
 > does not lift that gate. As written, the agent is offered only the
-> `lattice_capabilities` meta-tool, so the run cannot complete property 1 (its
-> `lattice_data_get` call names a tool the session does not offer). Property 2
-> holds either way. Registering `AllowAllMcpAuthorizer` (or your own
+> `lattice_capabilities` meta-tool, so the run cannot complete property 1: its
+> `lattice_data_get` call names a tool the session does not offer, which the MCP
+> server answers with a protocol error, so the client throws and the run ends
+> there, before the anonymous-caller act. Property 2 still holds; the run just
+> never reaches the step that shows it. Registering `AllowAllMcpAuthorizer` (or your own
 > `ILatticeApiMcpAuthorizer`) is the missing step for the agent journey below.
 
 Everything runs in one process for convenience, but the client talks to the
@@ -37,8 +39,8 @@ dotnet run --project samples/McpServer/McpServer.csproj
 The sample seeds an `agent` subject with a full-access grant on a demo tree and
 prints the agent's discovered tool set. It is written to then print a live
 `lattice_data_get` result and show the anonymous caller being offered zero
-tools before it exits, but as written the data call is refused - see the known
-issue above. It listens on
+tools before it exits, but as written the data call fails and the run ends
+there - see the known issue above. It listens on
 `http://localhost:5290` over plain HTTP to stay dependency-free.
 
 Authorization on the endpoint is disabled purely to keep the sample one-command

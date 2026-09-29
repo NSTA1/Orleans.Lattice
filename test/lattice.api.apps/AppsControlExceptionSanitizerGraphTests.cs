@@ -52,4 +52,36 @@ public sealed class AppsControlExceptionSanitizerGraphTests
         Assert.That(AppsControlExceptionSanitizer.TryRewrite(deep, "crm", out var sanitized), Is.True);
         Assert.That(sanitized!.InnerException, Is.Null);
     }
+
+    [Test]
+    public void TryRewrite_treats_a_graph_too_wide_to_hold_as_unsafe()
+    {
+        // The deep case above never fills the pending stack: a linear chain pops one exception
+        // and pushes its single inner, so the stack holds one entry throughout and it is the
+        // inspection budget that stops the walk. Only breadth exhausts the stack, so an
+        // aggregate wider than it is the sole input that reaches the capacity arm - and a walk
+        // that cannot hold the whole graph cannot certify it clean either.
+        var wide = new AggregateException(
+            Enumerable.Range(0, 64).Select(i => (Exception)new InvalidOperationException($"branch {i}")).ToArray());
+
+        Assert.That(AppsControlExceptionSanitizer.TryRewrite(wide, "crm", out var sanitized), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(sanitized!.InnerException, Is.Null);
+            Assert.That(sanitized, Is.TypeOf<InvalidOperationException>());
+        });
+    }
+
+    [Test]
+    public void TryRewrite_leaves_a_wide_but_holdable_aggregate_alone()
+    {
+        // Anti-vacuity for the case above: it fixes the boundary on the safe side, so a walk
+        // that refused every aggregate - or one whose stack was a single slot - would fail here
+        // while still passing every refusal test in this fixture.
+        var holdable = new AggregateException(
+            Enumerable.Range(0, 8).Select(i => (Exception)new InvalidOperationException($"branch {i}")).ToArray());
+
+        Assert.That(AppsControlExceptionSanitizer.TryRewrite(holdable, "crm", out var sanitized), Is.False);
+        Assert.That(sanitized, Is.Null);
+    }
 }

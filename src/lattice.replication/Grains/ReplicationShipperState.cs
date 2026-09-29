@@ -16,8 +16,9 @@ internal sealed class ReplicationShipperState
     /// <summary>
     /// Highest HLC of any successfully shipped and acknowledged entry
     /// for this (tree, peer). The cursor advances strictly to
-    /// ReplicationAck.HighestAppliedHlc on a positive ack and is the
-    /// authoritative resume point on activation.
+    /// ReplicationAck.HighestAppliedHlc on a positive ack and is retained
+    /// for reporting and WAL-GC registration; per-partition sequence
+    /// cursors are the authoritative activation resume points.
     /// </summary>
     [Id(0)]
     public HybridLogicalClock Cursor { get; set; } = HybridLogicalClock.Zero;
@@ -87,10 +88,11 @@ internal sealed class ReplicationShipperState
     /// The physical tree id this shipper's per-partition cursors are bound to,
     /// resolved from the logical tree alias. A logical tree can be repointed to
     /// a new physical tree by a registry alias swap (shadow-cutover restore,
-    /// resize, or reshard); WAL shards are keyed by the physical id, so when the
+    /// resize or schema remediation); WAL shards are keyed by the physical id, so when the
     /// resolved physical id changes the persisted <see cref="PartitionCursors"/>
     /// are absolute offsets into the retired log and must be discarded. The
-    /// shipper re-resolves the alias each pump and, on a mismatch, resets the
+    /// shipper normally rebinds from the alias-change notification and also
+    /// performs a periodic backstop resolve; on a mismatch it resets the
     /// cursors and rebinds to the new physical WAL so shipping resumes from the
     /// new source's log start (the peer's LWW / HLC merge makes the re-ship
     /// idempotent).

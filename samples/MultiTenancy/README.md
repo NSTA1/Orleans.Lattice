@@ -21,7 +21,8 @@ The program walks four acts:
 1. **Tenant tree naming.** A tenant-scoped tree id self-describes its owner:
    `LatticeTenantTrees.Compose(tenant, name)` yields `t/{tenant}/{name}`, and
    `TryGetTenant` reverses it. This structural prefix is what the isolation gate
-   checks - a caller in tenant `acme` can only ever name `t/acme/*`.
+   checks - a caller acting as tenant `acme` reaches only `t/acme/*` unless another
+   tenant grants it access.
 2. **Tenant lifecycle as a platform operator.** A bootstrap administrator
    creates two tenants and reads back their lifecycle status and the admin
    subjects each was seeded with - `acme` is handed to an explicit delegated

@@ -8,6 +8,7 @@ gRPC unary push transport for [`Orleans.Lattice.Replication`](https://www.nuget.
 - **Copy-free framing** - batches serialize straight into gRPC's buffer writer with no intermediate per-batch payload buffer (the marshaller's only per-call allocation is a small wrapper object).
 - **Canonical wire format** - reuses the same `IReplicationBatchEncoder` and versioned Orleans serialization as the rest of Lattice, so encoders never diverge between transport and core.
 - **Drop-in transport** - registers as the replication transport binding; no changes to producer, shipper, apply, or topology code.
+- **One peer map for every replication call** - the same registration carries snapshot bootstrap, the anti-entropy peer probes, and cross-cluster saga control to each peer, and the endpoint mapping serves the matching receiver routes.
 
 ## Documentation
 

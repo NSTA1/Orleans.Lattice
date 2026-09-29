@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Serialization;
 
@@ -70,22 +71,24 @@ public sealed partial class RepoContextAnnIndexSweepServiceTests
             runAuthority ?? Substitute.For<IRepoIndexRunAuthority>(),
             logger ?? NullLogger<RepoContextAnnIndexSweepService>.Instance);
 
-    /// <summary>Spins until <paramref name="condition"/> holds or the budget runs out.</summary>
-    private static async Task<bool> WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)
-    {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
+    /// <summary>
+    /// Spins until <paramref name="condition"/> holds or the budget runs out,
+    /// routed to the shared <see cref="TestPoll"/>. The 10-second budget and
+    /// 15ms cadence are carried over verbatim; what changes is that the deadline
+    /// is monotonic rather than derived from <see cref="DateTime.UtcNow"/>, so a
+    /// wall-clock step cannot shorten or extend it under a waiting barrier.
+    /// <paramref name="cancellationToken"/> is still honoured, so an aborted
+    /// test tears the wait down rather than sitting out the budget.
+    /// </summary>
+    private static Task<bool> WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)
+        => TestPoll.TryUntilAsync(
+            () =>
             {
-                return true;
-            }
-
-            await Task.Delay(15, cancellationToken).ConfigureAwait(false);
-        }
-
-        return condition();
-    }
+                cancellationToken.ThrowIfCancellationRequested();
+                return condition();
+            },
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromMilliseconds(15));
 
     /// <summary>A structural tree that lists the supplied repository markers.</summary>
     private static IGrainFactory GrainFactoryListing(params string[] repoIds)

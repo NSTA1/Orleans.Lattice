@@ -5,10 +5,10 @@
 #
 # A single, restart-durable image that composes the already-shipped Lattice
 # seams (core silo + file/Azure WAL + MCP binding + repository-context tools +
-# Onyx embedding client + membership/auth) behind an environment-selected
-# durability profile. The container's ONLY application listener is the MCP
-# endpoint (plus HTTP health probes, and in the azure profile the scaling
-# scrape); no gRPC facade and no Explorer UI are bundled.
+# embedding client + membership/auth) behind an environment-selected durability
+# profile. The container's ONLY application listener is the MCP endpoint (plus
+# HTTP health probes, the Prometheus /metrics scrape, and in the azure profile
+# the scaling scrape); no gRPC facade and no Explorer UI are bundled.
 #
 # Build context is the REPOSITORY ROOT (the host project ProjectReferences the
 # just-built src/ bits rather than NuGet packages), so build from the repo root:

@@ -1,7 +1,8 @@
-# Prometheus scrape config - single-cluster topology (simulator-baseline, current-state-no-replication, skewed-key-shard-splits, replication-key-filter, event-log-with-ttl, observer-no-peer).
+# Prometheus scrape config - origin/single-cluster topology.
 # The silo container exposes the OpenTelemetry Prometheus AspNetCore exporter on :9090
 # under the /metrics path, binding meters orleans.lattice, orleans.lattice.replication,
-# and vehicle_fleet_simulator.sink.
+# vehicle_fleet_simulator.sink, vehicle_fleet_simulator.read_driver,
+# vehicle_fleet_simulator.write_driver, and vehicle_fleet_simulator.atomic_saga_driver.
 
 global:
   scrape_interval: 5s

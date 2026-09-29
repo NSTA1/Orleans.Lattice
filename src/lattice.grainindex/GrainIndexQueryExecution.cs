@@ -8,8 +8,9 @@ public enum GrainIndexQueryExecution
 {
     /// <summary>
     /// A durable server-side cursor, checkpointed after every page. The default:
-    /// a long scan survives silo failovers, client restarts, and shard splits,
-    /// and only one page is ever in flight, so a large result set never
+    /// a long scan survives silo failovers and shard splits while the caller keeps
+    /// enumerating it. The cursor id is not exposed, so a restarted caller starts a
+    /// new query. Only one page is ever in flight, so a large result set never
     /// materialises client-side.
     /// </summary>
     DurableCursor = 0,
@@ -23,10 +24,11 @@ public enum GrainIndexQueryExecution
     Stream = 1,
 
     /// <summary>
-    /// A durable cursor served from a tree-wide snapshot captured when the query
-    /// starts, so every page sees the same index state and concurrent index
-    /// maintenance cannot make a grain appear twice or not at all across page
-    /// boundaries. The snapshot is over the <i>index</i>, not over grain state.
+    /// A durable cursor served from a tree snapshot captured when each key range
+    /// begins scanning, so every page within that range sees the same index state
+    /// and concurrent index maintenance cannot make a grain appear twice or not at
+    /// all across that range's page boundaries. The snapshot is over the
+    /// <i>index</i>, not over grain state.
     /// </summary>
     SnapshotCursor = 2,
 }

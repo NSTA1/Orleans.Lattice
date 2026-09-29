@@ -215,6 +215,13 @@ internal sealed class LatticeCrossTreeTxGrain(
             // system that holds every participating tree at once.
             ThrowIfParticipantClusterIdsDisagree(participants);
 
+            // Each sub-saga applies its legs under the prepared scope, which
+            // bypasses admission control by design, so a fresh admission is the
+            // only place each tree's write-size bounds and admission caps can be
+            // applied - and the only place an oversized leg can be refused before
+            // anything is staged, as the single-tree atomic entry points do.
+            await EnforceParticipantWriteBoundsAsync(participants);
+
             // Empty cross-tree batch (no trees, or every tree empty): vacuous
             // commit. Nothing to stage, decide, or finalize.
             if (participants.Count == 0)
@@ -819,6 +826,156 @@ internal sealed class LatticeCrossTreeTxGrain(
                 + "for one participating tree silently defeats the cluster-wide value the other trees "
                 + "inherit. Configure ClusterId cluster-wide (AddLatticeReplication does this) and remove "
                 + "the per-tree override, or do not span these trees in one cross-tree write.");
+        }
+    }
+
+    /// <summary>
+    /// Applies every participating tree's optional write-size bounds
+    /// (<see cref="LatticeOptions.MaxKeyLength"/> /
+    /// <see cref="LatticeOptions.MaxValueSizeBytes"/>) and admission caps
+    /// (<see cref="LatticeOptions.MaxLiveKeys"/> /
+    /// <see cref="LatticeOptions.MaxEstimatedBytes"/>, plus the advisory
+    /// ceilings) on a fresh admission, before anything is staged, persisted, or
+    /// dispatched - the checks the single-tree <c>SetManyAtomicAsync</c> entry
+    /// points apply. Every tree's size bounds are checked before any tree's caps,
+    /// so an oversized leg is always reported as the
+    /// <see cref="ArgumentException"/> it is. A tree whose slice only deletes is
+    /// not admission-checked, because deletes can only shrink it.
+    /// <para>
+    /// Without this a cross-tree write was the one batch write that never met a
+    /// cap: the sub-sagas apply their legs under the prepared scope, which
+    /// bypasses admission control, and an oversized leg surfaced only once the
+    /// sagas were running, as an <see cref="InvalidOperationException"/> after
+    /// the prepare had been staged and rolled back.
+    /// </para>
+    /// <para>
+    /// Like the single-tree check, a cap is compared against the tree's cached
+    /// storage-usage aggregate, never a per-write fan-out, and fails open when
+    /// that aggregate cannot be read. With all four options unset (the default)
+    /// it costs no grain call.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentException">A key or value exceeds its tree's bound.</exception>
+    /// <exception cref="LatticeQuotaExceededException">A tree with an upsert leg has reached an enforcing cap.</exception>
+    private async Task EnforceParticipantWriteBoundsAsync(List<CrossTreeParticipant> participants)
+    {
+        foreach (var participant in participants)
+        {
+            ValidateParticipantWriteSize(participant, optionsMonitor.Get(participant.TreeId));
+        }
+
+        foreach (var participant in participants)
+        {
+            if (HasUpsertLeg(participant))
+            {
+                await EnforceParticipantAdmissionAsync(participant.TreeId, optionsMonitor.Get(participant.TreeId));
+            }
+        }
+    }
+
+    private static void ValidateParticipantWriteSize(CrossTreeParticipant participant, LatticeOptions options)
+    {
+        if (options.MaxKeyLength is null && options.MaxValueSizeBytes is null)
+        {
+            return;
+        }
+
+        foreach (var (key, value) in participant.Entries)
+        {
+            if (options.MaxKeyLength is { } maxKeyLength && key.Length > maxKeyLength)
+            {
+                throw new ArgumentException(
+                    $"Key length {key.Length} in the cross-tree batch for tree '{participant.TreeId}' exceeds the configured LatticeOptions.MaxKeyLength of {maxKeyLength}.",
+                    "batches");
+            }
+
+            if (options.MaxValueSizeBytes is { } maxValueSizeBytes && value.Length > maxValueSizeBytes)
+            {
+                throw new ArgumentException(
+                    $"Value size {value.Length} bytes in the cross-tree batch for tree '{participant.TreeId}' exceeds the configured LatticeOptions.MaxValueSizeBytes of {maxValueSizeBytes}.",
+                    "batches");
+            }
+        }
+    }
+
+    private static bool HasUpsertLeg(CrossTreeParticipant participant)
+    {
+        if (participant.EntryDeletes is not { } deletes)
+        {
+            return participant.Entries.Count > 0;
+        }
+
+        for (var i = 0; i < participant.Entries.Count; i++)
+        {
+            if (i >= deletes.Count || !deletes[i])
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task EnforceParticipantAdmissionAsync(string treeId, LatticeOptions options)
+    {
+        // Foreign-origin (replication) and prepared (saga) turns bypass admission
+        // control everywhere, exactly as LatticeGrain.EnforceAdmissionControl does.
+        if (LatticeOriginContext.Current is not null || LatticePreparedContext.Current)
+        {
+            return;
+        }
+
+        var maxKeys = options.MaxLiveKeys;
+        var maxBytes = options.MaxEstimatedBytes;
+        var advisoryKeys = options.AdmissionAdvisoryLiveKeys;
+        var advisoryBytes = options.AdmissionAdvisoryBytes;
+        if (maxKeys is null && maxBytes is null && advisoryKeys is null && advisoryBytes is null)
+        {
+            return;
+        }
+
+        TreeStorageUsageReport report;
+        try
+        {
+            report = await grainFactory
+                .GetGrain<ILatticeStorageUsage>(treeId)
+                .GetReportAsync(forceRefresh: false, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Fail open, as the single-tree check does: a transient aggregator
+            // fault must never block or fail a write.
+            Logger.LogDebug(ex,
+                "Cross-tree saga {OperationId}: storage-usage aggregate for tree {TreeId} was unavailable; admission failing open.",
+                OperationId, treeId);
+            return;
+        }
+
+        var liveKeys = report.LiveKeys;
+        var estimatedBytes = report.TotalBytes;
+
+        if (advisoryKeys is { } advK && liveKeys >= advK)
+        {
+            LatticeMetrics.AdmissionWouldReject.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId), LatticeMetrics.DimensionKeys, LatticeTenantLabel.ForTree(treeId));
+        }
+        if (advisoryBytes is { } advB && estimatedBytes >= advB)
+        {
+            LatticeMetrics.AdmissionWouldReject.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId), LatticeMetrics.DimensionBytes, LatticeTenantLabel.ForTree(treeId));
+        }
+
+        if (maxKeys is { } capKeys && liveKeys >= capKeys)
+        {
+            LatticeMetrics.AdmissionRejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId), LatticeMetrics.DimensionKeys, LatticeTenantLabel.ForTree(treeId));
+            throw new LatticeQuotaExceededException(
+                $"Cross-tree write to tree '{treeId}' rejected: live key count {liveKeys} has reached the configured LatticeOptions.MaxLiveKeys cap of {capKeys}.",
+                treeId, LatticeQuotaExceededException.KeysDimension, liveKeys, capKeys);
+        }
+        if (maxBytes is { } capBytes && estimatedBytes >= capBytes)
+        {
+            LatticeMetrics.AdmissionRejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId), LatticeMetrics.DimensionBytes, LatticeTenantLabel.ForTree(treeId));
+            throw new LatticeQuotaExceededException(
+                $"Cross-tree write to tree '{treeId}' rejected: estimated footprint {estimatedBytes} bytes has reached the configured LatticeOptions.MaxEstimatedBytes cap of {capBytes} bytes.",
+                treeId, LatticeQuotaExceededException.BytesDimension, estimatedBytes, capBytes);
         }
     }
 

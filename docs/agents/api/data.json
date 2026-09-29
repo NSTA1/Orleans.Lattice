@@ -849,10 +849,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#CrdtWriteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "The code documents individual CRDT convergence semantics but not a uniform transport retry idempotency rule for CrdtWrite.",
-        "required_source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The unified RPC carries no operation id and dispatches to Op-specific mutations; counter and sequence verbs apply another mutation on replay, while set-add style verbs converge by their CRDT merge semantics.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#LatticeDataApiGrpcService.DispatchCrdtWriteAsync"
       },
       "concurrency": {
         "rule": "Each CRDT write routes through the typed accessor and the engine rejects mode mismatches or an OR-Map tree with no registered map shape.",
@@ -927,10 +926,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#DeleteAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "Point delete has no documented idempotency key or replay contract beyond returning whether a live value existed and was removed.",
-        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
-        "issue": 3636
+        "idempotent": "conditional",
+        "basis": "The first successful delete writes an LWW tombstone and returns true, while a repeat after that tombstone short-circuits as absent and returns false without replaying the original response.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#BPlusLeafGrain.DeleteCoreAsync"
       },
       "concurrency": {
         "rule": "Deleting from an unknown tree is a documented no-op that must still run behind the delete gate.",
@@ -1005,10 +1003,9 @@
         "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#DeleteRangeAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "Range delete has no documented caller-supplied idempotency key or replay contract.",
-        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
-        "issue": 3636
+        "idempotent": false,
+        "basis": "The request has no operation id or resume token and each invocation drains the current half-open range, so a replay can produce a different DeletedCount and can tombstone keys inserted into the range after the first call.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeGrain.cs#LatticeGrain.DeleteRangeAsync"
       },
       "concurrency": {
         "rule": "Range delete is all-or-nothing across its span for authorization; partial authorization tombstones nothing.",
@@ -1237,10 +1234,9 @@
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#SetAsync"
       },
       "idempotency": {
-        "status": "uncertain",
-        "reason": "Point set has no documented idempotency key or replay contract at the API layer.",
-        "required_source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs",
-        "issue": 3636
+        "idempotent": false,
+        "basis": "The facade carries no operation id and each SetAsync invocation reaches a leaf commit that advances HLC, writes a new LWW value, and can publish another mutation even when the bytes match a previous call.",
+        "source": "src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs#BPlusLeafGrain.CommitSetAsync"
       },
       "concurrency": {
         "rule": "The operation routes through the same gated ILattice.SetAsync write path used by in-cluster clients.",

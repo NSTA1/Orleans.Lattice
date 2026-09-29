@@ -29,6 +29,10 @@ public interface ILatticeBackupIncrementalCaptureService
     /// <param name="cancellationToken">Cancels the capture.</param>
     /// <returns>The captured backup's id and manifest.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="KeyNotFoundException">The base backup id does not exist in the sink.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the base backup's scope.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeTenantAccessDeniedException">The active tenant is not admitted to start the capture.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeSnapshotReplayBudgetExceededException">The fallback full capture would exceed the configured snapshot replay budget.</exception>
     Task<LatticeBackupCaptureResult> CaptureIncrementalAsync(
         LatticeBackupIncrementalCaptureRequest request,
         CancellationToken cancellationToken = default);

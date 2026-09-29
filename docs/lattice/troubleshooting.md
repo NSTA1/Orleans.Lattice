@@ -274,10 +274,11 @@ Two things this is *not*:
 
 - **Bound what callers can write, at the edge.** Both guards are opt-in and
   both default to `null`; on `SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`,
-  `SetManyAsync` and the CRDT delta paths each throws an `ArgumentException`
-  before the write reaches storage, which is a far better failure than a
-  provider error deep in the persistence path. The bulk-load paths do not
-  check them:
+  `SetManyAsync`, `SetManyWherePredicateAsync`, the single-tree atomic batches
+  (checked before the saga starts) and the CRDT delta paths each throws an
+  `ArgumentException` before the write reaches storage, which is a far better
+  failure than a provider error deep in the persistence path. The bulk-load
+  paths do not check them:
 
   ```csharp verify
   siloBuilder.ConfigureLattice("orders", options =>
@@ -311,14 +312,14 @@ Two things this is *not*:
 - **Admission control caps total growth, not row size.** `MaxLiveKeys` and
   `MaxEstimatedBytes` make the tree refuse the write calls that check them -
   `SetAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`,
-  `SetManyWherePredicateAsync`, the single-tree atomic batches,
-  `ApplyCrdtDeltaAsync` and `ApplyCrdtDeltaManyAsync` - with a
+  `SetManyWherePredicateAsync`, the single-tree and cross-tree atomic
+  batches, `ApplyCrdtDeltaAsync` and `ApplyCrdtDeltaManyAsync` - with a
   typed, actionable `LatticeQuotaExceededException` once the whole tree
   reaches a ceiling, and the non-enforcing `AdmissionAdvisoryLiveKeys` /
   `AdmissionAdvisoryBytes` dry-run ceilings help you size them; see
   [Configuration](configuration.md#maxestimatedbytes). They bound the tree's
-  total footprint, not any single row, and the cross-tree atomic batches, the
-  bulk-load paths and `MergeAsync` do not check them, so they complement the
+  total footprint, not any single row, and the bulk-load paths and
+  `MergeAsync` do not check them, so they complement the
   fixes above rather than replace them.
 
 ---
@@ -645,7 +646,8 @@ Two secondary checks:
 | Scan latency climbing while live keys stay flat | [Slow scans](#slow-scans) |
 | `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity); from `GetManyAsync`, concurrent [atomic writes](atomic-writes.md) |
 | `LatticeTransactionOutcomeUnavailableException` on a read | [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception) - the transaction registry was unreachable for a key under a pending atomic write: transient, retry after a back-off |
-| `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry |
+| `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry. `SaturationSource` names the seam that refused, and the `source` tag on `orleans.lattice.saturation.refusals` counts refusals by seam |
+| `LatticeTreeOwnershipDeniedException` from an alias change | [Ownership-bounded aliasing](tree-registry.md#ownership-bounded-aliasing) - the registered `ITreeOwnershipGuard` refused the alias before anything was written; `Reason` carries the guard's explanation |
 | Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |
 | Read returns an overwritten value | [Stale reads and cache behaviour](#stale-reads-and-cache-behaviour) |

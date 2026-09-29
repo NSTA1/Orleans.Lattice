@@ -224,7 +224,7 @@ Two supporting habits, both free:
 |------|---------|
 | `docker-compose.rig.yml` | The isolated stack. No build sections, external volumes, rig-only image tags, non-8080 host port. |
 | `census-expectations.json` | Known-answer figures for the offline census, quoted by the epic from a specific backup. |
-| `sql/*.sql` | The offline grain-state census queries. Committed files, never shell-assembled SQL. `inspect-state.ps1` runs four of them (grain state by type, leaf counts, leaf snapshots by prefix, checkpoints by partition); the healing and shard-root queries are standalone, run by hand (the adoption report used them for its F-A and F-B findings). |
+| `sql/*.sql` | The offline grain-state census queries. Committed files, never shell-assembled SQL. `inspect-state.ps1` runs four of them (grain state by type, leaf counts, leaf snapshots by prefix, checkpoints by partition); the healing and shard-root queries are standalone, run by hand. The adoption report's F-A and F-B findings came from `healing-bootstrap.sql`, `healing-decisions.sql` and `shard-root-count-by-tree.sql`; `shard-root-topology-integrity.sql`, added after it, checks that each shard root's persisted leaf flag agrees with the root node it names. |
 | `scripts/parameters.ps1` | Default parameters and the isolation contract. |
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides. |
 | `scripts/_rig-helpers.ps1` | Pure helpers: config, the isolation guard, the file-WAL framing walk, statistics, log counters. |

@@ -17,6 +17,7 @@ builder.Services.AddOpenTelemetry()
         .AddMeter("orleans.lattice.backup")       // Backup (only if the backup package is registered)
         .AddMeter("orleans.lattice.scaling")      // Scaling (only if the scaling package is registered)
         .AddMeter("orleans.lattice.tenancy")      // Tenancy (only if the tenancy package is registered)
+        .AddMeter("Orleans.Lattice.Api.Mcp.RepoContext") // Overview's exact-KNN panels (only if the repository-context package is hosted)
         .AddMeter("Microsoft.Orleans")            // Orleans runtime: activations, activation latency, directory, messaging
         .AddMeter("System.Runtime")               // .NET runtime: GC heap, allocation, pause time, working set, thread pool
         .AddPrometheusExporter());
@@ -36,6 +37,7 @@ registers only the `orleans.lattice` family exports no runtime telemetry at all.
 | `orleans.lattice.backup` | the backup package, only when registered on the silo | `Backup` |
 | `orleans.lattice.scaling` | the scaling package, only when registered on the silo | `Scaling` |
 | `orleans.lattice.tenancy` | the tenancy package, only when registered on the silo | `Tenancy` |
+| `Orleans.Lattice.Api.Mcp.RepoContext` | the repository-context MCP package, only where it is hosted | the three exact-KNN panels on `Overview` |
 | `Microsoft.Orleans` | the Orleans runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 | `System.Runtime` | the .NET runtime, always | none of the bundled dashboards; registered for operational diagnosis |
 
@@ -89,28 +91,35 @@ large keyspace.
 
 Retrieve only the kinds relevant to a deployment. A local-only silo typically imports `Overview`, `CommitPath`, and `AtomicWrites` (and `MaterialisedViews` if it registers any views); a multi-cluster deployment adds `Replication`.
 
-```csharp
+```csharp verify
+using System.IO;
 using Orleans.Lattice.Dashboards;
 
-var kinds = new[]
+public static class DashboardProvisioning
 {
-    LatticeDashboardKind.Overview,
-    LatticeDashboardKind.CommitPath,
-    LatticeDashboardKind.AtomicWrites,
-    LatticeDashboardKind.MaterialisedViews, // add when materialised views are registered
-    // LatticeDashboardKind.Replication, // add when replication is registered
-    // LatticeDashboardKind.ReplicationGrpc, // add when the gRPC replication transport is registered
-    // LatticeDashboardKind.Authorization, // add when the auth / membership packages are registered
-    // LatticeDashboardKind.Backup, // add when the backup package is registered
-    // LatticeDashboardKind.Scaling, // add when the scaling package is registered
-    // LatticeDashboardKind.Tenancy, // add when the tenancy package is registered
-    // LatticeDashboardKind.GrainIndex, // add when the grain-index package is registered
-};
+    public static void WriteSelectedDashboards(string directory)
+    {
+        var kinds = new[]
+        {
+            LatticeDashboardKind.Overview,
+            LatticeDashboardKind.CommitPath,
+            LatticeDashboardKind.AtomicWrites,
+            LatticeDashboardKind.MaterialisedViews, // add when materialised views are registered
+            // LatticeDashboardKind.Replication, // add when replication is registered
+            // LatticeDashboardKind.ReplicationGrpc, // add when the gRPC replication transport is registered
+            // LatticeDashboardKind.Authorization, // add when the auth / membership packages are registered
+            // LatticeDashboardKind.Backup, // add when the backup package is registered
+            // LatticeDashboardKind.Scaling, // add when the scaling package is registered
+            // LatticeDashboardKind.Tenancy, // add when the tenancy package is registered
+            // LatticeDashboardKind.GrainIndex, // add when the grain-index package is registered
+        };
 
-foreach (var kind in kinds)
-{
-    string json = LatticeDashboards.GetGrafanaDashboardJson(kind);
-    File.WriteAllText($"./grafana/dashboards/{kind}.json", json);
+        foreach (var kind in kinds)
+        {
+            string json = LatticeDashboards.GetGrafanaDashboardJson(kind);
+            File.WriteAllText(Path.Combine(directory, $"{kind}.json"), json);
+        }
+    }
 }
 ```
 

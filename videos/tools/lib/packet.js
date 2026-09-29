@@ -41,8 +41,8 @@ export function newWords(text, known) {
 
 /**
  * The moments to listen to, cue by cue, from narration's manifest (cues.json):
- * a take picked by ear, a clip no recogniser heard exactly, one made more
- * than once before it was, words the series voice has not said before, and
+ * a take picked by ear, a clip not heard exactly by both recognisers or with
+ * a pace or sound problem, one made more than once before it was, words the series voice has not said before, and
  * lines that changed since the published cut. `changed` holds cue numbers.
  */
 export function listenAt(manifest, { known = "", changed = new Set() } = {}) {

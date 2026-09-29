@@ -143,7 +143,7 @@ one of two `GrainIndexProjectionMode` values:
 | Mode | Behaviour |
 |---|---|
 | `Synchronous` (default) | The entries are written as part of the grain's write path. The grain's own state is committed first, and a failed index write on `WriteStateAsync` or `ClearStateAsync` is thrown to the caller (on activation or a state re-read it is logged instead); the outbox entry recorded beforehand is retried until it lands either way. |
-| `Eventual` | The index write is recorded durably in the outbox during the write path but applied afterwards by the outbox drain, so the caller neither waits for it nor sees its failures. A query issued straight after the write may not see the new entries until the next drain pass. |
+| `Eventual` | The index write is recorded durably in the outbox during the write path but applied afterwards by the outbox drain, so the caller neither waits for it nor sees its failures. A query issued straight after the write may not see the new entries until the next drain pass. `ClearStateAsync` is the exception: it applies its removal on the write path under either mode and throws a failure to the caller. The activation keeps diffing later writes against the entries it last confirmed itself, which a drained write does not update, so a value the drain published and a later write from the same activation replaced can leave its entry behind; see [Consistency](architecture.md#consistency). |
 
 ### `GrainIndexOutboxOptions`
 

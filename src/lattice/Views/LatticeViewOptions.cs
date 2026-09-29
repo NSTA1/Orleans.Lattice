@@ -117,8 +117,8 @@ public sealed class LatticeViewOptions
     /// <summary>
     /// Default <see cref="HistoryHybridFullValueWindow"/> (5 minutes): under
     /// <see cref="HistoryRetentionMode.Hybrid"/>, a revision keeps its full value
-    /// bytes only while its apply-time age is within this window; older revisions
-    /// are shaped to metadata.
+    /// bytes when its apply-time age is within this window; rows are not later
+    /// reshaped when they age past it.
     /// </summary>
     public static readonly TimeSpan DefaultHistoryHybridFullValueWindow = TimeSpan.FromMinutes(5);
 
@@ -355,11 +355,11 @@ public sealed class LatticeViewOptions
     /// Under <see cref="HistoryRetentionMode.Hybrid"/> on a durable history view,
     /// the maximum apply-time age of a revision for which the maintainer keeps the
     /// full LWW value bytes; an older revision (drained from a backlog or a
-    /// catch-up replay) is shaped to metadata only. Bounds full-byte storage to the
-    /// recent tail while keeping an unbounded metadata-only timeline behind it.
-    /// A non-positive value degrades hybrid to metadata-only. Ignored by the other
-    /// retention modes and by non-history views. Defaults to
-    /// <see cref="DefaultHistoryHybridFullValueWindow"/>.
+    /// catch-up replay) is shaped to metadata only. The choice is made once when
+    /// the row is written, and rows that kept bytes are not later trimmed to
+    /// metadata when they age past this window. A non-positive value degrades
+    /// hybrid to metadata-only. Ignored by the other retention modes and by
+    /// non-history views. Defaults to <see cref="DefaultHistoryHybridFullValueWindow"/>.
     /// </summary>
     public TimeSpan HistoryHybridFullValueWindow { get; set; } = DefaultHistoryHybridFullValueWindow;
 }

@@ -2230,20 +2230,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the durable view registration returns immediately when the same registration already exists.",
+        "source": "src/lattice/Views/ViewRegistryGrain.cs#RegisterAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateViewAsync"
+        "idempotent": true,
+        "basis": "The runtime view registry returns without writing when the existing registration equals the requested registration.",
+        "source": "src/lattice/Views/ViewRegistryGrain.cs#RegisterAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -2294,7 +2288,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "concurrency": {
-        "rule": "Trees that source materialised views are rejected.",
+        "rule": "Rejected while the tree is the source of a materialised view, while another tree aliases it, when its alias targets a tree it does not own, or while a resize, restore or remediation is changing its alias.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
       },
       "sources": [
@@ -3365,20 +3359,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Safe to retry after an interrupted shard purge, which is re-driven; once PurgeComplete is persisted a repeat throws InvalidOperationException even if the registry unregister that follows it failed, so after an ambiguous failure read the deletion status and treat an already-purged status as success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Irreversible hard purge has no retry-safe contract.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PurgeTreeAsync"
+        "idempotent": "conditional",
+        "basis": "Shard clearing re-runs until PurgeComplete is persisted, after which a repeated call throws InvalidOperationException instead of returning the original success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "concurrency": {
         "rule": "confirm must be true before irreversible purge.",
@@ -3423,20 +3411,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not retry after an ambiguous failure; a repeated rebuild can advance to another view generation or rebuild in place from later source state.",
+        "source": "src/lattice/Views/ViewMaintainerGrain.cs#RebuildAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether a repeated rebuild is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Shadow-swap rebuild from current source state with no stated retry contract.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RebuildViewAsync"
+        "idempotent": false,
+        "basis": "RebuildAsync targets ActiveGeneration plus one and SwapToShadowAsync persists a new ActiveGeneration on each completed locally derived rebuild.",
+        "source": "src/lattice/Views/ViewMaintainerGrain.ShadowSwap.cs#SwapToShadowAsync"
       },
       "concurrency": {
         "rule": "A complete new generation is built and the active generation is flipped in one durable commit; readers never observe a half-built view and the source keeps serving reads and writes.",
@@ -3477,20 +3459,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; after the source tail is trimmed the live-range check leaves the outcome as NoOp.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.WalMove.cs#ReclaimMovedWalSourceAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Irreversible finalisation has no retry-safe contract.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
+        "idempotent": true,
+        "basis": "ReclaimMovedWalSourceAsync trims only when the source provider still has a live retained range, otherwise it returns NoOp without trimming.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeAdminGrain.WalMove.cs#ReclaimMovedWalSourceAsync"
       },
       "concurrency": {
         "rule": "Refused if the source provider is the live placement.",
@@ -3627,23 +3603,17 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry is safe until recovery state is durably cleared; after success a repeated call fails with InvalidOperationException because the tree is not deleted.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#RecoverPhysicalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+        "idempotent": "conditional",
+        "basis": "RecoverPhysicalAsync re-runs before IsDeleted is cleared, but a repeat after a successful clear throws because the tree is no longer deleted.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#RecoverPhysicalAsync"
       },
       "concurrency": {
-        "rule": "Available within the soft-delete recovery window.",
+        "rule": "Available within the soft-delete recovery window; on an aliased tree it recovers the live copy the delete pinned, and a live resized tree is not deleted, so recovering it is rejected.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
       },
       "sources": [
@@ -4013,20 +3983,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-        "issue": 3635
+        "safe": false,
+        "policy": "Do not retry after an ambiguous failure; the target version is advanced before migration starts and a repeated call with the same target can fail the monotonic target-version guard.",
+        "source": "src/lattice.schema/LatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-          "issue": 3635
-        },
-        "basis": "Delegated schema facade operation.",
-        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceAndMigrateAsync"
+        "idempotent": false,
+        "basis": "AdvanceAndMigrateAsync performs a monotonic target-version advance before it starts migration, so the same request can be rejected on repeat after the advance has persisted.",
+        "source": "src/lattice.schema/LatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
       },
       "concurrency": {
         "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
@@ -4068,20 +4032,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry can be treated as already advanced only when the repeat fails the monotonic target-version guard for the same target version.",
+        "source": "src/lattice.schema/LatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-          "issue": 3635
-        },
-        "basis": "Delegated schema facade operation.",
-        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync"
+        "idempotent": "conditional",
+        "basis": "AdvanceTargetVersionAsync persists the higher target once, and a repeat with the same target is rejected because it is no longer greater than the current target.",
+        "source": "src/lattice.schema/LatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
       },
       "concurrency": {
         "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
@@ -4123,20 +4081,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry by reissuing the same request only if the caller treats a false return as already cleared.",
+        "source": "src/lattice.schema/LatticeSchemaPolicyStore.cs#ClearPolicyAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-          "issue": 3635
-        },
-        "basis": "Delegated schema facade operation.",
-        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearPolicyAsync"
+        "idempotent": "conditional",
+        "basis": "ClearPolicyAsync delegates to DeleteAsync, so the stored policy remains absent on repeat but the boolean result can change after the first delete.",
+        "source": "src/lattice.schema/LatticeSchemaPolicyStore.cs#ClearPolicyAsync"
       },
       "concurrency": {
         "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
@@ -4178,20 +4130,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry by reissuing the same request only if the caller treats a false return as already cleared.",
+        "source": "src/lattice.schema/LatticeSchemaVersionStore.cs#ClearConfigAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-          "issue": 3635
-        },
-        "basis": "Delegated schema facade operation.",
-        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ClearVersionConfigAsync"
+        "idempotent": "conditional",
+        "basis": "ClearConfigAsync delegates to DeleteAsync, so the stored version config remains absent on repeat but the boolean result can change after the first delete.",
+        "source": "src/lattice.schema/LatticeSchemaVersionStore.cs#ClearConfigAsync"
       },
       "concurrency": {
         "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
@@ -4674,20 +4620,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the policy store writes the same policy value to the same key.",
+        "source": "src/lattice.schema/LatticeSchemaPolicyStore.cs#SetPolicyAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-          "issue": 3635
-        },
-        "basis": "Delegated schema facade operation.",
-        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetPolicyAsync"
+        "idempotent": true,
+        "basis": "SetPolicyAsync validates the policy and stores it with SetAsync under the governed tree id, so the same request leaves the same policy value stored.",
+        "source": "src/lattice.schema/LatticeSchemaPolicyStore.cs#SetPolicyAsync"
       },
       "concurrency": {
         "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
@@ -4729,20 +4669,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the version store writes the same config value to the same key.",
+        "source": "src/lattice.schema/LatticeSchemaVersionStore.cs#SetConfigAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs",
-          "issue": 3635
-        },
-        "basis": "Delegated schema facade operation.",
-        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#SetVersionConfigAsync"
+        "idempotent": true,
+        "basis": "SetConfigAsync stores the supplied version config with SetAsync under the governed tree id, so the same request leaves the same config value stored.",
+        "source": "src/lattice.schema/LatticeSchemaVersionStore.cs#SetConfigAsync"
       },
       "concurrency": {
         "rule": "Schema reads authorize Read; schema mutations authorize SchemaAdmin.",
@@ -4779,20 +4713,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; the registry overwrites the same retention fields and the facade reads back the effective policy.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetHistoryRetentionAsync"
+        "idempotent": true,
+        "basis": "SetHistoryRetentionAsync writes the requested retention mode and window ticks onto the registry entry, replacing the same fields on repeat.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "concurrency": {
         "rule": "Already-written rows keep their stamped shape.",
@@ -4824,6 +4752,10 @@
           "condition": "Facade precondition failed."
         },
         {
+          "error_id": "tree-ownership-denied",
+          "condition": "The registered ownership guard refuses the alias."
+        },
+        {
           "error_id": "cancelled",
           "condition": "Call cancellation."
         },
@@ -4833,28 +4765,23 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; setting the same alias overwrites the registry entry with the same physical tree id.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+        "idempotent": true,
+        "basis": "SetAliasAsync stores PhysicalTreeId on the logical tree's registry entry, so the same alias request leaves the same alias mapping.",
+        "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed.",
+        "rule": "Only one level of alias indirection is allowed, and the alias is refused while either tree is deleted or a delete of it is pending.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeAlias"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeAlias",
+        "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard"
       ]
     },
     {
@@ -4883,20 +4810,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": true,
+        "policy": "Retry by reissuing the same request; every applied dimension is overwritten with the same value and unapplied dimensions are skipped again.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeConfigAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeConfigAsync"
+        "idempotent": true,
+        "basis": "SetTreeConfigAsync applies each flagged registry override by replacing that dimension with the requested value, so reapplying the same partial update leaves the same configuration.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeConfigAsync"
       },
       "concurrency": {
         "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
@@ -5068,20 +4989,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry is safe until undo state is durably cleared; after success a repeated call fails with InvalidOperationException because no undoable resize remains.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeCoreAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether this operation is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "No idempotency contract is stated.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#UndoTreeResizeAsync"
+        "idempotent": "conditional",
+        "basis": "UndoResizeCoreAsync preserves retryability until ResetResizeState is persisted, but after that persisted clear a repeat is rejected because no resize remains to undo.",
+        "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#UndoResizeCoreAsync"
       },
       "concurrency": {
         "rule": "Available during resize or before pre-resize purge.",
@@ -5173,6 +5088,14 @@
       "retryable": false,
       "meaning": "Bulk-load target is not empty.",
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeNotEmptyException.cs#TreeNotEmptyException"
+    },
+    {
+      "id": "tree-ownership-denied",
+      "type": "LatticeTreeOwnershipDeniedException",
+      "grpc_status": "PermissionDenied",
+      "retryable": false,
+      "meaning": "The registered ITreeOwnershipGuard refused an alias assignment; the status message carries the guard's caller-safe reason.",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#InvokeAsync"
     }
   ]
 }
