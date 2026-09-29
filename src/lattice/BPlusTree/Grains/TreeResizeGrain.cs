@@ -69,6 +69,75 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private readonly SemaphoreSlim _undoIntentGate = new(1, 1);
 
+    /// <summary>
+    /// The resize fields the interleaved reads report, as last persisted.
+    /// </summary>
+    private readonly record struct DurableResize(
+        bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId)
+    {
+        public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
+    }
+
+    /// <summary>
+    /// The undo-intent fields the interleaved reads report, as last persisted.
+    /// </summary>
+    private readonly record struct DurableIntent(
+        string? RequestedOperationId, string? FailedOperationId, string? FailureMessage,
+        string? UndoneOperationId, DateTime? UndoneAtUtc);
+
+    // What the interleaved reads (RequestUndoAsync, GetUndoProgressAsync,
+    // IsIdleAsync) answer from. Every phase transition mutates the in-memory state
+    // first, then awaits WriteStateAsync, and reverts the mutation if that write
+    // fails - so an interleaved read of the live state can land inside that window
+    // and report a transition (a completion, say) that is then rolled back,
+    // breaking the documented monotonic completion guarantee. These copies move
+    // only when a write has succeeded, and are captured at activation once the
+    // persisted state has been read. Phase turns keep reading the live state.
+    private DurableResize? _durableResize;
+    private DurableIntent? _durableIntent;
+
+    private DurableResize DurableResizeState => _durableResize ??= CaptureResize();
+
+    private DurableIntent DurableIntentState => _durableIntent ??= CaptureIntent();
+
+    private DurableResize CaptureResize() => new(
+        state.State.InProgress, state.State.Complete, state.State.OperationId,
+        state.State.OldPhysicalTreeId, state.State.SnapshotTreeId);
+
+    private DurableIntent CaptureIntent() => new(
+        undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
+        undoIntent.State.FailureMessage, undoIntent.State.UndoneOperationId, undoIntent.State.UndoneAtUtc);
+
+    /// <inheritdoc />
+    protected override Task OnActivateCoreAsync(CancellationToken cancellationToken)
+    {
+        _durableResize = CaptureResize();
+        _durableIntent = CaptureIntent();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Persists <see cref="TreeResizeState"/> and, only once the write has
+    /// succeeded, publishes what was written to the interleaved reads.
+    /// </summary>
+    private async Task WriteResizeStateAsync()
+    {
+        var written = CaptureResize();
+        await state.WriteStateAsync();
+        _durableResize = written;
+    }
+
+    /// <summary>
+    /// Persists the undo-intent slot and, only once the write has succeeded,
+    /// publishes what was written to the interleaved reads.
+    /// </summary>
+    private async Task WriteUndoIntentAsync()
+    {
+        var written = CaptureIntent();
+        await undoIntent.WriteStateAsync();
+        _durableIntent = written;
+    }
+
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "resize-keepalive";
 
@@ -89,6 +158,20 @@ internal sealed class TreeResizeGrain(
         undoIntent.State.RequestedOperationId is { } requested
         && (state.State.InProgress || state.State.Complete)
         && string.Equals(requested, state.State.OperationId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// <see cref="UndoPending"/> as last persisted, for the interleaved reads.
+    /// </summary>
+    private bool DurableUndoPending
+    {
+        get
+        {
+            var resize = DurableResizeState;
+            return DurableIntentState.RequestedOperationId is { } requested
+                && (resize.InProgress || resize.Complete)
+                && string.Equals(requested, resize.OperationId, StringComparison.Ordinal);
+        }
+    }
 
     /// <inheritdoc />
     protected override string LogContext => $"tree {TreeId}";
@@ -220,7 +303,7 @@ internal sealed class TreeResizeGrain(
         state.State.NewMaxInternalChildren = newMaxInternalChildren;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -288,7 +371,7 @@ internal sealed class TreeResizeGrain(
         state.State.ShardIndices = shardIndices;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -384,14 +467,16 @@ internal sealed class TreeResizeGrain(
         // body reads the resize state and writes nothing but the separate intent
         // slot: the phase that holds the turn may be part-way through mutating
         // TreeResizeState, and a write of that row from here could persist the
-        // half-applied transition or lose to its ETag (issue 3923).
+        // half-applied transition or lose to its ETag (issue 3923). For the same
+        // reason it validates against the resize state as last persisted, not
+        // against a transition a phase has applied in memory and may yet revert.
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
-        if (!state.State.InProgress && !state.State.Complete)
+        var resize = DurableResizeState;
+        if (!resize.InProgress && !resize.Complete)
             throw new InvalidOperationException(NoResizeToUndoMessage());
 
-        if (state.State.OldPhysicalTreeId is null || state.State.SnapshotTreeId is null
-            || state.State.OperationId is not { } operationId)
+        if (!resize.HasUndoTargets || resize.OperationId is not { } operationId)
             throw new InvalidOperationException(
                 $"Resize state for tree '{TreeId}' is incomplete; cannot undo.");
 
@@ -413,7 +498,7 @@ internal sealed class TreeResizeGrain(
                 undoIntent.State.FailureMessage = null;
                 try
                 {
-                    await undoIntent.WriteStateAsync();
+                    await WriteUndoIntentAsync();
                 }
                 catch
                 {
@@ -444,9 +529,12 @@ internal sealed class TreeResizeGrain(
     }
 
     /// <inheritdoc />
-    public Task<ResizeUndoProgress> GetUndoProgressAsync() =>
-        Task.FromResult(new ResizeUndoProgress(
-            UndoPending, undoIntent.State.FailedOperationId, undoIntent.State.FailureMessage));
+    public Task<ResizeUndoProgress> GetUndoProgressAsync()
+    {
+        var intent = DurableIntentState;
+        return Task.FromResult(new ResizeUndoProgress(
+            DurableUndoPending, intent.FailedOperationId, intent.FailureMessage));
+    }
 
     /// <summary>
     /// Runs the phase-aware unwind for an accepted undo from inside a phase turn,
@@ -509,7 +597,7 @@ internal sealed class TreeResizeGrain(
             undoIntent.State.UndoneAtUtc = DateTime.UtcNow;
             try
             {
-                await undoIntent.WriteStateAsync();
+                await WriteUndoIntentAsync();
             }
             catch (Exception ex)
             {
@@ -543,7 +631,7 @@ internal sealed class TreeResizeGrain(
             undoIntent.State.FailureMessage = reason;
             try
             {
-                await undoIntent.WriteStateAsync();
+                await WriteUndoIntentAsync();
             }
             catch
             {
@@ -560,9 +648,9 @@ internal sealed class TreeResizeGrain(
     }
 
     private string NoResizeToUndoMessage() =>
-        undoIntent.State.UndoneOperationId is { } undone
+        DurableIntentState is { UndoneOperationId: { } undone } intent
             ? $"No resize exists for tree '{TreeId}' that can be undone. The most recent resize " +
-              $"(operation '{undone}') was already undone at {undoIntent.State.UndoneAtUtc:O}, so a " +
+              $"(operation '{undone}') was already undone at {intent.UndoneAtUtc:O}, so a " +
               "retried undo has nothing further to unwind."
             : $"No resize exists for tree '{TreeId}' that can be undone.";
 
@@ -649,7 +737,7 @@ internal sealed class TreeResizeGrain(
             ResetResizeState();
             try
             {
-                await state.WriteStateAsync();
+                await WriteResizeStateAsync();
             }
             catch
             {
@@ -728,7 +816,7 @@ internal sealed class TreeResizeGrain(
         ResetResizeState();
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -832,7 +920,7 @@ internal sealed class TreeResizeGrain(
         state.State.Phase = ResizePhase.Swap;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -902,7 +990,7 @@ internal sealed class TreeResizeGrain(
         state.State.Phase = ResizePhase.Reject;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -945,7 +1033,7 @@ internal sealed class TreeResizeGrain(
         state.State.Phase = ResizePhase.Cleanup;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -1018,7 +1106,7 @@ internal sealed class TreeResizeGrain(
         state.State.Complete = true;
         try
         {
-            await state.WriteStateAsync();
+            await WriteResizeStateAsync();
         }
         catch
         {
@@ -1044,7 +1132,7 @@ internal sealed class TreeResizeGrain(
         if (state.State.AliasReservationId is null)
         {
             state.State.AliasReservationId = $"resize:{Guid.NewGuid():N}";
-            try { await state.WriteStateAsync(); }
+            try { await WriteResizeStateAsync(); }
             catch { state.State.AliasReservationId = null; throw; }
         }
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
@@ -1056,7 +1144,7 @@ internal sealed class TreeResizeGrain(
         if (state.State.AliasReservationId is not { } id) return;
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).EndAliasChangeAsync(id);
         state.State.AliasReservationId = null;
-        try { await state.WriteStateAsync(); }
+        try { await WriteResizeStateAsync(); }
         catch { state.State.AliasReservationId = id; throw; }
     }
 
@@ -1071,15 +1159,28 @@ internal sealed class TreeResizeGrain(
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Answers from the resize state as last persisted: this read is interleaved,
+    /// and a completion a phase has applied in memory but not yet durably written
+    /// may still be reverted, which would make completion non-monotonic.
+    /// </remarks>
     public Task<bool> IsIdleAsync() =>
-        Task.FromResult(!state.State.InProgress);
+        Task.FromResult(!DurableResizeState.InProgress);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Answers from the resize state as last persisted, like every interleaved
+    /// read on this coordinator. That is also the safe direction for the WAL GC
+    /// that calls it: an undo's reset clears these ids in memory before its write,
+    /// and a live read inside that window would release a copy the resize still
+    /// names if the write then failed and reverted.
+    /// </remarks>
     public Task<bool> ReferencesPhysicalTreeAsync(string physicalTreeId)
     {
         ArgumentNullException.ThrowIfNull(physicalTreeId);
+        var resize = DurableResizeState;
         return Task.FromResult(
-            string.Equals(state.State.OldPhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
-            || string.Equals(state.State.SnapshotTreeId, physicalTreeId, StringComparison.Ordinal));
+            string.Equals(resize.OldPhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+            || string.Equals(resize.SnapshotTreeId, physicalTreeId, StringComparison.Ordinal));
     }
 }

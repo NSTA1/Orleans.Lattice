@@ -224,6 +224,115 @@ public partial class TreeResizeGrainTests
         await h.Reminders.DidNotReceive().UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
     }
 
+    // --- Interleaved reads answer from the persisted state, never from a
+    //     transition a phase has applied in memory but may still revert ---
+
+    [Test]
+    public async Task An_interleaved_status_read_does_not_report_a_completion_whose_write_is_still_pending()
+    {
+        var h = CreateUndoHarness(ResizePhase.Cleanup);
+        Assert.That(await h.Grain.IsIdleAsync(), Is.False, "precondition: the resize is in flight");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.State.BeforeWrite = async () => { entered.TrySetResult(); await release.Task; };
+        h.State.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        var completing = h.Grain.CompleteResizeAsync();
+        await entered.Task;
+
+        // The completion is applied in memory and awaiting its write.
+        Assert.That(h.State.State.InProgress, Is.False, "precondition: the transition is applied in memory");
+        var idleWhileHeld = await h.Grain.IsIdleAsync();
+        var progressWhileHeld = await h.Grain.GetUndoProgressAsync();
+
+        release.SetResult();
+        Assert.ThrowsAsync<InvalidOperationException>(() => completing);
+        var idleAfterRevert = await h.Grain.IsIdleAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(idleWhileHeld, Is.False,
+                "a completion that may still be rolled back must not be reported, or completion is not monotonic");
+            Assert.That(progressWhileHeld.Pending, Is.False);
+            Assert.That(idleAfterRevert, Is.False, "the write failed and the transition was reverted");
+            Assert.That(h.State.State.InProgress, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task An_interleaved_status_read_reports_a_completion_once_its_write_succeeds()
+    {
+        var h = CreateUndoHarness(ResizePhase.Cleanup);
+        Assert.That(await h.Grain.IsIdleAsync(), Is.False, "precondition: the resize is in flight");
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.State.BeforeWrite = () => release.Task;
+
+        var completing = h.Grain.CompleteResizeAsync();
+        var idleWhileHeld = await h.Grain.IsIdleAsync();
+        release.SetResult();
+        await completing;
+        var idleAfter = await h.Grain.IsIdleAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(idleWhileHeld, Is.False);
+            Assert.That(idleAfter, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task An_interleaved_progress_read_does_not_report_an_undo_whose_intent_write_is_still_pending()
+    {
+        var h = CreateUndoHarness(ResizePhase.Swap);
+        Assert.That((await h.Grain.GetUndoProgressAsync()).Pending, Is.False, "precondition");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Intent.BeforeWrite = async () => { entered.TrySetResult(); await release.Task; };
+        h.Intent.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        var requesting = h.Grain.RequestUndoAsync();
+        await entered.Task;
+        Assert.That(h.Intent.State.RequestedOperationId, Is.EqualTo(UndoSnapshotSuffix),
+            "precondition: the intent is applied in memory");
+        var pendingWhileHeld = (await h.Grain.GetUndoProgressAsync()).Pending;
+
+        release.SetResult();
+        Assert.ThrowsAsync<InvalidOperationException>(() => requesting);
+        var pendingAfter = (await h.Grain.GetUndoProgressAsync()).Pending;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pendingWhileHeld, Is.False,
+                "an undo whose intent may yet fail to persist must not be reported as accepted");
+            Assert.That(pendingAfter, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task An_interleaved_undo_request_validates_against_the_persisted_resize_state()
+    {
+        // A resize whose initiation is applied in memory but not yet durable must
+        // not be accepted as undoable: the write may still fail and revert it.
+        var h = CreateUndoHarness(phase: null);
+        Assert.That(await h.Grain.IsIdleAsync(), Is.True, "precondition: no resize persisted");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.State.BeforeWrite = async () => { entered.TrySetResult(); await release.Task; };
+        h.State.ThrowOnWrite = new InvalidOperationException("storage unavailable");
+
+        var initiating = h.Grain.InitiateResizeStateAsync(256, 64);
+        await entered.Task;
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.RequestUndoAsync());
+
+        release.SetResult();
+        Assert.ThrowsAsync<InvalidOperationException>(() => initiating);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.StartWith("No resize exists"));
+            Assert.That(h.Intent.WriteCount, Is.Zero);
+        });
+    }
+
     // --- The phase loop runs the unwind, from every phase ---
 
     [TestCase(1)] // ResizePhase.Swap
@@ -260,7 +369,7 @@ public partial class TreeResizeGrainTests
         await snapshot.DidNotReceive().RunSnapshotSliceAsync();
         await snapshot.Received(1).AbortAsync(UndoSnapshotSuffix);
         await h.GrainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+            .Received(1).DiscardDerivedPhysicalTreeAsync();
         Assert.That(h.State.State.InProgress, Is.False);
     }
 
@@ -286,7 +395,7 @@ public partial class TreeResizeGrainTests
         await registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
         await snapshot.Received(1).AbortAsync(UndoSnapshotSuffix);
         await h.GrainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+            .Received(1).DiscardDerivedPhysicalTreeAsync();
         Assert.Multiple(() =>
         {
             Assert.That(h.State.State.Phase, Is.EqualTo(ResizePhase.Snapshot), "the alias must never have swapped");
