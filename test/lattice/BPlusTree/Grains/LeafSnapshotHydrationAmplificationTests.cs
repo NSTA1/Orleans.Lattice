@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -35,6 +36,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public sealed class LeafSnapshotHydrationAmplificationTests
 {
     private const int FrameBytes = 2 * 1024 * 1024;
+
+    // Roughly how long one peak-heap sampling pass may take, however large the
+    // process heap is. See SamplePeakLiveBytes.
+    private static readonly TimeSpan SamplingBudget = TimeSpan.FromSeconds(10);
 
     private ServiceProvider provider = null!;
     private IGrainStorageSerializer json = null!;
@@ -175,13 +180,18 @@ public sealed class LeafSnapshotHydrationAmplificationTests
     {
         Warm(stored);
 
+        // The unhindered read time, which paces the sampler below.
+        var clock = Stopwatch.StartNew();
+        Warm(stored);
+        var readTime = clock.Elapsed;
+
         // A sampler can only miss a peak, never invent one, so repeating and
         // keeping the largest reading only ever tightens the lower bound - and a
         // lower bound that already clears the factor needs no further attempts.
         long best = 0;
         for (var attempt = 0; attempt < 3; attempt++)
         {
-            best = Math.Max(best, SamplePeakLiveBytes(stored));
+            best = Math.Max(best, SamplePeakLiveBytes(stored, readTime));
             if (best > (long)FrameBytes * LeafSnapshotHydrationAdmission.HydrationHeapAmplification)
             {
                 break;
@@ -191,7 +201,7 @@ public sealed class LeafSnapshotHydrationAmplificationTests
         return (double)best / FrameBytes;
     }
 
-    private long SamplePeakLiveBytes(byte[] stored)
+    private long SamplePeakLiveBytes(byte[] stored, TimeSpan readTime)
     {
         var column = new BinaryData(stored.AsSpan().ToArray());
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
@@ -205,12 +215,31 @@ public sealed class LeafSnapshotHydrationAmplificationTests
         using var sampling = new ManualResetEventSlim();
         var sampler = new Thread(() =>
         {
+            var clock = Stopwatch.StartNew();
             while (Volatile.Read(ref done) == 0)
             {
+                var started = clock.Elapsed;
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true);
                 peak = Math.Max(peak, GC.GetTotalMemory(forceFullCollection: false));
                 samples++;
                 sampling.Set();
+
+                // Every forced collection suspends the reader, and sampling back to
+                // back is what makes the sampler dense: the read advances only a
+                // sliver between samples. But the whole measurement then costs
+                // (read time / sliver) collections, and a collection's cost grows
+                // with the process heap. In the coverage lane the whole suite
+                // shares one process, and this ran past the ten-minute hang
+                // timeout, so the host was killed and the core library's coverage
+                // was lost. Letting the read advance by readTime * (this
+                // collection's cost / budget) caps the measurement at about
+                // SamplingBudget at any heap size. On a small heap the pause
+                // rounds to nothing and the sampler stays as dense as ever.
+                var resume = clock.Elapsed + readTime * ((clock.Elapsed - started) / SamplingBudget);
+                while (clock.Elapsed < resume && Volatile.Read(ref done) == 0)
+                {
+                    Thread.Yield();
+                }
             }
         });
 
