@@ -48,7 +48,7 @@ internal sealed partial class TreeDeletionGrain
             state.State.SuppressLifecycleEvents = true;
             try
             {
-                await state.WriteStateAsync();
+                await PersistAsync();
             }
             catch
             {

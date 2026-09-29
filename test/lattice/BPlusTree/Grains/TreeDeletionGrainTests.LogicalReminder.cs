@@ -46,20 +46,24 @@ public partial class TreeDeletionGrainTests
     [Test]
     public async Task Logical_reminder_waits_for_the_window_then_retries_a_target_failure_on_the_next_tick()
     {
+        // Issue #3941: the deferred logical purge hands the pinned copy's walk to
+        // that copy's own timer (BeginPurgeAsync) rather than purging it inside
+        // one reminder-bounded call (PurgePhysicalAsync).
         var (grain, state, _, factory, _) = CreateGrain();
         var target = ConfigureAlias(factory);
         await grain.DeleteTreeAsync();
         await grain.ReceiveReminder("logical-tree-deletion", new TickStatus());
-        await target.DidNotReceive().PurgePhysicalAsync();
+        await target.DidNotReceive().BeginPurgeAsync();
         state.State.LogicalDeletedAtUtc = DateTimeOffset.UtcNow.AddDays(-10);
-        target.PurgePhysicalAsync().ThrowsAsync(new IOException("target unavailable"));
+        target.BeginPurgeAsync().ThrowsAsync(new IOException("target unavailable"));
         await grain.ReceiveReminder("logical-tree-deletion", new TickStatus());
         Assert.That(state.State.LogicalPurgeComplete, Is.False);
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.RecoverAsync());
-        target.PurgePhysicalAsync().Returns(Task.CompletedTask);
+        target.GetDeletionStatusAsync().Returns(new TreeDeletionSnapshot { IsDeleted = true, PurgeComplete = true });
         await grain.ReceiveReminder("logical-tree-deletion", new TickStatus());
         Assert.That(state.State.LogicalPurgeComplete, Is.True);
-        await target.Received(2).PurgePhysicalAsync();
+        await target.Received(1).BeginPurgeAsync();
+        await target.DidNotReceive().PurgePhysicalAsync();
     }
 
     [Test]

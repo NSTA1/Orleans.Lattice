@@ -92,7 +92,7 @@ internal sealed partial class TreeDeletionGrain
         state.State = new TreeDeletionState();
         try
         {
-            await state.WriteStateAsync();
+            await PersistAsync();
         }
         catch
         {

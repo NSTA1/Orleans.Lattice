@@ -84,6 +84,7 @@ public sealed class LatticeStateQueryCatalogBatchingTests
         public Task RecoverAsync() => throw new NotSupportedException();
 
         public Task PurgeNowAsync() => throw new NotSupportedException();
+        public Task BeginPurgeAsync() => throw new NotSupportedException();
     }
 
     private sealed class FakeGate(Func<string, bool> allow) : ILatticeAccessGate
