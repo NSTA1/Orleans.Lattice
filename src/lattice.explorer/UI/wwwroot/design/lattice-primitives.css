@@ -25,12 +25,13 @@
 
 /*
  * Links in running content - a key in a table, an address on the not-found page -
- * take the documentation site's link ink on both materials. Zero specificity, so
- * every primitive that styles a link (a button, a chain node, a spine stop) still
- * wins; without it an unclassed link fell back to the browser's #0000ee, which
+ * take the documentation site's link ink on both materials. Both rules have zero
+ * specificity, so every primitive that styles a link (a button, a chain node, a
+ * spine stop) still wins, and the hover rule, being later, wins over the base
+ * one. Without them an unclassed link fell back to the browser's #0000ee, which
  * measures 1.9:1 on Board.
  */
-:where(.lt-viewport) a {
+:where(.lt-viewport a) {
   color: var(--lt-link);
 }
 
