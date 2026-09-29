@@ -73,17 +73,16 @@ have no publish tag glob and no row in the tables above; their last released
 versions stay on nuget.org and should be marked deprecated there, pointing at
 `Orleans.Lattice.Explorer.Web` (the hosting entry point) as the alternative.
 
-| Retired package | Last tag shape | Successor |
-|---|---|---|
-| `Orleans.Lattice.Explorer.DesignSystem` | `lattice.explorer.designsystem-v<X.Y.Z>` | `Orleans.Lattice.Explorer.UI` |
-| `Orleans.Lattice.Explorer.Access` | `lattice.explorer.access-v<X.Y.Z>` | The Access area, compiled into `Orleans.Lattice.Explorer.UI` |
-| `Orleans.Lattice.Explorer.Backup` | `lattice.explorer.backup-v<X.Y.Z>` | The Backups area, compiled into `Orleans.Lattice.Explorer.UI` |
-| `Orleans.Lattice.Explorer.Schema` | `lattice.explorer.schema-v<X.Y.Z>` | The Schema area, compiled into `Orleans.Lattice.Explorer.UI` |
-| `Orleans.Lattice.Explorer.Plugins.*` (Abstractions, Selection, Data, History, Metrics, Topology, TagIndex, DeadLetter, Telemetry, Tenancy, Tenants, MyTenant) | `lattice.explorer.plugins.<name>-v<X.Y.Z>` | None: there is no plugin model. The native areas are compiled in, and the only third-party UI surface is a Lattice App UI. |
-| `Orleans.Lattice.Explorer` (the MAUI desktop head) | none (never tagged) | `Orleans.Lattice.Explorer.Web`, the Blazor Server head |
+- `Orleans.Lattice.Explorer.DesignSystem`, last tagged `lattice.explorer.designsystem-v<X.Y.Z>`. Its successor is `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Access`, last tagged `lattice.explorer.access-v<X.Y.Z>`. Its successor is the Access area, compiled into `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Backup`, last tagged `lattice.explorer.backup-v<X.Y.Z>`. Its successor is the Backups area, compiled into `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Schema`, last tagged `lattice.explorer.schema-v<X.Y.Z>`. Its successor is the Schema area, compiled into `Orleans.Lattice.Explorer.UI`.
+- `Orleans.Lattice.Explorer.Plugins.*` (Abstractions, Selection, Data, History, Metrics, Topology, TagIndex, DeadLetter, Telemetry, Tenancy, Tenants, MyTenant), last tagged `lattice.explorer.plugins.<name>-v<X.Y.Z>`. There is no successor: the Explorer has no plugin model, its native areas are compiled in, and the only third-party UI surface is a Lattice App UI.
+- `Orleans.Lattice.Explorer`, the MAUI desktop head, never tagged. Its successor is `Orleans.Lattice.Explorer.Web`, the Blazor Server head.
 
 A patch to one of these ids can still be cut from an older `release/<X.Y>` line
 that carries its sources and its tag glob, exactly like any held-back package.
+
 ## Tag shape
 
 The publish workflow's per-tag trigger globs match these tag shapes:

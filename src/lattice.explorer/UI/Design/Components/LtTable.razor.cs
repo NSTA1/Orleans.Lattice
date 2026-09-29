@@ -50,6 +50,7 @@ public partial class LtTable<TItem>
     private ElementReference? _returnFocus;
     private IReadOnlyList<TItem>? _source;
     private List<TItem> _rows = [];
+    private bool _interactive;
     private LtColumn<TItem>? _sortColumn;
     private LtSortDirection _sortDirection;
 
@@ -77,8 +78,18 @@ public partial class LtTable<TItem>
     /// Whether only the rows in view are rendered. Use it for lists that can run
     /// to thousands of rows; every row must then be <see cref="RowHeight"/> tall.
     /// </summary>
+    /// <remarks>
+    /// Virtualisation measures the viewport in the browser, so it can only run once
+    /// the component is interactive. Until its first interactive render (the server
+    /// prerender never gets one), the table renders its first
+    /// <see cref="PrerenderedRowLimit"/> rows as ordinary rows, so the first paint
+    /// is never an empty table.
+    /// </remarks>
     [Parameter]
     public bool Virtualize { get; set; }
+
+    /// <summary>How many rows a virtualised table renders before it is interactive.</summary>
+    internal const int PrerenderedRowLimit = 50;
 
     /// <summary>The height of one row in CSS pixels, used by virtualisation. Defaults to 44, the comfortable row height.</summary>
     [Parameter]
@@ -179,6 +190,12 @@ public partial class LtTable<TItem>
     /// <summary>The rows in their displayed order, after sorting.</summary>
     internal IReadOnlyList<TItem> DisplayedRows => _rows;
 
+    /// <summary>Whether rows are virtualised now: asked for, and the component has rendered interactively.</summary>
+    private bool IsVirtualized => Virtualize && _interactive;
+
+    /// <summary>The rows rendered without virtualisation: every row, or a bounded first page while a virtualised table waits to become interactive.</summary>
+    private IEnumerable<TItem> PlainRows => Virtualize && _rows.Count > PrerenderedRowLimit ? _rows.Take(PrerenderedRowLimit) : _rows;
+
     internal void AddColumn(LtColumn<TItem> column)
     {
         _columns.Add(column);
@@ -196,6 +213,21 @@ public partial class LtTable<TItem>
             }
 
             StateHasChanged();
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // OnAfterRender runs only in an interactive render, never in the server
+        // prerender, so this is the moment virtualisation can measure the page.
+        if (firstRender)
+        {
+            _interactive = true;
+            if (Virtualize)
+            {
+                StateHasChanged();
+            }
         }
     }
 

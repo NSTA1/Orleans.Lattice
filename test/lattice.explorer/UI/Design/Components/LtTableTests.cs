@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Design.Components;
@@ -162,6 +163,61 @@ public sealed class LtTableTests : ShellDesignTestContext
         cut.Render(p => p.Add(x => x.Items, new[] { new TreeRow("zeta", 1), new TreeRow("alpha", 2) }));
 
         Assert.That(Names(cut), Is.EqualTo(new[] { "alpha", "zeta" }));
+    }
+
+    [Test]
+    public async Task The_server_prerender_of_a_virtualised_table_renders_its_first_rows_as_plain_rows()
+    {
+        // The server prerender never renders interactively, so virtualisation
+        // cannot measure anything there; the first paint must still list rows.
+        var many = Enumerable.Range(0, 5000).Select(i => new TreeRow($"tree-{i:D4}", i)).ToArray();
+        var few = Enumerable.Range(0, 3).Select(i => new TreeRow($"tree-{i:D4}", i)).ToArray();
+
+        var longList = await PrerenderAsync(many);
+        var shortList = await PrerenderAsync(few);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Count(longList, "class=\"lt-table__row"), Is.EqualTo(LtTable<TreeRow>.PrerenderedRowLimit));
+            Assert.That(longList, Does.Contain("tree-0000").And.Contain("tree-0049").And.Not.Contain("tree-0050"));
+            Assert.That(Count(shortList, "class=\"lt-table__row"), Is.EqualTo(3));
+        });
+    }
+
+    private static async Task<string> PrerenderAsync(IReadOnlyList<TreeRow> rows)
+    {
+        await using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        await using var renderer = new Microsoft.AspNetCore.Components.Web.HtmlRenderer(services, services.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>());
+        return await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            RenderFragment columns = builder =>
+            {
+                builder.OpenComponent<LtColumn<TreeRow>>(0);
+                builder.AddComponentParameter(1, nameof(LtColumn<TreeRow>.Title), "Tree");
+                builder.AddComponentParameter(2, nameof(LtColumn<TreeRow>.Value), (Func<TreeRow, object?>)(row => row.Name));
+                builder.AddComponentParameter(3, nameof(LtColumn<TreeRow>.RowHeader), true);
+                builder.CloseComponent();
+            };
+            var output = await renderer.RenderComponentAsync<LtTable<TreeRow>>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                [nameof(LtTable<TreeRow>.Items)] = rows,
+                [nameof(LtTable<TreeRow>.Caption)] = "Trees",
+                [nameof(LtTable<TreeRow>.Virtualize)] = true,
+                [nameof(LtTable<TreeRow>.ChildContent)] = columns,
+            }));
+            return output.ToHtmlString();
+        });
+    }
+
+    private static int Count(string html, string fragment)
+    {
+        var count = 0;
+        for (var index = html.IndexOf(fragment, StringComparison.Ordinal); index >= 0; index = html.IndexOf(fragment, index + 1, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     [Test]
