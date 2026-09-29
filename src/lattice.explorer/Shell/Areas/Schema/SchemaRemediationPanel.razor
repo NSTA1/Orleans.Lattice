@@ -1,0 +1,93 @@
+@*
+    Remediation: the resumable status page of the tree's background migration
+    or remediation, and - for a caller who may remediate - a transform editor
+    that starts one. A remediation rewrites every value through the steps,
+    checks each against the tree's current policy, and cuts the tree over only
+    when every value passes; otherwise it stops at the first value that still
+    fails and changes nothing. Only member set, remove and rename steps can be
+    written here; conditional and computed transforms are registered in code,
+    and this tab says so rather than guessing (#1257).
+*@
+
+@if (Workspace is not null)
+{
+    <SchemaOperationStatus />
+
+    @if (Workspace.Grants.Remediate)
+    {
+        <section class="lt-schema-editor" aria-labelledby="lt-schema-remediate-title">
+            <h2 id="lt-schema-remediate-title" class="lt-schema-section-title">Start a remediation</h2>
+
+            @if (Workspace.Row.Policy is not { } policy)
+            {
+                <p class="lt-schema-note">A remediation rewrites values until they satisfy the tree's policy, and this tree has none. Set a policy on the Policy tab first.</p>
+            }
+            else
+            {
+                <p class="lt-schema-note">Every value is rewritten through these steps, in order, and checked against the tree's policy (@SchemaFormat.Policy(policy)). Members a step does not name are kept. Only set, remove and rename steps on top-level members can be written here; conditional or computed transforms are registered in code on the silos.</p>
+
+                @if (_draft.Steps.Count == 0)
+                {
+                    <p class="lt-schema-muted">No steps yet. Add the first one below.</p>
+                }
+                else
+                {
+                    <ol class="lt-schema-rules" aria-label="Transform steps">
+                        @for (var index = 0; index < _draft.Steps.Count; index++)
+                        {
+                            var at = index;
+                            <li class="lt-schema-rules__item">
+                                <span class="lt-schema-rules__text lt-shell-mono">@_draft.Steps[at].Describe()</span>
+                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _draft.RemoveAt(at)" aria-label="@($"Remove step {at + 1}")">Remove</LtButton>
+                            </li>
+                        }
+                    </ol>
+                }
+
+                <fieldset class="lt-schema-builder">
+                    <legend class="lt-schema-builder__legend">Add a step</legend>
+                    <LtSelect Label="Step" Options="@StepKinds" Value="@_draft.Kind.ToString()" ValueChanged="OnStepKindChanged" />
+                    <LtTextInput Label="Member" Mono="true" Value="@_draft.Path" ValueChanged="value => _draft.Path = value" />
+                    @switch (_draft.Kind)
+                    {
+                        case SchemaTransformStepKind.Rename:
+                            <LtTextInput Label="New name" Mono="true" Value="@_draft.ToPath" ValueChanged="value => _draft.ToPath = value" />
+                            break;
+                        case SchemaTransformStepKind.Set:
+                            <LtSelect Label="Value kind" Options="@ValueKinds" Value="@_draft.ValueKind.ToString()" ValueChanged="OnValueKindChanged" />
+                            @if (_draft.ValueKind != SchemaConstantKind.Null)
+                            {
+                                <LtTextInput Label="Value" Mono="true" Value="@_draft.Value" ValueChanged="value => _draft.Value = value" />
+                            }
+                            break;
+                    }
+                    @if (_stepError is not null)
+                    {
+                        <p class="lt-schema-error" role="alert">@_stepError</p>
+                    }
+                    <LtButton OnClick="AddStep">Add step</LtButton>
+                </fieldset>
+
+                @if (_startError is not null)
+                {
+                    <p class="lt-schema-error" role="alert">@_startError</p>
+                }
+
+                <div class="lt-toolbar lt-schema-actions">
+                    <LtButton OnClick="Review" Disabled="@Busy">Review and start...</LtButton>
+                </div>
+
+                <LtConfirmDestructive Open="@_confirm"
+                                      OpenChanged="value => _confirm = value"
+                                      Title="Remediate this tree"
+                                      ObjectKind="tree"
+                                      ObjectName="@Workspace.TreeId"
+                                      ConfirmText="Start remediation"
+                                      OnConfirm="StartRemediation">
+                    <p>Every value is rewritten through @SchemaFormat.Count(_draft.Steps.Count, "step") and checked against the policy. If every value passes, the tree is cut over to the rewritten values, and the old values are no longer served. If any value still fails, nothing is cut over.</p>
+                    <p>It runs in the background; this page shows its status, and you can leave while it runs.</p>
+                </LtConfirmDestructive>
+            }
+        </section>
+    }
+}

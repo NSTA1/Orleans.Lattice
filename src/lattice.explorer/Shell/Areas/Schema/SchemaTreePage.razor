@@ -1,0 +1,82 @@
+@page "/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@page "/t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}"
+@inherits ExplorerPage
+@implements IDisposable
+
+@*
+    /schema/{tree-path}: one tree's schema workspace. The heading is the logical
+    tree id in mono (a physical id never appears), with the declaring app when an
+    installed app's manifest declares this tree's schema; then the tab row, whose
+    selection is the ?tab= query value so every tab - including the resumable
+    status page of a running migration or remediation - has its own address.
+*@
+
+<PageTitle>@TreeId - Schema - Orleans.Lattice Explorer</PageTitle>
+<link rel="stylesheet" href="@SchemaAssets.Stylesheet" />
+
+@if (_error is not null)
+{
+    <h1 class="lt-shell-page-title lt-shell-mono">@TreeId</h1>
+    <LtEmptyState Title="This tree's schema did not load" HeadingLevel="2">
+        <ChildContent>@_error</ChildContent>
+        <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_missing)
+{
+    <h1 class="lt-shell-page-title lt-shell-mono">@TreeId</h1>
+    <p class="lt-shell-page-lede">There is no tree with this id.</p>
+}
+else if (_workspace is null)
+{
+    <h1 class="lt-shell-page-title lt-shell-mono">@TreeId</h1>
+    <LtSkeleton Lines="6" Label="Reading this tree's schema" />
+}
+else
+{
+    <div class="lt-schema-heading">
+        <h1 class="lt-shell-page-title lt-shell-mono">@TreeId</h1>
+        @if (_workspace.Row.Policy is not null)
+        {
+            <LtStatusPill State="LtStateRole.Enabled" Text="policy" />
+        }
+        @if (_workspace.Row.Version is { } version)
+        {
+            <LtStatusPill Text="@($"version {version.TargetVersion}")" />
+        }
+        @if (_workspace.Row.Declaration is { } declared)
+        {
+            <LtStatusPill Text="@($"app: {declared.Slug}")" />
+        }
+    </div>
+    <p class="lt-schema-meta">
+        @if (_workspace.Row.Declaration is { } declaration)
+        {
+            <span>
+                Declared by <a href="@_workspace.Href(SchemaAddresses.App(declaration.Slug))">app <span class="lt-shell-mono">@declaration.Slug</span> @declaration.AppVersion</a>:
+                family <span class="lt-shell-mono">@declaration.Family</span>, version @declaration.Version@(declaration.StrictIngest ? ", strict ingest" : string.Empty)
+            </span>
+        }
+        <span>Policy: @SchemaDirectoryPage.PolicyText(_workspace.Row)</span>
+        <span>Versioning: @SchemaDirectoryPage.VersionText(_workspace.Row)</span>
+    </p>
+
+    @if (!_workspace.Grants.HasAny)
+    {
+        <LtEmptyState Title="You may not manage this tree's schema" HeadingLevel="2">
+            Your account holds no schema authority on this tree. Ask an administrator for read or schema-admin access to it.
+        </LtEmptyState>
+    }
+    else
+    {
+        <CascadingValue Value="_workspace">
+            <LtTabs Label="@($"{TreeId} schema")" ActiveId="@_workspace.Tab" ActiveIdChanged="OnTabChanged">
+                <LtTab Id="@SchemaTabs.Policy" Title="Policy"><SchemaPolicyPanel /></LtTab>
+                <LtTab Id="@SchemaTabs.Versions" Title="Versions"><SchemaVersionsPanel /></LtTab>
+                <LtTab Id="@SchemaTabs.Compliance" Title="Compliance"><SchemaCompliancePanel /></LtTab>
+                <LtTab Id="@SchemaTabs.Remediation" Title="Remediation"><SchemaRemediationPanel /></LtTab>
+                <LtTab Id="@SchemaTabs.DeadLetters" Title="Dead letters"><SchemaDeadLettersPanel /></LtTab>
+            </LtTabs>
+        </CascadingValue>
+    }
+}

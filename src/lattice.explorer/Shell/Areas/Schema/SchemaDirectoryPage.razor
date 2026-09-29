@@ -1,0 +1,132 @@
+@page "/schema"
+@page "/t/{tenant}/schema"
+@inherits ExplorerPage
+@implements IDisposable
+
+@*
+    /schema: the trees under schema - a policy, a version config, or an app's
+    manifest declaration - with their versioning and the last compliance scan
+    this session ran. ?show=all lists every tree, so an ungoverned one can be
+    given a policy; ?filter= narrows by tree id. The area's stylesheet is linked
+    here, as every Schema page links it.
+*@
+
+<PageTitle>Schema - Orleans.Lattice Explorer</PageTitle>
+<link rel="stylesheet" href="@SchemaAssets.Stylesheet" />
+
+<h1 class="lt-shell-page-title">Schema</h1>
+<p class="lt-shell-page-lede">Trees under a schema policy or version config, and the last compliance scan run in this session.</p>
+
+<div class="lt-toolbar lt-schema-toolbar">
+    <nav class="lt-schema-show" aria-label="Which trees">
+        <a class="lt-schema-show__link" href="@Href(ShowAddress(all: false))" aria-current="@(ShowAll ? null : "page")">Under schema</a>
+        <a class="lt-schema-show__link" href="@Href(ShowAddress(all: true))" aria-current="@(ShowAll ? "page" : null)" data-lt-command="@SchemaArea.AllTreesCommandId">All trees</a>
+    </nav>
+    <LtSearchInput Label="Filter trees by id" Placeholder="Filter by tree id" Value="@Filter" ValueChanged="OnFilterChanged" />
+    <LtButton OnClick="RefreshAsync" Disabled="@_loading">Refresh</LtButton>
+    <LtButton OnClick="OpenScanPicker" data-lt-command="@SchemaArea.ScanCommandId">Scan compliance...</LtButton>
+</div>
+
+@if (_error is not null)
+{
+    <LtEmptyState Title="The trees could not be listed" HeadingLevel="2">
+        <ChildContent>@_error</ChildContent>
+        <Actions><LtButton OnClick="RefreshAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_read is null)
+{
+    <LtSkeleton Lines="6" Label="Reading each tree's schema" />
+}
+else
+{
+    <p class="lt-schema-status" role="status">@StatusLine</p>
+    @if (_read.Truncated)
+    {
+        <p class="lt-schema-note">This cluster holds more trees than one listing asks about, so some are not shown here. Open any tree's schema by its address, such as /schema/orders.</p>
+    }
+
+    @if (_rows.Count == 0)
+    {
+        @if (!ShowAll && string.IsNullOrEmpty(Filter))
+        {
+            <LtEmptyState Title="No tree is under schema yet" HeadingLevel="2">
+                <ChildContent>No tree has a policy, a version config or an app declaration. Every tree accepts every value.</ChildContent>
+                <Actions><a class="lt-schema-action" href="@Href(ShowAddress(all: true))">Show all trees</a></Actions>
+            </LtEmptyState>
+        }
+        else
+        {
+            <LtEmptyState Title="No tree matches" HeadingLevel="2">No tree id contains "@Filter".</LtEmptyState>
+        }
+    }
+    else
+    {
+        <LtTable TItem="SchemaTreeRow"
+                 Items="@_rows"
+                 Caption="@(ShowAll ? "Every tree and its schema" : "Trees under schema")"
+                 CaptionHidden="true"
+                 RowKey="@(row => row.TreeId)"
+                 DetailTitle="@(row => row.TreeId)">
+            <ChildContent>
+                <LtColumn TItem="SchemaTreeRow" Context="row" Title="Tree" RowHeader="true" Mono="true" SortBy="@(row => row.TreeId)">
+                    <a class="lt-schema-tree-link" href="@Href(SchemaAddresses.Tree(row.TreeId))">@row.TreeId</a>
+                </LtColumn>
+                <LtColumn TItem="SchemaTreeRow" Title="Policy" Value="@(row => PolicyText(row))" />
+                <LtColumn TItem="SchemaTreeRow" Title="Versioning" Value="@(row => VersionText(row))" />
+                <LtColumn TItem="SchemaTreeRow" Context="row" Title="Compliance">
+                    <LtStatusPill State="@ComplianceState(row)" Text="@ComplianceText(row)" />
+                </LtColumn>
+                <LtColumn TItem="SchemaTreeRow" Context="row" Title="Declared by">
+                    @if (row.Declaration is { } declaration)
+                    {
+                        <a class="lt-schema-app-link" href="@Href(SchemaAddresses.App(declaration.Slug))">app <span class="lt-shell-mono">@declaration.Slug</span></a>
+                    }
+                    else
+                    {
+                        <span class="lt-schema-muted">None</span>
+                    }
+                </LtColumn>
+            </ChildContent>
+            <CompactRow Context="row">
+                <LtCompactRow Mono="true">
+                    <Primary>@row.TreeId</Primary>
+                    <Secondary>@CompactSummary(row)</Secondary>
+                    <State><LtStatusPill State="@ComplianceState(row)" Text="@ComplianceText(row)" /></State>
+                </LtCompactRow>
+            </CompactRow>
+            <DetailActions Context="row">
+                <a class="lt-schema-action" href="@Href(SchemaAddresses.Tree(row.TreeId))">Open schema</a>
+                @if (row.Policy is not null)
+                {
+                    <a class="lt-schema-action" href="@Href(SchemaAddresses.StartScan(row.TreeId))">Scan compliance</a>
+                }
+            </DetailActions>
+        </LtTable>
+    }
+}
+
+<LtDialog Open="@_pickerOpen"
+          OpenChanged="OnPickerOpenChanged"
+          Title="Scan compliance"
+          Description="A scan reads every value of the tree and checks it against the tree's policy. It changes nothing."
+          Placement="@DialogPlacement">
+    <ChildContent>
+        @if (_read is null && _error is null)
+        {
+            <LtSkeleton Lines="1" Label="Reading the trees" />
+        }
+        else if (ScanTargets.Count == 0)
+        {
+            <p class="lt-schema-note">No tree you can see has a policy to scan against. Give a tree a policy first.</p>
+        }
+        else
+        {
+            <LtSelect Label="Tree" Options="@ScanTargets" Value="@_pickedTree" ValueChanged="OnPicked" />
+        }
+    </ChildContent>
+    <Actions>
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="ClosePicker">Cancel</LtButton>
+        <LtButton OnClick="StartPickedScan" Disabled="@(string.IsNullOrEmpty(_pickedTree))">Scan</LtButton>
+    </Actions>
+</LtDialog>

@@ -1,0 +1,182 @@
+@*
+    Versions: the tree's envelope-version config - schema family, target version
+    and strict ingest - with set, clear, advance, migrate, and advance and
+    migrate. Advancing is irreversible, so it is confirmed by naming the tree;
+    a migration is a staged, long-running operation whose status page is the
+    Remediation tab. What differs between two versions is registered in code
+    on the silos and is not shown here (#1257); the tab says so rather than
+    guessing.
+*@
+
+@if (Workspace is not null)
+{
+    <aside class="lt-schema-note" aria-label="What a version is here">
+        <p>A version is a stamp, not a shape. New writes are stamped with the tree's family and target version, and older values are upgraded when they are read or migrated. Advancing the target cannot be undone.</p>
+        <p>This Explorer cannot show what differs between two versions: each version's shape and its upgraders are registered in code on the silos and are not sent here.</p>
+    </aside>
+
+    @if (Operations.Find(Workspace.TreeId) is { IsActive: true } running)
+    {
+        <p class="lt-schema-running" role="status">
+            @running.Summary is running.
+            <a href="@Workspace.Href(Workspace.ForTab(SchemaTabs.Remediation))">Follow its status</a>
+        </p>
+    }
+
+    @if (!Workspace.Grants.ViewVersion)
+    {
+        <LtEmptyState Title="You may not read this tree's versioning" HeadingLevel="2">
+            Reading the version config needs read authority on the tree.
+        </LtEmptyState>
+    }
+    else if (_error is not null)
+    {
+        <LtEmptyState Title="The version config did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (_versioningMissing)
+    {
+        <LtEmptyState Title="Versioning is not available" HeadingLevel="2">
+            This cluster's silos do not register schema versioning, so no tree on it can be versioned.
+        </LtEmptyState>
+    }
+    else if (!_loaded)
+    {
+        <LtSkeleton Lines="3" Label="Reading the version config" />
+    }
+    else
+    {
+        @switch (_editor)
+        {
+            case Editor.Configure:
+                @RenderConfigure()
+                break;
+            case Editor.Advance:
+                @RenderAdvance()
+                break;
+            default:
+                @RenderCurrent()
+                break;
+        }
+    }
+
+    <LtConfirmDestructive Open="@(_confirm == Confirm.Clear)"
+                          OpenChanged="OnConfirmOpenChanged"
+                          Title="Turn off versioning"
+                          ObjectKind="tree"
+                          ObjectName="@Workspace.TreeId"
+                          ConfirmText="Turn off versioning"
+                          OnConfirm="ClearAsync">
+        New writes will no longer be stamped. Values already stamped keep their stamp and are still read.
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive Open="@(_confirm == Confirm.Advance)"
+                          OpenChanged="OnConfirmOpenChanged"
+                          Title="@($"Advance to version {_advanceTarget}")"
+                          ObjectKind="tree"
+                          ObjectName="@Workspace.TreeId"
+                          ConfirmText="Advance"
+                          OnConfirm="AdvanceAsync">
+        New writes will be stamped with version @_advanceTarget from now on. The target version cannot be lowered again. Stored values stay at their version until they are read or migrated.
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive Open="@(_confirm == Confirm.AdvanceAndMigrate)"
+                          OpenChanged="OnConfirmOpenChanged"
+                          Title="@($"Advance to version {_advanceTarget} and migrate")"
+                          ObjectKind="tree"
+                          ObjectName="@Workspace.TreeId"
+                          ConfirmText="Advance and migrate"
+                          OnConfirm="AdvanceAndMigrateAsync">
+        New writes will be stamped with version @_advanceTarget, which cannot be lowered again, and then every stored value is rewritten at that version in the background. You can follow the migration on the Remediation tab, and leave while it runs.
+    </LtConfirmDestructive>
+
+    <LtDialog Open="@(_confirm == Confirm.Migrate)"
+              OpenChanged="OnConfirmOpenChanged"
+              Title="Migrate stored values"
+              Placement="@DialogPlacement">
+        <ChildContent>
+            <p>Every stored value is rewritten at the current target version, @(_config?.TargetVersion), in the background. Values already at that version are left alone, and running it again resumes or does nothing.</p>
+            <p>You can follow the migration on the Remediation tab, and leave while it runs.</p>
+        </ChildContent>
+        <Actions>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _confirm = Confirm.None">Cancel</LtButton>
+            <LtButton OnClick="MigrateAsync">Start migration</LtButton>
+        </Actions>
+    </LtDialog>
+}
+
+@code {
+    private RenderFragment RenderCurrent() => __builder =>
+    {
+        if (_config is not { } config)
+        {
+            <LtEmptyState Title="Unversioned" HeadingLevel="2">
+                <ChildContent>Values are stored exactly as written, with no version stamp.</ChildContent>
+                <Actions>
+                    @if (Workspace!.Grants.ManageVersion)
+                    {
+                        <LtButton OnClick="OpenEnable">Turn on versioning</LtButton>
+                    }
+                </Actions>
+            </LtEmptyState>
+            return;
+        }
+
+        <LtDefinitionList>
+            <LtDefinition Term="Schema family" Mono="true">@config.SchemaId</LtDefinition>
+            <LtDefinition Term="Target version" Mono="true">@config.TargetVersion</LtDefinition>
+            <LtDefinition Term="Strict ingest">@(config.StrictIngest ? "On: a replicated or restored value whose version cannot be upgraded to the target goes to the dead letters" : "Off: replicated and restored values are stored with whatever version they carry")</LtDefinition>
+        </LtDefinitionList>
+
+        @if (Workspace!.Grants.ManageVersion)
+        {
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="OpenAdvance" Disabled="@Busy">Advance target version...</LtButton>
+                <LtButton OnClick="() => _confirm = Confirm.Migrate" Disabled="@Busy">Migrate stored values...</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="OpenConfigure" Disabled="@Busy">Change config</LtButton>
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = Confirm.Clear" Disabled="@Busy">Turn off versioning</LtButton>
+            </div>
+        }
+    };
+
+    private RenderFragment RenderConfigure() => __builder =>
+    {
+        <section class="lt-schema-editor" aria-labelledby="lt-schema-version-editor-title">
+            <h2 id="lt-schema-version-editor-title" class="lt-schema-section-title">@(_config is null ? "Turn on versioning" : "Change the version config")</h2>
+            @if (_config is not null)
+            {
+                <p class="lt-schema-note">This replaces the config as it is. To move to a higher version, advance the target instead: advancing is checked, this is not.</p>
+            }
+            <LtTextInput Label="Schema family" Mono="true" Value="@_familyText" ValueChanged="value => _familyText = value" inputmode="numeric"
+                         Hint="The number that names this tree's value family, stamped into every value." />
+            <LtTextInput Label="Target version" Mono="true" Value="@_versionText" ValueChanged="value => _versionText = value" inputmode="numeric"
+                         Hint="1 or more. New writes are stamped with it." />
+            <LtSwitch Label="Strict ingest" Checked="@_strict" CheckedChanged="value => _strict = value"
+                      Hint="On: a replicated or restored value whose version cannot be upgraded goes to the dead letters." />
+            @if (_formError is not null)
+            {
+                <p class="lt-schema-error" role="alert">@_formError</p>
+            }
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="SaveConfigAsync" Disabled="@Busy">Save config</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEditor">Cancel</LtButton>
+            </div>
+        </section>
+    };
+
+    private RenderFragment RenderAdvance() => __builder =>
+    {
+        <section class="lt-schema-editor" aria-labelledby="lt-schema-advance-title">
+            <h2 id="lt-schema-advance-title" class="lt-schema-section-title">Advance the target version</h2>
+            <p class="lt-schema-note">The target is now @(_config?.TargetVersion). It only ever goes up.</p>
+            <LtTextInput Label="New target version" Mono="true" Value="@_versionText" ValueChanged="value => _versionText = value" inputmode="numeric" Error="@_formError" />
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="() => ReviewAdvance(migrate: false)" Disabled="@Busy">Advance...</LtButton>
+                <LtButton OnClick="() => ReviewAdvance(migrate: true)" Disabled="@Busy">Advance and migrate...</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEditor">Cancel</LtButton>
+            </div>
+        </section>
+    };
+}

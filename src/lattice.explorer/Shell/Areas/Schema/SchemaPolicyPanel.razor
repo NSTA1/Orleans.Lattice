@@ -1,0 +1,144 @@
+@*
+    Policy: the tree's enforcement policy - its rules, applied together, and
+    strict ingest - with set (an editor seeded from the current policy) and
+    clear (a destructive confirmation naming the tree). A structured predicate
+    rule is shown and kept as it is; this editor does not write one (#1257).
+*@
+
+@if (Workspace is not null)
+{
+    @if (!Workspace.Grants.ViewPolicy)
+    {
+        <LtEmptyState Title="You may not read this tree's policy" HeadingLevel="2">
+            Reading a policy needs read authority on the tree.
+        </LtEmptyState>
+    }
+    else if (_error is not null)
+    {
+        <LtEmptyState Title="The policy did not load" HeadingLevel="2">
+            <ChildContent>@_error</ChildContent>
+            <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+        </LtEmptyState>
+    }
+    else if (!_loaded)
+    {
+        <LtSkeleton Lines="4" Label="Reading the policy" />
+    }
+    else if (_editing)
+    {
+        @RenderEditor()
+    }
+    else if (_policy is null)
+    {
+        <LtEmptyState Title="No policy" HeadingLevel="2">
+            <ChildContent>This tree accepts every value. Set a policy to validate every new write against its rules.</ChildContent>
+            <Actions>
+                @if (Workspace.Grants.ManagePolicy)
+                {
+                    <LtButton OnClick="OpenEditor">Set a policy</LtButton>
+                }
+            </Actions>
+        </LtEmptyState>
+    }
+    else
+    {
+        <LtDefinitionList>
+            <LtDefinition Term="Rules">@SchemaFormat.Count(_policy.Rules.Count, "rule"), all of which a value must satisfy</LtDefinition>
+            <LtDefinition Term="Strict ingest">@(_policy.StrictIngest ? StrictOn : StrictOff)</LtDefinition>
+        </LtDefinitionList>
+
+        <LtTable TItem="RuleRow"
+                 Items="@_rules"
+                 Caption="@($"Rules of {Workspace.TreeId}'s policy")"
+                 CaptionHidden="true">
+            <ChildContent>
+                <LtColumn TItem="RuleRow" Title="#" Align="LtColumnAlign.End" Value="@(row => row.Number)" />
+                <LtColumn TItem="RuleRow" Title="Kind" RowHeader="true" Value="@(row => row.Kind)" />
+                <LtColumn TItem="RuleRow" Title="Requirement" Value="@(row => row.Detail)" />
+            </ChildContent>
+            <CompactRow Context="row">
+                <LtCompactRow>
+                    <Primary>@row.Number. @row.Kind</Primary>
+                    <Secondary>@row.Detail</Secondary>
+                </LtCompactRow>
+            </CompactRow>
+        </LtTable>
+
+        @if (Workspace.Grants.ManagePolicy)
+        {
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="OpenEditor">Edit policy</LtButton>
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirmClear = true" Disabled="@_busy">Clear policy</LtButton>
+            </div>
+        }
+    }
+
+    <LtConfirmDestructive Open="@_confirmClear"
+                          OpenChanged="value => _confirmClear = value"
+                          Title="Clear this tree's policy"
+                          ObjectKind="tree"
+                          ObjectName="@Workspace.TreeId"
+                          ConfirmText="Clear policy"
+                          OnConfirm="ClearAsync">
+        Every value will be accepted from now on, and strict ingest stops diverting values. The rules are not kept.
+    </LtConfirmDestructive>
+}
+
+@code {
+    private RenderFragment RenderEditor() => __builder =>
+    {
+        <section class="lt-schema-editor" aria-labelledby="lt-schema-policy-editor-title">
+            <h2 id="lt-schema-policy-editor-title" class="lt-schema-section-title">@(_policy is null ? "Set a policy" : "Edit the policy")</h2>
+            <p class="lt-schema-note">A value must satisfy every rule. Saving replaces the whole policy; new writes are checked against it at once, and values already stored are not changed.</p>
+
+            @if (_draftRules.Count == 0)
+            {
+                <p class="lt-schema-muted">No rules yet. Add the first one below.</p>
+            }
+            else
+            {
+                <ol class="lt-schema-rules" aria-label="Rules in the new policy">
+                    @for (var index = 0; index < _draftRules.Count; index++)
+                    {
+                        var at = index;
+                        var rule = _draftRules[at];
+                        <li class="lt-schema-rules__item">
+                            <span class="lt-schema-rules__text"><strong>@SchemaFormat.RuleKind(rule)</strong> - @SchemaFormat.RuleDetail(rule)</span>
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveRule(at)" aria-label="@($"Remove rule {at + 1}")">Remove</LtButton>
+                        </li>
+                    }
+                </ol>
+            }
+
+            <fieldset class="lt-schema-builder">
+                <legend class="lt-schema-builder__legend">Add a rule</legend>
+                <LtSelect Label="Rule" Options="@RuleKinds" Value="@_builder.Kind.ToString()" ValueChanged="OnKindChanged" />
+                @switch (_builder.Kind)
+                {
+                    case SchemaRuleDraftKind.MaxLength:
+                        <LtTextInput Label="Largest size, in bytes" Value="@_builder.MaxLength" ValueChanged="value => _builder.MaxLength = value" inputmode="numeric" />
+                        break;
+                    case SchemaRuleDraftKind.Pattern:
+                        <LtTextInput Label="Pattern (a regular expression)" Mono="true" Value="@_builder.Pattern" ValueChanged="value => _builder.Pattern = value" />
+                        <LtTextInput Label="Member (leave empty for the whole value)" Mono="true" Value="@_builder.MemberPath" ValueChanged="value => _builder.MemberPath = value" />
+                        break;
+                }
+                <LtTextInput Label="Description (optional)" Value="@_builder.Description" ValueChanged="value => _builder.Description = value" Error="@_builderError" />
+                <LtButton OnClick="AddRule">Add rule</LtButton>
+            </fieldset>
+
+            <LtSwitch Label="Strict ingest" Checked="@_draftStrict" CheckedChanged="value => _draftStrict = value"
+                      Hint="@StrictHint" />
+
+            @if (_saveError is not null)
+            {
+                <p class="lt-schema-error" role="alert">@_saveError</p>
+            }
+
+            <div class="lt-toolbar lt-schema-actions">
+                <LtButton OnClick="SaveAsync" Disabled="@_busy">Save policy</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelEditor">Cancel</LtButton>
+            </div>
+        </section>
+    };
+}
