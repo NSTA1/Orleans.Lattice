@@ -250,7 +250,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_get_shard_map` | read | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts). |
 | `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status. |
 | `lattice_treeadmin_tree_reshard_status` | read | Read the current online-reshard state and shard-map fan-out. |
-| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state and effective B+ node capacities. |
+| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state - running, an accepted undo still unwinding (`undoRequested`), or none - and effective B+ node capacities. |
 | `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree. |
 | `lattice_treeadmin_tree_create` | manage | Explicitly create or register a tree with optional initial sizing. |
 | `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. |
@@ -260,7 +260,7 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. |
 | `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
-| `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. |
+| `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. Accept-then-poll: admitted even while a resize phase runs, it returns within a bounded wait with `undoRequested` set if the unwind is still in progress. |
 | `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot. |
 
 ### Bulk load, restore, and WAL placement

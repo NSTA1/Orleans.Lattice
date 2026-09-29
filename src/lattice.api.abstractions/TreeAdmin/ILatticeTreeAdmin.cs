@@ -573,10 +573,17 @@ public interface ILatticeTreeAdmin
     /// while a resize is still in progress, or while the pre-resize physical tree is
     /// still within its soft-delete recovery window (before purge completes). Reserved
     /// system tree ids are rejected.
+    /// <para>
+    /// Accept-then-poll: the undo is admitted even while a resize phase is in flight,
+    /// and the call waits only a bounded time for the unwind. When the returned
+    /// status carries <see cref="TreeResizeStatus.UndoRequested"/>, the undo was
+    /// accepted and is still unwinding; poll <see cref="GetResizeStatusAsync"/>
+    /// rather than retrying.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree whose last resize to undo. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tree's resize status after the undo.</returns>
+    /// <returns>The tree's resize status after the undo was accepted (and, when it finished within the wait, applied).</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
     /// <exception cref="InvalidOperationException">No in-flight or recoverable completed resize exists to undo, or the pre-resize tree has already been purged.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
@@ -586,7 +593,8 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Reads the online-resize status of <paramref name="treeId"/> - whether a resize
-    /// is in flight and the tree's current B+ node capacity as observed from its
+    /// is in flight, whether an accepted undo is still unwinding, and the tree's
+    /// current B+ node capacity as observed from its
     /// registry configuration - after authorizing whole-tree
     /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
     /// effects.

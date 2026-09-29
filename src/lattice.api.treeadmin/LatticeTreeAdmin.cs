@@ -2213,11 +2213,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // ReadReshardStatusAsync for why this internal continuation carries
         // system origin instead of re-authorizing at the grain's Read gate.
         bool complete;
+        bool undoRequested;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-                .IsResizeCompleteAsync()
-                .ConfigureAwait(false);
+            var lattice = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
+            complete = await lattice.IsResizeCompleteAsync().ConfigureAwait(false);
+            undoRequested = await lattice.IsResizeUndoPendingAsync().ConfigureAwait(false);
         }
 
         var entry = await _grainFactory.GetLatticeRegistry()
@@ -2232,6 +2233,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             CurrentMaxInternalChildren = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
             RequestedMaxLeafKeys = requestedMaxLeafKeys,
             RequestedMaxInternalChildren = requestedMaxInternalChildren,
+            UndoRequested = undoRequested,
         };
     }
 

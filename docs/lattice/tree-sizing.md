@@ -67,11 +67,36 @@ for as long as the old tree remains inside the soft-delete window:
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
 await tree.UndoResizeAsync();
+
+// The undo is accept-then-poll: follow an unwind that outlasted the call.
+while (await tree.IsResizeUndoPendingAsync())
+{
+    await Task.Delay(TimeSpan.FromSeconds(1));
+}
 ```
 
-`UndoResizeAsync` is phase-aware:
+`UndoResizeAsync` is **accept-then-poll**. It persists the undo intent and is
+admitted even while a resize phase is in flight - a large snapshot slice, for
+instance - rather than queueing behind the phase it exists to stop. The resize
+coordinator observes the intent at its next phase or snapshot-slice boundary
+(the snapshot is driven in wall-clock-bounded slices, so that boundary is at most
+a few seconds away) and runs the unwind below. The call then waits a bounded time,
+well inside the default 30-second response timeout, and returns either once the
+unwind has finished or with it still accepted and unwinding; in the second case
+`IsResizeUndoPendingAsync` reports `true` until it lands, and the tree-admin
+`tree_resize_status` read reports `undoRequested`. Retrying while an undo is pending
+is acknowledged again rather than refused, and a retry after the unwind finished is
+refused with a message naming the resize that was already undone, so a slow first
+undo is never mistaken for a failed one. An unwind that cannot be applied - the old
+tree has already been purged, say - is withdrawn, the resize carries on as if the
+undo had not been asked for, and the call that is waiting for it throws
+`InvalidOperationException` with the reason. While an accepted undo is pending,
+`ResizeAsync` throws `InvalidOperationException` rather than start or re-affirm a
+resize the coordinator is about to unwind.
 
-- **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, discards the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination.
+The unwind is phase-aware:
+
+- **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, discards the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination. An undo accepted while a snapshot slice was running is unwound from here even if that slice finished the copy: the alias is never swapped onto a copy the operator asked to discard.
 - **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and discards the new snapshot tree. The old physical tree is recovered from soft-delete only when it was actually soft-deleted: `Cleanup` is the only phase that deletes it, and it does so at the very end, so throughout `Swap` and `Reject` - and in `Cleanup` until the delete lands - the old tree is still live and is simply left alone.
 
 Once the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
@@ -93,7 +118,7 @@ Either way the destination is discarded rather than merely deleted: its shards a
 
 ### Manual trigger (testing)
 
-In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously. This grain interface is **declared `internal`** - consumer assemblies cannot reference or invoke it. Use `ILattice.ResizeAsync` for all non-test scenarios; it delegates to `ITreeResizeGrain` internally and exposes `ILattice.IsResizeCompleteAsync()` for progress polling.
+In integration tests, the existing test harnesses call `ITreeResizeGrain` directly to drive resize passes synchronously; `ITreeResizeGrain.UndoResizeAsync` is likewise the run-to-completion undo, which takes the coordinator's turn and so waits behind an in-flight phase. This grain interface is **declared `internal`** - consumer assemblies cannot reference or invoke it. Use `ILattice.ResizeAsync` and `ILattice.UndoResizeAsync` for all non-test scenarios; they delegate to `ITreeResizeGrain` internally, and `ILattice.IsResizeCompleteAsync()` and `ILattice.IsResizeUndoPendingAsync()` poll their progress.
 
 ## See also
 

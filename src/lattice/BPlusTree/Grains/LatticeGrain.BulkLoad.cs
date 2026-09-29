@@ -238,10 +238,42 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.TreeLifecycle, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
-        await ShardActivationRetry.RunAsync(
-            () => resize.UndoResizeAsync(),
+
+        // Accept, then poll (issue 3923). RequestUndoAsync is interleaved, so it is
+        // admitted even while a resize phase holds the coordinator's turn; the
+        // unwind itself runs on the coordinator's phase loop, and this worker only
+        // waits for it within a budget that stays inside the caller's response
+        // timeout. An unwind that outlasts the budget is still accepted and still
+        // unwinding - the status surface reports it - so returning is not a
+        // failure, and a retry is acknowledged rather than refused.
+        var operationId = await ShardActivationRetry.RunAsync(
+            () => resize.RequestUndoAsync(),
             cancellationToken);
+
+        var deadline = Environment.TickCount64 + (long)ResizeUndoWaitBudget.TotalMilliseconds;
+        while (true)
+        {
+            var progress = await resize.GetUndoProgressAsync();
+            if (!progress.Pending)
+            {
+                if (string.Equals(progress.FailedOperationId, operationId, StringComparison.Ordinal))
+                    throw new InvalidOperationException(progress.FailureMessage);
+                return;
+            }
+
+            if (Environment.TickCount64 >= deadline) return;
+            await Task.Delay(ResizeUndoPollInterval, cancellationToken);
+        }
     }
+
+    /// <summary>
+    /// How long <see cref="UndoResizeAsync"/> waits for an accepted unwind before
+    /// returning with it still in flight. Kept well inside Orleans' default 30 s
+    /// response timeout, so the caller is answered rather than timed out.
+    /// </summary>
+    internal static readonly TimeSpan ResizeUndoWaitBudget = TimeSpan.FromSeconds(15);
+
+    private static readonly TimeSpan ResizeUndoPollInterval = TimeSpan.FromMilliseconds(200);
 
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default)
@@ -536,5 +568,15 @@ internal sealed partial class LatticeGrain
         await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         return await resize.IsIdleAsync();
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsResizeUndoPendingAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+        var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
+        return (await resize.GetUndoProgressAsync()).Pending;
     }
 }
