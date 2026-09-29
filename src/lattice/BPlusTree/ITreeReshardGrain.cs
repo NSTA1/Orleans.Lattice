@@ -23,8 +23,9 @@ internal interface ITreeReshardGrain : IGrainWithStringKey
     /// asynchronously, anchored by a reminder so it survives silo restarts.
     /// <para>
     /// Grow-only: <paramref name="newShardCount"/> must be strictly greater
-    /// than the current physical shard count, and less than or equal to
-    /// <see cref="LatticeConstants.DefaultVirtualShardCount"/> (4096).
+    /// than the current physical shard count, and no greater than the smaller
+    /// of <see cref="LatticeConstants.DefaultVirtualShardCount"/> (4096) and the
+    /// number of virtual slots in the tree's <see cref="ShardMap"/>.
     /// Idempotent: if a reshard to the same target is already in progress,
     /// this call is a no-op. Throws <see cref="InvalidOperationException"/>
     /// if a reshard with a different target is in progress.

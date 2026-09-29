@@ -143,10 +143,9 @@ A tree declaration names an **app-local** tree. The physical tree is the
 structural `a/{app}/{name}`, composed per tenant as described above. Omitted shape
 pins inherit the host's defaults. `virtualShardCount` is applied when the install
 first registers the tree, and a manifest upgrade may not change it or drop the pin.
-A resize carries the tree's shard map, and so the declared slot count, over to the
-resized copy; the tree keeps the declared count until a reshard to a different shard
-count while it is still empty rebuilds that map with 4096 slots, and it then routes
-over the default 4096 virtual slots (see [Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
+A resize carries the declared slot count over to the resized copy and a reshard keeps
+it, and a reshard target cannot exceed it (see
+[Virtual shard space](../lattice/configuration.md#virtual-shard-space-constant)).
 
 `rebuildable: true` marks a tree whose contents can be re-derived rather than
 restored. It is descriptive metadata: the control facade's describe reports it, and no

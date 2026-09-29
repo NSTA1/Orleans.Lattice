@@ -283,6 +283,8 @@ capabilities:
         source: "docs/lattice/configuration.md"
       - statement: "A cross-tree batch whose tree ids repeat or whose tree slice repeats a key, including a Set and a Delete of one key, throws ArgumentException before any write is staged or saga state is persisted, so the operationId stays free for a corrected retry."
         source: "docs/lattice/atomic-writes.md"
+      - statement: "The cross-tree SetManyAtomicAsync extension checks every participating tree's entries against that tree's MaxKeyLength and MaxValueSizeBytes and refuses an oversized entry with ArgumentException before any tree is staged."
+        source: "docs/lattice/configuration.md"
     non_guarantees:
       - statement: "SetManyAsync is not atomic and can leave a partial batch applied."
         source: "docs/lattice/bulk-loading.md"
@@ -292,8 +294,6 @@ capabilities:
         source: "docs/lattice/atomic-writes.md"
       - statement: "Cross-tree atomic write is not a cross-tree read snapshot across separate reads."
         source: "docs/lattice/atomic-writes.md"
-      - statement: "The cross-tree SetManyAtomicAsync extension checks MaxKeyLength and MaxValueSizeBytes only when its saga writes the batch, where an oversized entry fails and rolls back the whole batch with InvalidOperationException."
-        source: "docs/lattice/configuration.md"
     unsafe_sequences:
       - sequence:
           - "reuse a cross-tree operationId"
@@ -1802,7 +1802,7 @@ capabilities:
         source: "docs/lattice/online-reshard.md"
       - statement: "The reshard coordinator is reminder-anchored and resumes automatically after silo restart."
         source: "docs/lattice/online-reshard.md"
-      - statement: "The reshard target range is 2 through 4096, the default virtual shard count, which bounds every tree whatever slot count its shard map holds."
+      - statement: "The reshard target range is 2 through the smaller of 4096 and the tree's own virtual slot count (the number of slots in its shard map), and a target above it is refused with ArgumentOutOfRangeException."
         source: "docs/lattice/online-reshard.md"
     non_guarantees:
       - statement: "ReshardAsync cannot shrink a tree that holds data."
@@ -1812,8 +1812,6 @@ capabilities:
       - statement: "The reshard source-selection policy is heuristic and does not currently read hotness counters."
         source: "docs/lattice/online-reshard.md"
       - statement: "A single tree cannot support more than 4096 physical shards."
-        source: "docs/lattice/online-reshard.md"
-      - statement: "On an installed-app tree whose manifest declared fewer than 4096 virtual slots and that already holds data, a reshard target above that slot count passes validation but is never reached and the reshard stays in progress."
         source: "docs/lattice/online-reshard.md"
     unsafe_sequences:
       - sequence:
@@ -1925,6 +1923,8 @@ capabilities:
         source: "docs/lattice/configuration.md"
       - statement: "The caps are checked once per call, so a batch is admitted or refused as a whole."
         source: "docs/lattice/configuration.md"
+      - statement: "The cross-tree SetManyAtomicAsync extension checks the MaxLiveKeys and MaxEstimatedBytes caps of every participating tree whose slice carries an upsert, before any tree is staged."
+        source: "docs/lattice/configuration.md"
     non_guarantees:
       - statement: "Per-tree admission is best-effort and approximate because it reads a cached per-tree aggregate."
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
@@ -1932,8 +1932,6 @@ capabilities:
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.MaxLiveKeys"
       - statement: "Incoming replicated writes and atomic-write-saga apply paths are never refused by per-tree admission."
         source: "src/lattice/LatticeQuotaExceededException.cs"
-      - statement: "The cross-tree SetManyAtomicAsync extension does not check the per-tree admission caps."
-        source: "docs/lattice/configuration.md"
     unsafe_sequences:
       - sequence:
           - "catch InvalidOperationException broadly around writes"

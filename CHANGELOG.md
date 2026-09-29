@@ -191,6 +191,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Shard - Tree delete, recover and purge skipped split-added shards.** They walked only the pinned ShardCount, so keys an adaptive split moved stayed readable and writable after DeleteTreeAsync and kept their state after a purge. They now walk every shard index the tree has allocated. ([#3657](https://github.com/NSTA1/Orleans.Lattice/issues/3657)) (`Orleans.Lattice`)
 
+- **Shard - Reshard ignored a declared virtual slot count.** On an app tree with fewer than 4096 slots, a target above that count passed validation and stayed in progress forever, and an empty-tree reshard rebuilt the map over 4096 slots. Both now honour the tree's slot count. ([#3888](https://github.com/NSTA1/Orleans.Lattice/issues/3888)) (`Orleans.Lattice`, `Orleans.Lattice.Apps`)
+
 - **Core - A completed online snapshot kept mirroring its source.** An Online SnapshotAsync never released its source shadow-forward, so later source writes reached the destination, a second online snapshot or resize was refused, and deleting the destination failed source writes. ([#3658](https://github.com/NSTA1/Orleans.Lattice/issues/3658)) (`Orleans.Lattice`)
 
 - **Core - A resized tree lost its registration, configuration and snapshots.** Purging a first resize's retired copy unregistered the live tree, the alias swap reset its PublishEvents, history and retention-ceiling overrides, and a snapshot copied the retired shards. Each now acts on the live copy. ([#3741](https://github.com/NSTA1/Orleans.Lattice/issues/3741), [#3742](https://github.com/NSTA1/Orleans.Lattice/issues/3742), [#3743](https://github.com/NSTA1/Orleans.Lattice/issues/3743)) (`Orleans.Lattice`)
@@ -225,6 +227,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Backup - A full backup's cut recorded HLC 0.** The consistency cut read an anchor the core always stamps as zero; it now records the highest HLC the capture read, so the first increment on a full base pins the WAL at that frontier while it drains. ([#3758](https://github.com/NSTA1/Orleans.Lattice/issues/3758)) (`Orleans.Lattice.Backup`)
 
+- **Backup - Capturing a tree with a folded shard failed.** The topology step digested shards `0..count-1`, so once shard healing had folded a shard away it named a missing index and every backup threw. It now follows the routing map, which also gives the true virtual slot count. ([#3887](https://github.com/NSTA1/Orleans.Lattice/issues/3887)) (`Orleans.Lattice.Backup`, `Orleans.Lattice`)
+
 - **WAL - GC reactivation respects the sweep share.** The reactivation pass fans leaf touches out within the sweep starvation share and retries a refused touch in the same pass, a refusal no longer spends a reactivation attempt, and the orphan-pin sweep sum is documented as a population bound. ([#3761](https://github.com/NSTA1/Orleans.Lattice/issues/3761), [#2878](https://github.com/NSTA1/Orleans.Lattice/issues/2878)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
 
 - **Leaf - Split and hydration accounting.** Recovery-path split completions land on a zero-primed `recovered` outcome, the bisect-refusal counter documents its corrected cost model, and the hydration heap factor is justified from both the binary and legacy JSON read paths. ([#2860](https://github.com/NSTA1/Orleans.Lattice/issues/2860), [#2856](https://github.com/NSTA1/Orleans.Lattice/issues/2856), [#2858](https://github.com/NSTA1/Orleans.Lattice/issues/2858)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
@@ -241,7 +245,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Replication - Bootstrap dropped the TTL of committed rows.** The default snapshot export left every committed row's expiry at 0, so whole-tree bootstrap and the anti-entropy fallback installed TTL keys on the peer as durable. Committed rows now carry the source entry's absolute expiry. ([#3802](https://github.com/NSTA1/Orleans.Lattice/issues/3802)) (`Orleans.Lattice.Replication`)
 
-- **Core - Conditional and atomic batches skipped the write bounds.** `SetManyWherePredicateAsync`, `SetManyAtomicAsync` and `SetManyAtomicWhereAsync` now enforce `MaxKeyLength`, `MaxValueSizeBytes` and `MaxLiveKeys` / `MaxEstimatedBytes` caps like `SetManyAsync`, atomic ones before the saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852)) (`Orleans.Lattice`)
+- **Core - Batch writes skipped the write bounds.** `SetManyWherePredicateAsync`, single-tree atomic batches and the cross-tree `SetManyAtomicAsync` extension now enforce `MaxKeyLength`, `MaxValueSizeBytes`, `MaxLiveKeys` and `MaxEstimatedBytes` like `SetManyAsync`, atomic ones before a saga starts. ([#3803](https://github.com/NSTA1/Orleans.Lattice/issues/3803), [#3852](https://github.com/NSTA1/Orleans.Lattice/issues/3852), [#3889](https://github.com/NSTA1/Orleans.Lattice/issues/3889)) (`Orleans.Lattice`)
 
 - **Performance - `performance-report.ps1` threw at startup.** Its `-NamePrefix` parameter is declared again, so Layer 1, Layer 2 and self-provisioning Layer 3 sweeps no longer fail under StrictMode, and a gate checks that every documented script parameter is declared. ([#3804](https://github.com/NSTA1/Orleans.Lattice/issues/3804)) (`repository-wide`)
 
