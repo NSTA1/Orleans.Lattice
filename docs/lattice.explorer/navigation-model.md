@@ -1,153 +1,231 @@
 # The Explorer navigation model
 
-The Explorer console is navigated through four tiers. They are deliberately
-given different shapes, because when every tier looked like a horizontal tab
-strip nothing signalled hierarchy and the same word could appear twice in
-adjacent tiers.
+In the Explorer, the address is the navigation. Every page has one canonical
+address. The browser's URL carries it, and the address line at the top of every
+page shows it as a chain of nodes. You can type into that chain to go somewhere
+else. A directory spine on the left lists the areas you can reach. A command
+palette in the same address line runs anything a page can do.
 
-## The four tiers
+This page covers the address grammar, the address line, completions, the
+command palette, the directory spine, and how tenancy re-roots an address.
 
-| Tier | What it selects | How it renders |
-| --- | --- | --- |
-| Areas | The top-level capability you are working in (Explore, Backups, Access, Tenant administration, My tenant, Telemetry, and Schema when a head registers it) | A stable vertical rail down the left of the shell |
-| Catalog kind | Whether the catalog lists trees, views or tag indexes | A segmented control above the catalog |
-| Selection surfaces | Which aspect of the selected tree or view you are looking at (Data, Topology, Metrics, Dead-letter), or, for a selected tag index, its tag-index browser | An underlined tab strip above the detail panel |
-| Plugin sub-surfaces | A section within one area, such as the surfaces of Tenant administration | A visibly subordinate segmented control, quieter than the selection tabs |
+## The address grammar
 
-No two adjacent tiers share a shape, and no two adjacent tiers may share a
-label. Where a plugin declares a sub-surface whose label matches its own area
-label, the shell relabels the first such sub-surface to `Overview` rather than
-render the same word twice. That relabelling is a backstop; plugins should name their
-surfaces so it never fires.
-
-## Why primary navigation is a rail
-
-Areas used to be a horizontal tab strip with a fixed inline capacity, which had
-two consequences beyond looking like every other tier.
-
-First, horizontal space is scarce, so entries competed for it. An entry the
-caller could not use still occupied an inline slot and pushed a usable entry
-into an overflow menu. Vertical space is cheap, so the rail renders every area
-and nothing is displaced.
-
-Second, because nothing was displaced, demoting an entry became free. That is
-what makes the visibility policy in
-[Navigation visibility policy](navigation-visibility-policy.md) affordable: an
-area you cannot open can stay visible, grouped and quiet, instead of being
-hidden or silently greyed.
-
-## Addressing a view by URL
-
-Every navigable view has a URL. Back, forward, reload, bookmark and share all
-work, and a link to a specific tree and surface opens on that exact view.
-
-The home area is addressed directly:
+An address is an optional tenant root, an area, the segments of the object
+within that area, and an optional query:
 
 ```text
-/explore
-/explore/trees
-/explore/trees/orders
-/explore/trees/orders/data
+[/t/{tenant}]/{area}[/{segment}...][?{key}={value}&...]
 ```
 
-A contributed area is namespaced under `/area/`, because its slug is only known
-at run time and so cannot own a literal path segment:
+A bare `/` (or `/t/{tenant}` when tenancy is on) is Home, the estate overview.
+Some examples:
 
 ```text
-/area/backups
-/area/tenants
-/area/backups/trees/orders/existing
+/
+/data
+/data/a/crm/orders
+/data/a/crm/orders?tab=history&key=order-42
+/t/acme/replication/trees
+/cluster/wal?tree=orders&partition=3
 ```
 
-An area's slug is derived from its plugin id, not from its label, so renaming an
-area does not move it. The Tenant administration area is registered under the
-plugin id `orleans.lattice.tenants` and therefore addresses as `/area/tenants`;
-My tenant addresses as `/area/mytenant`. A contributed area carries the same
-optional kind, id and surface tail as the home area.
+For the Data area, the segments below the area are the parts of the logical
+tree id, so the tree `a/crm/orders` is `/data/a/crm/orders`. The full ABNF is in
+the [UI package README](../../src/lattice.explorer/UI/NUGET_README.md).
 
-An area's sub-surface travels as a query parameter namespaced to its area:
+The encoding rules are strict, so that every address has exactly one spelling:
 
-```
-/area/tenants?tenant-admin-surface=quotas
-/area/mytenant?my-tenant-surface=sharing
-```
+- **Everything is lower case.** An area key is a lower-case letter followed by
+  lower-case letters, digits and hyphens. A segment keeps `a-z`, `0-9`, `-`, `.`,
+  `_` and `~`, and percent-encodes everything else as UTF-8 with upper-case hex,
+  including an upper-case letter. A tree named `Orders` is addressed as
+  `%4Frders`.
+- **Dot segments are encoded.** The segments `.` and `..` are written `%2E` and
+  `%2E%2E`, so a browser cannot collapse them.
+- **Query values keep their case.** A query value keeps the RFC 3986 unreserved
+  characters, upper case included, and percent-encodes the rest. Each query key
+  appears at most once.
+- **Some area keys are reserved.** No area may take `t`, which introduces a
+  tenant root, or `not-found`, which is the not-found page.
 
-It is namespaced because a route keeps its parameters when the area changes, so
-a shared bare `surface` key would let one area clobber the other's. The address
-wins over the remembered value, so a link opens on the surface it names even
-when you last left that area somewhere else - and the Tenant administration and
-My tenant areas then remember the addressed surface, so a later bare visit stays
-where the link put you.
+Parsing typed or pasted input is lenient. An upper-case area key is read as
+lower case, a leading `./` and a trailing `/` are ignored, a fragment is dropped,
+and a raw character that the canonical form would encode is taken as itself. The
+address the Explorer then shows and links to is always the canonical form.
 
-The Access, Backups and Schema areas use `access-surface`, `backups-surface` and
-`schema-surface` the same way when the address carries no catalog selection; when
-it does, they put the sub-surface in the route's own surface segment instead, as
-in `/area/backups/trees/orders/existing` above. The Telemetry area addresses the
-panel you are looking at with `query`.
+Every link the Explorer renders is relative to the application's base path, so
+the console works unchanged when a host mounts it under a subpath (see
+[Running and hosting the Explorer](running-the-explorer.md)).
 
-Two further routes exist: `/reset-view`, which lists what is remembered and clears
-it when you ask it to, and `/not-found`.
+### Query keys
 
-Parsing is forgiving. Handed a bare `/tenants`, the address parser still
-resolves the area, reports the address as normalised, and lets the shell rewrite
-the address bar to the canonical `/area/tenants`. That tolerance is in the
-parser, which is what the shell hands an address it has already received: since
-every declared route begins with a literal segment and no catch-all exists, an
-un-namespaced area is not by itself a routable address a browser can request
-cold.
+Query keys are how a page records its state in the address, so every view can
+be bookmarked, shared and walked with Back and Forward. Three keys mean the same
+thing wherever they appear: `key` names one key within the object, `prefix`
+names a key prefix, and `at` names a point in time or a revision. Each area adds
+its own keys, such as `tab` on a Data tree or `range` on a Telemetry board; they
+are listed in [The Explorer areas](areas.md).
 
-### Paths are lower case
+### Routes and the not-found page
 
-Every route and query key the console declares is lower case:
-`/explore/trees/orders/data`, never `/Explore/Trees/...`. A hygiene test scans
-the declared routes and fails the build if an upper-case segment appears.
+Every route the Explorer declares is lower case and begins with a literal
+segment, and none is a catch-all. A hygiene test fails the build otherwise. A
+catch-all at the application root would also match static asset paths, so a
+request for a script could be answered by the whole console. An object deeper
+than an area's routes can express is carried in the query instead; for example,
+an app's in-app path beyond its declared segments travels as `?path=`.
 
-### Every route begins with a literal segment
+An address that does not resolve lands on the not-found page. It says that
+nothing lives at that address, shows the address, and links the nearest address
+that does exist for you: the root of its area when that area is visible to you,
+and Home otherwise. An address in an area that is hidden from you renders the
+same page, so the Explorer never confirms that such an area exists (see
+[Area availability](area-availability.md)).
 
-No declared route may begin with a route parameter, and none may contain a
-catch-all. This is enforced by a hygiene test, and the reason is not stylistic.
+## The address line
 
-A catch-all route at the application root matches asset paths as well as pages.
-When one was briefly present, a request for `_framework/blazor.web.js` was
-routed into the renderer, so an asset URL returned the whole admin console and
-carried two `Content-Security-Policy` headers. Browsers enforce the
-intersection of duplicated policies, so the effective policy silently stopped
-being the one the middleware composed. Beginning every route with a literal
-segment removes the possibility structurally rather than relying on route
-precedence, which only helps when a competing literal endpoint actually exists.
+When you are not typing, the address line shows the current address as a chain
+of nodes in a mono typeface. Each ancestor is a link and the current node is
+drawn as the marker, the order diagram's "you are here". A query is shown as one
+final node, such as `?tab=history`. With a tenant root, the tenant (`t/acme`) is
+the first node; otherwise the chain starts at `Home`.
 
-## Where the URL ends and preferences begin
+Press `/` (outside a text field) or `Ctrl+K` (`Cmd+K` on a Mac), or select the
+line, to turn it into an input. The input starts with the current address
+selected, so typing replaces it. What you type decides what the line does:
 
-The URL carries *where you are*. Preferences carry *how you like it* and *where
-you were last time*. An explicit URL always wins over what was remembered.
-Landing on a bare `/` restores the remembered view, but only on entry to the
-console. A single policy arbitrates this once per session, so the two never
-disagree - and so a later `/` is honoured rather than overridden. That second
-half is load-bearing: Back out of an area returns you to the home address, and a
-restore that fired again there would put you straight back into the area you were
-trying to leave, making browser history impossible to walk.
+| Input | Mode | Suggestions |
+|---|---|---|
+| Starts with `/` | Address | A "Go to" entry for the typed address, plus matches from every visible area. |
+| Starts with `>` | Command palette | The commands whose title or id contains the text. |
+| Starts with `t/` | Tenant | The tenants you may reach. Choosing one re-roots the current address. |
+| Starts with `a/` | App | Matches from the visible areas' completions, such as installed apps. |
+| Anything else | Search | The visible areas whose key or name matches, a "Go to" entry when the text is an area address, and matches from every visible area. |
 
-See [What the Explorer remembers](what-the-explorer-remembers.md).
+The input is an ARIA 1.2 combobox. The arrow keys move through the suggestions,
+Enter goes to the highlighted one (or the first when none is highlighted), and
+Escape restores the chain and returns focus to where you started. A polite
+status region announces how many suggestions there are.
 
-## Hosting note: the route binding
+### Completions
 
-The component that binds the shell's route to the browser address bar,
-`ShellRouteBinding`, is rendered by the shell's own layout, deliberately outside
-the application shell rather than by the routable page. Entering a contributed
-area swaps out the page, and a binding owned by that page would be disposed with
-it - after which nothing would perform a navigation the shell asked for and
-nothing would observe a Back or Forward.
+Each visible area answers completions from its own data, such as tree ids in
+Data or backup ids in Backups. The Explorer asks every visible area in parallel,
+each under its own time bound of two seconds, and shows each area's group as
+soon as it answers. The groups always appear in directory order, however the
+answers race, so the list never reshuffles under the pointer. An area that does
+not answer in time contributes nothing and is named in a note ("Data did not
+answer in time." or "Data could not be searched."); it never holds back the
+others. A new keystroke cancels the completions still running. An area that is
+unavailable to you is never asked.
 
-This only matters if you replace the shell's layout with your own. A custom head
-that hand-rolls a layout must render `ShellRouteBinding` within it, and must
-place it where an area change cannot unmount it. Omit it and the console still
-works, but it keeps its route in memory only: the address bar stops following
-the view, and deep links, sharing and browser history stop working with it.
+## The command palette
+
+Typing `>` turns the address line into the command palette. The palette offers:
+
+- **Chrome commands.** `go.home` goes to Home, `go.{area}` goes to each visible
+  area (for example `go.data`), and the appearance commands set the theme,
+  contrast and density (`appearance.theme.system`, `appearance.theme.paper`,
+  `appearance.theme.board`, `appearance.contrast.system`,
+  `appearance.contrast.standard`, `appearance.contrast.more`,
+  `appearance.density.comfortable` and `appearance.density.compact`).
+- **Area commands.** Each visible area contributes its own, such as
+  `data.refresh` or `backups.capture`. They are listed with their areas in
+  [The Explorer areas](areas.md).
+
+Choosing a command first navigates to the page the command belongs to, then runs
+it there. Nothing is palette-only: every command is also a visible control on
+its page, and that control carries the command's id in a `data-lt-command`
+attribute. The palette is a faster way to reach a control, never the only way.
+
+## The directory spine
+
+The directory spine is the order diagram's sidebar: hollow nodes on a hairline,
+with the current stop drawn as the ringed marker node and a heavier label. Home
+heads the spine, followed by one stop per area you can reach, in a fixed order:
+Data, Apps, Access, Schema, Tenancy, Replication, Backups, Telemetry and
+Cluster.
+
+- A **visible** area's stop links to its root. It may carry a short badge, such
+  as a count.
+- An **unavailable** area's stop is shown, demoted, with the one-sentence reason
+  it cannot be opened now, such as "Sign in to administer access on this
+  cluster."
+- A **hidden** area has no stop at all.
+
+How an area decides between these is described in
+[Area availability](area-availability.md). The spine is asked again on every
+navigation, and whenever sign-in, the connection or the configuration changes,
+because each of those can change which areas you may see.
+
+Home shows the same stops as an estate overview, each with a one-line status
+under its name, such as how many trees there are. Each status arrives
+independently under its own time bound, so a slow area never delays the others.
+
+### At different widths
+
+The Explorer is phone-first-class for reading and simple actions. It measures its
+own width and uses three bands:
+
+| Band | Width | Spine | Header | Address line |
+|---|---|---|---|---|
+| Expanded | 1200px and up | A full spine with badges and reasons. | Connection, appearance and identity controls in a row. | The full chain. |
+| Medium | 768px to 1199px | A rail: every label, but no badges or reasons. | As expanded. | The full chain. |
+| Compact | Below 768px | A slide-in sheet opened from the **Directory** button, which returns focus when it closes. | The mark and name, with a **Menu** button holding the connection, identity and appearance controls. | The last two nodes after a `...` node that opens the full chain as a list. The command palette opens as a full-screen sheet. |
+
+Until the width has been measured, the expanded layout renders, so nothing
+depends on script to be usable.
+
+Skip links come first on every page: **Skip to directory**, **Skip to address**
+and **Skip to content**.
+
+## Tenancy and re-rooting
+
+The web head always registers the tenant view, so whether an address carries a
+tenant root depends on the caller. For a caller whose tenancy is on, the active
+tenant is the root node of Home and of every tenant-scoped address:
+`/t/acme/data/orders` rather than `/data/orders`. Tenancy is off for a caller
+scoped to the reserved `default` tenant who is not a platform operator (on a
+cluster without the tenancy add-on, that is every caller who cannot see the
+Access area), and in a head that does not register the tenant view.
+Access and Cluster are cluster-wide and never carry a tenant root. The Tenancy
+area's operator directory at `/tenancy` is cluster-wide, while its My tenant
+pages at `/t/{tenant}/tenancy` are tenant-rooted. Every other area is
+tenant-scoped.
+
+The Explorer keeps every address canonical for your tenancy:
+
+- **Tenancy off.** No address carries a tenant root, and an address that has one
+  is redirected to the same address without it.
+- **Tenancy on.** An address without a tenant root is rooted at the active
+  tenant. A cluster-wide area's address loses any tenant root it was given.
+- **Another tenant's address.** Arriving at `/t/{other}/...` is a request to
+  switch to that tenant. It goes through the operator-gated tenant switch. If the
+  switch succeeds, the Explorer says so. If it is refused, the Explorer redirects
+  to the active tenant's equivalent address and shows a warning, so a URL can
+  never scope you beyond what you may reach.
+
+To re-root the current address, type `t/` in the address line. It completes the
+tenants you may reach, marking the active one. Choosing one keeps the rest of the
+address and replaces its tenant root; a cluster-wide address is unchanged.
+
+A caller scoped to the reserved `default` tenant who is not a platform operator
+sees no tenancy chrome: addresses stay plain, and `/t/default/...` is
+redirected to the plain form. See [Tenant scope](tenant-scope.md) for the full
+tenancy model and the Tenancy area.
+
+## Where the address ends and preferences begin
+
+The address carries where you are. Preferences carry how you like the console,
+such as the theme and density, and an explicit address is never overridden by a
+remembered value. See [What the Explorer remembers](what-the-explorer-remembers.md).
 
 ## See also
 
-- [Navigation visibility policy](navigation-visibility-policy.md)
-- [What the Explorer remembers](what-the-explorer-remembers.md)
+- [Area availability](area-availability.md)
+- [The Explorer areas](areas.md)
 - [Tenant scope](tenant-scope.md)
+- [What the Explorer remembers](what-the-explorer-remembers.md)
 - [Theming and density](theming-and-density.md)
 - [Accessibility conformance](accessibility-conformance.md)

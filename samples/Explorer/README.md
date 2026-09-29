@@ -256,8 +256,9 @@ Whether locally-defined group membership affects authorization depends on the
 cluster's group-merge mode. Set `LATTICE_MEMBERSHIP_MERGE_MODE` to `Union`
 (default), `TokenOnly` or `DirectoryOnly` before running. Under `TokenOnly`,
 membership comes only from the identity provider's token, so **Access > Groups**
-renders its create and member controls disabled with an explanatory banner,
-while rules and **Explain** stay live. For example (PowerShell):
+turns off **New group**, and a group's page says so in a notice and turns off
+adding and removing members while the members stay viewable; **Rules** and
+**Explain** stay live. For example (PowerShell):
 
 ```powershell
 $env:LATTICE_MEMBERSHIP_MERGE_MODE = 'TokenOnly'
@@ -266,10 +267,11 @@ dotnet run --project samples/Explorer/Explorer.csproj
 
 ## Identity directory: static (default) and Entra (opt-in)
 
-The Access area's subject picker and its validated create form run against an
-identity directory. An id the directory does not know **fails closed**: the
-create form blocks it with "No such principal in the directory." instead of
-creating an unvalidated free-text id.
+The Access area's **subject picker** (the **Search the directory** control that
+finds users and groups) and its **validated forms** run against an identity
+directory. When a directory is configured, entering a principal id that the
+directory does not know **fails closed** - the form refuses it ("No principal with the id ... exists in
+the identity directory.") instead of creating an unvalidated free-text id.
 
 ### Static directory (default)
 
@@ -278,9 +280,9 @@ With no configuration, an in-memory roster backs the directory: the users in
 `task-editors`, `task-viewers`, `visitors` and `acme-editors`. In a create form
 or a rule's subject picker:
 
-- type `al` -> the picker finds `alice`;
-- type `operators` with the group toggle -> found;
-- type `nobody` -> the create form blocks it, because it is not in the roster.
+- type `al` and choose **Search the directory** -> the picker finds `alice`;
+- choose **Group** as the kind and search for `operators` -> found;
+- type `nobody` and save -> the form refuses it, because it is not in the roster.
 
 ### Entra directory (opt-in, your tenant over Microsoft Graph)
 

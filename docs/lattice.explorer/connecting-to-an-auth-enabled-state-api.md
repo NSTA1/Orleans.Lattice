@@ -1,51 +1,70 @@
 # Connecting to an auth-enabled State API
 
-The Orleans.Lattice Explorer connects to a Lattice State API endpoint to browse
-cluster state. When the endpoint requires authentication, the Explorer runs an
-extensible login challenge: it discovers which authentication scheme the
-endpoint accepts, presents the matching sign-in surface, and attaches the
-resulting credential to every State-API call.
+The Explorer connects to one Lattice API endpoint. When that endpoint requires
+authentication, the session chrome discovers the advertised auth schemes, offers
+a matching sign-in action, and attaches the resulting credential to every State
+API call made by that browser circuit.
 
-## How discovery works
+## Discovery
 
-Before sign-in the Explorer calls the endpoint's unauthenticated
-`GetAuthScheme` RPC. This probe carries no credential and the server answers it
-without enforcing authorization, so the Explorer can learn how to sign in before
-it holds anything. The response advertises the accepted schemes, in the server's
-preference order, and the public parameters each one needs (for example an OIDC
-authority, tenant, client id, and audience).
+Before sign-in, the Explorer calls the endpoint's unauthenticated `GetAuthScheme`
+gRPC method. The probe carries no credential. If the endpoint advertises schemes,
+the Explorer keeps the ordered list and the public parameters attached to each
+scheme. If the probe fails or the endpoint advertises nothing, the Explorer falls
+back to the built-in Basic form so older or anonymous endpoints keep working.
 
-The advertisement carries only public configuration. It never contains a secret,
-a signing key, or any user-specific data, so it is safe to serve without a
-credential. An endpoint that advertises nothing (the default), or whose probe
-fails, leaves the sign-in dialog on the built-in Basic form, which keeps older or
-anonymous endpoints working unchanged; a host can still select another registered
-method itself through `IExplorerAuthSession.LoginWithMethodAsync`.
+The advertisement is public configuration only. It can include values such as an
+OIDC authority, tenant id, client id and audience. It must not contain secrets.
 
-## Selecting a login method
+## Selecting a sign-in method
 
-Each login method is an `IExplorerAuthMethod` with a stable `SchemeId`. The
-Explorer matches the advertised scheme to a registered method and runs its
-challenge:
+Each sign-in method implements `IExplorerAuthMethod`:
 
-- `basic` presents a username and password form and attaches an
-  `authorization: Basic ...` header. This is always available.
-- `entra` (from the optional `Orleans.Lattice.Explorer.Entra` package) runs an
-  interactive Microsoft Entra ID sign-in and attaches a bearer token. A hosted
-  Blazor Server head uses the
-  [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)
-  provider for the same scheme instead, which exchanges the browser's OpenID
-  Connect session for the token.
-- Any custom scheme a host registers presents its own sign-in surface.
+- `SchemeId` is the stable scheme id.
+- `CanHandle(advertisedScheme)` decides whether the method handles an advertised
+  scheme.
+- `ChallengeAsync(context, cancellationToken)` runs the sign-in and returns an
+  `ExplorerAuthSignIn` with the credential attached to the connection.
 
-When the endpoint advertises a scheme the Explorer has no method for, the sign-in
-surface shows a clear, actionable message rather than guessing.
+The shipped methods are:
+
+- `basic` - always available. It accepts the Basic scheme and also handles an
+  empty advertisement. The session chrome renders a username/password form.
+- `entra` from `Orleans.Lattice.Explorer.Entra` - interactive Entra sign-in for
+  desktop or CLI hosts.
+- `entra` from `Orleans.Lattice.Explorer.Entra.Web` - hosted-web Entra sign-in
+  for the Blazor Server web head. It exchanges the browser OpenID Connect
+  session for a downstream State API bearer token.
+
+If the endpoint advertises only schemes for which no method is registered, the
+sign-in dialog shows an actionable unsupported-method message rather than
+choosing a different scheme.
+
+## Session chrome and server form posts
+
+The web head configures the session chrome to submit Basic credentials through
+native server form posts:
+
+- `POST auth/login` validates an antiforgery token, reads `username` and
+  `password`, signs in through the auth session, and redirects back to the
+  Explorer base href.
+- `POST auth/logout` validates an antiforgery token, clears the local State API
+  credential, and redirects back to the Explorer base href.
+
+The identity menu also contains **Reset view** and **Sign out**. A federated
+provider can publish `ExplorerSignOutOptions.FederatedSignOutPath`; when it does,
+the sign-out button posts to that provider endpoint instead of the local logout
+endpoint.
+
+The header connection indicator shows connection state, exposes **Sign in** when
+the endpoint requires authentication, can reconnect a disconnected endpoint, and
+opens the connection settings dialog when endpoint editing is allowed by the web
+head.
 
 ## Signing in with Basic
 
-The Basic form behaves exactly as it always has. Nothing changes for an endpoint
-that requires a username and password; Basic is simply one login method among
-many now.
+Registering the core auth services makes the Basic provider available. The web
+head calls this for you.
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;
@@ -55,81 +74,64 @@ var services = new ServiceCollection();
 services.AddExplorerAuth();
 ```
 
+The Basic method attaches an `authorization: Basic ...` header through the
+connection authentication seam. A static credential header is sent only to
+`https` endpoints, or to an endpoint whose settings explicitly allow unencrypted
+HTTP/2 for local development.
+
 ## Signing in with Entra
 
-Add the optional Entra package and register the Entra login method. The MSAL and
-Entra dependencies stay out of the core Explorer, so hosts that do not need Entra
-never pay for it.
-
-Add the `Orleans.Lattice.Explorer.Entra` package, call `AddExplorerAuth()`,
-then call `AddExplorerEntraAuth(...)` to set the public OIDC authority (or
-tenant), client id, and State API scope. The verified setup snippet lives in the
+Add the optional `Orleans.Lattice.Explorer.Entra` package for an interactive
+host, call `AddExplorerAuth()`, then call `AddExplorerEntraAuth(...)` to set the
+public OIDC authority (or tenant), client id and State API scope. The verified
+setup snippet lives in the
 [`Orleans.Lattice.Explorer.Entra` package docs](../lattice.explorer.entra/README.md#setup),
-where the Entra package is part of the compiling reference set.
+where the Entra package is part of the compiling reference set. Configured values
+win over the endpoint advertisement; advertised values only fill in unset options.
 
-Configured values take precedence over the advertisement, so the advertised
-authority, client id and audience are used only for the fields you leave unset -
-which makes each of these optional against an endpoint that advertises them,
-without your configuration ever being silently displaced. Because the
-advertisement is fetched over an unauthenticated RPC from the endpoint that will
-receive the resulting token, an advertised **authority** is additionally admitted
-only when it is `https` and its host is allow-listed: a recognised Entra login
-host by default, or, when `ExplorerEntraOptions.AllowedAuthorityHosts` is
-non-empty, exactly the hosts listed there (the list replaces the default set).
-Anything else fails the sign-in with the remedy named, rather than sending you to
-an identity provider the endpoint chose.
+An advertised authority is admitted only when it is an absolute `https` URL and
+its host is allowed. With no custom allow-list, the provider accepts the known
+Entra login hosts. When `AllowedAuthorityHosts` is non-empty, it replaces that
+set.
 
-## Token freshness
+For the Blazor Server web head, use
+[`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)
+instead. That provider integrates with ASP.NET Core OpenID Connect middleware and
+Microsoft.Identity.Web.
 
-A bearer-token method never attaches an expired token. The token source refreshes
-proactively and silently: a token is treated as expiring once the clock reaches
-its expiry minus a clock-skew margin (two minutes by default), so a fresh token
-is acquired before the old one is rejected. A signed-in user sees no interruption
-while a refresh is still possible.
+## Token freshness and re-authentication
 
-Concurrency is single-flight. When many calls observe an expiring token at once,
-one refresh runs and the rest reuse its result, so a burst of calls never causes
-a thundering herd on the token endpoint. If a mid-session call is rejected with
-an authentication failure, the Explorer performs a single silent refresh and
-retries once before surfacing anything to the user.
+Bearer-token methods return `LatticeCallAuthentication.Bearer` over an
+`ExplorerAccessTokenSource`. The source refreshes before expiry, coalesces
+concurrent refreshes, and latches into a revoked state when silent renewal can no
+longer produce a token.
 
-Only when a refresh is genuinely impossible - the refresh material has expired or
-been revoked, or consent was withdrawn - does the Explorer re-run the interactive
-challenge. A hard authentication failure re-challenges rather than dropping the
-user into a broken session.
+When a credential latches as revoked, the session chrome shows the `Your session
+expired` interstitial. If an `ExplorerReauthOptions.ChallengePath` is configured,
+**Sign in again** navigates there with the current local URL as the return URL.
+Otherwise it performs a full-page reload.
 
-## Where tokens live
+## Where credentials live
 
-Tokens are session state. They live only in memory and are never written to the
-Explorer's configuration store. Signing out clears the token and drops the
-connection back to anonymous. This differs from the Basic credential, which the
-Explorer may persist to its injected credential store; a token is never
-persisted by the core Explorer. Persistence of refresh material is a
-provider-owned, opt-in concern.
+Tokens are session state. The core auth session never writes token material to
+the Explorer configuration store. Token providers own any optional persistence of
+their refresh material.
 
-A sign-in is bound to the endpoint it was made against. Applying a configuration
-that points the console at a different endpoint signs the session out, so the new
-endpoint challenges for a sign-in of its own rather than receiving the one made
-for the old endpoint.
+The Basic credential may be stored by the injected credential store. In the web
+head that store is a Data Protection-protected, `HttpOnly`, secure browser
+cookie. Signing out clears the store and reconfigures the connection without the
+credential.
+
+A sign-in is bound to the endpoint it was minted for. If the endpoint changes,
+the auth session signs out instead of carrying the credential to a different
+host.
 
 ## Reaching an endpoint behind an origin-locked proxy
 
-Some deployments front the State API with a proxy that only accepts requests
-carrying a specific routing header, and reject anything else at the origin. Azure
-Front Door with an origin lock is the common case: the silo origin refuses any
-request that does not carry the `X-Azure-FDID` header identifying the expected
-Front Door instance.
-
-The Explorer dials the State API over native gRPC (HTTP/2), which such a proxy
-usually cannot forward, so the Explorer connects to the origin directly and must
-present the routing header itself. That header is **not** a credential, so it
-does not belong on the authentication seam: an interactive sign-in replaces the
-whole authentication object, which would drop any header carried there. Instead
-it rides on `LatticeConnectionSettings.TransportHeaders`, applied to every call
-independently of the sign-in state.
-
-Set it through `ExplorerConfiguration.TransportHeaders`, which maps straight onto
-the connection settings:
+Some deployments front the State API with a proxy that requires a routing header,
+such as `X-Azure-FDID` for an Azure Front Door origin lock. That header is not a
+credential and must survive sign-in. Put it in `TransportHeaders`, not in the
+authentication seam.
 
 ```csharp verify
 using System.Collections.Generic;
@@ -148,38 +150,26 @@ var configuration = new ExplorerConfiguration
 LatticeConnectionSettings settings = configuration.ToConnectionSettings();
 ```
 
-A deployment that uses the environment bootstrap can seed the same header without
-code through the `LATTICE_EXPLORER_TRANSPORT_HEADERS` variable, a semicolon-
-separated list of `Name=Value` pairs (a value may itself contain `=` or be
-empty):
+The environment bootstrap can seed the same headers:
 
-```
+```text
 LATTICE_EXPLORER_TRANSPORT_HEADERS=X-Azure-FDID=<front-door-id>
 ```
 
-These headers are non-secret routing metadata, so they are safe to persist in the
-Explorer's configuration store and to pass through the environment. The live
-authentication credential never flows through this seam.
-
 ## Reference
 
-- `IExplorerAuthMethod` - the login-method seam (`SchemeId`, `CanHandle`,
-  `ChallengeAsync`).
-- `IExplorerAuthSession` - the session that discovers schemes and drives sign-in
-  (`DiscoverAsync`, `LoginAsync`, `LoginWithMethodAsync`, `CurrentScheme`).
-- `ExplorerAccessTokenSource` - the proactive, single-flight token-refresh engine.
-- `LatticeStateApiException` - the typed failure a state-API call surfaces, in
-  place of the raw gRPC fault (kept as the inner exception), once any single
-  silent token refresh and the inline transient retries are spent, or when no
-  endpoint is configured yet. Its `Message` is safe to show the user.
-  `IsTransient` marks a failure the endpoint may recover from, including a
-  load-shed `ResourceExhausted` refusal, which is never retried inline;
-  `RequiresAuthentication` marks a gRPC `Unauthenticated` or `PermissionDenied`
-  rejection; and `IsPermissionDenied` narrows that to `PermissionDenied` - a
-  caller refused for want of a grant, which signing in again cannot fix.
+- `IExplorerAuthMethod` - sign-in provider contract.
+- `IExplorerAuthSession` - discovers schemes, drives sign-in and sign-out, and
+  applies credentials to the connection.
+- `ExplorerAuthChallengeContext` - selected scheme, advertised parameters,
+  interactive inputs, endpoint and `TimeProvider`.
+- `ExplorerAccessTokenSource` - proactive, single-flight token refresh.
 - `LatticeConnectionSettings.TransportHeaders` - non-secret headers attached to
-  every call regardless of the sign-in state (for example an origin-lock routing
-  header), seedable via `LATTICE_EXPLORER_TRANSPORT_HEADERS`. Every
-  `LatticeConnectionSettings` member, with its type and default, is listed in
-  [Configuration](configuration.md#latticeconnectionsettings).
+  every call regardless of sign-in state.
+
+## See also
+
 - [Adding a custom auth method](adding-a-custom-auth-method.md)
+- [Configuration](configuration.md)
+- [`Orleans.Lattice.Explorer.Entra`](../lattice.explorer.entra/README.md)
+- [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)
