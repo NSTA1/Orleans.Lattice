@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
@@ -11,18 +12,36 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// </summary>
 public partial class DataDirectoryPage : IDisposable
 {
-    private static readonly (DataTreeKind? Kind, string Text)[] KindOptions =
+    /// <summary>The kind filter's value for every row.</summary>
+    internal const string AllKinds = "all";
+
+    /// <summary>The kind filter's value for the tenant's own trees.</summary>
+    internal const string TreeKinds = "trees";
+
+    /// <summary>The kind filter's value for views.</summary>
+    internal const string ViewKinds = "views";
+
+    /// <summary>The kind filter's value for the trees and prefixes other tenants share with this one.</summary>
+    internal const string SharedKinds = "shared";
+
+    private static readonly LtSelectOption[] OwnedKindOptions =
     [
-        (null, "All"),
-        (DataTreeKind.Tree, "Trees"),
-        (DataTreeKind.View, "Views"),
+        new(AllKinds, "All"),
+        new(TreeKinds, "Trees"),
+        new(ViewKinds, "Views"),
+    ];
+
+    private static readonly LtSelectOption[] TenantKindOptions =
+    [
+        .. OwnedKindOptions,
+        new(SharedKinds, "Shared with this tenant"),
     ];
 
     private readonly CancellationTokenSource _lifetime = new();
     private IReadOnlyList<DataTreeEntry>? _entries;
     private IReadOnlyList<DataTreeEntry> _visible = [];
     private string? _filter;
-    private DataTreeKind? _kind;
+    private string _kind = AllKinds;
     private string? _error;
     private bool _subscribed;
 
@@ -31,6 +50,15 @@ public partial class DataDirectoryPage : IDisposable
 
     [Inject]
     internal ExplorerTenancy Tenancy { get; set; } = default!;
+
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
+    internal LtBreakpoint? Breakpoint { get; set; }
+
+    // Only a tenant can have trees shared with it, so the filter offers "shared" only with tenancy on.
+    private IReadOnlyList<LtSelectOption> KindOptions => Tenancy.IsActive ? TenantKindOptions : OwnedKindOptions;
+
+    // The responsive contract: a segmented control of more than three options becomes a select at the compact band.
+    private bool UseKindSelect => Breakpoint == LtBreakpoint.Compact && KindOptions.Count > 3;
 
     private string Lede => Tenancy.IsActive && Tenancy.ActiveTenant is { } tenant
         ? $"Every tree and view you can reach in tenant {tenant}."
@@ -66,7 +94,9 @@ public partial class DataDirectoryPage : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    internal static LtStateRole? StatusRole(DataTreeEntry entry) => entry.Kind == DataTreeKind.View
+    internal static LtStateRole? StatusRole(DataTreeEntry entry) => entry.IsShared
+        ? null
+        : entry.Kind == DataTreeKind.View
         ? LtStateRole.Enabled
         : entry.Lifecycle switch
         {
@@ -76,7 +106,9 @@ public partial class DataDirectoryPage : IDisposable
             _ => LtStateRole.Unknown,
         };
 
-    internal static string StatusText(DataTreeEntry entry) => entry.Kind == DataTreeKind.View
+    internal static string StatusText(DataTreeEntry entry) => entry.AccessText is { } access
+        ? access
+        : entry.Kind == DataTreeKind.View
         ? "View"
         : entry.Lifecycle switch
         {
@@ -97,6 +129,11 @@ public partial class DataDirectoryPage : IDisposable
         if (entry.AppSlug is { } slug)
         {
             parts.Add("app " + slug);
+        }
+
+        if (entry.SharedText is { } shared)
+        {
+            parts.Add(shared.ToLowerInvariant());
         }
 
         return string.Join(" - ", parts);
@@ -163,11 +200,19 @@ public partial class DataDirectoryPage : IDisposable
         Apply();
     }
 
-    private void SetKind(DataTreeKind? kind)
+    private void SetKind(string kind)
     {
         _kind = kind;
         Apply();
     }
+
+    private bool MatchesKind(DataTreeEntry entry) => _kind switch
+    {
+        TreeKinds => entry.Kind == DataTreeKind.Tree && !entry.IsShared,
+        ViewKinds => entry.Kind == DataTreeKind.View,
+        SharedKinds => entry.IsShared,
+        _ => true,
+    };
 
     private void Apply()
     {
@@ -178,7 +223,7 @@ public partial class DataDirectoryPage : IDisposable
         }
 
         var filter = _filter?.Trim();
-        if (string.IsNullOrEmpty(filter) && _kind is null)
+        if (string.IsNullOrEmpty(filter) && _kind == AllKinds)
         {
             _visible = entries;
             return;
@@ -187,7 +232,7 @@ public partial class DataDirectoryPage : IDisposable
         var visible = new List<DataTreeEntry>();
         foreach (var entry in entries)
         {
-            if (_kind is { } kind && entry.Kind != kind)
+            if (!MatchesKind(entry))
             {
                 continue;
             }
@@ -195,7 +240,8 @@ public partial class DataDirectoryPage : IDisposable
             if (!string.IsNullOrEmpty(filter)
                 && !entry.LogicalId.Contains(filter, StringComparison.OrdinalIgnoreCase)
                 && !entry.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                && !(entry.AppSlug?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false))
+                && !(entry.AppSlug?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)
+                && !(entry.SharedBy?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false))
             {
                 continue;
             }

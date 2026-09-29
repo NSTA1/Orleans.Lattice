@@ -2,11 +2,13 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Transport;
 
@@ -30,6 +32,10 @@ public abstract class DataTestContext : ShellChromeTestContext
 
         Services.AddSingleton<ILatticeStateClient>(Client);
         Services.AddKeyedSingleton(ShellFacades.Key, Admin);
+
+        // The grants the tenant has received: read only with tenancy on, and faked so a test never dials.
+        Grants = new FakeTenancyCluster();
+        Services.AddKeyedSingleton<ILatticeTenantGrantAdmin>(ShellFacades.Key, Grants);
         Services.AddExplorerArea<DataArea>();
     }
 
@@ -38,6 +44,9 @@ public abstract class DataTestContext : ShellChromeTestContext
 
     /// <summary>The substitute tree-administration facade.</summary>
     internal ILatticeTreeAdmin Admin { get; }
+
+    /// <summary>The tenancy facades behind the grant listing: a test adds tenants and grants, or fails the listing.</summary>
+    internal FakeTenancyCluster Grants { get; }
 
     /// <summary>The state ids of the trees the caller may administer.</summary>
     internal HashSet<string> AdministeredTrees { get; } = new(StringComparer.Ordinal);

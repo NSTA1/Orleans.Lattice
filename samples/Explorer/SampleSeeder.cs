@@ -24,6 +24,9 @@ internal static class SampleSeeder
     /// <summary>The id of the rule granting <c>operators</c> Read on the demo tree.</summary>
     public const string OperatorsReadRuleId = "operators-read-factory-floor";
 
+    /// <summary>The id of the rule letting globex's admin read acme's orders, which acme offers globex through a grant.</summary>
+    public const string SharedOrdersRuleId = "globex-admin-read-acme-orders";
+
     /// <summary>How many orders each tenant's <c>orders</c> tree holds.</summary>
     public const int OrdersPerTenant = 5;
 
@@ -273,10 +276,13 @@ internal static class SampleSeeder
             }
 
             var grants = services.GetRequiredService<ILatticeTenantGrantAdmin>();
+
+            // A grant's scope is the granting tenant's full tree id: the tenant gate
+            // matches it against the t/{tenant}/... id a crossing reads.
             await grants.OfferGrantAsync(
                 SampleIdentities.AcmeTenant,
                 SampleIdentities.GlobexTenant,
-                SampleIdentities.TenantOrdersTree,
+                OrdersTree(SampleIdentities.AcmeTenant),
                 TenantGrantAccess.Read,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -309,6 +315,19 @@ internal static class SampleSeeder
                         effect: LatticeEffect.Allow),
                     cancellationToken).ConfigureAwait(false);
             }
+
+            // The grant opens the tenant boundary between acme and globex; the
+            // deny-by-default gate still decides who may read. globex's admin may
+            // read acme's orders, and once globex approves the grant the crossing
+            // is admitted.
+            await policy.PutRuleAsync(
+                new LatticeAuthorizationRule(
+                    ruleId: SharedOrdersRuleId,
+                    subject: LatticeSubjectSelector.User(SampleIdentities.GlobexAdmin),
+                    scope: LatticeScope.Tree(OrdersTree(SampleIdentities.AcmeTenant)),
+                    operations: LatticeOperation.Read | LatticeOperation.RangeRead,
+                    effect: LatticeEffect.Allow),
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

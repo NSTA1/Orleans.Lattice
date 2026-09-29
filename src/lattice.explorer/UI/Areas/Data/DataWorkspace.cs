@@ -33,6 +33,13 @@ internal sealed class DataWorkspace
     /// <summary>The tree the workspace shows.</summary>
     public DataTreeEntry Tree { get; }
 
+    /// <summary>
+    /// Whether the workspace may offer administration (reconcile, rebuild) at all.
+    /// A tree another tenant shares is read under a grant, which carries read or
+    /// write access and never administration, so its workspace is read-only.
+    /// </summary>
+    public bool OffersAdministration => !Tree.IsShared;
+
     /// <summary>The current address, query included.</summary>
     public ExplorerAddress Address { get; }
 

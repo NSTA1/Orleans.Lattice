@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Tenancy;
@@ -33,6 +35,9 @@ internal sealed class ConsoleCircuit : IAsyncDisposable
 
     /// <summary>The Explorer's apps facade for this circuit.</summary>
     public ILatticeAppsControl Apps => Services.GetRequiredKeyedService<ILatticeAppsControl>(FacadeKey);
+
+    /// <summary>The Explorer's cross-tenant grant facade for this circuit.</summary>
+    public ILatticeTenantGrantAdmin Grants => Services.GetRequiredKeyedService<ILatticeTenantGrantAdmin>(FacadeKey);
 
     /// <summary>Opens a circuit signed in as <paramref name="user"/> and scoped to <paramref name="tenant"/>.</summary>
     /// <param name="sample">The started sample.</param>
@@ -81,6 +86,12 @@ internal sealed class ConsoleCircuit : IAsyncDisposable
 
         return trees;
     }
+
+    /// <summary>Reads <paramref name="key"/> from <paramref name="treeId"/> through the circuit's state connection, as the tree workspace does.</summary>
+    /// <param name="treeId">The tree id, exactly as the workspace passes it.</param>
+    /// <param name="key">The key.</param>
+    public Task<EntryGetResponse> ReadAsync(string treeId, string key) =>
+        Services.GetRequiredService<IExplorerSession>().Connection.GetEntryAsync(new EntryGetRequest { TreeId = treeId, Key = key });
 
     /// <summary>The slugs of the apps installed in the circuit's tenant.</summary>
     public async Task<IReadOnlyList<string>> ListInstalledAppsAsync() =>

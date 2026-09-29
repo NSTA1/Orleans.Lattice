@@ -37,6 +37,29 @@ public sealed partial class EstateSmokeTests
     }
 
     [Test]
+    public async Task Once_globex_approves_acmes_offer_its_data_lists_acmes_orders_as_shared_and_reads_them()
+    {
+        var acmeOrders = SampleSeeder.OrdersTree(SampleIdentities.AcmeTenant);
+        await using var circuit = await ConsoleCircuit.OpenAsync(_sample, SampleIdentities.GlobexAdmin, SampleIdentities.GlobexTenant);
+
+        var offered = (await circuit.Grants.ListGrantsAsync(SampleIdentities.GlobexTenant)).Received
+            .Single(grant => grant.GranterTenantId == SampleIdentities.AcmeTenant);
+        await circuit.Grants.ApproveGrantAsync(SampleIdentities.AcmeTenant, SampleIdentities.GlobexTenant, offered.Scope);
+        var read = await circuit.ReadAsync(acmeOrders, "order-1001");
+        var (address, data) = await SampleTestHost.GetPageAsync(_sample, "t/globex/data");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(offered.Scope, Is.EqualTo(acmeOrders), "acme offers its orders by their full tree id, which the tenant gate matches");
+            Assert.That(read.Status, Is.EqualTo(Orleans.Lattice.Api.State.StateQueryStatus.Found), "globex reads acme's orders by the granted id, not re-rooted into globex");
+            Assert.That(read.Entry, Is.Not.Null);
+            Assert.That(address.AbsolutePath, Is.EqualTo("/t/globex/data"));
+            Assert.That(data, Does.Contain($"href=\"t/globex/data/{acmeOrders}\""), "globex's directory links acme's orders under globex's own root");
+            Assert.That(data, Does.Contain("Shared tree").And.Contain("Read only"));
+        });
+    }
+
+    [Test]
     public async Task A_tenant_admins_console_lists_its_own_tenants_trees()
     {
         await using var circuit = await ConsoleCircuit.OpenAsync(_sample, SampleIdentities.AcmeAdmin, SampleIdentities.AcmeTenant);

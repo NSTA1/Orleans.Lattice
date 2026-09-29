@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Lattice.Explorer.Core.Tenancy;
+using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Suggestions;
@@ -54,6 +56,9 @@ public partial class TenancyGrants
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
+
+    [Inject]
+    internal IServiceProvider Services { get; set; } = default!;
 
     // Only a platform operator can list every tenant, so only an operator's picker refuses an unlisted one.
     private LtComboBoxMode GranteeMode => Catalog.LastStanding is { IsOperator: true } ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest;
@@ -118,6 +123,19 @@ public partial class TenancyGrants
         _ => 2,
     };
 
+    /// <summary>
+    /// The scope to offer for a tree name or prefix typed in <paramref name="tenant"/>.
+    /// The cluster's tenant gate matches a grant's scope against the full
+    /// <c>t/{tenant}/...</c> tree id it reads, so a tenant-local name is qualified
+    /// into the granting tenant's namespace; a bare name would share nothing.
+    /// </summary>
+    /// <param name="tenant">The granting tenant.</param>
+    /// <param name="scope">The name or prefix as typed.</param>
+    internal static string QualifyScope(string tenant, string scope) =>
+        scope.StartsWith(ExplorerTenantTrees.SegmentPrefix, StringComparison.Ordinal)
+            ? scope
+            : $"{ExplorerTenantTrees.SegmentPrefix}{tenant}/{scope}";
+
     private void OpenOffer()
     {
         _grantee = string.Empty;
@@ -159,7 +177,7 @@ public partial class TenancyGrants
         _busy = true;
         try
         {
-            await Catalog.Grants!.OfferGrantAsync(TenantId, grantee, scope, access).ConfigureAwait(true);
+            await Catalog.Grants!.OfferGrantAsync(TenantId, grantee, QualifyScope(TenantId, scope), access).ConfigureAwait(true);
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -225,6 +243,11 @@ public partial class TenancyGrants
         {
             await change(Catalog.Grants!, grant).ConfigureAwait(true);
             Toasts.Show(done, LtToastTone.Success);
+
+            // The trees shared with this tenant are part of the Data directory's
+            // memo; a grant this circuit just approved, rejected or revoked changes
+            // them, so the next Data read lists them afresh.
+            (Services.GetService(typeof(DataDirectory)) as DataDirectory)?.Invalidate();
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {

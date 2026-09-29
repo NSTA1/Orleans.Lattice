@@ -43,7 +43,7 @@ public partial class DataViewsPanel : IDisposable
         _administrable.Clear();
         foreach (var view in _views)
         {
-            if (view.SourceStateId is { } source && await Gate.CanAdministerAsync(source, _lifetime.Token))
+            if (workspace.OffersAdministration && view.SourceStateId is { } source && await Gate.CanAdministerAsync(source, _lifetime.Token))
             {
                 _administrable.Add(view.StateId);
             }

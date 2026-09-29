@@ -5,16 +5,22 @@
 @*
     The Data directory: every tree and view the caller can reach, drawn as one
     booktabs table - logical name (never a physical id), kind, owning app, shard
-    count, lifecycle, and a view's source. The catalogue is read once per
-    circuit, filtered here, and virtualised, so thousands of trees stay usable.
-    Below the small breakpoint the table becomes two-line rows with a detail
-    sheet, and the toolbar stacks.
+    count, lifecycle, and a view's source. With tenancy on, the trees and
+    prefixes other tenants share with the tenant through a grant it approved
+    follow its own trees, each with its owner and what the grant allows. The
+    catalogue is read once per circuit, filtered here, and virtualised, so
+    thousands of trees stay usable. Below the small breakpoint the table becomes
+    two-line rows with a detail sheet, and the toolbar stacks.
 *@
 
 <PageTitle>Data - Orleans.Lattice Explorer</PageTitle>
 
 <h1 class="lt-shell-page-title">Data</h1>
 <p class="lt-shell-page-lede">@Lede</p>
+@if (Directory.SharingNote is { } sharingNote)
+{
+    <p class="lt-data-note" role="note">@sharingNote</p>
+}
 
 <div class="lt-toolbar">
     <div class="lt-data-toolbar__grow">
@@ -23,14 +29,21 @@
                        Value="@_filter"
                        ValueChanged="OnFilterChanged" />
     </div>
-    <div class="lt-data-segmented" role="group" aria-label="Show">
-        @foreach (var option in KindOptions)
-        {
-            <LtButton Variant="LtButtonVariant.Quiet"
-                      Pressed="@(_kind == option.Kind)"
-                      OnClick="() => SetKind(option.Kind)">@option.Text</LtButton>
-        }
-    </div>
+    @if (UseKindSelect)
+    {
+        <LtSelect Label="Show" Options="@KindOptions" Value="@_kind" ValueChanged="SetKind" />
+    }
+    else
+    {
+        <div class="lt-data-segmented" role="group" aria-label="Show">
+            @foreach (var option in KindOptions)
+            {
+                <LtButton Variant="LtButtonVariant.Quiet"
+                          Pressed="@(_kind == option.Value)"
+                          OnClick="() => SetKind(option.Value)">@option.Text</LtButton>
+            }
+        </div>
+    }
     <LtButton data-lt-command="@DataArea.RefreshCommandId" OnClick="RefreshAsync">Refresh</LtButton>
     <span class="lt-data-toolbar__status" role="status">@CountText</span>
 </div>
@@ -63,9 +76,25 @@ else
              DetailTitle="@(entry => entry.DisplayName)">
         <ChildContent>
             <LtColumn TItem="DataTreeEntry" Context="entry" Title="Name" RowHeader="true" Mono="true" SortBy="@(entry => entry.DisplayName)">
-                <a href="@Navigator.Canonicalize(entry.Address).ToHref()">@entry.DisplayName</a>
+                @if (entry.Kind == DataTreeKind.Prefix)
+                {
+                    <span>@entry.DisplayName</span>
+                }
+                else
+                {
+                    <a href="@Navigator.Canonicalize(entry.Address).ToHref()">@entry.DisplayName</a>
+                }
             </LtColumn>
             <LtColumn TItem="DataTreeEntry" Title="Kind" Value="@(entry => entry.KindText)" SortBy="@(entry => entry.KindText)" />
+            @if (Tenancy.IsActive)
+            {
+                <LtColumn TItem="DataTreeEntry" Context="entry" Title="Shared by" Mono="true" SortBy="@(entry => entry.SharedBy)">
+                    @if (entry.SharedBy is { } owner)
+                    {
+                        <span>@owner</span>
+                    }
+                </LtColumn>
+            }
             <LtColumn TItem="DataTreeEntry" Context="entry" Title="App" SortBy="@(entry => entry.AppSlug)">
                 @if (entry.AppSlug is { } slug)
                 {
@@ -91,7 +120,14 @@ else
             </LtCompactRow>
         </CompactRow>
         <DetailActions Context="entry">
-            <a class="lt-btn" href="@Navigator.Canonicalize(entry.Address).ToHref()">Open @entry.DisplayName</a>
+            @if (entry.Kind == DataTreeKind.Prefix)
+            {
+                <span>Open a tree under this prefix by its full id in the address line.</span>
+            }
+            else
+            {
+                <a class="lt-btn" href="@Navigator.Canonicalize(entry.Address).ToHref()">Open @entry.DisplayName</a>
+            }
         </DetailActions>
         <EmptyContent>
             <span>Nothing matches the filter.</span>

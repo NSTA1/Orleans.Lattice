@@ -170,7 +170,7 @@ public partial class DataTagIndexesPanel : IDisposable
             return;
         }
 
-        _canReconcile = Gate.Admin is not null && await Gate.CanAdministerAsync(index.TreeId, _lifetime.Token);
+        _canReconcile = workspace.OffersAdministration && Gate.Admin is not null && await Gate.CanAdministerAsync(index.TreeId, _lifetime.Token);
         try
         {
             var covered = await reader.ListCoveredTreesForIndexAsync(index.IndexName, _lifetime.Token);

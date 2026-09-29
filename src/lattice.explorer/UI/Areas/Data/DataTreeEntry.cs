@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
@@ -50,6 +51,25 @@ internal sealed record DataTreeEntry
     /// <summary>A view's projection version, when it reports one.</summary>
     public string? ProjectionVersion { get; init; }
 
+    /// <summary>
+    /// The tenant that shares this tree or prefix with the caller's tenant through
+    /// an approved grant, or <see langword="null"/> for a tree the tenant owns.
+    /// </summary>
+    /// <remarks>
+    /// A shared entry's <see cref="LogicalId"/> and <see cref="StateId"/> are both
+    /// the granted <c>t/{owner}/...</c> id: the cluster passes an already-qualified
+    /// id through without re-rooting it into the caller's tenant, and its tenant
+    /// gate admits the crossing on the grant. <see cref="Tenant"/> stays the
+    /// caller's tenant, so the address is rooted where the caller is.
+    /// </remarks>
+    public string? SharedBy { get; init; }
+
+    /// <summary>What the grant behind a shared entry allows; <see cref="TenantGrantAccess.None"/> for an owned tree.</summary>
+    public TenantGrantAccess SharedAccess { get; init; }
+
+    /// <summary>Whether another tenant shares this entry with the caller's tenant.</summary>
+    public bool IsShared => SharedBy is not null;
+
     /// <summary>The name a person reads: the view name for a view, else the logical id.</summary>
     public string DisplayName => ViewName ?? LogicalId;
 
@@ -59,10 +79,23 @@ internal sealed record DataTreeEntry
         DataTreeKind.View when IsHistory => "History view",
         DataTreeKind.View when IsAggregation => "Aggregation view",
         DataTreeKind.View => "Projection view",
+        DataTreeKind.Prefix => "Shared prefix",
+        _ when IsShared => "Shared tree",
         _ when AppSlug is not null => "App tree",
         _ => "Tree",
     };
 
-    /// <summary>The tree workspace's address, rooted at the owning tenant when there is one.</summary>
-    public ExplorerAddress Address => ExplorerAddress.ForTree(DataArea.AreaKey, LogicalId).WithTenant(Tenant);
+    /// <summary>"Shared by acme" for a shared entry, else <see langword="null"/>.</summary>
+    public string? SharedText => SharedBy is { } owner ? "Shared by " + owner : null;
+
+    /// <summary>What a shared entry's grant allows, such as "Read only", else <see langword="null"/>.</summary>
+    public string? AccessText => IsShared ? DataSharedTrees.AccessText(SharedAccess) : null;
+
+    /// <summary>
+    /// The tree workspace's address, rooted at the owning tenant when there is one.
+    /// A shared prefix names no tree, so its address is the directory's.
+    /// </summary>
+    public ExplorerAddress Address => Kind == DataTreeKind.Prefix
+        ? ExplorerAddress.ForArea(DataArea.AreaKey).WithTenant(Tenant)
+        : ExplorerAddress.ForTree(DataArea.AreaKey, LogicalId).WithTenant(Tenant);
 }
