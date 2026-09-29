@@ -790,12 +790,7 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "The source states the lifecycle or consent transition semantics but does not state whether retrying after an ambiguous transport or process failure is safe without first reading current state.",
-          "required_source": "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl",
-          "issue": 3635
-        },
+        "safe": true,
         "policy": "After an ambiguous failure, read Describe or List before retrying so a completed disable is not mistaken for a fresh failure.",
         "source": "src/lattice.apps/Registry/AppLifecycle.cs#Evaluate"
       },
@@ -841,14 +836,9 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "The source states the lifecycle or consent transition semantics but does not state whether retrying after an ambiguous transport or process failure is safe without first reading current state.",
-          "required_source": "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl",
-          "issue": 3635
-        },
+        "safe": true,
         "policy": "After an ambiguous failure, read Describe or List before retrying; activation failures are recorded as state evidence rather than returned as lifecycle results.",
-        "source": "src/lattice.apps/Activation/IAppActivationPipeline.cs#IAppActivationPipeline"
+        "source": "src/lattice.apps/Registry/AppLifecycle.cs#Evaluate"
       },
       "idempotency": {
         "idempotent": true,
@@ -992,14 +982,9 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "The source states the lifecycle or consent transition semantics but does not state whether retrying after an ambiguous transport or process failure is safe without first reading current state.",
-          "required_source": "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl",
-          "issue": 3635
-        },
+        "safe": "conditional",
         "policy": "After an ambiguous failure, inspect List, Describe, and GetConsent before retrying; installing the same version again is refused and consent changes must use UpdateConsent.",
-        "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#InstallAsync"
+        "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#InstallCoreAsync"
       },
       "idempotency": {
         "idempotent": false,
@@ -1077,12 +1062,7 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "The source states the lifecycle or consent transition semantics but does not state whether retrying after an ambiguous transport or process failure is safe without first reading current state.",
-          "required_source": "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl",
-          "issue": 3635
-        },
+        "safe": true,
         "policy": "After an ambiguous failure, read Describe or List before retrying; an uninstalled record makes a repeat uninstall a no-op but an app with no record is NotFound.",
         "source": "src/lattice.apps/Registry/AppLifecycle.cs#Evaluate"
       },
@@ -1128,14 +1108,9 @@
         }
       ],
       "retry": {
-        "safe": {
-          "status": "uncertain",
-          "reason": "The source states the lifecycle or consent transition semantics but does not state whether retrying after an ambiguous transport or process failure is safe without first reading current state.",
-          "required_source": "src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs#ILatticeAppsControl",
-          "issue": 3635
-        },
+        "safe": "conditional",
         "policy": "After an ambiguous failure, read GetConsent and Describe before retrying; an enabled app may already have had the new consent recorded before re-application failed.",
-        "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#UpdateConsentAsync"
+        "source": "src/lattice.api.apps/LatticeAppsControl.Install.cs#UpdateConsentCoreAsync"
       },
       "idempotency": {
         "idempotent": "conditional",

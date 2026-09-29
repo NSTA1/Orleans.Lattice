@@ -1624,20 +1624,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Safe to retry after an interrupted shard purge, which is re-driven; once PurgeComplete is persisted a repeat throws InvalidOperationException even if the registry unregister that follows it failed, so after an ambiguous failure read the deletion status and treat an already-purged status as success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether a repeated purge is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Irreversible hard purge bypassing the soft-delete window; requires confirm true.",
-        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#PurgeTreeAsync"
+        "idempotent": "conditional",
+        "basis": "Shard clearing re-runs until PurgeComplete is persisted, after which a repeated call throws InvalidOperationException instead of returning the original success.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
       },
       "concurrency": {
         "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
@@ -1670,20 +1664,14 @@
         }
       ],
       "retry": {
-        "status": "uncertain",
-        "reason": "No source states that retrying this operation is safe after an ambiguous failure.",
-        "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
-        "issue": 3635
+        "safe": "conditional",
+        "policy": "Retry is safe after a partial recovery failure, but a retry after a completed recovery fails with InvalidOperationException because the tree is no longer deleted.",
+        "source": "src/lattice/BPlusTree/ITreeDeletionGrain.cs#RecoverAsync"
       },
       "idempotency": {
-        "idempotent": {
-          "status": "uncertain",
-          "reason": "No source states whether a repeated recover is idempotent after an ambiguous failure.",
-          "required_source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs",
-          "issue": 3635
-        },
-        "basis": "Recovers a soft-deleted tree within its recovery window.",
-        "source": "src/lattice.api.tenantadmin/ILatticeTenantScopedTreeAdmin.cs#RecoverTreeAsync"
+        "idempotent": "conditional",
+        "basis": "Recovery keeps the deletion record until idempotent shard unmark and reseed complete, but after success the cleared deletion record makes a repeated call throw InvalidOperationException.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#RecoverPhysicalAsync"
       },
       "concurrency": {
         "rule": "The target id is composed as t/{tenantId}/{name} under the ambient active tenant; no parameter can name another tenant tree.",
