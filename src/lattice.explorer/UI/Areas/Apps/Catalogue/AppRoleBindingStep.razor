@@ -3,14 +3,15 @@
 
 @*
     Bind roles: each role the app declares is bound to one membership group - never
-    to a user. The group is typed, or found with the auth facade's group search,
+    to a user. The same step changes the installed version's bindings, where a role
+    may also be left unbound. The group is typed, or found with the auth facade's group search,
     which is read-only here: nothing is created or changed in the directory.
 *@
 @if (Flow?.Descriptor is { } app)
 {
     <section class="lt-apps-section" aria-labelledby="lt-apps-bind">
-        <h2 id="lt-apps-bind" class="lt-apps-section__title">Bind roles to groups</h2>
-        <p>Members of each group receive that role in @AppsPresentation.DisplayName(app.Presentation, app.Slug). Bind every role to continue.</p>
+        <h2 id="lt-apps-bind" class="lt-apps-section__title">@(Flow.IsRebinding ? "Change role bindings" : "Bind roles to groups")</h2>
+        <p>Members of each group receive that role in @AppsPresentation.DisplayName(app.Presentation, app.Slug). @(Flow.IsRebinding ? "Clear a group to leave its role unbound; nobody then holds it." : "Bind every role to continue.")</p>
         @foreach (var role in app.Roles)
         {
             var name = role.Name;
@@ -53,11 +54,11 @@
         }
         <div class="lt-apps-actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="Flow.Back">Back</LtButton>
-            <LtButton OnClick="Flow.ConfirmBindings" Disabled="@(Flow.UnboundRoles.Count > 0)">Continue</LtButton>
+            <LtButton OnClick="Flow.ConfirmBindings" Disabled="@(!Flow.IsRebinding && Flow.UnboundRoles.Count > 0)">Continue</LtButton>
         </div>
         @if (Flow.UnboundRoles.Count > 0)
         {
-            <p class="lt-apps-hint">Still unbound: @string.Join(", ", Flow.UnboundRoles).</p>
+            <p class="lt-apps-hint">@(Flow.IsRebinding ? "Held by nobody" : "Still unbound"): @string.Join(", ", Flow.UnboundRoles).</p>
         }
     </section>
 }

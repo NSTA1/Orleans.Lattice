@@ -236,6 +236,12 @@ else
                 </ChildContent>
                 <EmptyContent>This app declares no roles.</EmptyContent>
             </LtTable>
+            @if (model.IsAppInstallHolder && !admin.Roles.IsDefaultOrEmpty)
+            {
+                <p class="lt-app-actions">
+                    <a class="lt-btn" href="@Href(AppPageAddresses.Reconsent(Address.Tenant, model.SourceKey, model.Slug))" data-lt-rebind="true">Change role bindings</a>
+                </p>
+            }
         }
     </text>;
 

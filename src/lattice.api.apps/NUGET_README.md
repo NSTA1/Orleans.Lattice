@@ -19,7 +19,10 @@ siloBuilder
 ```
 
 `AddLatticeAppsApi()` registers the facade as the `ILatticeAppsControl`
-singleton that transport bindings such as `Orleans.Lattice.Api.Apps.Grpc` map.
+singleton that transport bindings such as `Orleans.Lattice.Api.Apps.Grpc` map,
+and as the `ILatticeAppRoleBindings` singleton that replaces an installed app's
+role-to-group bindings for its installed version. An enabled app is re-applied
+afterwards, so a removed binding keeps no grant; a disabled app stays disabled.
 
 Behaviour:
 

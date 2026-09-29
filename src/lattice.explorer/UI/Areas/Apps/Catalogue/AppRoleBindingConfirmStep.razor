@@ -1,0 +1,77 @@
+@*
+    Confirm the change of the installed version's role bindings: every declared role's
+    group now and after the change, side by side, then Apply behind a confirmation that
+    states its consequences. Nothing is sent until the confirmation is accepted.
+*@
+@if (Flow?.Descriptor is { } app && Flow.Installed is { } installed)
+{
+    var name = AppsPresentation.DisplayName(app.Presentation, app.Slug);
+    var changes = Flow.BindingChanges;
+    var changed = changes.Any(change => change.IsChanged);
+
+    <section class="lt-apps-section" aria-labelledby="lt-apps-rebind-confirm">
+        <h2 id="lt-apps-rebind-confirm" class="lt-apps-section__title">Confirm the role bindings</h2>
+        <p>Each role's group now and after the change. Only the bindings change: the consent, the ceiling and whether @name is enabled stay as they are.</p>
+
+        @foreach (var change in changes)
+        {
+            <div class="lt-apps-binding" @key="change.Role" data-lt-binding="@change.Role" data-lt-changed="@(change.IsChanged ? "true" : "false")">
+                <span class="lt-apps-binding__role">@change.Role</span>
+                <LtDefinitionList>
+                    <LtDefinition Term="Now" Mono="@(change.Current is not null)">@(change.Current ?? "Not bound")</LtDefinition>
+                    <LtDefinition Term="After" Mono="@(change.Proposed is not null)">@(change.Proposed ?? "Not bound")</LtDefinition>
+                </LtDefinitionList>
+                <span class="lt-apps-hint">@Summary(change)</span>
+            </div>
+        }
+
+        <div class="lt-apps-actions">
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="Flow.Back">Back</LtButton>
+            <LtButton OnClick="() => _asking = true" Disabled="@(!changed)">Apply bindings...</LtButton>
+        </div>
+        @if (!changed)
+        {
+            <p class="lt-apps-hint">Nothing changes yet. Go back to bind a role to another group.</p>
+        }
+    </section>
+
+    <LtDialog Open="_asking"
+              OpenChanged="open => _asking = open"
+              Title="@($"Change the role bindings of {name}?")">
+        <ChildContent>
+            @if (installed.State == AppLifecycleState.Enabled)
+            {
+                <p>Its access rules are replaced at once. Members of a group a role leaves lose that role, and members of a group it joins gain it.</p>
+            }
+            else
+            {
+                <p>The bindings are recorded now and take effect when @name is enabled. It stays @installed.State.ToString().ToLowerInvariant().</p>
+            }
+        </ChildContent>
+        <Actions>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _asking = false">Cancel</LtButton>
+            <LtButton OnClick="ApplyAsync">Apply</LtButton>
+        </Actions>
+    </LtDialog>
+}
+
+@code {
+    private bool _asking;
+
+    [CascadingParameter]
+    internal AppInstallFlow? Flow { get; set; }
+
+    private static string Summary(AppRoleBindingChange change) => (change.Current, change.Proposed) switch
+    {
+        _ when !change.IsChanged => "Unchanged.",
+        (null, _) => "Bound for the first time.",
+        (_, null) => "Unbound: nobody holds it any more.",
+        _ => "Moves to another group.",
+    };
+
+    private Task ApplyAsync()
+    {
+        _asking = false;
+        return Flow!.CommitBindingsAsync();
+    }
+}

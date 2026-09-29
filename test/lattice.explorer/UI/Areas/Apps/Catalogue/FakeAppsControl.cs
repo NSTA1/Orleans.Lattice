@@ -4,11 +4,12 @@ using Orleans.Lattice.Api.Apps;
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 
 /// <summary>
-/// A scripted <see cref="ILatticeAppsControl"/> that records every lifecycle and
-/// consent call, answers from in-memory installations, and can fail or hold any
-/// call so each transition and failure can be driven deterministically.
+/// A scripted <see cref="ILatticeAppsControl"/> and <see cref="ILatticeAppRoleBindings"/>
+/// that records every lifecycle, consent and re-binding call, answers from in-memory
+/// installations, and can fail or hold any call so each transition and failure can be
+/// driven deterministically.
 /// </summary>
-internal sealed class FakeAppsControl : ILatticeAppsControl
+internal sealed class FakeAppsControl : ILatticeAppsControl, ILatticeAppRoleBindings
 {
     /// <summary>The advisory flags; everything is granted unless a test restricts it.</summary>
     public LatticeAppsCapabilities Capabilities { get; set; } = new()
@@ -32,7 +33,7 @@ internal sealed class FakeAppsControl : ILatticeAppsControl
     /// <summary>What <see cref="ListAsync"/> reports.</summary>
     public List<AppSummary> Listed { get; } = [];
 
-    /// <summary>Failures to throw, by verb (install, enable, disable, uninstall, consent).</summary>
+    /// <summary>Failures to throw, by verb (install, enable, disable, uninstall, consent, rebind).</summary>
     public Dictionary<string, Exception> Failures { get; } = new(StringComparer.Ordinal);
 
     /// <summary>When set, <see cref="InstallAsync"/> waits for it.</summary>
@@ -43,6 +44,9 @@ internal sealed class FakeAppsControl : ILatticeAppsControl
 
     /// <summary>Every consent update.</summary>
     public List<AppConsentUpdate> ConsentUpdates { get; } = [];
+
+    /// <summary>Every role re-binding.</summary>
+    public List<AppRoleBindingsUpdate> RoleBindingUpdates { get; } = [];
 
     /// <summary>Every lifecycle verb and slug, in order.</summary>
     public List<(string Verb, string Slug)> Calls { get; } = [];
@@ -121,6 +125,23 @@ internal sealed class FakeAppsControl : ILatticeAppsControl
 
     /// <inheritdoc />
     public Task<LatticeAppsCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default) => Task.FromResult(Capabilities);
+
+    /// <inheritdoc />
+    public Task<AppRoleBindingsReport> UpdateRoleBindingsAsync(AppRoleBindingsUpdate request, CancellationToken cancellationToken = default)
+    {
+        RoleBindingUpdates.Add(request);
+        Calls.Add(("rebind", request.Slug));
+        Throw("rebind");
+        var installed = Installed[request.Slug] with { RoleBindings = request.RoleBindings };
+        Installed[request.Slug] = installed;
+        return Task.FromResult(new AppRoleBindingsReport
+        {
+            Slug = request.Slug,
+            Version = request.Version,
+            RoleBindings = request.RoleBindings,
+            State = installed.State,
+        });
+    }
 
     private Task<AppLifecycleResult> Transition(string verb, string slug, AppLifecycleState state)
     {

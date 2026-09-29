@@ -139,8 +139,9 @@ internal sealed partial class LatticeAppsControl
         }
 
         // A same-version upgrade replaces the ceiling (re-pinning it to the version) and keeps
-        // identity, bindings and state. It is pinned to the version just read, so an upgrade that
-        // lands in between is refused (ConcurrencyConflict) instead of being rolled back.
+        // identity, bindings and state. It is pinned to the version and the revision just read, so
+        // an upgrade or a role re-binding that lands in between is refused (ConcurrencyConflict)
+        // instead of being rolled back.
         var transition = await _registry.UpgradeAsync(
             new AppRegistryInstallRequest
             {
@@ -149,6 +150,7 @@ internal sealed partial class LatticeAppsControl
                 Ceiling = ceiling,
                 RoleBindings = current.RoleBindings,
                 ExpectedVersion = current.Version,
+                ExpectedRevision = current.Revision,
                 BridgeConsent = bridgeConsent,
             },
             cancellationToken).ConfigureAwait(false);

@@ -61,6 +61,7 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeAppsControl),
         typeof(ILatticeAppCatalog),
         typeof(ILatticeAppWorkspace),
+        typeof(ILatticeAppRoleBindings),
     ];
 
     /// <summary>
@@ -95,6 +96,7 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddKeyedScoped<ILatticeAppsControl, ShellAppsControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppCatalog, ShellAppCatalogTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppWorkspace, ShellAppWorkspaceTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeAppRoleBindings, ShellAppRoleBindingsTransport>(ShellFacades.Key);
 
         return services;
     }
