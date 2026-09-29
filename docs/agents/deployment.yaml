@@ -283,24 +283,6 @@ configuration_schema:
         type: "TimeSpan"
         default: "TimeSpan.FromMinutes(1)"
         source: "src/lattice.api.state.grpc/Security/EnvVarCredentialAuthorizerOptions.cs#EnvVarCredentialAuthorizerOptions.LockoutDuration"
-  - type: "ExplorerAuthUiOptions"
-    package: "Orleans.Lattice.Explorer.UI"
-    registration:
-      value: "AddLatticeExplorerWeb"
-      source: "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
-    properties:
-      - name: "UseServerFormPost"
-        type: "bool"
-        default: "false"
-        source: "src/lattice.explorer/UI/Authentication/ExplorerAuthUiOptions.cs#ExplorerAuthUiOptions.UseServerFormPost"
-      - name: "LoginPath"
-        type: "string"
-        default: "\"/auth/login\""
-        source: "src/lattice.explorer/UI/Authentication/ExplorerAuthUiOptions.cs#ExplorerAuthUiOptions.LoginPath"
-      - name: "LogoutPath"
-        type: "string"
-        default: "\"/auth/logout\""
-        source: "src/lattice.explorer/UI/Authentication/ExplorerAuthUiOptions.cs#ExplorerAuthUiOptions.LogoutPath"
   - type: "ExplorerConfigStoreOptions"
     package: "Orleans.Lattice.Explorer.Core"
     registration:
@@ -401,16 +383,6 @@ configuration_schema:
         type: "Action<CookieAuthenticationOptions>?"
         default: "null"
         source: "src/lattice.explorer.entra.web/ExplorerEntraWebOptions.cs#ExplorerEntraWebOptions.ConfigureCookieOptions"
-  - type: "ExplorerNavigationOptions"
-    package: "Orleans.Lattice.Explorer.Core"
-    registration:
-      value: "AddLatticeExplorerWeb"
-      source: "src/lattice.explorer/WebHosting/LatticeExplorerWebServiceCollectionExtensions.cs#AddLatticeExplorerWeb"
-    properties:
-      - name: "AllowEndpointConfiguration"
-        type: "bool"
-        default: "true"
-        source: "src/lattice.explorer/Core/Navigation/ExplorerNavigationOptions.cs#ExplorerNavigationOptions.AllowEndpointConfiguration"
   - type: "ExplorerReauthOptions"
     package: "Orleans.Lattice.Explorer.Core"
     registration:

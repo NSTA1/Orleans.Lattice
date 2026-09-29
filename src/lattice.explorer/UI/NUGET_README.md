@@ -1,57 +1,62 @@
 # Orleans.Lattice.Explorer.UI
 
-The shared **Razor component class library** (RCL) for the
-[Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice). Holds every
-routable page, the layout, and the navigation, detail, configuration, appearance,
-and authentication components, so each explorer head (web, desktop) renders an
-identical UI. The admin areas (Backups, Access, Schema, Tenant administration, My
-tenant, Telemetry) ship in their own plugin packages.
+The Orleans.Lattice Explorer UI: a Razor class library for everything
+**outside** a Lattice App's frame.
 
-## What it provides
+- The navigation and session chrome: the directory spine, the address line, the
+  command palette, sign-in, re-authentication and the identity menu.
+- The shell-owned native areas - Data, Apps, Access, Schema, Tenancy,
+  Replication, Backups, Telemetry and Cluster - compiled in, each deciding its
+  own visibility from its facade's capability probe and failing closed.
+- The order-diagram design system in its Operate register: the documentation
+  site's own `tokens.css` and fonts (linked at build time, never copied), the
+  Explorer-only density, focus and lifecycle and health state tokens, and the
+  primitives every area is drawn with.
+- The credential-aware transport adapters, and the app frame host and bridge
+  broker that keep a Lattice App's UI sandboxed.
 
-- The `Routes` root router and all routable explorer pages.
-- The shared layout and reusable UI components.
-- The shell-side registration helpers: `AddExplorerPluginAdapters()` (the host
-  state and preference adapters every plugin needs), `AddExplorerSelectionPlugins()`
-  (the one-call composite over the per-selection surfaces), `AddExplorerAppearance()`
-  (theme, contrast and density), and `AddExplorerChromeSlot<TComponent>()` (a
-  component contributed to a banner region).
-- Dependencies on the per-selection surface packages - `Orleans.Lattice.Explorer.Plugins.Data`,
-  `.Topology`, `.Metrics`, `.DeadLetter`, `.TagIndex`, and `.History` - on their
-  shared kernel `Orleans.Lattice.Explorer.Plugins.Selection`, and on
-  `Orleans.Lattice.Explorer.Plugins.Abstractions`, so the composite registration
-  can reach every surface.
-- `lattice-shell.css`, the stylesheet for the shell chrome those components
-  render: the brand bar, the navigation rail, the detail panel, the area strip,
-  and the authentication, tenant, and configuration surfaces. Shared UI
-  primitives (buttons, badges, modals, navigation, tab strips) come from
-  [`Orleans.Lattice.Explorer.DesignSystem`](https://www.nuget.org/packages/Orleans.Lattice.Explorer.DesignSystem)
-  instead, so a plugin composes them without referencing this package.
-- The packaged **static web assets** (the shell and appearance stylesheets, the
-  first-paint appearance script, and the favicon). A referencing app serves them
-  automatically at `_content/Orleans.Lattice.Explorer.UI/` with no extra wiring.
+Nothing in this package is an extension point. There is no public area
+registration API: the only way third parties put UI into the Explorer is a
+Lattice App, whose UI runs in a sandboxed, credential-free frame.
 
-## Usage
+Static assets are served from `_content/Orleans.Lattice.Explorer.UI/`, with
+the design system under `design/` and the navigation chrome under `shell/`. You
+do not reference this package directly; the Explorer web head
+(`AddLatticeExplorerWeb` and `MapLatticeExplorer`) brings it in.
 
-Normally consumed transitively through a head package such as
-[`Orleans.Lattice.Explorer.Web`](https://www.nuget.org/packages/Orleans.Lattice.Explorer.Web),
-which maps the components with an interactive server render mode. Reference the
-static assets from the host document. The appearance script must stay a classic,
-blocking script in `<head>` (no `defer` or `async`), so the chosen theme is on
-the document at first paint:
+## The address grammar
 
-```html
-<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-shell.css" />
-<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-appearance.css" />
-<script src="_content/Orleans.Lattice.Explorer.UI/lattice-appearance.js"></script>
+Every Explorer page has one canonical address, which the address line shows as
+a chain of nodes and accepts as input. With tenancy on, the active tenant is the
+root node of every tenant-scoped address; with tenancy off there is no tenant
+node, and a `/t/...` address is redirected to the same address without one.
+For the Data area, the segments below the area are the logical tree id's parts,
+so the tree `a/crm/orders` is `/data/a/crm/orders`.
+
+```abnf
+address        = ( home / area-address ) [ "?" query ]
+home           = "/" / tenant-root
+area-address   = [ tenant-root ] "/" area *( "/" segment )
+tenant-root    = "/t/" segment
+area           = LCALPHA *( LCALPHA / DIGIT / "-" )   ; never "t"
+segment        = 1*( seg-char / pct-encoded )           ; never "." or ".."
+seg-char       = LCALPHA / DIGIT / "-" / "." / "_" / "~"
+query          = param *( "&" param )
+param          = key "=" value                          ; each key at most once
+key            = LCALPHA *( LCALPHA / DIGIT / "-" )     ; key, prefix, at, ...
+value          = *( seg-char / UCALPHA / pct-encoded )
+pct-encoded    = "%" HEXUP HEXUP                        ; UTF-8 bytes
+LCALPHA        = %x61-7A
+UCALPHA        = %x41-5A
+HEXUP          = DIGIT / %x41-46
 ```
 
-and, first thing in `<body>`, stamp the chosen density:
+Every route segment is lower case: any other character in a tenant id or a
+segment, including an upper-case letter, is percent-encoded as UTF-8 with
+upper-case hex, so a tree named `Orders` is addressed as `%4Frders`, and the dot
+segments `.` and `..` are written `%2E` and `%2E%2E` so a browser cannot remove
+them. A query value keeps the RFC 3986 unreserved characters, upper case
+included, and percent-encodes the rest. An unknown address lands on the
+not-found page, which names the nearest address that does exist.
 
-```html
-<script>window.latticeAppearance && window.latticeAppearance.stamp();</script>
-```
-
-See the
-[Explorer documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.explorer/README.md)
-for the full guide.
+This package is in progress and has not shipped a release.

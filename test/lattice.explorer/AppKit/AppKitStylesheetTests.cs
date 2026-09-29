@@ -1,13 +1,14 @@
 using System.IO.Compression;
 using System.Text.RegularExpressions;
-using Orleans.Lattice.Explorer.Tests.Shell.Design;
+using Orleans.Lattice.Explorer.Tests.UI.Design;
 
 namespace Orleans.Lattice.Explorer.Tests.AppKit;
 
 /// <summary>
 /// The kit stylesheet is built on the documentation site's own tokens and
-/// fonts, staged byte-identically into the kit path at build time (never
-/// hand-copied), and keys every
+/// fonts, carried byte-identically under the kit's own web root (real files,
+/// so the runtime can serve them; the docs-site files stay the source of
+/// truth), and keys every
 /// theme, contrast, density and motion choice off the attributes the bootstrap
 /// sets. Its high-contrast overlay is the Explorer's own, value for value.
 /// </summary>
@@ -18,7 +19,6 @@ public sealed class AppKitStylesheetTests
     private const string BoardSelector = "[data-theme=\"board\"]";
     private const string PaperMoreSelector = "[data-theme=\"paper\"][data-contrast=\"more\"]";
     private const string BoardMoreSelector = "[data-theme=\"board\"][data-contrast=\"more\"]";
-    private const string StagedDirectory = AppKitPaths.Project + "/obj/appkit-design";
 
     /// <summary>Every docs-site file the kit links, and the path it is served at.</summary>
     private static readonly (string Served, string Source)[] LinkedFiles =
@@ -42,10 +42,10 @@ public sealed class AppKitStylesheetTests
         Assert.Multiple(() =>
         {
             Assert.That(assets[0].BasePath, Is.EqualTo(AppKitPaths.BasePath));
-            Assert.That(Path.GetFullPath(assets[0].Identity), Does.StartWith(Path.GetFullPath(AppKitPaths.Absolute(StagedDirectory))).IgnoreCase,
-                $"{served} is the build-staged copy of {source}, never a file checked in beside the kit");
+            Assert.That(Path.GetFullPath(assets[0].Identity), Is.EqualTo(Path.GetFullPath(AppKitPaths.Absolute(AppKitPaths.Project + "/wwwroot/" + served))).IgnoreCase,
+                $"{served} must be served from the kit's own web root, where the runtime resolves it");
             Assert.That(File.ReadAllBytes(assets[0].Identity), Is.EqualTo(File.ReadAllBytes(AppKitPaths.Absolute(source))),
-                $"{served} must be byte-identical to {source}");
+                $"{served} must be byte-identical to {source}: copy {source} over {AppKitPaths.Project}/wwwroot/{served}");
         });
     }
 
@@ -54,7 +54,7 @@ public sealed class AppKitStylesheetTests
     {
         // One source of truth: the frame and the Explorer around it draw from identical tokens.
         var kit = StaticWebAssetManifest.Assets(AppKitPaths.Project).Single(a => !a.IsCompressed && a.RelativePath == "appkit/v1/tokens.css");
-        var shell = StaticWebAssetManifest.Assets("src/lattice.explorer/Shell").Single(a => !a.IsCompressed && a.RelativePath == "design/tokens.css");
+        var shell = StaticWebAssetManifest.Assets("src/lattice.explorer/UI").Single(a => !a.IsCompressed && a.RelativePath == "design/tokens.css");
 
         Assert.That(File.ReadAllBytes(kit.Identity), Is.EqualTo(File.ReadAllBytes(shell.Identity)));
     }
@@ -66,7 +66,7 @@ public sealed class AppKitStylesheetTests
             .Where(asset => asset.IsCompressed && asset.RelativePath == "appkit/v1/tokens.css")
             .ToArray();
 
-        Assert.That(compressed, Is.Not.Empty, "the build compresses the linked tokens.css");
+        Assert.That(compressed, Is.Not.Empty, "the build compresses tokens.css");
         var expected = File.ReadAllBytes(AppKitPaths.Absolute(ShellStylesheets.DocsSiteTokens));
         foreach (var asset in compressed)
         {
@@ -78,37 +78,16 @@ public sealed class AppKitStylesheetTests
     }
 
     [Test]
-    public void No_linked_file_is_copied_into_the_kit_wwwroot()
+    public void The_kit_project_neither_links_nor_stages_a_design_asset()
     {
-        Assert.Multiple(() =>
-        {
-            foreach (var (served, _) in LinkedFiles)
-            {
-                Assert.That(File.Exists(AppKitPaths.Absolute(AppKitPaths.Project + "/wwwroot/" + served)), Is.False,
-                    served + " must be linked from docs-site, never copied");
-            }
-        });
-    }
-
-    [Test]
-    public void The_kit_project_stages_each_docs_site_file_and_serves_the_staged_copy()
-    {
+        // A linked or staged file sits outside the project's content root, and the
+        // static web asset runtime then serves it as an empty 200 (issue #3831).
         var project = AppKitPaths.Read(AppKitPaths.Project + "/Orleans.Lattice.Explorer.AppKit.csproj");
 
         Assert.Multiple(() =>
         {
-            Assert.That(project, Does.Contain(@"<LatticeDocsSitePublic>$(MSBuildThisFileDirectory)..\..\..\docs-site\template\public\</LatticeDocsSitePublic>"),
-                "the source is the docs-site folder the Shell links");
-            foreach (var (served, source) in LinkedFiles)
-            {
-                var relative = served["appkit/v1/".Length..].Replace('/', '\\');
-                var fromDocsSite = source["docs-site/template/public/".Length..].Replace('/', '\\');
-                Assert.That(project, Does.Contain($"<LatticeAppKitDesignSource Include=\"$(LatticeDocsSitePublic){fromDocsSite}\" StagedPath=\"{relative}\" />"), served);
-                Assert.That(project, Does.Contain($"<Content Include=\"$(LatticeAppKitStagedDesign){relative}\" Link=\"wwwroot\\{served.Replace('/', '\\')}\" />"), served);
-            }
-
-            Assert.That(Regex.Matches(project, @"<Copy\b"), Has.Count.EqualTo(1), "one staging copy, from the docs-site sources only");
-            Assert.That(project, Does.Contain("SourceFiles=\"@(LatticeAppKitDesignSource)\""));
+            Assert.That(project, Does.Not.Contain("Link=\"wwwroot"), "no kit asset may be linked into the web root");
+            Assert.That(Regex.IsMatch(project, @"<Copy\b"), Is.False, "no kit asset may be staged at build time");
         });
     }
 

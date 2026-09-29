@@ -100,5 +100,4 @@ The choice persists like any other view preference.
 ## See also
 
 - [The Explorer navigation model](navigation-model.md)
-- [Writing an Explorer plugin](writing-a-plugin.md)
 - [Managing access](managing-access.md)

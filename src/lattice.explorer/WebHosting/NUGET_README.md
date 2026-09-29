@@ -14,31 +14,22 @@ path and cannot drift.
 ## Package shape
 
 This package ships as one of a small family of explorer packages. It depends on
-the shared explorer libraries, which restore automatically for a consumer:
+two explorer libraries, which restore automatically for a consumer:
 
-- `Orleans.Lattice.Explorer.UI` - the shared Razor component class library (its
+- `Orleans.Lattice.Explorer.UI` - the Explorer UI itself: the navigation and
+  session chrome, the compiled-in Data, Apps, Access, Schema, Tenancy,
+  Replication, Backups, Telemetry and Cluster areas, the design system, the
+  credential-aware transport, and the sandboxed Lattice App frame host. Its
   static web assets are served automatically at
-  `_content/Orleans.Lattice.Explorer.UI/`).
-- `Orleans.Lattice.Explorer.Core` - the head-agnostic connection, configuration,
-  session, authentication, tenant-scoping, and navigation services.
-- `Orleans.Lattice.Explorer.DesignSystem` - the design tokens, named breakpoints,
-  and adaptive layout primitives.
-- `Orleans.Lattice.Explorer.Plugins.Abstractions` - the plugin contract and its
-  four-state access model.
-- `Orleans.Lattice.Explorer.Plugins.Selection` and the per-selection surfaces
-  built on it (`Orleans.Lattice.Explorer.Plugins.Data`, `.Topology`, `.Metrics`,
-  `.DeadLetter`, `.History`, and `.TagIndex`).
-- `Orleans.Lattice.Explorer.Backup` - the Backups management area.
-- `Orleans.Lattice.Explorer.Access` - the Access (membership and access-control)
-  management area.
-- `Orleans.Lattice.Explorer.Plugins.Tenancy` - the shared tenant-administration
-  seam behind `Orleans.Lattice.Explorer.Plugins.Tenants` (the Tenant
-  administration area) and `Orleans.Lattice.Explorer.Plugins.MyTenant` (the My
-  tenant area).
-- `Orleans.Lattice.Explorer.Plugins.Telemetry` - the Telemetry area and the My
-  tenant metrics section.
-- `Orleans.Lattice.Explorer.Schema` - the Schema (schema-policy management) area.
+  `_content/Orleans.Lattice.Explorer.UI/`, and it brings
+  `Orleans.Lattice.Explorer.AppKit`, the kit a Lattice App UI runs on inside
+  its frame.
+- `Orleans.Lattice.Explorer.Core` - the head-agnostic connection,
+  configuration, session, authentication and tenant-scoping services.
 
+There is no plugin model and no area registration API: every area is compiled
+in and decides its own visibility from its facade's capability probe, failing
+closed.
 ## Usage
 
 ```csharp
@@ -61,18 +52,17 @@ app.Run();
 ```
 
 `AddLatticeExplorerWeb` registers everything the standalone head wires up: Razor
-components with interactive server components, the shared explorer UI, the
-state-API connection seam, the configuration backing store plus environment
-bootstrap, the catalog / metrics / topology / data / dead-letter / history /
-session services, the plugin host and its keyed access store, the per-selection
-surfaces, the Backups, Access, Tenant administration, My tenant, and Telemetry
-areas, the Schema services (the Schema tab itself stays withheld
-until the head also calls `AddExplorerSchemaPlugin()`), and the auth / cookie /
-data-protection plumbing.
+components with interactive server components, the Explorer UI with every area,
+the state-API connection seam, the configuration backing store plus environment
+bootstrap, the session and preference services, the tenant view, and the auth /
+cookie / data-protection plumbing.
 
 `MapLatticeExplorer` maps the Razor components (interactive server render mode
-with the UI additional assembly), the static assets, and the server-side
-`/auth/login` and `/auth/logout` endpoints under the configured base path.
+with the UI additional assembly), the static assets, the Lattice App frame's
+bootstrap route (`_apps/frame/v1/`), and the server-side `/auth/login` and
+`/auth/logout` endpoints under the configured base path. Every response carries
+static security headers; `X-Frame-Options: DENY` is omitted only on the frame
+bootstrap route, which sends its own sandboxing policy.
 
 ## Interactivity and static assets
 
@@ -83,7 +73,7 @@ interactive), the package's `build/Orleans.Lattice.Explorer.Web.props`
 automatically sets `RequiresAspNetWebAssets` for you; you do not need to set
 anything. If you have already set that property yourself, your value is kept.
 
-The UI's stylesheet and scripts ship as static web assets of the referenced
+The UI's stylesheets, fonts and scripts ship as static web assets of the referenced
 `Orleans.Lattice.Explorer.UI` package and are served automatically by a published
 host and under the Development environment. When you run from build output (for
 example with `dotnet run`) under a non-Development environment, call

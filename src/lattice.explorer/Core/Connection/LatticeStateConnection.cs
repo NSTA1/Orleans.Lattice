@@ -123,6 +123,17 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         {
             throw;
         }
+        catch (RpcException ex) when (IsCancellation(ex))
+        {
+            // A cancelled probe says nothing about the endpoint: the caller gave up,
+            // or the channel was rebuilt under it. The state is left as it was.
+            cancellationToken.ThrowIfCancellationRequested();
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
         catch (RpcException ex)
         {
             if (IsTransient(ex))
@@ -264,6 +275,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
             {
                 throw;
             }
+            catch (RpcException ex) when (IsCancellation(ex))
+            {
+                throw Cancelled(ex, cancellationToken);
+            }
             catch (RpcException ex)
             {
                 // Application-level back-pressure: the tree is WAL-saturated and
@@ -357,6 +372,10 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         throw;
+                    }
+                    catch (RpcException ex) when (IsCancellation(ex))
+                    {
+                        throw Cancelled(ex, cancellationToken);
                     }
                     catch (RpcException ex)
                     {
@@ -568,6 +587,28 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         StatusCode.Unknown or
         StatusCode.ResourceExhausted or
         StatusCode.Aborted;
+
+    /// <summary>
+    /// Whether a call ended because it was cancelled. The Explorer cancels its own
+    /// calls whenever a page, live tail or scan is left, and a call in flight when
+    /// the channel is rebuilt ends the same way, so a cancellation is never
+    /// evidence about the endpoint: it never moves the connection's state.
+    /// </summary>
+    private static bool IsCancellation(RpcException ex) => ex.StatusCode == StatusCode.Cancelled;
+
+    /// <summary>
+    /// The exception a cancelled call surfaces as: the caller's own cancellation
+    /// when it asked for one, otherwise a transient failure of this call alone.
+    /// Neither changes <see cref="Status"/>.
+    /// </summary>
+    private static Exception Cancelled(RpcException ex, CancellationToken cancellationToken) =>
+        cancellationToken.IsCancellationRequested
+            ? new OperationCanceledException("The state-API call was cancelled.", ex, cancellationToken)
+            : new LatticeStateApiException("The state-API call was cancelled before it completed. Try again.", ex)
+            {
+                IsTransient = true,
+                RequiresAuthentication = false,
+            };
 
     private static bool IsAuthFailure(RpcException ex) => ex.StatusCode is
         StatusCode.Unauthenticated or

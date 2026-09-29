@@ -22,7 +22,18 @@ internal static class ExplorerSecurityHeaders
     /// <c>&lt;script&gt;</c> DOM-patch blocks and interactive components emit
     /// inline <c>style</c> attributes; a strict policy without it would break the
     /// running console. <c>connect-src 'self'</c> permits the same-origin SignalR
-    /// WebSocket that carries the interactive circuit.
+    /// WebSocket that carries the interactive circuit. <c>img-src</c> admits
+    /// <c>data:</c> for app icons.
+    /// <para>
+    /// <c>frame-src 'self'</c> is how the console frames Lattice App UIs, and it is
+    /// deliberately paired with <c>X-Frame-Options: DENY</c> on every response
+    /// except the app frame bootstrap route (epic #3807, E4). A CSP source cannot
+    /// name a path without also naming a host, and naming the host would make this
+    /// header per-request rather than static, so the path restriction is enforced
+    /// by the pairing instead: a frame that navigates itself anywhere else on this
+    /// origin reaches a response that refuses to be framed. <c>frame-src</c> alone
+    /// also keeps every other origin out of any frame the console hosts.
+    /// </para>
     /// </summary>
     internal const string ContentSecurityPolicyValue =
         "default-src 'self'; " +
@@ -31,6 +42,7 @@ internal static class ExplorerSecurityHeaders
         "img-src 'self' data:; " +
         "font-src 'self' data:; " +
         "connect-src 'self'; " +
+        "frame-src 'self'; " +
         "frame-ancestors 'none'; " +
         "base-uri 'self'; " +
         "form-action 'self'";

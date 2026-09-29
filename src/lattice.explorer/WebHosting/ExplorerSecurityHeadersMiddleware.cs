@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.UI.Framing;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -73,7 +74,12 @@ internal sealed class ExplorerSecurityHeadersMiddleware
             headers.ContentSecurityPolicy = _contentSecurityPolicy;
         }
 
-        if (StringValues.IsNullOrEmpty(headers.XFrameOptions))
+        // The app frame bootstrap route is the ONE response the Explorer lets itself
+        // frame (epic #3807, E4): it carries its own frame-ancestors 'self' policy.
+        // The predicate is never broader than that route, so every other response,
+        // including every page, asset and SignalR endpoint, keeps DENY.
+        if (!AppFrameRoute.IsFrameBootstrapPath(context.Request.Path)
+            && StringValues.IsNullOrEmpty(headers.XFrameOptions))
         {
             headers.XFrameOptions = ExplorerSecurityHeaders.FrameOptions;
         }
