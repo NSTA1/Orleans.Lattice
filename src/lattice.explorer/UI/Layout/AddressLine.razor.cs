@@ -204,10 +204,15 @@ public partial class AddressLine : IDisposable
         }
     }
 
-    private async Task OnInputAsync(ChangeEventArgs args)
+    // Bound with @bind (get, set, oninput) rather than a one-way value plus @oninput.
+    // Every keystroke is a round trip to the circuit; with a one-way value a render
+    // answering an earlier keystroke wrote that older text back over keys typed since,
+    // so fast typing lost characters. A bound input tells the renderer what the browser
+    // already holds, so a reply never overwrites newer typing.
+    private Task OnTextChangedAsync(string? text)
     {
-        _text = args.Value as string ?? string.Empty;
-        await RefreshAsync();
+        _text = text ?? string.Empty;
+        return RefreshAsync();
     }
 
     private async Task OnKeyDownAsync(KeyboardEventArgs args)

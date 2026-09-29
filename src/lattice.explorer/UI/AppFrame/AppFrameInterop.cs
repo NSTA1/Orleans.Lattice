@@ -34,8 +34,8 @@ internal sealed class AppFrameInterop(AppFrame owner)
     [JSInvokable]
     public Task OnFrameReloaded() => owner.HandleFrameReloadedAsync();
 
-    /// <summary>The frame reported that its last script loaded (informational).</summary>
-    /// <returns>A completed task.</returns>
+    /// <summary>The frame reported that its last script loaded; the host posts the in-app path again.</summary>
+    /// <returns>A task that completes when the host has handled it.</returns>
     [JSInvokable]
-    public Task OnFrameLoaded() => Task.CompletedTask;
+    public Task OnFrameLoaded() => owner.HandleFrameLoadedAsync();
 }

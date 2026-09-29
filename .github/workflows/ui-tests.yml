@@ -123,21 +123,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    # Three shards, run in parallel. The first split is the one that matters: the
-    # journeys drive their own web head with a mutable demo world, the structure
-    # and accessibility fixtures drive the shared disconnected head, so splitting
-    # there keeps each shard to one head.
+    # Five shards, run in parallel, split by the suite's namespaces: accessibility
+    # (the axe sweep in every appearance and the keyboard, landmark, motion and
+    # forced-colour checks), journeys in two halves, apps (the pilot app, the frame
+    # isolation suite and the AppKit boot fixture, each in Chromium, Firefox and
+    # WebKit), and structure (reflow and the hygiene fixtures). Every shard starts
+    # its own in-process test world, so no shard waits on another's head.
     #
-    # The journeys are then split again, because forty cases against a single
-    # in-process head is enough load that a later case can wait out a thirty-second
-    # circuit-ready timeout and fail with the shell never reporting itself
-    # measured. That failure rotated between cases from run to run, which is the
-    # signature of contention rather than of any one case being wrong. Halving the
-    # head's workload is the honest fix; raising the timeout would only hide it.
-    #
-    # The second journey shard is defined as the COMPLEMENT of the first, so the
-    # three filters cannot leave a case unrun however the fixtures are renamed or
-    # added to.
+    # The structure shard and the second journey shard are defined as COMPLEMENTS,
+    # so the five filters cannot leave a case unrun however the fixtures are
+    # renamed or added to.
     strategy:
       fail-fast: false
       matrix:
@@ -172,16 +167,18 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
-      # Only chromium. The suite asserts layout, reflow and accessibility, none
-      # of which are engine-specific enough to justify tripling install time
-      # and runtime on every PR. Add firefox/webkit here only if a real
-      # cross-engine defect ever justifies it.
+          key: playwright-all-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
+      # Chromium, Firefox and WebKit. Layout, reflow and accessibility run in
+      # Chromium only, but the app frame's isolation is enforced by each engine's
+      # own sandbox and policy implementation, so the apps shard runs the pilot,
+      # the isolation suite and the AppKit boot fixture in all three engines
+      # (epic #3807, issue #3832). Every shard installs all three: the install is
+      # cached, and one install step keeps the shards identical.
       #
-      # --with-deps installs the OS packages chromium needs; it is skipped on a
-      # cache hit because only the browser payload is cached, not apt state, so
+      # --with-deps installs the OS packages the browsers need; it is skipped on
+      # a cache hit because only the browser payload is cached, not apt state, so
       # we still run the deps-only install in that case.
-      - name: Install Playwright chromium
+      - name: Install Playwright browsers
         run: |
           set -euo pipefail
           script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit)"
@@ -190,9 +187,9 @@ jobs:
             exit 1
           fi
           if [ "${{ steps.pwcache.outputs.cache-hit }}" = "true" ]; then
-            pwsh "$script" install-deps chromium
+            pwsh "$script" install-deps chromium firefox webkit
           else
-            pwsh "$script" install chromium --with-deps
+            pwsh "$script" install chromium firefox webkit --with-deps
           fi
 
       # tla-toolchain: not-required - every shard filter here selects
