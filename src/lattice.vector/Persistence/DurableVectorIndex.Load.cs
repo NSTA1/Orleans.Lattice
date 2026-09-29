@@ -6,6 +6,7 @@ namespace Orleans.Lattice.Vector.Persistence;
 public sealed partial class DurableVectorIndex
 {
     private VectorIndexLoadDiscardReason _loadRejection;
+    private List<string>? _absentRecords;
 
     /// <summary>
     /// Adopts durable state if every part of it can be verified, and discards it
@@ -13,6 +14,14 @@ public sealed partial class DurableVectorIndex
     /// is exactly the failure mode - a stale cell resurrecting a deleted vector -
     /// that the coherence contract exists to rule out, and because the index is a
     /// derived projection, throwing it away costs only time.
+    /// <para>
+    /// "Cannot be verified" means the records are invalid or absent on every read
+    /// path, not that one read failed to return them. A record one read omitted but
+    /// another returns defers the load with
+    /// <see cref="VectorIndexRecordUnavailableException"/> instead (issue #3905),
+    /// because the time a discard costs can be hours and the store was merely
+    /// unable to answer at that moment.
+    /// </para>
     /// </summary>
     private async Task LoadAsync(CancellationToken keyWalkToken, CancellationToken cancellationToken)
     {
@@ -43,13 +52,24 @@ public sealed partial class DurableVectorIndex
             _keysLoaded = true;
         }
 
-        var manifestRecord = await _store
-            .ReadAsync(VectorIndexStorageKeys.Manifest(_prefix), cancellationToken).ConfigureAwait(false);
+        _absentRecords?.Clear();
+
+        var manifestKey = VectorIndexStorageKeys.Manifest(_prefix);
+        var manifestRecord = await _store.ReadAsync(manifestKey, cancellationToken).ConfigureAwait(false);
         var buildRecord = await _store
             .ReadAsync(VectorIndexStorageKeys.BuildState(_prefix), cancellationToken).ConfigureAwait(false);
 
-        if (manifestRecord is not null &&
-            VectorIndexManifest.TryReadRecord(manifestRecord, out var manifest) &&
+        VectorIndexManifest? committed = null;
+        if (manifestRecord is null)
+        {
+            NoteAbsent(manifestKey);
+        }
+        else if (VectorIndexManifest.TryReadRecord(manifestRecord, out var decoded))
+        {
+            committed = decoded;
+        }
+
+        if (committed is { } manifest &&
             await TryRestoreAsync(manifest, cancellationToken).ConfigureAwait(false))
         {
             AdoptBuildState(manifest, buildRecord);
@@ -101,8 +121,85 @@ public sealed partial class DurableVectorIndex
             return;
         }
 
+        // A RECORD THE COMMIT CHAIN NAMES BUT A READ DID NOT RETURN IS NOT YET
+        // PROOF OF DAMAGE (issue #3905). Absence observed through one read path is
+        // also what a store looks like while it cannot serve that path - refused
+        // admission, a routing gap, a partial answer under load - and discarding
+        // on that evidence destroyed a converged 174,900-vector index during a WAL
+        // replay-permit storm. So the absence is confirmed through the other read
+        // paths before anything is deleted. A record another path returns is
+        // intact: the load defers, keeping everything it banked. A read that
+        // throws here - a saturation refusal in particular - propagates unchanged,
+        // which is the same "retry after a backoff" answer. Only a record every
+        // path agrees is absent is judged unloadable. Confined to the unloadable
+        // verdict: a count mismatch or an embedding-space change is decided on
+        // records that were read, not on records that were missing.
+        if (_loadRejection == VectorIndexLoadDiscardReason.UnloadableRecord && _absentRecords is { Count: > 0 })
+        {
+            await ThrowIfAbsenceIsUnconfirmedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await DiscardAsync(cancellationToken).ConfigureAwait(false);
         LoadDiscardReason = _loadRejection;
+        LoadDiscardedManifest = committed;
+    }
+
+    /// <summary>
+    /// The most absent records a load re-reads before accepting the absence. One
+    /// that another read path returns is enough to defer, and a genuinely damaged
+    /// index is absent on every path, so a small sample decides it; bounding it
+    /// keeps a store that lost hundreds of records from paying hundreds of
+    /// confirming reads before the rebuild it needs.
+    /// </summary>
+    private const int MaxAbsenceConfirmations = 16;
+
+    /// <summary>
+    /// Records a key the committed state names that the read asking for it did not
+    /// return. Allocates only on this path, which a healthy load never reaches.
+    /// </summary>
+    private void NoteAbsent(string key)
+    {
+        _absentRecords ??= [];
+        if (_absentRecords.Count < MaxAbsenceConfirmations)
+        {
+            _absentRecords.Add(key);
+        }
+    }
+
+    /// <summary>
+    /// Re-reads each record the load found absent through both a point read and a
+    /// prefix scan of its own key, and throws
+    /// <see cref="VectorIndexRecordUnavailableException"/> if either returns it.
+    /// Returns normally only when every sampled record is absent on both paths.
+    /// </summary>
+    private async Task ThrowIfAbsenceIsUnconfirmedAsync(CancellationToken cancellationToken)
+    {
+        foreach (var key in _absentRecords!)
+        {
+            if (await _store.ReadAsync(key, cancellationToken).ConfigureAwait(false) is not null
+                || await ScanFindsAsync(key, cancellationToken).ConfigureAwait(false))
+            {
+                throw new VectorIndexRecordUnavailableException(
+                    $"The durable vector index under '{_prefix}' was not loaded: the record '{key}' its "
+                    + "committed state names was missing from one read of the store but returned by another, "
+                    + "so the store could not serve a consistent read. Nothing was discarded; retry the load "
+                    + "after a backoff.");
+            }
+        }
+    }
+
+    private async Task<bool> ScanFindsAsync(string key, CancellationToken cancellationToken)
+    {
+        await foreach (var entry in _store.ScanAsync(key, cancellationToken)
+                           .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(entry.Key, key, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<bool> TryRestoreAsync(VectorIndexManifest manifest, CancellationToken cancellationToken)
@@ -263,6 +360,8 @@ public sealed partial class DurableVectorIndex
         VectorIndex restored, VectorIndexManifest manifest, CancellationToken cancellationToken)
     {
         var applied = 0;
+        var expected = manifest.Header.CentroidChunkCount;
+        var seen = expected > 0 ? new bool[expected] : [];
         var prefix = VectorIndexStorageKeys.CentroidPrefix(_prefix, manifest.Generation, manifest.CentroidEpoch);
         var scan = _store.ScanAsync(prefix, cancellationToken);
         await foreach (var entry in scan.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -274,12 +373,36 @@ public sealed partial class DurableVectorIndex
 
             restored.ApplyChunk(payload);
             applied++;
+
+            if (int.TryParse(
+                    entry.Key.AsSpan(prefix.Length),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var sequence) &&
+                sequence >= 0 && sequence < seen.Length)
+            {
+                seen[sequence] = true;
+            }
+        }
+
+        if (applied < expected)
+        {
+            // Short, not wrong: note which chunks the scan did not return, so the
+            // discard can first ask whether they are really gone.
+            for (var sequence = 0; sequence < seen.Length; sequence++)
+            {
+                if (!seen[sequence])
+                {
+                    NoteAbsent(VectorIndexStorageKeys.CentroidChunk(
+                        _prefix, manifest.Generation, manifest.CentroidEpoch, sequence));
+                }
+            }
         }
 
         // A partitioning that is not completely restored is worse than none: the
         // index would rank against a partly zeroed centroid block. S6 refuses to
         // report Ready in that state, and this refuses to serve it at all.
-        return applied == manifest.Header.CentroidChunkCount && restored.CentroidsComplete;
+        return applied == expected && restored.CentroidsComplete;
     }
 
     private async Task<bool> ReadPartitionStatesAsync(
@@ -316,15 +439,17 @@ public sealed partial class DurableVectorIndex
             seen[partition] = true;
         }
 
+        var complete = true;
         for (var partition = 0; partition < partitionSlots; partition++)
         {
             if (!seen[partition])
             {
-                return false;
+                NoteAbsent(VectorIndexStorageKeys.PartitionState(_prefix, manifest.Generation, partition));
+                complete = false;
             }
         }
 
-        return true;
+        return complete;
     }
 
     /// <summary>
@@ -372,11 +497,17 @@ public sealed partial class DurableVectorIndex
             for (var i = sequence; i < upper; i++)
             {
                 var key = keys[i - sequence];
-                if (!records.TryGetValue(key, out var record) ||
-                    !VectorIndexRecord.TryUnwrap(record, out var payload))
+                if (!records.TryGetValue(key, out var record))
+                {
+                    NoteAbsent(key);
+                    throw new VectorIndexFormatException(
+                        $"The vector chunk at '{key}' was not returned by the read.");
+                }
+
+                if (!VectorIndexRecord.TryUnwrap(record, out var payload))
                 {
                     throw new VectorIndexFormatException(
-                        $"The vector chunk at '{key}' is missing, truncated, corrupt, or written by an unsupported build.");
+                        $"The vector chunk at '{key}' is truncated, corrupt, or written by an unsupported build.");
                 }
 
                 target.ApplyChunk(payload);
