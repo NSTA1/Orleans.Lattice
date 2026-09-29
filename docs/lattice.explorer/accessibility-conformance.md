@@ -13,7 +13,7 @@ keyboard operability and focus order; visible focus; heading structure;
 landmarks and skip links; live-region announcements; name, role and value for
 custom widgets; text contrast; non-text contrast; reduced motion; and forced
 colours and contrast preferences. The full checklist, with the success criterion
-for each, is `test/lattice.explorer.uitests/ConformanceChecklist.md`.
+and the enforcing tests for each, is [`ConformanceChecklist.md`](../../test/lattice.explorer.uitests/ConformanceChecklist.md).
 
 ## What the console does
 
@@ -84,20 +84,28 @@ the real web head against a live test cluster:
   through them. The app frame's isolation is checked with hostile bundles in
   Chromium, Firefox and WebKit.
 
-The criterion each test enforces is listed in the checklist.
+The criterion each test enforces is listed in the [`ConformanceChecklist.md`](../../test/lattice.explorer.uitests/ConformanceChecklist.md) checklist.
 
-Two disciplines make those results mean something:
+Three disciplines make those results mean something:
 
 - **No suppression mechanism exists.** There is no allow-list to add an
   exception to. A finding is fixed, or it is tracked as its own issue.
 - **Every case proves its own premises first.** Axe reports zero violations on a
-  blank page, so each case first asserts that the console rendered, that the
-  theme and contrast genuinely changed what the browser resolved, that the width
-  band is the one requested, and that the identity is the one rendered. The rule
-  set is checked for vacuity too: `target-size`, the only rule carrying the
-  `wcag22aa` tag in the bundled axe-core, ships disabled, and
-  `label-content-name-mismatch`, the only `wcag21a` rule, is tagged
-  experimental, so both are force-enabled by id.
+  blank page, so each sweep first asserts that the page's heading rendered and that
+  the document carries exactly the appearance asked for. The rule set is checked
+  for vacuity too: every requested tag must resolve to at least one rule axe
+  evaluated. `target-size`, the only rule carrying the `wcag22aa` tag in the
+  bundled axe-core, ships disabled, and `label-content-name-mismatch`, the only
+  `wcag21a` rule, is tagged experimental, so both are force-enabled by id.
+- **The gates are mutation-tested.** A deliberate defect is applied to the source
+  and the suite is run to show which test catches it.
+  [`AxeMutationProof.md`](../../test/lattice.explorer.uitests/AxeMutationProof.md)
+  records that the axe sweep passes an ARIA state bound to a C# `bool` (a valueless
+  `aria-pressed`) and that a named assertion is what catches it.
+  [`IsolationMutationProof.md`](../../test/lattice.explorer.uitests/Apps/IsolationMutationProof.md)
+  records that the app frame stays contained when either of its two sandbox locks
+  (the frame attribute or the bootstrap document's policy) is removed, and that
+  removing both fails the isolation tests in all three engines.
 
 ## Known limitations
 
@@ -134,7 +142,8 @@ technology or interaction involved.
 
 ## See also
 
-- `test/lattice.explorer.uitests/ConformanceChecklist.md` - the ten criteria and their enforcing tests
+- [`ConformanceChecklist.md`](../../test/lattice.explorer.uitests/ConformanceChecklist.md) - the ten criteria and their enforcing tests
+- [`AxeMutationProof.md`](../../test/lattice.explorer.uitests/AxeMutationProof.md) and [`IsolationMutationProof.md`](../../test/lattice.explorer.uitests/Apps/IsolationMutationProof.md) - the mutation evidence
 - [Theming and density](theming-and-density.md)
 - [The Explorer navigation model](navigation-model.md)
 - [Lattice Apps in the Explorer](lattice-apps.md)

@@ -94,7 +94,7 @@ signs in as any identity, and **Sign out** sticks.
 Start with `dotnet run` (signed in as `explorer-admin`, connected to `east`).
 The console opens at `/t/default`, the cluster's reserved default tenant: an
 operator can reach it as well as `acme` and `globex`, which it administers, and
-starts there. Choose `acme` in the address root's tenant selector, or open
+starts there. Type `t/acme` in the address line and choose it, or open
 `/t/acme`, to follow the walk below. The address is rooted at `/t/{tenant}` for
 every tenant-scoped area; Access and Cluster are cluster-wide and never are.
 

@@ -1007,10 +1007,10 @@
         },
         {
           "id": "role-held",
-          "check": "The access gate returns an unfiltered allow for every operation of the tool's declared role on at least one resolved scope for the caller subject; a key-filtered allow never holds an operation, on a prefix scope as on a tree scope.",
+          "check": "The caller holds the tool's declared role by binding (its group closure contains a group the install binds to the role, and the role confers an operation and a scope), and the access gate, asked only after the binding holds, refuses none of the role's operations on at least one resolved scope. A key-filtered answer is tested at a representative key of the scope, so it can only narrow, never grant; the caller's other rules never add a role.",
           "on_true": "coarse-authorizer",
           "on_false": "not-advertised",
-          "source": "src/lattice.api.mcp.apps/AppMcpRoleGate.cs#AppMcpRoleGate"
+          "source": "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
         },
         {
           "id": "coarse-authorizer",
@@ -1030,13 +1030,15 @@
           "outcome": "The app tool is absent from tools/list and therefore unreachable from tools/call; if a stale session invokes it, the namespaced tool throws an authorization McpException."
         }
       ],
-      "fail_closed": "A missing collaborator, unvalidated tenant, disabled app, unpinned ceiling, bad tool pairing, lost role grant, or MCP coarse-authorizer denial withholds the app tool and the invocation path re-checks current state; a key-filtered allow does not hold a role operation.",
+      "fail_closed": "A missing collaborator, unvalidated tenant, disabled app, unpinned ceiling, bad tool pairing, lost role binding, a deny on the role, or MCP coarse-authorizer denial withholds the app tool and the invocation path re-checks current state; a key-filtered answer can only narrow a bound role, never grant one.",
       "sources": [
         "src/lattice.api.mcp/Discovery/ILatticeApiMcpAppToolSource.cs",
         "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs",
         "src/lattice.api.mcp.apps/AppMcpNamespacedTool.cs",
         "src/lattice.api.mcp.apps/AppMcpRoleGate.cs",
         "src/lattice.api.mcp.apps/AppMcpToolActivation.cs",
+        "src/lattice.apps/Registry/AppRoleGate.cs",
+        "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs",
         "src/lattice.api.mcp.apps/AppMcpToolSource.cs"
       ]
     },
