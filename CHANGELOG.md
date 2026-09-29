@@ -46,6 +46,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Event publish fan-out.** A multi-key set, conditional set or CRDT delta apply published its per-key stream events one await at a time. They now go out in bounded concurrent windows of 32, so a 500-key request costs 16 grain-call rounds instead of 500. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
+- **Performance - Leaf frame state-bytes walk.** The row walker that sums a frame's state bytes is now pinned as an inline root, so the JIT inlines its per-row parser into the walk instead of inlining the walk into its callers. The walk is 68% faster over a 4096-row frame. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
+- **Performance - Compacted OR-set decode.** Decoding a compacted OR-set overflowed its presized buffer and let list doubling widen it. It now widens once to the provable ceiling, cutting 29% of the decode's allocation and 31% of its time. ([#3898](https://github.com/NSTA1/Orleans.Lattice/pull/3898)) (`Orleans.Lattice`)
+
 - **Performance - Aggregation row transcode.** A row now encodes a short string once instead of sizing it and then encoding it again, gated on a compile-time UTF-8 bound rather than a virtual `Encoding.GetMaxByteCount` call paid per string. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
 
 - **Performance - Leaf snapshot frame reads.** The frame codec re-validated its 24-byte header on every read helper, inside per-row and per-probe loops. It is now read once and threaded through: a lower-bound seek is 76% faster, hydration admission 22%, and the aggregate walk 64%. ([#3881](https://github.com/NSTA1/Orleans.Lattice/pull/3881)) (`Orleans.Lattice`)

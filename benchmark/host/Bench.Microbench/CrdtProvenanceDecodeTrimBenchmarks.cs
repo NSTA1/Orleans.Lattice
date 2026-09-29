@@ -85,6 +85,8 @@ public class CrdtProvenanceDecodeTrimBenchmarks
     private CrdtProvenanceDelta[] _mvDeltas = null!;
     private MvRegister _singleValued = null!;
     private OrMap<string, GCounter> _map = null!;
+    private OrSet _compactedSet = null!;
+    private OrSet _uncompactedSet = null!;
 
     /// <summary>Builds the decode inputs the lanes project.</summary>
     [GlobalSetup]
@@ -131,6 +133,90 @@ public class CrdtProvenanceDecodeTrimBenchmarks
             OrMapCurrentValueBaseline(),
             OrMapProvenanceDecoder.Instance.DecodeCurrentValue(_map),
             "or-map current value");
+
+        _compactedSet = BuildOrSet(compacted: true);
+        _uncompactedSet = BuildOrSet(compacted: false);
+
+        AssertSameChanges(
+            OrSetStateBaseline(_compactedSet),
+            OrSetProvenanceDecoder.Instance.DecodeState(_compactedSet),
+            "or-set state (compacted)");
+        AssertSameChanges(
+            OrSetStateBaseline(_uncompactedSet),
+            OrSetProvenanceDecoder.Instance.DecodeState(_uncompactedSet),
+            "or-set state (uncompacted)");
+
+        // The compacted corpus must actually SYNTHESIZE - that is the only path
+        // the trim touches. A corpus that quietly stopped overflowing its
+        // presize would make the primary lane a duplicate of the control and
+        // the comparison would measure nothing.
+        var compactedCount = OrSetProvenanceDecoder.Instance.DecodeState(_compactedSet).Count;
+        var compactedDots = OrSetDotTotal(_compactedSet);
+        if (compactedCount <= compactedDots)
+        {
+            throw new InvalidOperationException(
+                "The compacted OrSet corpus does not overflow its presize, so the trim lane is void.");
+        }
+
+        // ...and the control corpus must NOT, or it is not a control.
+        var uncompactedCount = OrSetProvenanceDecoder.Instance.DecodeState(_uncompactedSet).Count;
+        if (uncompactedCount != OrSetDotTotal(_uncompactedSet))
+        {
+            throw new InvalidOperationException(
+                "The control OrSet corpus synthesizes events, so it is not a below-threshold control.");
+        }
+    }
+
+    private static int OrSetDotTotal(OrSet set)
+    {
+        var total = 0;
+        foreach (var (_, dots) in set.Adds) total += dots.Count;
+        foreach (var (_, dots) in set.Tombstones) total += dots.Count;
+        return total;
+    }
+
+    /// <summary>
+    /// Builds an OrSet whose decode either overflows its presize or does not.
+    /// <para>
+    /// Compacted: tombstones carry a DIFFERENT replica id from the adds, so no
+    /// tombstone dot is present in the add list and every one synthesizes its
+    /// Added half - which is what pushes the result past the dot total.
+    /// Uncompacted: tombstones mirror add dots exactly, so nothing is
+    /// synthesized and the presize is already exact.
+    /// </para>
+    /// </summary>
+    private static OrSet BuildOrSet(bool compacted)
+    {
+        const int elements = 64;
+        const int addsPerElement = 32;
+        const int tombsPerElement = 4;
+
+        var set = new OrSet();
+        for (var e = 0; e < elements; e++)
+        {
+            var key = Convert.ToBase64String(Encoding.UTF8.GetBytes($"element-{e:D4}"));
+
+            var adds = new List<OrSetDot>(addsPerElement);
+            for (var i = 1; i <= addsPerElement; i++)
+            {
+                adds.Add(new OrSetDot { ReplicaId = ReplicaA, Counter = i });
+            }
+
+            var tombs = new List<OrSetDot>(tombsPerElement);
+            for (var i = 1; i <= tombsPerElement; i++)
+            {
+                tombs.Add(new OrSetDot
+                {
+                    ReplicaId = compacted ? ReplicaB : ReplicaA,
+                    Counter = i,
+                });
+            }
+
+            set.Adds[key] = adds;
+            set.Tombstones[key] = tombs;
+        }
+
+        return set;
     }
 
     // ========================================================================
@@ -299,6 +385,142 @@ public class CrdtProvenanceDecodeTrimBenchmarks
     [Benchmark]
     public int OrMapCurrentValue_Optimized_RealDecodeCurrentValue()
         => OrMapProvenanceDecoder.Instance.DecodeCurrentValue(_map).Count;
+
+    // ========================================================================
+    // (4) or-set state decode - compacted buffer growth
+    // ========================================================================
+    //
+    // DecodeState presizes its result to the dot total, which is exact for an
+    // uncompacted set. A COMPACTED set synthesizes an extra Added event per
+    // tombstone dot that no longer survives in the add list, so the buffer
+    // overflows and grows. It grows exactly once either way - the ceiling,
+    // total + tombstoneDots, never exceeds 2 * total - so the saving is not in
+    // the number of reallocations but in the SIZE of the one that happens:
+    // List<T> doubles to 2 * total, where the provable ceiling is smaller by
+    // the whole add-dot count.
+
+    /// <summary>The prior shape: presize to the dot total and let the overflow double.</summary>
+    [Benchmark]
+    public int OrSetState_Baseline_DoublingGrowth() => OrSetStateBaseline(_compactedSet).Count;
+
+    /// <summary>The shipped shape: the <b>real production</b> decoder, widening to the exact ceiling.</summary>
+    [Benchmark]
+    public int OrSetState_Optimized_RealDecodeState()
+        => OrSetProvenanceDecoder.Instance.DecodeState(_compactedSet).Count;
+
+    /// <summary>
+    /// Control: an uncompacted set, where nothing is synthesized and the presize
+    /// is already exact. Neither lane may grow at all, so the pair must show no
+    /// separation - if it does, the primary delta is not the growth.
+    /// </summary>
+    [Benchmark]
+    public int OrSetState_Control_Uncompacted_Baseline() => OrSetStateBaseline(_uncompactedSet).Count;
+
+    /// <summary>Control: the shipped decoder over the same uncompacted set.</summary>
+    [Benchmark]
+    public int OrSetState_Control_Uncompacted_Optimized()
+        => OrSetProvenanceDecoder.Instance.DecodeState(_uncompactedSet).Count;
+
+    /// <summary>
+    /// Verbatim copy of <c>OrSetProvenanceDecoder.DecodeState</c> as it stood
+    /// before the trim: identical but for the exact-size widening, so the
+    /// overflow is served by List&lt;T&gt;'s own doubling.
+    /// </summary>
+    private static List<CrdtMemberChange> OrSetStateBaseline(OrSet set)
+    {
+        var adds = set.Adds;
+        var tombstones = set.Tombstones;
+
+        var keys = new List<string>(adds.Count + tombstones.Count);
+        var total = 0;
+        foreach (var (key, dots) in adds)
+        {
+            keys.Add(key);
+            total += dots.Count;
+        }
+        foreach (var (key, dots) in tombstones)
+        {
+            total += dots.Count;
+            if (!adds.ContainsKey(key)) keys.Add(key);
+        }
+        if (total == 0) return new List<CrdtMemberChange>();
+
+        keys.Sort(StringComparer.Ordinal);
+
+        var result = new List<CrdtMemberChange>(total);
+        foreach (var key in keys)
+        {
+            var element = Convert.FromBase64String(key);
+            var start = result.Count;
+
+            adds.TryGetValue(key, out var addDots);
+            if (addDots is not null)
+            {
+                for (var i = 0; i < addDots.Count; i++)
+                {
+                    var dot = addDots[i];
+                    result.Add(new CrdtMemberChange
+                    {
+                        Element = element,
+                        Kind = CrdtMemberChangeKind.Added,
+                        ReplicaId = dot.ReplicaId,
+                        Ordinal = dot.Counter,
+                        WallClock = null,
+                    });
+                }
+            }
+
+            if (tombstones.TryGetValue(key, out var tombDots))
+            {
+                for (var i = 0; i < tombDots.Count; i++)
+                {
+                    var dot = tombDots[i];
+                    if (addDots is not null && !OrSetProvenanceDecoder.ContainsExact(addDots, in dot))
+                    {
+                        result.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Added,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+
+                    result.Add(new CrdtMemberChange
+                    {
+                        Element = element,
+                        Kind = CrdtMemberChangeKind.Removed,
+                        ReplicaId = dot.ReplicaId,
+                        Ordinal = dot.Counter,
+                        WallClock = null,
+                    });
+                }
+            }
+
+            result.Sort(start, result.Count - start, BaselineCausalOrderComparer.Instance);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Verbatim copy of the decoder's private causal-order comparer, so the
+    /// baseline lane sorts identically to the shipped one.
+    /// </summary>
+    private sealed class BaselineCausalOrderComparer : IComparer<CrdtMemberChange>
+    {
+        public static BaselineCausalOrderComparer Instance { get; } = new();
+
+        public int Compare(CrdtMemberChange x, CrdtMemberChange y)
+        {
+            var byOrdinal = x.Ordinal.CompareTo(y.Ordinal);
+            if (byOrdinal != 0) return byOrdinal;
+            var byReplica = string.CompareOrdinal(x.ReplicaId, y.ReplicaId);
+            if (byReplica != 0) return byReplica;
+            return ((int)x.Kind).CompareTo((int)y.Kind);
+        }
+    }
 
     private List<CrdtMemberChange> OrMapStateBaseline()
     {
