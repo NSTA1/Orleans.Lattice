@@ -1,0 +1,68 @@
+@page "/access"
+@page "/access/rules"
+@page "/t/{tenant}/access"
+@page "/t/{tenant}/access/rules"
+@inherits ExplorerPage
+
+@*
+    Every authorization rule on the cluster, authored and app-owned alike, in
+    pages. App-owned rules are attributed to their app and are read-only.
+*@
+
+<PageTitle>Access rules - Orleans.Lattice Explorer</PageTitle>
+
+<h1 class="lt-shell-page-title">Access</h1>
+<p class="lt-shell-page-lede">Who may do what on this cluster: the authorization rules, the groups they name, and why a decision came out as it did.</p>
+<AccessNav Current="@AccessRoutes.RulesSegment" />
+<AccessPostureBanner Model="_model" />
+
+<div class="lt-toolbar">
+    <LtSearchInput Label="Search rules" Placeholder="Rule id, subject or tree" Value="@_search" ValueChanged="@(value => _search = value)" />
+    @if (IsCompact)
+    {
+        <LtSelect Label="Show" Options="FilterOptions" Value="@_filter" ValueChanged="@(value => _filter = value)" />
+    }
+    else
+    {
+        <div class="lt-access-filter" role="group" aria-label="Show">
+            @foreach (var option in FilterOptions)
+            {
+                <LtButton @key="option.Value" Variant="LtButtonVariant.Quiet" Pressed="@(_filter == option.Value)" OnClick="@(() => _filter = option.Value)">@option.Text</LtButton>
+            }
+        </div>
+    }
+    <LtButton OnClick="OpenEditor" Disabled="@(_failure is not null)" data-lt-command="@AccessArea.CreateRuleCommandId">New rule</LtButton>
+    @if (_rules is not null)
+    {
+        <span class="lt-access-count" role="status">@CountText</span>
+    }
+</div>
+
+@if (_failure is { } failure)
+{
+    <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "Rules could not be read")">
+        <ChildContent>@failure.Message</ChildContent>
+        <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
+    </LtEmptyState>
+}
+else if (_rules is null)
+{
+    <LtSkeleton Lines="6" Label="Loading rules" />
+}
+else
+{
+    <AccessRuleTable Rules="Visible" Caption="Authorization rules" CaptionHidden="true" EmptyText="@EmptyText" />
+    @if (_next is not null)
+    {
+        <div class="lt-access-actions">
+            <LtButton OnClick="LoadMoreAsync" Disabled="_loadingMore">Load more rules</LtButton>
+        </div>
+    }
+}
+
+<LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="New rule" Placement="DialogPlacement">
+    @if (_editorOpen)
+    {
+        <AccessRuleEditor Model="_model" OnSaved="OnSavedAsync" OnCancel="@(() => _editorOpen = false)" />
+    }
+</LtDialog>
