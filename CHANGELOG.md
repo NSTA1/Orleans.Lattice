@@ -60,6 +60,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **CRDT - Counter component overflow.** A G-Counter or PN-Counter advance past `long.MaxValue` wrapped the component negative, so the pointwise-max merge discarded it and the write succeeded having counted nothing. It now throws `OverflowException` and writes nothing. ([#3926](https://github.com/NSTA1/Orleans.Lattice/issues/3926)) (`Orleans.Lattice`)
+
+- **Observability - Telemetry step overflow.** A range query whose step was too large to multiply, on a catalogue entry declaring no step ceiling, threw `OverflowException`. The rate window and defaulted span now saturate, so the deployment step guardrail rejects it as a bounds violation. ([#3924](https://github.com/NSTA1/Orleans.Lattice/issues/3924)) (`Orleans.Lattice.Api.Telemetry`)
+
+- **Config - Telemetry request timeout ceiling.** A `RequestTimeout` longer than `HttpClient` accepts (`int.MaxValue` milliseconds) passed validation and then failed every resolution of the backend client. Validation now rejects it, naming the ceiling. ([#3925](https://github.com/NSTA1/Orleans.Lattice/issues/3925)) (`Orleans.Lattice.Api.Telemetry`)
+
 - **Core - Tree lifecycle follows aliases.** Deleting, recovering or purging a resized, restored or remediated tree now acts on its live copy, and a resize no longer reports the tree as deleted when it retires the old copy. Deleting through an alias to a tree it does not own is refused. ([#3744](https://github.com/NSTA1/Orleans.Lattice/issues/3744)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Schema`)
 
 - **Observability - Logical tree id after an alias.** Mutation observers and the `tree` metric tag keep reporting the logical tree id after a resize, restore or schema remediation moves a tree to a new physical copy, so observers, dashboards and alerts keep their series. ([#3767](https://github.com/NSTA1/Orleans.Lattice/issues/3767), [#3780](https://github.com/NSTA1/Orleans.Lattice/issues/3780)) (`Orleans.Lattice`)

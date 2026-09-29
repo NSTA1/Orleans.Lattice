@@ -104,6 +104,52 @@ public class PnCounterTests
     }
 
     [Test]
+    public void Increment_past_the_component_ceiling_throws_and_leaves_the_component_unchanged()
+    {
+        // A wrapped positive component would read long.MinValue, which the pointwise-max
+        // merge discards, so the increment would be lost without any error.
+        var c = new PnCounter();
+        c.Increment("r1", long.MaxValue);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => c.Increment("r1", 1), Throws.TypeOf<OverflowException>());
+            Assert.That(c.Increments["r1"], Is.EqualTo(long.MaxValue));
+        });
+    }
+
+    [Test]
+    public void Decrement_past_the_component_ceiling_throws_and_leaves_the_component_unchanged()
+    {
+        // The negative side is a grow-only component too: a wrapped one would read
+        // long.MinValue and silently lose the decrement to the pointwise-max merge.
+        var c = new PnCounter();
+        c.Decrement("r1", long.MaxValue);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => c.Decrement("r1", 1), Throws.TypeOf<OverflowException>());
+            Assert.That(c.Decrements["r1"], Is.EqualTo(long.MaxValue));
+        });
+    }
+
+    [Test]
+    public void Increment_and_decrement_up_to_the_component_ceiling_are_exact()
+    {
+        var c = new PnCounter();
+        c.Increment("r1", long.MaxValue - 1);
+        c.Increment("r1", 1);
+        c.Decrement("r1", long.MaxValue - 1);
+        c.Decrement("r1", 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(c.Increments["r1"], Is.EqualTo(long.MaxValue));
+            Assert.That(c.Decrements["r1"], Is.EqualTo(long.MaxValue));
+        });
+    }
+
+    [Test]
     public void Merge_takes_pointwise_max_per_replica()
     {
         var a = new PnCounter();

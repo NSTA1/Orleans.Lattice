@@ -80,6 +80,22 @@ public class GCounterAccessorTests
     }
 
     [Test]
+    public async Task IncrementAsync_past_the_component_ceiling_throws_rather_than_applying_a_wrapped_delta()
+    {
+        // The delta carries the replica's new cumulative component. A wrapped component
+        // (long.MinValue) is smaller than the stored long.MaxValue, so the leaf's
+        // pointwise-max apply would discard it and the call would succeed having
+        // counted nothing.
+        var lattice = Seeded("k", "r", long.MaxValue);
+
+        Assert.That(
+            async () => await lattice.GCounter("k").IncrementAsync("r", 1),
+            Throws.TypeOf<OverflowException>());
+        await lattice.DidNotReceive().ApplyCrdtDeltaAsync(
+            Arg.Any<string>(), Arg.Any<LatticeMergeMode>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void IncrementAsync_rejects_empty_replica()
     {
         var lattice = Empty("k");

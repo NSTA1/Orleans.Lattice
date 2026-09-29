@@ -2011,12 +2011,12 @@ See [OR-Flag - Marking many flags at once](../crdt/orflag.md#marking-many-flags-
 | `OrSetAccessor` | `Task MergeAsync(OrSet other)` | Merges `other` into the stored state, applied as one typed delta. |
 | `PnCounterAccessor` | `Task<PnCounter> GetAsync()` | Reads the current counter state. |
 | `PnCounterAccessor` | `Task<long> ValueAsync()` | Reads the current scalar value. |
-| `PnCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the positive component for `replicaId`. `amount` must be non-negative. |
-| `PnCounterAccessor` | `Task DecrementAsync(string replicaId, long amount = 1)` | Advances the negative component for `replicaId`. `amount` must be non-negative. |
+| `PnCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the positive component for `replicaId`. `amount` must be non-negative. Throws `OverflowException`, and writes nothing, when the advance would take the component past `long.MaxValue`. |
+| `PnCounterAccessor` | `Task DecrementAsync(string replicaId, long amount = 1)` | Advances the negative component for `replicaId`. `amount` must be non-negative. Throws `OverflowException`, and writes nothing, when the advance would take the component past `long.MaxValue`. |
 | `PnCounterAccessor` | `Task MergeAsync(PnCounter other)` | Merges `other` into the stored state, applied as one typed delta. |
 | `GCounterAccessor` | `Task<GCounter> GetAsync()` | Reads the current grow-only counter state. |
 | `GCounterAccessor` | `Task<long> ValueAsync()` | Reads the current scalar value: the sum of all replica components. |
-| `GCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the grow-only component for `replicaId`. `amount` must be non-negative. |
+| `GCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the grow-only component for `replicaId`. `amount` must be non-negative. Throws `OverflowException`, and writes nothing, when the advance would take the component past `long.MaxValue`. |
 | `GCounterAccessor` | `Task MergeAsync(GCounter other)` | Merges `other` into the stored state by pointwise-max per replica. |
 | `GSetAccessor` | `Task<GSet> GetAsync()` | Reads the current grow-only set state. |
 | `GSetAccessor` | `Task AddAsync(byte[] element)` | Adds `element`; duplicate adds are idempotent. |
