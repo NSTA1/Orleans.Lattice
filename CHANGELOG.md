@@ -188,9 +188,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Security - A tree-scoped rule granted a scopeless capability.** MCP discovery masked only the telemetry bit as scopeless, so an Allow rule on a single tree carried `AppInstall` into the granted operations. Both scopeless capabilities are now carried only from a cluster-wide rule. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp`)
 
+- **Security - A rejected MCP call echoed the caller's argument names.** Unknown argument names reached the rejection message and the server log verbatim and unbounded, so a caller could forge a log record with CR/LF. Names are now sanitized, truncated, and capped in number. ([#3972](https://github.com/NSTA1/Orleans.Lattice/pull/3972)) (`Orleans.Lattice.Api.Mcp`)
+
 - **Security - A single-key allow certified a whole prefix.** An app role scoped to a key prefix probed its key filter with the prefix string, which resolves on the exact-key tier, so a policy allowing only the key equal to that prefix held the role prefix-wide. Filtered decisions now fail closed. ([#3863](https://github.com/NSTA1/Orleans.Lattice/pull/3863)) (`Orleans.Lattice.Api.Mcp.Apps`)
 
 - **Security - A cleared Explorer credential was not cleared.** The cookie store's clear deleted nothing once response headers were sent, which on a Blazor circuit is always, so a credential dropped on an endpoint change survived and was replayed against the new address. ([#3800](https://github.com/NSTA1/Orleans.Lattice/pull/3800)) (`Orleans.Lattice.Explorer`)
+
+- **Security - An Explorer sign-out could be undone.** Logout needs no sign-in, so junk cookie values flushed the bounded revocation ledger and resurrected a credential. Only minted values are admitted now, and a credential carries the endpoint it was minted for and is refused elsewhere. ([#3972](https://github.com/NSTA1/Orleans.Lattice/pull/3972)) (`Orleans.Lattice.Explorer`)
 
 - **Security - Grant scoping.** A data-plane write grant no longer lets a caller index and read any readable directory, and a bearer token is no longer used as a subject identifier. ([#2386](https://github.com/NSTA1/Orleans.Lattice/pull/2386), [#3292](https://github.com/NSTA1/Orleans.Lattice/issues/3292)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
