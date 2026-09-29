@@ -271,6 +271,11 @@ Backup*/
 # directory, not a Visual Studio upgrade-backup folder either.
 !/src/lattice.api.mcp/Tools/Backup/
 !/test/lattice.api.mcp/Tools/Backup/
+# The rewritten Explorer's Backups area (epic #3807) lives in real Backups/ source,
+# stylesheet and test directories, not Visual Studio upgrade-backup folders.
+!/src/lattice.explorer/Shell/Areas/Backups/
+!/src/lattice.explorer/Shell/wwwroot/backups/
+!/test/lattice.explorer/Shell/Areas/Backups/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/
