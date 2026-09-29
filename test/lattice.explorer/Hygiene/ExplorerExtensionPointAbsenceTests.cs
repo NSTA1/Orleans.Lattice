@@ -51,7 +51,7 @@ public sealed class ExplorerExtensionPointAbsenceTests
             {
                 "Orleans.Lattice.Explorer.Core",
                 "Orleans.Lattice.Explorer.AppKit",
-                "Orleans.Lattice.Explorer.Shell",
+                "Orleans.Lattice.Explorer.UI",
                 "Orleans.Lattice.Explorer.Web",
             }));
     }
@@ -82,16 +82,16 @@ public sealed class ExplorerExtensionPointAbsenceTests
     [Test]
     public void The_area_and_completion_contracts_are_internal()
     {
-        var shell = typeof(Orleans.Lattice.Explorer.Shell.Layout.ShellLayout).Assembly;
+        var shell = typeof(Orleans.Lattice.Explorer.UI.Layout.ShellLayout).Assembly;
 
         Assert.Multiple(() =>
         {
             foreach (var name in new[]
             {
-                "Orleans.Lattice.Explorer.Shell.Navigation.IExplorerArea",
-                "Orleans.Lattice.Explorer.Shell.Navigation.IAddressCompletionSource",
-                "Orleans.Lattice.Explorer.Shell.Navigation.ExplorerAreaServiceCollectionExtensions",
-                "Orleans.Lattice.Explorer.Shell.ShellServiceCollectionExtensions",
+                "Orleans.Lattice.Explorer.UI.Navigation.IExplorerArea",
+                "Orleans.Lattice.Explorer.UI.Navigation.IAddressCompletionSource",
+                "Orleans.Lattice.Explorer.UI.Navigation.ExplorerAreaServiceCollectionExtensions",
+                "Orleans.Lattice.Explorer.UI.ShellServiceCollectionExtensions",
             })
             {
                 var type = shell.GetType(name, throwOnError: true)!;
@@ -103,11 +103,11 @@ public sealed class ExplorerExtensionPointAbsenceTests
     [Test]
     public void No_public_member_accepts_or_returns_an_area_or_completion_contract()
     {
-        var shell = typeof(Orleans.Lattice.Explorer.Shell.Layout.ShellLayout).Assembly;
+        var shell = typeof(Orleans.Lattice.Explorer.UI.Layout.ShellLayout).Assembly;
         var contracts = new[]
         {
-            shell.GetType("Orleans.Lattice.Explorer.Shell.Navigation.IExplorerArea", throwOnError: true)!,
-            shell.GetType("Orleans.Lattice.Explorer.Shell.Navigation.IAddressCompletionSource", throwOnError: true)!,
+            shell.GetType("Orleans.Lattice.Explorer.UI.Navigation.IExplorerArea", throwOnError: true)!,
+            shell.GetType("Orleans.Lattice.Explorer.UI.Navigation.IAddressCompletionSource", throwOnError: true)!,
         };
 
         var offenders = new List<string>();
@@ -173,7 +173,7 @@ public sealed class ExplorerExtensionPointAbsenceTests
         [
             typeof(Orleans.Lattice.Explorer.Core.Session.ExplorerPreferenceKey).Assembly,
             typeof(Orleans.Lattice.Explorer.AppKit.AppKitProtocol).Assembly,
-            typeof(Orleans.Lattice.Explorer.Shell.Layout.ShellLayout).Assembly,
+            typeof(Orleans.Lattice.Explorer.UI.Layout.ShellLayout).Assembly,
             typeof(Orleans.Lattice.Explorer.Web.LatticeExplorerWebOptions).Assembly,
         ];
 

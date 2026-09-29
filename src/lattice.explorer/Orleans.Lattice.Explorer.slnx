@@ -1,7 +1,7 @@
 <Solution>
   <Project Path="Core/Orleans.Lattice.Explorer.Core.csproj" />
   <Project Path="AppKit/Orleans.Lattice.Explorer.AppKit.csproj" />
-  <Project Path="Shell/Orleans.Lattice.Explorer.Shell.csproj" />
+  <Project Path="Shell/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="WebHosting/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="Web/Orleans.Lattice.Explorer.WebHost.csproj" />
   <Project Path="../../test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj" />

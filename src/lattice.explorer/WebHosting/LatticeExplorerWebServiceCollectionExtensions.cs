@@ -5,8 +5,8 @@ using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Tenancy;
-using Orleans.Lattice.Explorer.Shell;
-using Orleans.Lattice.Explorer.Shell.Session;
+using Orleans.Lattice.Explorer.UI;
+using Orleans.Lattice.Explorer.UI.Session;
 namespace Orleans.Lattice.Explorer.Web;
 
 /// <summary>

@@ -50,7 +50,7 @@
   <Project Path="src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj" />
   <Project Path="src/lattice.explorer/WebHosting/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj" />
-  <Project Path="src/lattice.explorer/Shell/Orleans.Lattice.Explorer.Shell.csproj" />
+  <Project Path="src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="src/lattice.explorer/AppKit/Orleans.Lattice.Explorer.AppKit.csproj" />
   <Project Path="src/lattice.api.apps.grpc/Orleans.Lattice.Api.Apps.Grpc.csproj" />
   <Project Path="test/lattice.api.apps.grpc/Orleans.Lattice.Api.Apps.Grpc.Tests.csproj" />

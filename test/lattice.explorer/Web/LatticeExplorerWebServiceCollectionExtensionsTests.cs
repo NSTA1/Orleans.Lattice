@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Session;
-using Orleans.Lattice.Explorer.Shell.Session;
+using Orleans.Lattice.Explorer.UI.Session;
 using Orleans.Lattice.Explorer.Web;
 
 namespace Orleans.Lattice.Explorer.Tests.Web;
@@ -156,7 +156,7 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
         services.AddLatticeExplorerWeb();
 
         var areas = services
-            .Where(d => d.ServiceType == typeof(Orleans.Lattice.Explorer.Shell.Navigation.IExplorerArea))
+            .Where(d => d.ServiceType == typeof(Orleans.Lattice.Explorer.UI.Navigation.IExplorerArea))
             .Select(d => d.ImplementationType?.Name)
             .ToArray();
         Assert.Multiple(() =>
@@ -166,7 +166,7 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
                 "DataArea", "AppsArea", "AccessArea", "SchemaArea", "TenancyArea",
                 "ReplicationArea", "BackupsArea", "TelemetryArea", "ClusterArea",
             }));
-            Assert.That(services.Any(d => d.ServiceType == typeof(Orleans.Lattice.Explorer.Shell.Framing.Broker.AppBridgeBroker)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(Orleans.Lattice.Explorer.UI.Framing.Broker.AppBridgeBroker)), Is.True);
         });
     }
 
@@ -196,7 +196,7 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
         var tenants = services.Single(d => d.ServiceType == typeof(Orleans.Lattice.Explorer.Core.Tenancy.IExplorerAccessibleTenantSource));
         Assert.Multiple(() =>
         {
-            Assert.That(gate.ImplementationType, Is.EqualTo(typeof(Orleans.Lattice.Explorer.Shell.Navigation.ShellTenantOperatorGate)));
+            Assert.That(gate.ImplementationType, Is.EqualTo(typeof(Orleans.Lattice.Explorer.UI.Navigation.ShellTenantOperatorGate)));
             Assert.That(gate.Lifetime, Is.EqualTo(ServiceLifetime.Scoped));
             Assert.That(tenants.ImplementationFactory, Is.Not.Null, "the Tenancy area's list is registered by factory");
             Assert.That(services.Any(d => d.ServiceType == typeof(Orleans.Lattice.Explorer.Core.Tenancy.IExplorerTenantView)), Is.True);

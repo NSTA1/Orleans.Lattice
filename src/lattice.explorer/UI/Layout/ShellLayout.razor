@@ -1,0 +1,134 @@
+@inherits LayoutComponentBase
+@using Orleans.Lattice.Explorer.UI.Pages
+
+@*
+    The Explorer's frame. Skip links first (directory, address, content); the
+    header with the lattice mark, the session slots and the appearance menu; the
+    address line; then the directory spine beside the main landmark.
+
+    The layout measures its own root and cascades the width band (LtBreakpoint)
+    to the chrome and to the primitives: medium turns the spine into a rail, and
+    compact moves the spine into a slide-in sheet and folds the header's slots and
+    appearance controls into one overflow menu, which closes as soon as anything
+    in it is activated so it never stacks under a session overlay. Until the
+    width is measured the expanded frame renders, so nothing here depends on
+    script to be usable.
+
+    The main landmark is gated: an area the caller may not see renders the
+    not-found page, an unavailable one says why, and nothing renders an area's
+    page before its availability is known.
+*@
+
+<div class="@RootClass" @ref="_root">
+    <nav class="lt-shell-skip" aria-label="Skip links">
+        <a class="lt-shell-skip__link" href="#lt-shell-directory" @onclick="SkipToDirectoryAsync" @onclick:preventDefault>Skip to directory</a>
+        <a class="lt-shell-skip__link" href="#lt-shell-address" @onclick="SkipToAddressAsync" @onclick:preventDefault>Skip to address</a>
+        <a class="lt-shell-skip__link" href="#lt-shell-content" @onclick="SkipToContentAsync" @onclick:preventDefault>Skip to content</a>
+    </nav>
+
+    <header class="lt-shell-header">
+        @if (IsCompact)
+        {
+            <button type="button"
+                    class="lt-btn lt-btn--quiet lt-shell-header__control"
+                    aria-haspopup="dialog"
+                    aria-expanded="@(_directoryOpen ? "true" : "false")"
+                    @onclick="OpenDirectory"
+                    @ref="_directoryToggle">
+                Directory
+            </button>
+        }
+        <a class="lt-shell-brand" href="@HomeHref">
+            <LtMark Size="22" />
+            <span class="lt-shell-brand__name"><span class="lt-shell-brand__prefix">Orleans.</span>Lattice Explorer</span>
+        </a>
+        <div class="lt-shell-header__end">
+            @if (IsCompact)
+            {
+                <button type="button"
+                        class="lt-btn lt-btn--quiet lt-shell-header__control"
+                        aria-haspopup="dialog"
+                        aria-expanded="@(_menuOpen ? "true" : "false")"
+                        @onclick="OpenMenu"
+                        @ref="_menuToggle">
+                    Menu
+                </button>
+            }
+            else
+            {
+                @Slot(ShellSlotNames.HeaderConnection)
+                <AppearanceMenu />
+                @Slot(ShellSlotNames.HeaderIdentity)
+            }
+        </div>
+    </header>
+
+    <CascadingValue Value="_location">
+        <CascadingValue Name="@LtBreakpointCascade.Name" Value="_breakpoint">
+            <div class="lt-shell-address" id="lt-shell-address" tabindex="-1">
+                <AddressLine @ref="_addressLine" />
+            </div>
+
+            <div class="lt-shell-body">
+                @if (!IsCompact)
+                {
+                    <div class="@DirectoryClass" id="lt-shell-directory" tabindex="-1" @ref="_directory">
+                        <DirectorySpine Rail="@(_breakpoint == LtBreakpoint.Medium)" />
+                    </div>
+                }
+                <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
+                    @if (GatedArea is { } area)
+                    {
+                        @if (!_location.EntriesLoaded)
+                        {
+                            <LtSkeleton Lines="6" Label="Loading" />
+                        }
+                        else if (_location.CurrentEntry is not { } entry)
+                        {
+                            <NotFoundPage />
+                        }
+                        else if (!entry.IsVisible)
+                        {
+                            <h1 class="lt-shell-page-title">@area.DisplayName</h1>
+                            <LtEmptyState Title="Not available" HeadingLevel="2">@entry.Availability.Reason</LtEmptyState>
+                        }
+                        else
+                        {
+                            @Body
+                        }
+                    }
+                    else
+                    {
+                        @Body
+                    }
+                </main>
+            </div>
+
+            @if (IsCompact)
+            {
+                <LtDialog Open="_directoryOpen"
+                          OpenChanged="OnDirectoryOpenChanged"
+                          Title="Directory"
+                          Placement="LtDialogPlacement.Start"
+                          ReturnFocus="_directoryToggle">
+                    <DirectorySpine OnNavigate="CloseDirectory" />
+                </LtDialog>
+                <LtDialog Open="_menuOpen"
+                          OpenChanged="OnMenuOpenChanged"
+                          Title="Menu"
+                          Placement="LtDialogPlacement.End"
+                          ReturnFocus="_menuToggle">
+                    <div class="lt-shell-overflow" @onclick="CloseMenu">
+                        @Slot(ShellSlotNames.HeaderConnection)
+                        @Slot(ShellSlotNames.HeaderIdentity)
+                        <AppearanceControls />
+                    </div>
+                </LtDialog>
+            }
+            @* Inside the width cascade, so the session overlay's dialogs open as full-screen sheets when compact. *@
+            @Slot(ShellSlotNames.OverlaySession)
+        </CascadingValue>
+    </CascadingValue>
+
+    <LtToastRegion Label="Notifications" />
+</div>

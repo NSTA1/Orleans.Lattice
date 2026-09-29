@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Text.RegularExpressions;
-using Orleans.Lattice.Explorer.Tests.Shell.Design;
+using Orleans.Lattice.Explorer.Tests.UI.Design;
 
 namespace Orleans.Lattice.Explorer.Tests.AppKit;
 
@@ -54,7 +54,7 @@ public sealed class AppKitStylesheetTests
     {
         // One source of truth: the frame and the Explorer around it draw from identical tokens.
         var kit = StaticWebAssetManifest.Assets(AppKitPaths.Project).Single(a => !a.IsCompressed && a.RelativePath == "appkit/v1/tokens.css");
-        var shell = StaticWebAssetManifest.Assets("src/lattice.explorer/Shell").Single(a => !a.IsCompressed && a.RelativePath == "design/tokens.css");
+        var shell = StaticWebAssetManifest.Assets("src/lattice.explorer/UI").Single(a => !a.IsCompressed && a.RelativePath == "design/tokens.css");
 
         Assert.That(File.ReadAllBytes(kit.Identity), Is.EqualTo(File.ReadAllBytes(shell.Identity)));
     }

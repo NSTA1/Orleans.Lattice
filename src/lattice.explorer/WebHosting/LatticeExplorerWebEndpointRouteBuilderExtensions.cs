@@ -3,8 +3,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Orleans.Lattice.Explorer.Shell.Framing;
-using Orleans.Lattice.Explorer.Shell.Layout;
+using Orleans.Lattice.Explorer.UI.Framing;
+using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.Web.Components;
 
 namespace Orleans.Lattice.Explorer.Web;

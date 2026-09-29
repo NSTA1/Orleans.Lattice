@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.Shell.Framing;
+using Orleans.Lattice.Explorer.UI.Framing;
 
 namespace Orleans.Lattice.Explorer.Web;
 

@@ -1,5 +1,5 @@
 using System.Text.RegularExpressions;
-using Orleans.Lattice.Explorer.Tests.Shell.Design;
+using Orleans.Lattice.Explorer.Tests.UI.Design;
 
 namespace Orleans.Lattice.Explorer.Tests.AppKit;
 
@@ -15,7 +15,7 @@ public sealed class AppKitFrameDocumentTests
     [Test]
     public void The_bootstrap_is_published_at_the_versioned_path()
     {
-        var frames = StaticWebAssetManifest.Assets("src/lattice.explorer/Shell")
+        var frames = StaticWebAssetManifest.Assets("src/lattice.explorer/UI")
             .Where(asset => !asset.IsCompressed && asset.RelativePath == "appkit/v1/frame.html")
             .ToArray();
 
