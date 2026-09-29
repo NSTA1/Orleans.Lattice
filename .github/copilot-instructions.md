@@ -351,6 +351,12 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   Then verify against the **merge commit** (`git log -1 --format=%B` on the
   base), not against the branch you merged, which was clean the whole time and
   stays clean.
+  - **Squash is the default, not the only method.** The repository also allows
+    true merge commits, and the one place they are the right choice is an
+    epic or bucket integration branch landing on `main` (see "An integration
+    branch lands on `main` with a merge commit" below). Every other pull
+    request - including each member pull request into an integration branch -
+    still squash-merges with an explicit `--subject` and `--body`.
   - **What IS decidable before the merge is the cause, and it is now gated.**
     The artefact is out of reach, but the precondition is not: GitHub composes
     a trailer only when the pull request's commits carry **more than one
@@ -478,6 +484,27 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     pull request is large by construction, so review deferred to it turns N
     reviewable pull requests into one unreviewable one. Review each sub-issue
     pull request into the epic branch to the same bar as one into `main`.
+  - **An integration branch lands on `main` with a merge commit, not a
+    squash.** This applies to every `<type>/epic/<slug>` branch, whether it is
+    a decomposed epic or a bucket (below), and it is the one reason merge
+    commits are enabled on this repository. Each member pull request was
+    already squash-merged into the integration branch as one reviewed commit
+    carrying its own subject and `Refs #N`; squashing the integration branch
+    again would collapse those N reviewed, bisectable units into one opaque
+    commit and throw the per-item history away. A merge commit keeps them
+    intact on `main`, and GitHub does not compose `Co-authored-by:` lines into
+    a merge commit. Pass the subject and body explicitly, as for a squash:
+
+    ```powershell
+    gh pr merge <n> --merge --subject "feat: <epic or bucket title> (#<n>)" --body "..."
+    ```
+
+    Nothing else changes: the pull request still needs a green
+    `build-and-test`, the trailer guard still scans every commit it brings (so
+    member commits must be trailer-free, which the member pull requests already
+    enforced), and its author-identity arm still applies, because the merge
+    method is chosen at the merge button and is not decidable before it. Never
+    use `--merge` for a pull request whose head is not an integration branch.
   - **Do not apply this ceremonially.** An epic of two or three genuinely
     independent items is better served by ordinary pull requests straight into
     `main`. The epic branch earns its overhead only once the fan-out is wide

@@ -126,7 +126,7 @@ Only after **every** sub-issue is integrated and the integration branch builds c
 4. Commit the integrated work with a conventional message (`feat: <epic title>`), push `<type>/epic/<epic-slug>`. The changelog entry is part of this commit.
 5. Create **one** PR to `main` with `gh pr create`, body written to `.scratch/pr-body.md` (ASCII only) and passed via `--body-file`:
    - a `## Summary` that frames the epic and its shipped capabilities;
-   - **`Closes #<epic>`** plus a `Closes #NNN` for every sub-issue the epic fully implements, in the `## Summary` section, so all auto-close on squash-merge;
+   - **`Closes #<epic>`** plus a `Closes #NNN` for every sub-issue the epic fully implements, in the `## Summary` section, so all auto-close when the PR merges. The epic PR lands with a **merge commit** (`gh pr merge <n> --merge --subject ... --body ...`), not a squash, so each sub-issue's reviewed commit survives on `main` (see "An integration branch lands on `main` with a merge commit" in `.github/copilot-instructions.md`); state this in the PR body so the human merging it picks the right button;
    - a `## Changes` section grouping the new/modified public API, the tests added (by sub-issue), the sample added, and the documentation authored;
    - labels: `enhancement` (or the epic's category) **plus every package label** the epic touched, per the `pr-labels` skill.
 6. **Verify the body applied** (it silently no-ops on a malformed file): re-read the first/last lines and length via `gh pr view <num> --json body`. Fix and re-`gh pr edit --body-file` if empty/stale.
