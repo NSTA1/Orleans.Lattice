@@ -24,7 +24,9 @@ namespace Orleans.Lattice.Replication;
 /// different clusters survive as distinct dot-tagged values
 /// (<see cref="HasAmbiguousMode"/>) so a reader can detect the ambiguity and
 /// fail closed rather than silently choosing one mode and dead-lettering the
-/// loser's data.
+/// loser's data. Concurrent assignments of the <i>same</i> mode also survive as
+/// separate values, but they agree and are not ambiguous, so two regions that
+/// each enable a tree under one mode converge on that mode.
 /// </description>
 /// </item>
 /// </list>
@@ -69,9 +71,10 @@ public sealed class LatticeReplicationConfigEntry : ICrdt<LatticeReplicationConf
     /// <summary>
     /// The multi-value register holding the target tree's declared wire
     /// <see cref="LatticeMergeMode"/>, each value encoded via
-    /// <see cref="EncodeMode"/>. A single live value is the steady state; two or
-    /// more live values indicate concurrent divergent mode assignments that a
-    /// reader must resolve (see <see cref="HasAmbiguousMode"/>).
+    /// <see cref="EncodeMode"/>. A single live value is the steady state. Two or
+    /// more live values record concurrent mode assignments: when they decode to
+    /// the same mode they agree and the tree resolves normally; when they
+    /// diverge a reader must fail closed (see <see cref="HasAmbiguousMode"/>).
     /// </summary>
     [Id(1)]
     public MvRegister Mode { get; set; } = new();
@@ -83,22 +86,27 @@ public sealed class LatticeReplicationConfigEntry : ICrdt<LatticeReplicationConf
     public bool IsEnabled => Enabled.IsEnabled;
 
     /// <summary>
-    /// Returns <see langword="true"/> when <see cref="Mode"/> carries more than
-    /// one live value, i.e. concurrent clusters assigned divergent merge modes
-    /// that have not been reconciled. Readers fail closed on the mode: the
-    /// merge-mode resolver returns no mode for the tree (it never picks one of
-    /// the divergent values) and commit-time shipper nudges stop, but an
-    /// already-active shipper keeps shipping the tree's new local writes. An
-    /// operator resolves the ambiguity by disabling the tree and re-enabling it
-    /// under a single mode.
+    /// Returns <see langword="true"/> when <see cref="Mode"/> carries live values
+    /// that decode to more than one <b>distinct</b> merge mode, i.e. concurrent
+    /// clusters assigned divergent merge modes that have not been reconciled.
+    /// Concurrent assignments of the <i>same</i> mode - two regions each enabling
+    /// the tree under the mode the other also chose - leave several live values
+    /// in the register but agree, so they are not ambiguous. Readers fail closed
+    /// on an ambiguous mode: the merge-mode resolver returns no mode for the tree
+    /// (it never picks one of the divergent values) and commit-time shipper
+    /// nudges stop, but an already-active shipper keeps shipping the tree's new
+    /// local writes. An operator resolves the ambiguity by disabling the tree and
+    /// re-enabling it under a single mode.
     /// </summary>
-    public bool HasAmbiguousMode => Mode.Count > 1;
+    public bool HasAmbiguousMode => ClassifyModes(out _) is ModeAgreement.Divergent;
 
     /// <summary>
-    /// The currently-live declared merge mode(s) for the target tree, decoded
-    /// from <see cref="Mode"/>. Empty when no mode has been assigned, a single
-    /// element in the steady state, or multiple elements when
-    /// <see cref="HasAmbiguousMode"/> is <see langword="true"/>.
+    /// The distinct currently-live declared merge mode(s) for the target tree,
+    /// decoded from <see cref="Mode"/> in the register's deterministic value
+    /// order. Empty when no mode has been assigned, a single element in the
+    /// steady state (including when several concurrent assignments agree on one
+    /// mode), or multiple elements when <see cref="HasAmbiguousMode"/> is
+    /// <see langword="true"/>.
     /// </summary>
     public IReadOnlyList<LatticeMergeMode> Modes
     {
@@ -111,10 +119,14 @@ public sealed class LatticeReplicationConfigEntry : ICrdt<LatticeReplicationConf
                 return Array.Empty<LatticeMergeMode>();
             }
 
-            var result = new LatticeMergeMode[count];
+            var result = new List<LatticeMergeMode>(count);
             for (var i = 0; i < count; i++)
             {
-                result[i] = DecodeMode(values[i]);
+                var mode = DecodeMode(values[i]);
+                if (!result.Contains(mode))
+                {
+                    result.Add(mode);
+                }
             }
 
             return result;
@@ -163,24 +175,51 @@ public sealed class LatticeReplicationConfigEntry : ICrdt<LatticeReplicationConf
 
     /// <summary>
     /// Reads the unambiguous declared merge mode. Returns <see langword="true"/>
-    /// and sets <paramref name="mode"/> when exactly one live value is present;
-    /// returns <see langword="false"/> (with <paramref name="mode"/> set to its
-    /// default) when no mode has been assigned or when the mode is ambiguous
-    /// (<see cref="HasAmbiguousMode"/>).
+    /// and sets <paramref name="mode"/> when every live value decodes to the same
+    /// mode (one value in the steady state, or several concurrent assignments
+    /// that agree); returns <see langword="false"/> (with <paramref name="mode"/>
+    /// set to its default) when no mode has been assigned or when the mode is
+    /// ambiguous (<see cref="HasAmbiguousMode"/>).
     /// </summary>
     /// <param name="mode">The resolved merge mode when the method returns <see langword="true"/>.</param>
     /// <returns><see langword="true"/> when a single unambiguous mode is present.</returns>
     public bool TryGetMode(out LatticeMergeMode mode)
+        => ClassifyModes(out mode) is ModeAgreement.Single;
+
+    /// <summary>
+    /// Classifies the register's live values without allocating: no value, one
+    /// distinct mode (possibly carried by several concurrent dots), or divergent
+    /// modes. Walks <see cref="MvRegister.Entries"/> directly rather than
+    /// <see cref="MvRegister.Values"/>, which copies and sorts every value.
+    /// </summary>
+    private ModeAgreement ClassifyModes(out LatticeMergeMode mode)
     {
-        var values = Mode.Values();
-        if (values.Count == 1)
+        var entries = Mode.Entries;
+        if (entries.Count == 0)
         {
-            mode = DecodeMode(values[0]);
-            return true;
+            mode = default;
+            return ModeAgreement.None;
         }
 
-        mode = default;
-        return false;
+        var first = DecodeMode(entries[0].Value);
+        for (var i = 1; i < entries.Count; i++)
+        {
+            if (DecodeMode(entries[i].Value) != first)
+            {
+                mode = default;
+                return ModeAgreement.Divergent;
+            }
+        }
+
+        mode = first;
+        return ModeAgreement.Single;
+    }
+
+    private enum ModeAgreement
+    {
+        None,
+        Single,
+        Divergent,
     }
 
     /// <inheritdoc />

@@ -59,6 +59,9 @@ public sealed class LatticeStateQueryOrderingTests
         public Task DeleteRetiredPhysicalTreeAsync() => throw new NotSupportedException();
 
         public Task DeleteDerivedPhysicalTreeAsync() => throw new NotSupportedException();
+        public Task DiscardDerivedPhysicalTreeAsync() => throw new NotSupportedException();
+        public Task<PhysicalTreeRetention> GetPhysicalRetentionAsync() => throw new NotSupportedException();
+        public Task<bool> DiscardIfAbandonedDerivedCopyAsync() => throw new NotSupportedException();
         public Task DeleteDelegatedAsync() => throw new NotSupportedException();
         public Task<bool> IsPhysicalDeletedAsync() => throw new NotSupportedException();
         public Task RecoverPhysicalAsync() => throw new NotSupportedException();
@@ -72,6 +75,7 @@ public sealed class LatticeStateQueryOrderingTests
         public Task RecoverAsync() => throw new NotSupportedException();
 
         public Task PurgeNowAsync() => throw new NotSupportedException();
+        public Task BeginPurgeAsync() => throw new NotSupportedException();
     }
 
     /// <summary>

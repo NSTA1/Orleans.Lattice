@@ -99,6 +99,75 @@ public class LatticeReplicationConfigEntryTests
     }
 
     [Test]
+    public void MergeFrom_concurrent_same_mode_writes_are_not_ambiguous()
+    {
+        // Two clusters concurrently assign the SAME mode (issue #3899): the
+        // register keeps both dot-tagged values, but they agree, so the mode is
+        // resolvable and must not be reported as ambiguous.
+        var a = new LatticeReplicationConfigEntry();
+        a.SetMode("site-a", LatticeMergeMode.OrSet);
+
+        var b = new LatticeReplicationConfigEntry();
+        b.SetMode("site-b", LatticeMergeMode.OrSet);
+
+        a.MergeFrom(b);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a.Mode.Count, Is.EqualTo(2), "both concurrent dots survive the merge");
+            Assert.That(a.HasAmbiguousMode, Is.False);
+            Assert.That(a.TryGetMode(out var mode), Is.True);
+            Assert.That(mode, Is.EqualTo(LatticeMergeMode.OrSet));
+            Assert.That(a.Modes, Is.EqualTo(new[] { LatticeMergeMode.OrSet }));
+        });
+    }
+
+    [Test]
+    public void MergeFrom_same_mode_pair_plus_divergent_mode_is_ambiguous()
+    {
+        // Agreement between two replicas must not mask a third, divergent one.
+        var a = new LatticeReplicationConfigEntry();
+        a.SetMode("site-a", LatticeMergeMode.OrSet);
+
+        var b = new LatticeReplicationConfigEntry();
+        b.SetMode("site-b", LatticeMergeMode.OrSet);
+
+        var c = new LatticeReplicationConfigEntry();
+        c.SetMode("site-c", LatticeMergeMode.LwwRegister);
+
+        a.MergeFrom(b);
+        a.MergeFrom(c);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a.HasAmbiguousMode, Is.True);
+            Assert.That(a.TryGetMode(out _), Is.False);
+            Assert.That(a.Modes, Is.EquivalentTo(new[] { LatticeMergeMode.OrSet, LatticeMergeMode.LwwRegister }));
+        });
+    }
+
+    [Test]
+    public void SetMode_after_observing_concurrent_same_mode_writes_collapses_to_one_value()
+    {
+        var a = new LatticeReplicationConfigEntry();
+        a.SetMode("site-a", LatticeMergeMode.OrSet);
+
+        var b = new LatticeReplicationConfigEntry();
+        b.SetMode("site-b", LatticeMergeMode.OrSet);
+
+        a.MergeFrom(b);
+        a.SetMode("site-a", LatticeMergeMode.PnCounter);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a.Mode.Count, Is.EqualTo(1));
+            Assert.That(a.HasAmbiguousMode, Is.False);
+            Assert.That(a.TryGetMode(out var mode), Is.True);
+            Assert.That(mode, Is.EqualTo(LatticeMergeMode.PnCounter));
+        });
+    }
+
+    [Test]
     public void MergeFrom_disable_wins_over_concurrent_enable()
     {
         // site-a enables; site-b concurrently disables without observing the

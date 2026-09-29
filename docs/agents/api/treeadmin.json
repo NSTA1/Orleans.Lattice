@@ -1146,6 +1146,16 @@
           "name": "CanRecover",
           "type": "bool",
           "required": true
+        },
+        {
+          "name": "PurgedShardCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "PurgeShardCount",
+          "type": "int",
+          "required": true
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeDeletionStatus.cs#TreeDeletionStatus"
@@ -3360,13 +3370,13 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Safe to retry after an interrupted shard purge, which is re-driven; once PurgeComplete is persisted a repeat throws InvalidOperationException even if the registry unregister that follows it failed, so after an ambiguous failure read the deletion status and treat an already-purged status as success.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
+        "policy": "Safe to retry. The purge is accept-then-poll: the first call records it in progress and hands the shard walk to a background timer, then waits a bounded time; a call while the purge runs, or after it completed, returns the current status without error, so after an ambiguous failure or a return with PurgeInProgress still true, read the deletion status or simply call again.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
       },
       "idempotency": {
-        "idempotent": "conditional",
-        "basis": "Shard clearing re-runs until PurgeComplete is persisted, after which a repeated call throws InvalidOperationException instead of returning the original success.",
-        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#PurgePhysicalAsync"
+        "idempotent": true,
+        "basis": "Accepting a purge that is already running or complete changes nothing and returns its status; the background walk resumes from its last durably recorded shard after a restart.",
+        "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.Purge.cs#BeginPurgeAsync"
       },
       "concurrency": {
         "rule": "confirm must be true before irreversible purge.",

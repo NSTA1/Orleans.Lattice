@@ -97,8 +97,11 @@ internal static class TypeAliases
     internal const string TombstoneCompactionState = "ol.tcs";
     internal const string TreeDeletionState = "ol.tds";
     internal const string TreeDeletionSnapshot = "ol.tdn";
+    internal const string PhysicalTreeRetention = "ol.ptr";
     internal const string TreeResizeState = "ol.trs";
     internal const string ResizePhase = "ol.rp";
+    internal const string TreeResizeUndoState = "ol.tru";
+    internal const string ResizeUndoProgress = "ol.rup";
     internal const string TreeRegistryEntry = "ol.tre";
     internal const string TreeSnapshotState = "ol.tss";
     internal const string SnapshotPhase = "ol.snp";

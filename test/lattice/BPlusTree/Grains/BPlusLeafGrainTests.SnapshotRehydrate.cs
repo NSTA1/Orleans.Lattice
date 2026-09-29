@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -23,7 +24,8 @@ public partial class BPlusLeafGrainTests
     private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, ILeafSnapshotStorageGrain SnapshotStub, ILeafReplayCoordinatorGrain Coordinator) CreateGrainWithSnapshotAndCoordinator(
         LeafSnapshotBlob? preloadedSnapshot,
         long persistedCheckpoint,
-        long walHead)
+        long walHead,
+        ILoggerFactory? loggerFactory = null)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(preloadedSnapshot));
@@ -44,6 +46,8 @@ public partial class BPlusLeafGrainTests
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(Substitute.For<ILeafCursorReporter>());
+        if (loggerFactory is not null)
+            sc.AddSingleton(loggerFactory);
         var services = sc.BuildServiceProvider();
 
         var leafKey = Guid.NewGuid();

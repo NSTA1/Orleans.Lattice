@@ -271,6 +271,11 @@ public class LatticeGrainSystemTreeGuardTests
             () => CreateGrainFor(treeId).IsResizeCompleteAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
+    public void IsResizeUndoPendingAsync_rejects_reserved_id(string treeId)
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
+            () => CreateGrainFor(treeId).IsResizeUndoPendingAsync());
+
+    [TestCaseSource(nameof(ReservedIds))]
     public void ReshardAsync_rejects_reserved_id(string treeId)
         => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).ReshardAsync(8));

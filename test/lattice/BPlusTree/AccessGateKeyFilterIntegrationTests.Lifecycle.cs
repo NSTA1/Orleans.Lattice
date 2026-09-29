@@ -198,10 +198,10 @@ public partial class AccessGateKeyFilterIntegrationTests
         }
     }
 
-    // ---- Finding 3: the four lifecycle-status verbs ----------------------
+    // ---- Finding 3: the lifecycle-status verbs ---------------------------
 
     /// <summary>
-    /// The four observe-only lifecycle-status verbs, each paired with the name it
+    /// The observe-only lifecycle-status verbs, each paired with the name it
     /// reports under so a failure names the offending verb.
     /// </summary>
     private static IEnumerable<TestCaseData> LifecycleStatusVerbs()
@@ -215,6 +215,11 @@ public partial class AccessGateKeyFilterIntegrationTests
         yield return new TestCaseData(
             new Func<ILattice, Task<bool>>(t => t.IsResizeCompleteAsync()))
             .SetName("IsResizeCompleteAsync");
+        // Inverted so the shared "answers true on a quiet tree" assertions hold:
+        // a quiet tree has no undo pending.
+        yield return new TestCaseData(
+            new Func<ILattice, Task<bool>>(async t => !await t.IsResizeUndoPendingAsync()))
+            .SetName("IsResizeUndoPendingAsync");
         yield return new TestCaseData(
             new Func<ILattice, Task<bool>>(t => t.IsReshardCompleteAsync()))
             .SetName("IsReshardCompleteAsync");

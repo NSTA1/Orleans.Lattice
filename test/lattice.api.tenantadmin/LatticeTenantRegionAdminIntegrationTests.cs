@@ -28,8 +28,9 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 /// operator-only allowed-set operation and the operator-or-tenant-admin residency
 /// and status operations alike, even though the data plane defaults to allow. The
 /// trusted co-host (system-origin) path stands in for authenticated infrastructure
-/// so the lifecycle runs without a wire identity; nothing here depends on timing,
-/// ordering, or delays.
+/// so the lifecycle runs without a wire identity. Only the automatic drain
+/// completion (issue #3897) is asynchronous, and its test polls the committed
+/// record against a deadline rather than sleeping for a fixed interval.
 /// </summary>
 /// <remarks>
 /// Owned by the epic coordinator's integration run; not exercised in the T20
@@ -106,6 +107,39 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
             var row = report.Regions.Single(r => r.RegionId == RegionB);
             Assert.That(row.Status, Is.EqualTo(TenantRegionLifecycleStatus.Removed), "the region is removed after drain");
+        }
+    }
+
+    [Test]
+    public async Task Draining_the_local_region_completes_to_removed_with_no_explicit_driver_call()
+    {
+        // Issue #3897: nothing drove the lifecycle, so a dropped region sat at
+        // Draining for good. The silo now completes the drain of its own serving
+        // region automatically, one legal step at a time, off the residency
+        // snapshot's change notifications.
+        var tenant = TenantId.Parse("auto-drain");
+        await SeedTenantAsync(tenant);
+        var localRegion = _fixture.LocalRegionId;
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Facade.AuthorizeAllowedRegionsAsync(tenant.Value, new[] { localRegion, RegionB });
+            await Facade.SetResidencyAsync(tenant.Value, new[] { localRegion, RegionB });
+
+            var change = await Facade.SetResidencyAsync(tenant.Value, new[] { RegionB });
+            Assert.That(change.RemovedRegions, Does.Contain(localRegion), "the local region begins draining");
+
+            var local = await WaitForStatusAsync(tenant, localRegion, TenantRegionLifecycleStatus.Removed);
+            var remote = (await Facade.GetTenantRegionStatusAsync(tenant.Value)).Regions.Single(r => r.RegionId == RegionB);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(local, Is.EqualTo(TenantRegionLifecycleStatus.Removed), "the local drain completes on its own");
+                Assert.That(
+                    remote.Status,
+                    Is.EqualTo(TenantRegionLifecycleStatus.Provisioning),
+                    "an added region is never promoted automatically: going Online without a backfill would serve an incomplete replica");
+            });
         }
     }
 
@@ -222,6 +256,28 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
         }
     }
 
+    private async Task<TenantRegionLifecycleStatus> WaitForStatusAsync(
+        TenantId tenant, string regionId, TenantRegionLifecycleStatus expected)
+    {
+        // The drain is driven off the residency snapshot's background rebuilds, so
+        // poll the committed record against a generous deadline rather than a delay.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var status = TenantRegionLifecycleStatus.None;
+        while (DateTime.UtcNow < deadline)
+        {
+            var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
+            status = report.Regions.Single(r => r.RegionId == regionId).Status;
+            if (status == expected)
+            {
+                return status;
+            }
+
+            await Task.Delay(50);
+        }
+
+        return status;
+    }
+
     private async Task SeedTenantAsync(TenantId tenant)
     {
         var record = TenantRecord.Create(
@@ -247,6 +303,9 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
 
         public ITenantRegistry Registry => SiloServices.GetRequiredService<ITenantRegistry>();
+
+        public string LocalRegionId =>
+            SiloServices.GetRequiredService<Microsoft.Extensions.Options.IOptions<Orleans.Configuration.ClusterOptions>>().Value.ClusterId;
 
         public async Task InitializeAsync()
         {

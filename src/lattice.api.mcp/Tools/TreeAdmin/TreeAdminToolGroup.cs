@@ -178,7 +178,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Read a tree's soft-deletion status",
                 "Reads a tree's soft-deletion lifecycle status: whether it is live, soft-deleted (with the UTC "
                 + "delete time and the recovery deadline derived from the configured soft-delete window), whether a "
-                + "hard purge is in progress or has completed, and whether it can still be recovered. It reports the "
+                + "hard purge is in progress or has completed (with purgedShardCount of purgeShardCount shards done), and "
+                + "whether it can still be recovered. It answers without waiting for a shard's purge, from the state as "
+                + "last persisted. It reports the "
                 + "logical tree: a live resized tree reads as not deleted while its old copy is retired, and for a "
                 + "tree created again under a purged id it reports the purged tree, while the tree itself is live. "
                 + "A pure read with no side "
@@ -191,10 +193,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetResizeStatusAsync, "lattice_treeadmin_tree_resize_status",
                 "Read a tree's online-resize status",
-                "Reads a tree's online-resize status: whether a resize is currently in flight, and the tree's "
+                "Reads a tree's online-resize status: whether a resize is currently in flight, whether an "
+                + "accepted undo is still unwinding (undoRequested), and the tree's "
                 + "current effective B+ node capacity (maximum keys per leaf node and maximum children per internal "
-                + "node) as recorded in the registry. Poll this after triggering tree_resize to watch the rebuild "
-                + "complete. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
+                + "node) as recorded in the registry. undoRequested=true means an undo was accepted and is still "
+                + "unwinding (whatever inProgress says); otherwise inProgress=true means a resize is running and "
+                + "inProgress=false means none is in flight. Poll this after triggering tree_resize to watch the rebuild complete, or after "
+                + "tree_resize_undo to watch the unwind. Answers without waiting for an in-flight resize phase. A "
+                + "pure read with no side effects. Requires whole-tree read authority. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync, "lattice_treeadmin_tree_snapshot_status",
                 "Read a tree's snapshot status",
                 "Reads a tree's snapshot status: whether a point-in-time snapshot capture is currently in flight for "
@@ -406,12 +412,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.PurgeTreeAsync, "lattice_treeadmin_tree_purge",
                 "Hard-purge a soft-deleted tree",
                 "Immediately and irreversibly hard-purges a soft-deleted tree, bypassing the soft-delete window: its "
-                + "leaf and internal node state is permanently removed and the tree is unregistered, returning the "
-                + "tree's final deletion status. On an aliased tree it purges the live copy the delete pinned and "
-                + "unregisters both that copy and the logical tree. The confirm flag must be set to true to acknowledge the "
-                + "irreversible destruction; a false or omitted value is rejected. Rejected when the tree is not "
-                + "deleted or was already purged, and for a reserved system tree id. Tree-lifecycle-gated and "
-                + "destructive."));
+                + "leaf and internal node state is permanently removed and the tree is unregistered. On an aliased "
+                + "tree it purges the live copy the delete pinned and unregisters both that copy and the logical tree. "
+                + "Accept-then-poll: the purge is recorded as in progress and its shard walk runs in the background, "
+                + "where no request timeout stops it part-way; the call waits a bounded time and returns the tree's "
+                + "deletion status. purgeInProgress=true in that status means the purge was accepted and is still "
+                + "running (purgedShardCount of purgeShardCount shards done), not that it failed: poll "
+                + "tree_deletion_status until purgeComplete=true rather than retrying. A call while the purge runs, or "
+                + "after it completed, returns the status without error. The confirm flag must be set to true to "
+                + "acknowledge the irreversible destruction; a false or omitted value is rejected. Rejected when the "
+                + "tree is not deleted, and for a reserved system tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.BeginBulkLoadAsync, "lattice_treeadmin_bulk_load_begin",
                 "Open a bulk-load session",
                 "Opens a streamed, resumable bulk-load (tree-creation) session over an empty tree under a stable, "
@@ -483,8 +493,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "and discards the draft destination; an undo after the alias swap recovers the pre-resize tree, "
                 + "removes the alias, restores the prior registry configuration, and deletes the resized tree. "
                 + "Available while a resize is in flight or while the pre-resize tree is still within its "
-                + "soft-delete recovery window. Returns the tree's resize status once the undo has been applied. "
-                + "Rejected when no resize exists to undo or the pre-resize tree has already been purged, and for a "
+                + "soft-delete recovery window. The undo is accepted even while a resize phase is running: the "
+                + "intent is persisted at once and the resize unwinds at its next phase or slice boundary. The call "
+                + "waits a bounded time for the unwind and returns the tree's resize status; undoRequested=true in "
+                + "that status means the undo was accepted and is still unwinding, so poll tree_resize_status "
+                + "rather than retrying. A retry while the undo is pending is acknowledged again. "
+                + "Rejected when no resize exists to undo (naming the most recent resize when it was already "
+                + "undone) or when the unwind cannot be applied because the pre-resize tree has already been "
+                + "purged, and for a "
                 + "reserved system tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SnapshotTreeAsync, "lattice_treeadmin_tree_snapshot",
                 "Capture a point-in-time snapshot of a tree",

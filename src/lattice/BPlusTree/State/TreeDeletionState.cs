@@ -75,4 +75,33 @@ internal sealed class TreeDeletionState
 
     /// <summary>Pins an ordinary deletion to this grain's physical id before shard effects.</summary>
     [Id(16)] public bool LocalDeleteTargetPinned { get; set; }
+
+    /// <summary>
+    /// Whether this physical copy was discarded by
+    /// <see cref="ITreeDeletionGrain.DiscardDerivedPhysicalTreeAsync"/> - an
+    /// undone resize's destination. A discarded copy has had its WAL retention
+    /// released, so it can never be recovered; its purge also trims its log.
+    /// Legacy persisted state decodes the missing slot to <see langword="false"/>.
+    /// </summary>
+    [Id(17)] public bool Discarded { get; set; }
+
+    /// <summary>
+    /// The number of shard indices the in-flight purge walks - one past the
+    /// highest physical shard the tree has ever allocated, as resolved when the
+    /// walk was started and re-resolved as it runs. Reported beside
+    /// <see cref="NextShardIndex"/> as the purge's progress. Legacy persisted
+    /// state decodes the missing slot to 0, meaning "not yet resolved".
+    /// </summary>
+    [Id(18)] public int PurgeShardCount { get; set; }
+
+    /// <summary>
+    /// Whether the in-flight purge was requested explicitly (through
+    /// <see cref="ITreeDeletionGrain.BeginPurgeAsync"/>) rather than started by
+    /// the soft-delete reminder. A requested purge walks its shards back to back
+    /// instead of at the reminder-driven purge's gentle cadence, including after
+    /// a reactivation resumes it. Legacy persisted state decodes the missing
+    /// slot to <see langword="false"/>.
+    /// </summary>
+    [Id(19)] public bool PurgeRequested { get; set; }
+
 }

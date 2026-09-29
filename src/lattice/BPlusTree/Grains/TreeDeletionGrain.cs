@@ -17,7 +17,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// is registered to fire after <see cref="LatticeOptions.SoftDeleteDuration"/>.
 /// When the reminder fires and the soft-delete window has elapsed, a grain timer
 /// walks each shard one-by-one (same pattern as <see cref="TombstoneCompactionGrain"/>),
-/// clearing all leaf and internal node state and deactivating grains.
+/// clearing all leaf and internal node state and deactivating grains. An explicit
+/// purge (<see cref="BeginPurgeAsync"/>) drives the same timer-walked purge without
+/// waiting for the window; see <c>TreeDeletionGrain.Purge.cs</c>.
 /// </summary>
 internal sealed partial class TreeDeletionGrain(
     IGrainContext context,
@@ -59,9 +61,10 @@ internal sealed partial class TreeDeletionGrain(
     private async Task RetirePhysicalAsync(bool retainsRegistryEntry)
     {
         EnsureLifecycleOrigin();
+        await ClearRecordIfReusedAfterPurgeAsync();
         var suppressed = state.State.SuppressLifecycleEvents;
         state.State.SuppressLifecycleEvents = true;
-        try { await state.WriteStateAsync(); }
+        try { await PersistAsync(); }
         catch { state.State.SuppressLifecycleEvents = suppressed; throw; }
         await SoftDeleteAsync(retainsRegistryEntry);
     }
@@ -122,7 +125,7 @@ internal sealed partial class TreeDeletionGrain(
         state.State.RetainsRegistryEntry = retainsRegistryEntry;
         try
         {
-            await state.WriteStateAsync();
+            await PersistAsync();
         }
         catch
         {
@@ -186,7 +189,7 @@ internal sealed partial class TreeDeletionGrain(
             state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
             try
             {
-                await state.WriteStateAsync();
+                await PersistAsync();
             }
             catch (Exception rollbackFault)
             {
@@ -208,42 +211,25 @@ internal sealed partial class TreeDeletionGrain(
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreeDeleted);
     }
 
-    public Task<bool> IsDeletedAsync() => Task.FromResult(
-        state.State.DeletePending || state.State.LogicalPhysicalTreeId is not null
-        || (!state.State.RetainsRegistryEntry && state.State.IsDeleted));
+    public async Task<bool> IsDeletedAsync()
+    {
+        var deleted = state.State.DeletePending || state.State.LogicalPhysicalTreeId is not null
+            || (!state.State.RetainsRegistryEntry && state.State.IsDeleted);
+
+        // A purged tree whose id was registered again is a new, live tree.
+        return deleted && !await IsReusedAfterPurgeAsync();
+    }
 
     public Task<bool> IsPhysicalDeletedAsync() => Task.FromResult(state.State.IsDeleted || state.State.Delegated);
-
-    public Task<TreeDeletionSnapshot> GetDeletionStatusAsync()
-    {
-        // A pure read: no internal-origin assertion (mirrors IsDeletedAsync), so
-        // the diagnostics facade can dial it directly. The recovery deadline is
-        // derived from the persisted delete time and the tree's configured
-        // soft-delete duration; it is null while the tree is live.
-        if (state.State.LogicalPhysicalTreeId is not null)
-            return Task.FromResult(new TreeDeletionSnapshot
-            {
-                IsDeleted = true,
-                DeletedAtUtc = state.State.LogicalDeletedAtUtc,
-                RecoveryDeadlineUtc = state.State.LogicalDeletedAtUtc + Options.SoftDeleteDuration,
-                PurgeInProgress = state.State.LogicalPurgeInProgress,
-                PurgeComplete = state.State.LogicalPurgeComplete,
-            });
-        var retired = state.State.RetainsRegistryEntry;
-        var deletedAt = retired ? null : state.State.DeletedAtUtc;
-        return Task.FromResult(new TreeDeletionSnapshot
-        {
-            IsDeleted = !retired && state.State.IsDeleted,
-            DeletedAtUtc = deletedAt,
-            RecoveryDeadlineUtc = deletedAt is { } at ? at + Options.SoftDeleteDuration : null,
-            PurgeInProgress = !retired && state.State.PurgeInProgress,
-            PurgeComplete = !retired && state.State.PurgeComplete,
-        });
-    }
 
     public async Task RecoverAsync()
     {
         EnsureLifecycleOrigin();
+
+        // Nothing to restore: the purged tree's data is gone and the id already
+        // names a live tree. Clearing the record is the whole recovery.
+        if (await ClearRecordIfReusedAfterPurgeAsync())
+            return;
         if (state.State.LogicalPhysicalTreeId is not null)
         {
             await RecoverLogicalAsync();
@@ -261,6 +247,14 @@ internal sealed partial class TreeDeletionGrain(
 
         if (!state.State.IsDeleted && !state.State.Delegated)
             throw new InvalidOperationException("Cannot recover a tree that has not been deleted.");
+
+        // A discarded copy's leaf materialiser pins were retired and its log
+        // trimmed when it was discarded, so its leaves could not replay back to
+        // their state: recovering it would serve a tree missing every write its
+        // leaves had not yet checkpointed.
+        if (state.State.Discarded)
+            throw new InvalidOperationException(
+                "Cannot recover a tree that was discarded by an undone resize; its write-ahead log has been released.");
 
         if (state.State.PurgeComplete)
             throw new InvalidOperationException("Cannot recover a tree whose data has already been purged.");
@@ -325,7 +319,7 @@ internal sealed partial class TreeDeletionGrain(
         state.State.DeletePending = false;
         try
         {
-            await state.WriteStateAsync();
+            await PersistAsync();
         }
         catch
         {
@@ -356,6 +350,7 @@ internal sealed partial class TreeDeletionGrain(
     public async Task PurgeNowAsync()
     {
         EnsureLifecycleOrigin();
+        await ClearRecordIfReusedAfterPurgeAsync();
         if (state.State.LogicalPhysicalTreeId is not null)
         {
             await PurgeLogicalAsync();
@@ -383,7 +378,8 @@ internal sealed partial class TreeDeletionGrain(
         if (state.State.PurgeComplete)
             throw new InvalidOperationException("This tree has already been fully purged.");
 
-        // Run purge synchronously shard-by-shard (no timer needed for manual purge).
+        // Run purge synchronously shard-by-shard, inside this one call. The public
+        // purge goes through BeginPurgeAsync, whose walk no caller's timeout bounds.
         var shardCount = await ResolveAllocatedShardCountAsync();
         for (int i = 0; i < shardCount; i++)
         {
@@ -398,31 +394,49 @@ internal sealed partial class TreeDeletionGrain(
         var purgeCompleteSnapshot = state.State.PurgeComplete;
         var nextShardIndexSnapshot = state.State.NextShardIndex;
         var shardRetriesSnapshot = state.State.ShardRetries;
+        var purgeRequestedSnapshot = state.State.PurgeRequested;
+        var purgeShardCountSnapshot = state.State.PurgeShardCount;
 
         // Mark complete and clean up.
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        state.State.PurgeRequested = false;
+        state.State.PurgeShardCount = shardCount;
+        _finalisingPurge = true;
         try
         {
-            await state.WriteStateAsync();
+            await PersistAsync();
         }
         catch
         {
+            _finalisingPurge = false;
             state.State.PurgeInProgress = purgeInProgressSnapshot;
             state.State.PurgeComplete = purgeCompleteSnapshot;
             state.State.NextShardIndex = nextShardIndexSnapshot;
             state.State.ShardRetries = shardRetriesSnapshot;
+            state.State.PurgeRequested = purgeRequestedSnapshot;
+            state.State.PurgeShardCount = purgeShardCountSnapshot;
             throw;
         }
+
+        // This walk finished whatever a timer-driven one had left to do.
+        _purgeTimer?.Dispose();
+        _purgeTimer = null;
 
         // Remove the tree from the registry so TreeExistsAsync immediately
         // returns false. The reminder-driven CompletePurgeAsync path does
         // the same (line 250-254) - keep the synchronous PurgeNowAsync path
         // in lockstep so callers of the public PurgeTreeAsync API observe a
-        // fully purged tree on return.
+        // fully purged tree on return. A discarded copy's log is trimmed
+        // again first, while its registry entry still resolves the partition
+        // count and placement, to release anything the discard itself could
+        // not.
+        if (state.State.Discarded)
+            await TrimDiscardedWalAsync();
         await UnregisterPurgedTreeAsync();
+        _finalisingPurge = false;
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
@@ -442,7 +456,7 @@ internal sealed partial class TreeDeletionGrain(
             if (DateTimeOffset.UtcNow - state.State.LogicalDeletedAtUtc >= Options.SoftDeleteDuration)
             {
                 using var origin = LatticeAccessGateContext.EnterSystemOrigin();
-                try { await PurgeLogicalAsync(); }
+                try { await BeginLogicalPurgeAsync(); }
                 catch (Exception fault)
                 {
                     logger.LogError(fault,
@@ -452,7 +466,16 @@ internal sealed partial class TreeDeletionGrain(
             }
             return;
         }
-        if (state.State.Delegated) return;
+        if (reminderName == LogicalPurgeKeepaliveReminderName)
+        {
+            await OnLogicalPurgeKeepaliveAsync();
+            return;
+        }
+
+        // A delegated copy's purge is started by its logical owner, never by a
+        // reminder of its own, but once started it is resumed by the keepalive
+        // like any other walk.
+        if (state.State.Delegated && reminderName != KeepaliveReminderName) return;
         if (!state.State.IsDeleted) return;
 
         if (state.State.PurgeComplete)
@@ -461,7 +484,7 @@ internal sealed partial class TreeDeletionGrain(
             // single teardown guard for both reminders; nothing below it can
             // observe PurgeComplete == true.
             await UnregisterAllRemindersAsync();
-            this.DeactivateOnIdle();
+            DeactivateUnlessLogicalPurgePending();
             return;
         }
 
@@ -479,33 +502,72 @@ internal sealed partial class TreeDeletionGrain(
             && state.State.PurgeInProgress
             && _purgeTimer is null)
         {
-            await StartPurgeAsync(startFromShard: state.State.NextShardIndex);
+            await StartPurgeAsync(startFromShard: state.State.NextShardIndex, requested: state.State.PurgeRequested);
         }
     }
 
-    internal async Task StartPurgeAsync(int startFromShard)
-    {
-        await BeginPurgeStateAsync(startFromShard);
+    /// <summary>
+    /// The pause between two purge timer ticks for a purge the soft-delete
+    /// reminder started: one shard per tick, gently, since nobody is waiting.
+    /// </summary>
+    internal static readonly TimeSpan BackgroundPurgePeriod = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// The pause between two purge timer ticks for an explicitly requested purge,
+    /// whose ticks each walk shards back to back for up to
+    /// <see cref="RequestedPurgeSlice"/>.
+    /// </summary>
+    internal static readonly TimeSpan RequestedPurgePeriod = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>
+    /// How long one tick of an explicitly requested purge keeps starting shards
+    /// before it yields the activation. A shard already started is always
+    /// finished, so a tick can run longer by one shard's purge.
+    /// </summary>
+    internal static readonly TimeSpan RequestedPurgeSlice = TimeSpan.FromSeconds(1);
+
+    internal async Task StartPurgeAsync(int startFromShard, bool requested = false)
+    {
+        await BeginPurgeStateAsync(startFromShard, requested);
+
+        _purgeTimer?.Dispose();
         _purgeTimer = this.RegisterGrainTimer(
             OnPurgeTimerTick,
-            new GrainTimerCreationOptions(dueTime: TimeSpan.Zero, period: TimeSpan.FromSeconds(2)));
+            new GrainTimerCreationOptions(
+                dueTime: TimeSpan.Zero,
+                period: state.State.PurgeRequested ? RequestedPurgePeriod : BackgroundPurgePeriod));
     }
 
-    internal async Task BeginPurgeStateAsync(int startFromShard)
+    internal async Task BeginPurgeStateAsync(int startFromShard, bool requested = false)
     {
+        var shardCount = await ResolveAllocatedShardCountAsync();
+
+        var snapshot = (state.State.PurgeInProgress, state.State.NextShardIndex, state.State.ShardRetries,
+            state.State.PurgeRequested, state.State.PurgeShardCount);
         state.State.PurgeInProgress = true;
         state.State.NextShardIndex = startFromShard;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        state.State.PurgeRequested |= requested;
+        state.State.PurgeShardCount = shardCount;
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            (state.State.PurgeInProgress, state.State.NextShardIndex, state.State.ShardRetries,
+                state.State.PurgeRequested, state.State.PurgeShardCount) = snapshot;
+            throw;
+        }
 
         // The keepalive reminder is the purge's crash-recovery anchor, so it is
         // essential rather than best-effort and must not be dropped on the
         // transient reminder-service startup fault (issue #2579). Unlike the
         // purge reminder in DeleteTreeAsync this call site does have a natural
         // re-attempt seam - the purge reminder itself re-enters StartPurgeAsync
-        // on its next tick while _purgeTimer is still null - so the bounded
-        // readiness retry is the whole fix here and no state rollback is needed.
+        // on its next tick while _purgeTimer is still null, and a requested
+        // purge is re-accepted by a retry - so the bounded readiness retry is
+        // the whole fix here and no state rollback is needed.
         await ReminderServiceReadiness.RetryWhileInitializingAsync(
             () => reminderRegistry.RegisterOrUpdateReminder(
                 callingGrainId: context.GrainId,
@@ -517,17 +579,52 @@ internal sealed partial class TreeDeletionGrain(
 
     private async Task OnPurgeTimerTick(CancellationToken ct)
     {
-        await ProcessNextShardAsync();
+        // A requested purge ticks every few milliseconds; after a shard failed
+        // it waits the background period before trying that shard again.
+        if (Environment.TickCount64 < _purgeRetryNotBefore) return;
+
+        if (!state.State.PurgeRequested)
+        {
+            await ProcessNextShardAsync();
+            return;
+        }
+
+        // An explicitly requested purge walks shards back to back, yielding the
+        // activation between slices so queued calls are served.
+        var sliceEnd = Environment.TickCount64 + (long)RequestedPurgeSlice.TotalMilliseconds;
+        do
+        {
+            if (!await ProcessNextShardAsync()) return;
+        }
+        while (Environment.TickCount64 < sliceEnd);
     }
 
-    internal async Task ProcessNextShardAsync()
+    /// <summary>
+    /// Runs one step of the purge walk: purges the next shard, or completes the
+    /// purge once every shard has been walked.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the walk advanced and has more to do;
+    /// <see langword="false"/> when it completed, is no longer running, or must
+    /// wait for its next tick to retry a shard.
+    /// </returns>
+    internal async Task<bool> ProcessNextShardAsync()
     {
+        if (!state.State.PurgeInProgress || state.State.PurgeComplete)
+        {
+            // A synchronous PurgeNowAsync finished the walk under this timer, or
+            // it was never running: stop rather than walk a purged tree again.
+            _purgeTimer?.Dispose();
+            _purgeTimer = null;
+            return false;
+        }
+
         var shardCount = await ResolveAllocatedShardCountAsync();
 
         if (state.State.NextShardIndex >= shardCount)
         {
             await CompletePurgeAsync();
-            return;
+            return false;
         }
 
         try
@@ -535,42 +632,123 @@ internal sealed partial class TreeDeletionGrain(
             await PurgeShardAsync(state.State.NextShardIndex);
             state.State.NextShardIndex++;
             state.State.ShardRetries = 0;
-            await state.WriteStateAsync();
+            state.State.PurgeShardCount = shardCount;
+            await PersistAsync();
+            return true;
+        }
+        catch (TimeoutException ex)
+        {
+            _purgeRetryNotBefore = Environment.TickCount64 + (long)BackgroundPurgePeriod.TotalMilliseconds;
+
+            // The shard did not answer within the response timeout, which says
+            // its purge is slow, not that it failed: the shard keeps walking
+            // after the call is abandoned, and the retry queues behind it and
+            // finds the work done. So a timeout never spends the retry budget -
+            // spending it would skip a shard that was still being purged and
+            // report the tree purged with that shard's data intact (issue #3941).
+            logger.LogWarning(ex,
+                "Purge of shard {ShardIndex} of tree {TreeId} did not answer in time; retrying it on the next tick.",
+                state.State.NextShardIndex, TreeId);
+            return false;
         }
         catch (Exception ex)
         {
+            _purgeRetryNotBefore = Environment.TickCount64 + (long)BackgroundPurgePeriod.TotalMilliseconds;
+            if (!MaySkipFailedShard)
+            {
+                // An explicitly requested purge inside the soft-delete window
+                // never skips a shard: skipping records the tree purged with
+                // that shard's data still in storage, which the synchronous
+                // purge this replaced never did. It retries the shard instead,
+                // and the status keeps reporting the purge in progress there.
+                logger.LogWarning(ex,
+                    "Purge failed for shard {ShardIndex} of tree {TreeId}; a requested purge does not skip it, so it is retried.",
+                    state.State.NextShardIndex, TreeId);
+                return false;
+            }
+
             logger.LogWarning(ex, "Purge failed for shard {ShardIndex} of tree {TreeId}", state.State.NextShardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
                 state.State.ShardRetries++;
-                await state.WriteStateAsync();
+                await PersistAsync();
             }
             else
             {
                 state.State.NextShardIndex++;
                 state.State.ShardRetries = 0;
-                await state.WriteStateAsync();
+                await PersistAsync();
             }
+            return false;
         }
     }
+
+    /// <summary>
+    /// Whether a shard whose purge keeps failing may be skipped after its retry:
+    /// always for the purge the soft-delete reminder starts, and for an
+    /// explicitly requested one only once the soft-delete window has elapsed -
+    /// the point at which the deferred purge would have skipped it anyway.
+    /// </summary>
+    private bool MaySkipFailedShard =>
+        !state.State.PurgeRequested
+        || DateTimeOffset.UtcNow - (state.State.DeletedAtUtc ?? DateTimeOffset.UtcNow) >= Options.SoftDeleteDuration;
+
+    /// <summary>
+    /// The <see cref="Environment.TickCount64"/> before which the purge timer
+    /// does not retry a shard whose last attempt failed or timed out.
+    /// </summary>
+    private long _purgeRetryNotBefore;
 
     internal async Task CompletePurgeAsync()
     {
         _purgeTimer?.Dispose();
         _purgeTimer = null;
 
+        // Reverted on a failed write so the keepalive reminder, which reads the
+        // in-memory flags, resumes the walk instead of tearing itself down over a
+        // completion that never reached storage. PurgeShardCount is kept, as the
+        // number of shards the finished purge walked.
+        var snapshot = (state.State.PurgeInProgress, state.State.PurgeComplete, state.State.NextShardIndex,
+            state.State.ShardRetries, state.State.PurgeRequested);
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
-        await state.WriteStateAsync();
+        state.State.PurgeRequested = false;
+        _finalisingPurge = true;
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            _finalisingPurge = false;
+            (state.State.PurgeInProgress, state.State.PurgeComplete, state.State.NextShardIndex,
+                state.State.ShardRetries, state.State.PurgeRequested) = snapshot;
+            throw;
+        }
 
-        // Remove the tree from the registry.
+        // Remove the tree from the registry, trimming a discarded copy's log
+        // first for the reason PurgePhysicalAsync gives.
+        if (state.State.Discarded)
+            await TrimDiscardedWalAsync();
         await UnregisterPurgedTreeAsync();
+        _finalisingPurge = false;
 
         await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+        DeactivateUnlessLogicalPurgePending();
+    }
+
+    /// <summary>
+    /// Deactivates a finished purge's activation, unless this grain is also the
+    /// logical owner of an aliased tree whose purge it is still driving: that
+    /// drive runs on this activation's timer.
+    /// </summary>
+    private void DeactivateUnlessLogicalPurgePending()
+    {
+        if (state.State.LogicalPurgeInProgress && !state.State.LogicalPurgeComplete) return;
         this.DeactivateOnIdle();
     }
 
@@ -667,12 +845,12 @@ internal sealed partial class TreeDeletionGrain(
 
     /// <summary>
     /// Bulk-removes every leaf-as-materialiser cursor registered against
-    /// the deleted tree from the silo-scoped
+    /// the tree - at its purge, or when it is discarded - from the silo-scoped
     /// <see cref="ILeafCursorReporter"/> (when present). Resolved
     /// optionally - hosts that have not added the replication package
     /// have no reporter registered and this is a silent no-op.
     /// Failures are logged-and-swallowed: the tree's data is already
-    /// gone, so a residual cursor is harmless under the in-memory
+    /// unreachable, so a residual cursor is harmless under the in-memory
     /// registry and recoverable under a future durable registry via
     /// the next bulk-clear cycle.
     /// </summary>
@@ -690,7 +868,7 @@ internal sealed partial class TreeDeletionGrain(
         {
             logger.LogWarning(
                 ex,
-                "Failed to deregister leaf-materialiser cursors for purged tree {TreeId}; "
+                "Failed to deregister leaf-materialiser cursors for purged or discarded tree {TreeId}; "
                 + "the WAL GC will fall back to its time-based retention until the registry is reconciled.",
                 TreeId);
         }

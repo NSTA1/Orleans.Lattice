@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -43,13 +44,21 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     Task RunResizePassAsync();
 
     /// <summary>
-    /// Undoes the most recent resize by recovering the old physical tree,
-    /// removing the alias, restoring the original registry configuration,
+    /// Undoes the most recent resize synchronously by recovering the old physical
+    /// tree, removing the alias, restoring the original registry configuration,
     /// and deleting the new snapshot tree. Available at every phase of the
     /// resize: before the alias swap the destination tree is simply discarded,
     /// and after it the old physical tree is restored - recovering it from
     /// soft-delete only when the Cleanup phase already deleted it, since in
     /// the earlier phases it is still live.
+    /// <para>
+    /// This is the run-to-completion trigger, intended for integration testing and
+    /// manual use in the manner of <see cref="RunResizePassAsync"/>: it takes the
+    /// coordinator's turn, so it queues behind an in-flight phase and holds its
+    /// caller for the whole unwind. The public undo path uses
+    /// <see cref="RequestUndoAsync"/> instead, which is admitted immediately
+    /// (issue 3923).
+    /// </para>
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown if no resize exists to undo, if the persisted resize state is
@@ -58,9 +67,61 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     Task UndoResizeAsync();
 
     /// <summary>
+    /// Accepts an undo of the most recent resize and returns without waiting for
+    /// the unwind. Persists the intent in a slot separate from the coordinator's
+    /// phase state and arms the phase loop, which observes it at its next tick or
+    /// snapshot slice boundary and runs the same phase-aware unwind as
+    /// <see cref="UndoResizeAsync"/>. Poll <see cref="GetUndoProgressAsync"/> to
+    /// follow it.
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so it is
+    /// admitted while a resize phase holds the coordinator's turn - the moment an
+    /// undo is most needed. It never mutates coordinator phase state. Idempotent:
+    /// a request while an undo is already pending is acknowledged again.
+    /// </para>
+    /// </summary>
+    /// <returns>The operation id of the resize being undone.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if no resize exists to undo; the message names the most recently
+    /// undone resize, when there is one, so a retry after a successful undo is not
+    /// mistaken for a failure.
+    /// </exception>
+    [AlwaysInterleave]
+    Task<string> RequestUndoAsync();
+
+    /// <summary>
+    /// Reports whether an accepted undo is still unwinding and, when an accepted
+    /// undo was withdrawn because it could not be applied, which resize it named
+    /// and why. Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>
+    /// so it answers while a phase is in flight. A pure read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ResizeUndoProgress> GetUndoProgressAsync();
+
+    /// <summary>
     /// Returns <c>true</c> when the coordinator is idle - either no resize
     /// has ever been initiated, or the last one has run to completion.
-    /// Returns <c>false</c> while a resize is in flight.
+    /// Returns <c>false</c> while a resize is in flight. An accepted undo of a
+    /// resize that had already completed does not turn this back to
+    /// <c>false</c>, so completion stays monotonic for a given resize; read
+    /// <see cref="GetUndoProgressAsync"/> for the unwind. Marked
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a status
+    /// read is not held behind an in-flight phase. A pure read.
     /// </summary>
+    [AlwaysInterleave]
     Task<bool> IsIdleAsync();
+
+    /// <summary>
+    /// Reports whether this tree's resize state still names
+    /// <paramref name="physicalTreeId"/> - as the old physical tree an undo would
+    /// recover, or as the destination an in-flight or completed resize built. A
+    /// retired copy that is no longer named can never be recovered through this
+    /// coordinator, which is what lets the WAL GC release the retention of an
+    /// undone resize's destination deleted by a build that predates the discard
+    /// (issue #3930). A pure read of in-memory state, interleaved so it never
+    /// queues behind a snapshot pass.
+    /// </summary>
+    /// <param name="physicalTreeId">The physical tree id to look for.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> ReferencesPhysicalTreeAsync(string physicalTreeId);
 }
