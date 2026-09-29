@@ -25,6 +25,7 @@ internal static partial class ShellServiceCollectionExtensions
     static partial void AddSession(IServiceCollection services)
     {
         services.TryAddScoped<SessionChromeState>();
+        services.TryAddScoped<SessionConnectionAnnouncer>();
         services.TryAddScoped<IConnectionTester, LatticeConnectionTester>();
         services.TryAddSingleton(new SessionSignInOptions());
 

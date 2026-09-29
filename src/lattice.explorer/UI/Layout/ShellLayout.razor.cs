@@ -86,6 +86,9 @@ public partial class ShellLayout : IAsyncDisposable
     [Inject]
     internal IServiceProvider Services { get; set; } = default!;
 
+    [Inject]
+    internal SessionConnectionAnnouncer ConnectionAnnouncer { get; set; } = default!;
+
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
     // The compact modifier is how a stylesheet reacts to the band without a width
@@ -135,6 +138,10 @@ public partial class ShellLayout : IAsyncDisposable
         AuthSession.AuthenticationChanged += OnSessionStateChanged;
         ExplorerSession.ConfigurationChanged += OnSessionStateChanged;
         WatchConnection();
+
+        // One announcement per lost connection for the whole circuit, whichever
+        // connection indicators happen to be mounted.
+        ConnectionAnnouncer.Start();
     }
 
     /// <inheritdoc />

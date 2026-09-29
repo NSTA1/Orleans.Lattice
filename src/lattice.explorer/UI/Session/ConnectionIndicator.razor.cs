@@ -22,14 +22,13 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// </para>
 /// <para>
 /// When the connection falls into its faulted state the endpoint's own
-/// explanation is posted once as a toast, so a sighted keyboard user sees why and
-/// not only that. A repeat of the same fault posts nothing.
+/// explanation is posted once as a toast by the circuit's
+/// <see cref="SessionConnectionAnnouncer"/>, and withdrawn when it recovers.
 /// </para>
 /// </remarks>
 public partial class ConnectionIndicator
 {
     private bool _reconnecting;
-    private LatticeConnectionState _lastState;
 
     [Inject]
     private IExplorerSession Explorer { get; set; } = default!;
@@ -39,9 +38,6 @@ public partial class ConnectionIndicator
 
     [Inject]
     private SessionChromeState State { get; set; } = default!;
-
-    [Inject]
-    private LtToastService Toasts { get; set; } = default!;
 
     private LatticeConnectionStatus Status => Explorer.Connection.Status;
 
@@ -63,7 +59,6 @@ public partial class ConnectionIndicator
     /// <inheritdoc />
     protected override void OnInitialized()
     {
-        _lastState = Status.State;
         Explorer.Connection.StatusChanged += OnStatusChanged;
         Explorer.ConfigurationChanged += OnChanged;
         Auth.AuthenticationChanged += OnChanged;
@@ -91,20 +86,9 @@ public partial class ConnectionIndicator
         }
     }
 
-    private void OnStatusChanged(LatticeConnectionStatus status) => _ = InvokeAsync(() => Announce(status));
-
-    private void Announce(LatticeConnectionStatus status)
-    {
-        if (status.State == LatticeConnectionState.Faulted && _lastState != LatticeConnectionState.Faulted)
-        {
-            var where = status.Endpoint is { Length: > 0 } endpoint ? $" from {endpoint}" : string.Empty;
-            var why = status.Message is { Length: > 0 } message ? $": {message}" : ".";
-            Toasts.Show($"Disconnected{where}{why}", LtToastTone.Danger);
-        }
-
-        _lastState = status.State;
-        StateHasChanged();
-    }
+    // The circuit's SessionConnectionAnnouncer raises the one outage toast; the
+    // indicator only re-renders its own state.
+    private void OnStatusChanged(LatticeConnectionStatus status) => _ = InvokeAsync(StateHasChanged);
 
     private void OnChanged() => _ = InvokeAsync(StateHasChanged);
 }

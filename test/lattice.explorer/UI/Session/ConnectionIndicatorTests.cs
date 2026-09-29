@@ -122,20 +122,23 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
     }
 
     [Test]
-    public void Falling_into_a_fault_posts_the_endpoints_explanation_once()
+    public void Two_mounted_indicators_raise_no_toast_of_their_own_the_circuit_announces_once()
     {
         Explorer.Configured(RemoteConfiguration(Endpoint));
         StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, Endpoint, null));
-        var cut = Render<ConnectionIndicator>();
+        var header = Render<ConnectionIndicator>();
+        Render<ConnectionIndicator>();
         var toasts = Services.GetRequiredService<LtToastService>();
+        using var announcer = new SessionConnectionAnnouncer(Explorer, toasts);
+        announcer.Start();
 
         var faulted = new LatticeConnectionStatus(LatticeConnectionState.Faulted, Endpoint, "Connection refused.");
-        cut.InvokeAsync(() => StateConnection.Move(faulted)).GetAwaiter().GetResult();
-        cut.InvokeAsync(() => StateConnection.Move(faulted)).GetAwaiter().GetResult();
+        header.InvokeAsync(() => StateConnection.Move(faulted)).GetAwaiter().GetResult();
+        header.InvokeAsync(() => StateConnection.Move(faulted)).GetAwaiter().GetResult();
 
         Assert.Multiple(() =>
         {
-            Assert.That(toasts.Toasts, Has.Count.EqualTo(1));
+            Assert.That(toasts.Toasts, Has.Count.EqualTo(1), "one outage, one toast, however many indicators are mounted");
             Assert.That(toasts.Toasts[0].Message, Is.EqualTo($"Disconnected from {Endpoint}: Connection refused."));
             Assert.That(toasts.Toasts[0].Tone, Is.EqualTo(LtToastTone.Danger));
         });
