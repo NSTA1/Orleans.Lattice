@@ -836,6 +836,21 @@ internal sealed partial class BPlusLeafGrain
     /// remains open on the default itself.
     /// </para>
     /// <para>
+    /// <b>Nor is the CPU figure right when replays are bound on the grain store
+    /// (issue #3921).</b> A store that serialises its writes serves replays at a
+    /// fixed rate however many run at once, so on such a deployment more permits
+    /// only lengthen each hold, and a longer hold is exactly what trips the
+    /// admission gate's no-progress arm. Measured there, raising the ceiling from
+    /// the derived 6 to 16 raised saturation refusals by nearly half and stopped
+    /// a cold open that had completed at 6 from completing within 45 minutes. The derived
+    /// value is therefore only an initial guess: on a store-bound deployment it
+    /// must be tuned to the store's write parallelism, using
+    /// <c>orleans.lattice.wal.replay.permit_hold</c> and
+    /// <c>orleans.lattice.wal.replay.permits_served</c> to tell the two regimes
+    /// apart. Sizing the ceiling from measured service time instead is tracked
+    /// as issue #3933.
+    /// </para>
+    /// <para>
     /// <b>Why no memory-derived default is offered here.</b> Deriving one needs a
     /// per-replay byte figure to divide the heap ceiling by, and this repository
     /// does not contain one. The nearest candidate,
@@ -940,6 +955,11 @@ internal sealed partial class BPlusLeafGrain
                 0,
                 LatticeMetrics.PermitAdaptationRestored,
                 LatticeTenantLabel.Platform);
+
+            // The gate's service count (issue #3921), primed here for the same
+            // reason: a flat served series on a sized gate is the no-progress
+            // regime, and it must not read the same as a build without it.
+            LatticeMetrics.WalReplayPermitsServed.Add(0, LatticeTenantLabel.Platform);
         }
 
         return Volatile.Read(ref _replayConcurrencyGate)!;
@@ -1293,17 +1313,65 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </remarks>
     internal static bool IsReplayPermitQueueNotDraining(TimeSpan maxQueueWait)
+        => ClassifyReplayPermitQueueDrain(maxQueueWait, out _) != ReplayPermitDrainVerdict.Draining;
+
+    /// <summary>
+    /// Which arm of <see cref="IsReplayPermitQueueNotDraining"/> fired, so a
+    /// refusal can say what it actually observed (issue #3921).
+    /// </summary>
+    internal enum ReplayPermitDrainVerdict
     {
+        /// <summary>No evidence the queue is failing to drain; admit.</summary>
+        Draining,
+
+        /// <summary>
+        /// The smoothed wait of recently terminated permit waits is at or above
+        /// the bound: waits are completing, but slowly.
+        /// </summary>
+        WaitExceeded,
+
+        /// <summary>
+        /// No queued activation has acquired a permit for at least the bound:
+        /// the permits already issued are not coming back, which is a hold-time
+        /// condition rather than a queue-depth one.
+        /// </summary>
+        NoProgress,
+    }
+
+    /// <summary>
+    /// The arm-attributed form of <see cref="IsReplayPermitQueueNotDraining"/>:
+    /// the same predicate, evaluated in the same order, reporting which arm fired
+    /// and how long it has been since the gate last made progress (issue #3921).
+    /// </summary>
+    /// <param name="maxQueueWait">The longest queue wait treated as healthy.
+    /// Non-positive disables the predicate.</param>
+    /// <param name="sinceLastProgress">The time since the last acquisition or
+    /// queueing-epoch start, or <see cref="TimeSpan.Zero"/> when none has been
+    /// recorded.</param>
+    /// <returns>The arm that fired, or <see cref="ReplayPermitDrainVerdict.Draining"/>.</returns>
+    /// <remarks>
+    /// The smoothed-wait arm is checked first, so when both hold the refusal is
+    /// attributed to it: a mean that is still being refreshed by terminating
+    /// waits is the more specific evidence. Allocation-free: it reads and writes
+    /// <see cref="long"/> statics only.
+    /// </remarks>
+    internal static ReplayPermitDrainVerdict ClassifyReplayPermitQueueDrain(
+        TimeSpan maxQueueWait, out TimeSpan sinceLastProgress)
+    {
+        var lastProgress = Volatile.Read(ref _lastReplayPermitProgress);
+        sinceLastProgress = lastProgress == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(lastProgress);
+
         if (maxQueueWait <= TimeSpan.Zero)
-            return false;
+            return ReplayPermitDrainVerdict.Draining;
 
         ExpireStaleReplayPermitWaitMean(maxQueueWait);
 
         if (Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
-            return true;
+            return ReplayPermitDrainVerdict.WaitExceeded;
 
-        var lastProgress = Volatile.Read(ref _lastReplayPermitProgress);
-        return lastProgress != 0 && Stopwatch.GetElapsedTime(lastProgress) >= maxQueueWait;
+        return lastProgress != 0 && sinceLastProgress >= maxQueueWait
+            ? ReplayPermitDrainVerdict.NoProgress
+            : ReplayPermitDrainVerdict.Draining;
     }
 
     /// <summary>
@@ -1425,6 +1493,72 @@ internal sealed partial class BPlusLeafGrain
         => NoteReplayPermitQueueWait(wait, acquired);
 
     /// <summary>
+    /// Builds the message of a replay-admission refusal, naming the condition
+    /// the refusing arm actually observed (issue #3921).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two arms need different messages because they have opposite
+    /// remedies. A <see cref="ReplayPermitDrainVerdict.WaitExceeded"/> refusal
+    /// is a queue that is deep and slow, and the queue-depth option is a
+    /// relevant lever. A <see cref="ReplayPermitDrainVerdict.NoProgress"/>
+    /// refusal is permits that are not coming back: the replays holding them are
+    /// slow, typically bound on the grain store, and a queue-depth option does
+    /// nothing for it. The single message this replaced reported the smoothed
+    /// wait on both arms, so on the no-progress arm it asserted "not draining"
+    /// beside a measured <c>0 ms</c> wait and pointed at the queue-depth option,
+    /// which sent the investigation behind issue #3921 the wrong way twice.
+    /// </para>
+    /// <para>
+    /// Pure and internal so the wording of each arm is testable without driving
+    /// a real refusal.
+    /// </para>
+    /// </remarks>
+    internal static string DescribeReplayAdmissionRefusal(
+        ReplayPermitDrainVerdict verdict,
+        int queued,
+        int bound,
+        LatticeReplayAdmissionClass admissionClass,
+        int ceiling,
+        TimeSpan smoothedWait,
+        TimeSpan sinceLastProgress,
+        TimeSpan maxQueueWait)
+    {
+        var head =
+            $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
+            + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
+            + $"{ceiling} permit(s), and ";
+
+        if (verdict == ReplayPermitDrainVerdict.NoProgress)
+        {
+            return head
+                + $"no permit has been released to the queue in {sinceLastProgress.TotalSeconds:F0} s: no queued "
+                + $"activation has acquired a replay permit for at least the "
+                + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
+                + $"{maxQueueWait.TotalMilliseconds:F0} ms. The permits already issued are not coming back, "
+                + "so the replays holding them are slow; this is a replay hold-time condition, not a queue "
+                + "that is too deep. This activation was refused admission rather than queued behind work it "
+                + "could not outlast. Retry after a backoff. Check replay and grain-store throughput: read "
+                + "orleans.lattice.wal.replay.permit_hold against the service rate on "
+                + "orleans.lattice.wal.replay.permits_served, and the grain store's write latency. If replays "
+                + "are bound on the store, raising "
+                + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)} "
+                + "lengthens every hold and makes this refusal more frequent, not less; lower it toward the "
+                + "store's write parallelism instead. A permit withheld by memory backpressure also does not "
+                + "return; see orleans.lattice.wal.replay.permits_withheld.";
+        }
+
+        return head
+            + $"the queue is not draining: the smoothed queue wait is {smoothedWait.TotalMilliseconds:F0} ms, "
+            + $"at or above the {nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
+            + $"{maxQueueWait.TotalMilliseconds:F0} ms. This activation was refused admission rather than queued "
+            + "behind work it could not outlast. Retry after a backoff, or raise "
+            + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
+            + "(zero restores an unbounded queue). If orleans.lattice.wal.replay.permit_hold is long, the "
+            + "replays themselves are slow and the queue is a symptom.";
+    }
+
+    /// <summary>
     /// Acquires a permit from the per-silo replay concurrency gate, returning
     /// the semaphore so the caller can release it once the replay completes.
     /// Returns <c>null</c> for a leaf with no tree id (a no-op activation that
@@ -1480,7 +1614,8 @@ internal sealed partial class BPlusLeafGrain
         var admissionClass = LatticeReplayAdmissionContext.Current;
         if (!TryAdmitReplayPermitWaiter(
                 options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound)
-            && IsReplayPermitQueueNotDraining(options.WalReplayPermitMaxQueueWait))
+            && ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out var sinceProgress)
+                is var verdict and not ReplayPermitDrainVerdict.Draining)
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 
@@ -1489,18 +1624,29 @@ internal sealed partial class BPlusLeafGrain
             // saturation refusal in this library - back off and retry, the regime
             // clears - and a second type carrying the same contract would only
             // fragment the catch sites that already honour it.
-            LatticeMetrics.RecordSaturationRefusal(state.State.TreeId, LatticeSaturationSource.ReplayPermitAdmission);
+            //
+            // Attributed to the arm that fired (issue #3921). The two arms have
+            // opposite remedies - a long smoothed wait is too much queued, no
+            // progress is permits not coming back - and before the tag a reader
+            // had to parse exception text to tell them apart.
+            var arm = verdict == ReplayPermitDrainVerdict.NoProgress
+                ? LatticeMetrics.SaturationArmNoProgress
+                : LatticeMetrics.SaturationArmWaitExceeded;
+            _replayAdmissionRefusalArm = (string?)arm.Value;
+            LatticeMetrics.RecordSaturationRefusal(
+                state.State.TreeId,
+                LatticeSaturationSource.ReplayPermitAdmission,
+                arm);
             throw new LatticeSaturatedException(
-                $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
-                + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
-                + $"{Volatile.Read(ref _replayConcurrencyCeiling)} permit(s), and the queue is not "
-                + $"draining: the smoothed queue wait is {ReplayPermitWaitMeanForTest.TotalMilliseconds:F0} ms "
-                + $"against a {nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
-                + $"{options.WalReplayPermitMaxQueueWait.TotalMilliseconds:F0} ms. This activation was "
-                + "refused admission rather than queued behind work it could not outlast. Retry after a "
-                + "backoff, or raise "
-                + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
-                + "(zero restores an unbounded queue).",
+                DescribeReplayAdmissionRefusal(
+                    verdict,
+                    queued,
+                    bound,
+                    admissionClass,
+                    Volatile.Read(ref _replayConcurrencyCeiling),
+                    ReplayPermitWaitMeanForTest,
+                    sinceProgress,
+                    options.WalReplayPermitMaxQueueWait),
                 state.State.TreeId!,
                 LatticeSaturationSource.ReplayPermitAdmission);
         }
@@ -1740,7 +1886,10 @@ internal sealed partial class BPlusLeafGrain
         if (!TryAcquireStarvationReplayPermit(gate, origin))
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
-            LatticeMetrics.RecordSaturationRefusal(state.State.TreeId, LatticeSaturationSource.ReplayPermitAdmission);
+            LatticeMetrics.RecordSaturationRefusal(
+                state.State.TreeId,
+                LatticeSaturationSource.ReplayPermitAdmission,
+                LatticeMetrics.SaturationArmGcShare);
             return null;
         }
 
@@ -2328,7 +2477,11 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             if (replayPermit is not null)
+            {
                 ReleaseStarvationReplayPermit(replayPermit);
+                if (permitAcquired)
+                    RecordReplayPermitHold(acquiredAt);
+            }
             _starvationDriveInFlight = false;
 
             // Disposing the source while detached work can still read its token
@@ -2599,6 +2752,55 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Records the end of one permit hold on the replay concurrency gate: a
+    /// <see cref="LatticeMetrics.WalReplayPermitHold"/> sample for this tree and
+    /// one increment of the process-wide
+    /// <see cref="LatticeMetrics.WalReplayPermitsServed"/> (issue #3921).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called from the <c>finally</c> that owns the permit, <b>after</b> the
+    /// permit has been returned or withheld, and it never throws. Recording
+    /// before the release would put an observation between the permit and the
+    /// only code that returns it, which is the permit-leak shape of issue #2256;
+    /// and an exception escaping a <c>finally</c> would replace the replay's own
+    /// fault with a diagnostic one.
+    /// </para>
+    /// <para>
+    /// Allocation-free for the reason given on
+    /// <see cref="RecordReplayPermitQueueWait"/>: every tag value is a string or
+    /// a frozen static, and the tenant tag is served from
+    /// <see cref="LatticeTenantLabel.ForTree(string)"/>'s cache.
+    /// </para>
+    /// </remarks>
+    /// <param name="acquiredAt">The <see cref="Stopwatch.GetTimestamp"/> reading taken as the permit was acquired.</param>
+    private void RecordReplayPermitHold(long acquiredAt)
+        => RecordReplayPermitHold(acquiredAt, MetricTreeId, state.State.TreeId);
+
+    /// <summary>
+    /// The emission shape of <see cref="RecordReplayPermitHold(long)"/>, static
+    /// and internal so its per-call allocation can be measured directly.
+    /// </summary>
+    /// <param name="acquiredAt">The <see cref="Stopwatch.GetTimestamp"/> reading taken as the permit was acquired.</param>
+    /// <param name="metricTreeId">The tree tag value.</param>
+    /// <param name="treeId">The tree id the tenant tag is derived from.</param>
+    internal static void RecordReplayPermitHold(long acquiredAt, string metricTreeId, string? treeId)
+    {
+        try
+        {
+            LatticeMetrics.WalReplayPermitHold.Record(
+                Stopwatch.GetElapsedTime(acquiredAt).TotalMilliseconds,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId),
+                LatticeTenantLabel.ForTree(treeId));
+            LatticeMetrics.WalReplayPermitsServed.Add(1, LatticeTenantLabel.Platform);
+        }
+        catch
+        {
+            // Intentionally swallowed - see the remarks above.
+        }
+    }
+
+    /// <summary>
     /// How far this activation got through replay admission, so a cancellation
     /// can be attributed to the phase it actually landed in (issue #2770).
     /// </summary>
@@ -2848,6 +3050,7 @@ internal sealed partial class BPlusLeafGrain
 
         bool advanced;
         SemaphoreSlim? replayPermit = null;
+        long replayPermitAcquiredAt = 0;
 
         // Memory-adaptive backpressure state for this activation (issue #2781).
         // Both are read only in the finally, and both default to the inert value
@@ -2902,6 +3105,10 @@ internal sealed partial class BPlusLeafGrain
 
             if (replayPermit is not null)
             {
+                // Hold-time start (issue #3921). Taken first, before any
+                // observation below, so the hold measures the replay and not
+                // the bookkeeping around it.
+                replayPermitAcquiredAt = Stopwatch.GetTimestamp();
                 // The cold/warm discriminator is precisely the replay-start
                 // override computed at step 0.5: a -1 sentinel means neither the
                 // snapshot rehydrate nor a pre-populated cache supplied an anchor,
@@ -3178,6 +3385,10 @@ internal sealed partial class BPlusLeafGrain
                         replayPermit.Release();
                     }
                 }
+
+                // Issue #3921. After the permit is returned or withheld, never
+                // before it, and never throwing - see RecordReplayPermitHold.
+                RecordReplayPermitHold(replayPermitAcquiredAt);
             }
         }
 

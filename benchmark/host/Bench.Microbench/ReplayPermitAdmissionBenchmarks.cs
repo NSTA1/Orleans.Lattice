@@ -113,6 +113,21 @@ public class ReplayPermitAdmissionBenchmarks
     }
 
     /// <summary>
+    /// The issue #3921 path: a zero smoothed wait, but no permit released to
+    /// the queue for longer than the bound, so the no-progress arm refuses. The
+    /// arm-attributed classification also reports the time since progress, and
+    /// this measures that it stays allocation-free.
+    /// </summary>
+    [Benchmark(Description = "Replay admission - no progress")]
+    public bool AdmissionNoProgress()
+    {
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+            TimeSpan.Zero, sinceLastProgress: MaxQueueWait + TimeSpan.FromSeconds(2));
+        return BPlusLeafGrain.ClassifyReplayPermitQueueDrain(MaxQueueWait, out _)
+            == BPlusLeafGrain.ReplayPermitDrainVerdict.NoProgress;
+    }
+
+    /// <summary>
     /// The fold that feeds the mean, driven on the acquisition outcome. It runs
     /// once per terminated wait and now also stamps the sample the arm above
     /// reads, so it is measured to show that stamping is free.
