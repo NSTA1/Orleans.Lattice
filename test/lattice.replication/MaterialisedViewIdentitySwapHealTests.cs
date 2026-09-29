@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -250,18 +251,21 @@ public class MaterialisedViewIdentitySwapHealTests
         });
     }
 
-    private static async Task WaitUntilAsync(Func<Task<bool>> condition, string failureMessage)
-    {
-        for (var attempt = 0; attempt < 50; attempt++)
-        {
-            if (await condition())
-            {
-                return;
-            }
-
-            await Task.Delay(20);
-        }
-
-        Assert.Fail(failureMessage);
-    }
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds, failing with
+    /// <paramref name="failureMessage"/> at the barrier if it never does.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to the shared <see cref="TestPoll"/> barrier. The hand-rolled
+    /// predecessor bounded itself by attempt count (50 x 20 ms) rather than by
+    /// elapsed time, so on a loaded agent the real budget was 1 s plus fifty
+    /// awaits of a grain call and the barrier could give up long before the
+    /// drain it waits for had a fair chance. The bound is now wall-clock.
+    /// </remarks>
+    private static Task WaitUntilAsync(Func<Task<bool>> condition, string failureMessage) =>
+        TestPoll.UntilAsync(
+            condition,
+            failureMessage,
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromMilliseconds(20));
 }

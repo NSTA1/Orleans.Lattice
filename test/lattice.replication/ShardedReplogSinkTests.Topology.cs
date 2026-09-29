@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -6,6 +5,7 @@ using NSubstitute;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -50,19 +50,18 @@ public partial class ShardedReplogSinkTests
     /// opens is reported as itself instead of as a misattributed downstream
     /// assertion failure.
     /// </summary>
-    private static async Task WaitUntilAsync(Func<bool> condition, string because, int timeoutMs = 10_000)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (!condition())
-        {
-            if (stopwatch.ElapsedMilliseconds > timeoutMs)
-            {
-                Assert.Fail($"Timed out after {timeoutMs} ms waiting for {because}.");
-            }
-
-            await Task.Delay(5);
-        }
-    }
+    /// <remarks>
+    /// Delegates to the shared <see cref="TestPoll"/> barrier rather than
+    /// hand-rolling the loop, so this fixture inherits the re-sample-after-the-
+    /// deadline behaviour that keeps a barrier from failing purely because a
+    /// scheduling hiccup straddled the deadline.
+    /// </remarks>
+    private static Task WaitUntilAsync(Func<bool> condition, string because, int timeoutMs = 10_000) =>
+        TestPoll.UntilAsync(
+            condition,
+            because,
+            TimeSpan.FromMilliseconds(timeoutMs),
+            TimeSpan.FromMilliseconds(5));
 
     private static (
         ShardedReplogSink Sink,
