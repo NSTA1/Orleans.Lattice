@@ -31,7 +31,8 @@ public static class LatticeAppsApiServiceCollectionExtensions
     /// <summary>
     /// Adds the transport-agnostic app-control facade to the service collection,
     /// registering it as the <see cref="ILatticeAppsControl"/> singleton that transport
-    /// bindings map. Must be called after <c>AddLatticeApps()</c>. Idempotent.
+    /// bindings map, and as the <see cref="ILatticeAppRoleBindings"/> singleton that re-binds
+    /// an installed app's roles. Must be called after <c>AddLatticeApps()</c>. Idempotent.
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <returns>The same <paramref name="services"/> for chaining.</returns>
@@ -57,6 +58,15 @@ public static class LatticeAppsApiServiceCollectionExtensions
             sp.GetRequiredService<ILatticeAccessGate>(),
             sp.GetRequiredService<ITenantContextResolver>(),
             sp.GetService<ILatticeMembershipContext>()));
+        services.TryAddSingleton<ILatticeAppRoleBindings>(sp =>
+            sp.GetRequiredService<ILatticeAppsControl>() as ILatticeAppRoleBindings
+            ?? new LatticeAppsControl(
+                sp.GetRequiredService<IAppRegistry>(),
+                sp.GetRequiredService<IAppSource>(),
+                sp.GetRequiredService<IAppActivationPipeline>(),
+                sp.GetRequiredService<ILatticeAccessGate>(),
+                sp.GetRequiredService<ITenantContextResolver>(),
+                sp.GetService<ILatticeMembershipContext>()));
         services.TryAddSingleton<ILatticeAppCatalog>(sp => new LatticeAppCatalog(
             LatticeAppCatalog.ToSourceSet(sp.GetRequiredService<IAppSource>()),
             sp.GetRequiredService<IAppRegistry>(),

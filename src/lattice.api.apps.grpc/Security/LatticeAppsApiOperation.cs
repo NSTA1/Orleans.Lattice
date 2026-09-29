@@ -49,4 +49,6 @@ public enum LatticeAppsApiOperation
     BridgeSet = 21,
     /// <summary>Delete one key of an app-owned tree through the app bridge.</summary>
     BridgeDelete = 22,
+    /// <summary>Replace an installed app's version-pinned role-to-group bindings.</summary>
+    UpdateRoleBindings = 23,
 }

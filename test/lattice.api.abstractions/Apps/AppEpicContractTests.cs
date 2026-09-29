@@ -5,9 +5,9 @@ using Orleans.Lattice.Api.Apps;
 namespace Orleans.Lattice.Api.Abstractions.Tests.Apps;
 
 /// <summary>
-/// Pins the shape of the three app contracts epic #3807 adds beside
+/// Pins the shape of the four app contracts epic #3807 adds beside
 /// <see cref="ILatticeAppsControl"/>: the administrative catalogue, the per-user
-/// workspace, and the untrusted-UI data bridge.
+/// workspace, the untrusted-UI data bridge, and role re-binding.
 /// </summary>
 [TestFixture]
 public sealed class AppEpicContractTests
@@ -36,6 +36,10 @@ public sealed class AppEpicContractTests
             "Task SetAsync(AppBridgeTarget target, String key, ReadOnlyMemory<Byte> value, CancellationToken cancellationToken = default)",
             "Task<Boolean> DeleteAsync(AppBridgeTarget target, String key, CancellationToken cancellationToken = default)",
         }).SetName("Bridge_contract_exposes_exactly_its_operations");
+        yield return new TestCaseData(typeof(ILatticeAppRoleBindings), new[]
+        {
+            "Task<AppRoleBindingsReport> UpdateRoleBindingsAsync(AppRoleBindingsUpdate request, CancellationToken cancellationToken = default)",
+        }).SetName("Role_bindings_contract_exposes_exactly_its_operations");
     }
 
     [TestCaseSource(nameof(Contracts))]

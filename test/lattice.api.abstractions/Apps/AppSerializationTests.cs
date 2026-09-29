@@ -209,6 +209,11 @@ public sealed class AppSerializationTests
         {
             CanListSources = true, CanListAvailable = true, CanDescribeFromSource = true, CanGetIcon = true,
         };
+        yield return new AppRoleBindingsUpdate { Slug = Summary.Slug, Version = Summary.Version, RoleBindings = [Binding] };
+        yield return new AppRoleBindingsReport
+        {
+            Slug = Summary.Slug, Version = Summary.Version, RoleBindings = [Binding], State = AppLifecycleState.Enabled,
+        };
     }
 
     private static IEnumerable<TestCaseData> RoundTripCases() => Samples()
@@ -233,7 +238,7 @@ public sealed class AppSerializationTests
                 && !typeof(Exception).IsAssignableFrom(t));
         Assert.That(Samples().Select(s => s.GetType()).Distinct(), Is.EquivalentTo(dtoTypes));
         Assert.That(PreEpicSamples().Count(), Is.EqualTo(19));
-        Assert.That(Samples().Select(s => s.GetType()).Distinct().Count(), Is.EqualTo(38));
+        Assert.That(Samples().Select(s => s.GetType()).Distinct().Count(), Is.EqualTo(40));
     }
 
     [TestCaseSource(nameof(LifecycleStates))]

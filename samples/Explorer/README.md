@@ -1,29 +1,27 @@
 # Explorer sample
 
 A one-command, self-contained demo of the opt-in `Orleans.Lattice.Explorer.Web`
-hosting library. It co-hosts, in a single process:
+hosting library. One process on one machine, with no cloud dependency, runs a
+**two-region estate** and the **Explorer web console**, so every Explorer area
+has live data:
 
-1. a single-silo Orleans cluster with the state-API, auth-admin, schema-admin,
-   tree-admin, backup, replication-status and apps gRPC surfaces (app control,
-   the source catalogue, the per-user workspace and the app frame bridge),
-   carrying the task-board sample app, and
-2. the embeddable **Explorer web console**, pointed at that gRPC endpoint,
+- two single-silo Orleans clusters, the `east` and `west` regions, each serving
+  every control plane the Explorer has an area for (state, auth, schema, apps,
+  tenancy, tree administration, backup, and replication control and status) on
+  its own h2c gRPC endpoint;
+- tenancy on, with two seeded tenants, `acme` and `globex`;
+- replication between the regions over loopback gRPC, with a small background
+  writer keeping the links busy and a switch that pauses the link;
+- one backup sink both regions share, which is what lets replicated trees be
+  backed up; and
+- the Explorer console, served by `east` and connected to it.
 
-so you can open the console in a browser and browse a live tree end to end.
-
-The console is registered and mounted with the exact two calls a consumer makes
-to embed it in their own ASP.NET app:
-
-- `AddLatticeExplorerWeb()` registers the Razor components, the Explorer UI with
-  every native area compiled in (Data, Apps, Access, Schema, Tenancy,
-  Replication, Backups, Telemetry and Cluster), the state-API connection seam,
-  and the sign-in plumbing. Each area probes its own facade and hides itself
-  when the cluster does not serve it; there is nothing to register per area.
-- `MapLatticeExplorer()` maps the interactive-server components, static assets,
-  the app frame bootstrap route, and sign-in / sign-out endpoints.
-
-This is the same code path as the standalone web head, so the standalone head and
-any co-hosted console cannot drift.
+The console is registered and mounted with the two calls a consumer makes to
+embed it in their own ASP.NET app: `AddLatticeExplorerWeb()` registers the
+Explorer with every area compiled in, and `MapLatticeExplorer()` maps it. Each
+area probes its own facade and hides itself when the cluster does not serve it,
+so there is nothing to register per area. This is the standalone web head's
+code path, so a co-hosted console and the standalone head cannot drift.
 
 ## Run it
 
@@ -31,147 +29,236 @@ any co-hosted console cannot drift.
 dotnet run --project samples/Explorer/Explorer.csproj
 ```
 
-Then open `http://localhost:5080/` in a browser. The sample seeds a demo tree
-(`factory-floor`, 12 entries) and stays running until you press Ctrl+C.
+Open `http://localhost:5080/`. Startup takes a few seconds; the console output
+then lists every URL, every sample identity and everything that was seeded. The
+sample runs until you press Ctrl+C.
 
-The console is seeded to connect to the co-hosted gRPC endpoint through the
-launcher-friendly bootstrap environment variables (`LATTICE_EXPLORER_ENDPOINT`
-and `LATTICE_EXPLORER_INSECURE_DEV`), so it connects with no first-run setup. It
-also auto-signs-in as a demo administrator (`LATTICE_EXPLORER_USERNAME` /
-`LATTICE_EXPLORER_PASSWORD`), which is what unlocks the admin areas below. The web
-head withholds that environment credential by default, because it would sign every
-anonymous visitor in as the operator; the sample opts in with
-`AllowEnvironmentCredentialSeed = true`, which is appropriate only for a
-single-operator loopback demo like this one. To keep
-the demo deterministic, the sample pins the console's persisted configuration to
-its own file (`AddLatticeExplorerWeb(o => o.ConfigFilePath = ...)`) and clears it
-on startup, so it never inherits a saved endpoint from your per-user Explorer
-config and always reconnects to this co-hosted silo. The gRPC surface listens on
-`http://localhost:5199` over HTTP/2 without TLS (h2c) to stay dependency-free; a
-real deployment would terminate TLS and register real authorizers instead of
-disabling authorization.
+| Switch | Effect |
+|--------|--------|
+| `--minimal` | One region, no tenancy and no peer: the single-cluster experience. |
+| `--explorer-region west` | Connect the console to the `west` region instead of `east`. |
+| `--sign-in-as <user>` | Sign the console in as another sample identity, such as `acme-admin`. `--sign-in-as none` starts signed out. |
+| `--peer-paused` | Pause the link between the regions as soon as the seeded data has reached `west`. |
+| `--port-offset <n>` | Add `n` to every port, when the defaults are taken (for example by another copy of the sample). |
 
-## The admin areas
+Pass switches after `--`, for example
+`dotnet run --project samples/Explorer/Explorer.csproj -- --sign-in-as acme-admin`.
 
-The console's areas are listed on the directory spine down the left of the page,
-and each one probes its own facade and fails closed. This sample co-hosts
-every control plane its one silo can serve and auto-signs-in as a bootstrap
-administrator (`explorer-admin`), so the **Data**, **Apps**, **Access**,
-**Schema**, **Replication**, **Backups** and **Cluster** areas are live out of
-the box. Two are absent, each for a stated reason:
+### What runs
 
-- **Telemetry** needs a metrics backend (a Prometheus-compatible query
-  endpoint) behind the telemetry facade, and this one-process sample runs none,
-  so it serves no telemetry facade and the area hides itself.
-- **Tenancy** needs the tenancy add-on; this sample runs one implicit tenant.
+| | `east` | `west` |
+|---|---|---|
+| gRPC (facades and replication receiver) | `http://localhost:5199` | `http://localhost:5198` |
+| Silo / gateway ports | 11111 / 30000 | 11112 / 30001 |
+| Explorer console | `http://localhost:5080/` | served by `east` |
 
-Replication is registered with one region and no peer, so the Replication area
-and the Cluster area's region picture show a single-region estate with nothing
-behind. Runtime enrolment is not served: it replicates its own configuration
-tree, and a replicated tree must be backed by a shared off-cluster backup sink,
-while this sample's backups go to the default in-cluster sink.
+Both regions run the same code, with the same identities, policy and tenants.
+`east` also seeds the data that replication carries to `west`:
 
-An area whose facade the cluster does not serve, such as Telemetry here, is
-hidden: it has no stop on the spine, and its address renders the not-found page.
-An area you could use after signing in is shown with a one-sentence reason
-instead. In this sample signing out does not stick: the environment credential
-seed signs any circuit whose credential store is empty straight back in, so the
-page that loads after **Sign out** is signed in again.
+- `factory-floor` (default tenant): 12 machines, replicated last-writer-wins.
+- `t/acme/orders` and `t/globex/orders`: five orders in each tenant.
+- The `task-board` app installed and enabled in tenant `acme`, with three cards.
+  Its manifest declares its `tasks` tree for replication, so installing it
+  enrolled `t/acme/a/task-board/tasks` in replication.
 
-Availability is advisory throughout: the cluster authorises every call, whatever
-the console chose to draw. See
-[Area availability](../../docs/lattice.explorer/area-availability.md).
+Every seed is a fixed, small set. The background writer overwrites one of the
+12 machines in `east`, and one of four `west-sensor-` keys in `west`, every
+second, so the trees never grow.
 
-## The task-board app
+### Sample identities
 
-The apps plane carries one sample Lattice App, `task-board`, whose UI runs in a
-sandboxed frame. The sample registers it with the in-image app source and seeds
-the three groups its walkthrough uses: `task-editors` (`alice`),
-`task-viewers` (`bob`) and `visitors` (`carol`). Nothing is installed until you
-do it in the console. Follow
-[the task-board walkthrough](Apps/TaskBoard/README.md#walkthrough) to find it in
-the catalogue, review its consent, bind its roles to those groups, install,
-enable and open it, then sign in as each of the three users to compare
-[what they see](Apps/TaskBoard/README.md#the-same-app-three-groups).
+The sample's authenticator trusts the user name and never checks the password,
+so any password signs in.
 
-## Things worth trying in this sample
+| User | What it is |
+|------|------------|
+| `explorer-admin` | Bootstrap administrator and platform operator. The console signs in as it by default. |
+| `acme-admin` | Tenant admin of `acme`. |
+| `globex-admin` | Tenant admin of `globex`. |
+| `alice` | Member of `operators` (may read `factory-floor`) and `task-editors`. |
+| `bob` | Member of `task-viewers`. |
+| `carol` | Member of `visitors`, bound to no app role. |
 
-- **The address is the navigation.** Open the Data area and select
-  `factory-floor`: the address is `/data/factory-floor`, all lower case, and the
-  address line above the page shows it as a chain of nodes. Choose a tab or a key
-  and the address follows, as in `/data/factory-floor?tab=history&key=...`. Open
-  it in a fresh tab and you land on that exact view; Back and Forward behave.
-- **Type an address or search.** Press `/` or `Ctrl+K` and type `fact` to find
-  the tree, or `>` to open the command palette and run a command such as
-  `data.refresh`. Every command is also a visible control on its page.
-- **Choose a theme.** The appearance menu sits in the header. Theme follows your
-  system by default; Paper and Board are the two materials, and high contrast is
-  a separate axis that layers over either. The choice is applied at first paint,
-  so a reload never flashes the wrong theme. `/reset` lists what the console
-  remembers and clears it.
-- **Narrow the window.** Below 768px the spine becomes a slide-in **Directory**
-  sheet, the header folds into one **Menu**, and tables become two-line rows that
-  open a detail sheet.
-- **Tenancy adapts.** This sample runs no tenancy add-on, so no address carries a
-  tenant root and the Tenancy area is hidden. See
-  [tenant scope](../../docs/lattice.explorer/tenant-scope.md).
-- **Keyboard only.** Tab once from the top: the first stops are the skip links
-  **Skip to directory**, **Skip to address** and **Skip to content**. Arrow keys
-  move within every tab row, and every dialog returns focus when it closes.
+`explorer-admin` also administers both tenants, as a tenant an operator creates
+without naming admins would.
 
-See [the navigation model](../../docs/lattice.explorer/navigation-model.md),
-[what the Explorer remembers](../../docs/lattice.explorer/what-the-explorer-remembers.md)
-and [theming and density](../../docs/lattice.explorer/theming-and-density.md).
+The console signs in automatically, so signing out does not stick: the page
+that loads next is signed in again. To see the console as another identity,
+restart with `--sign-in-as <user>`. To switch identities within one run - the
+sample keeps everything in memory, so a restart loses what you did - start with
+`--sign-in-as none`: the console then starts signed out, its **Sign in** dialog
+signs in as any identity, and **Sign out** sticks.
 
-How the admin sign-in works, so you can adapt it:
+## Walk each area
 
-- The silo registers membership and authorization (`AddLatticeMembership`,
-  `AddLatticeAuth`) with `explorer-admin` as a bootstrap administrator, plus
-  schema enforcement (`AddLatticeSchemaEnforcement`), per-value schema versioning
-  with one demo schema (`AddLatticeSchemaVersioning`: schema 1 at versions 1 and
-  2, with a v1 -> v2 upcaster, so the Schema area's Versions tab has a registry
-  to target), and the state, auth and schema control facades
-  (`AddLatticeStateApi`, `AddLatticeAuthApi`, `AddLatticeSchemaApi`).
-- The state, auth, and schema gRPC bindings (`AddLatticeStateApiGrpc`,
-  `AddLatticeAuthApiGrpc`, `AddLatticeSchemaApiGrpc`) are configured with the
-  `Basic` credential scheme so the console's `authorization: Basic base64(user:pass)`
-  header is understood. The state binding needs it too: co-hosting auth turns on
-  the state API's fail-closed read-visibility filter, so the catalog only lists
-  trees the resolved caller may read - without the scheme the caller is anonymous
-  and the tree list comes back empty.
-- `DemoBasicAuthenticator` (a trivial trusted-token authenticator) decodes that
-  header to recover the `explorer-admin` subject; because it is a bootstrap
-  administrator, the fail-closed capability probes accept it and the areas light
-  up. A real deployment resolves the subject from a validated JWT / Entra token
-  instead, and leaves transport authorization enabled.
+Start with `dotnet run` (signed in as `explorer-admin`, connected to `east`).
+The console opens at `/t/acme`: the operator administers `acme` and `globex`,
+and the console scopes a signed-in operator to the first tenant it can reach.
+The address is rooted at `/t/{tenant}` for every tenant-scoped area; Access and
+Cluster are cluster-wide and never are.
 
-The data-plane authorization default is **deny-by-default** (`DefaultEffect =
-Deny`, the framework default): a subject with no matching rule is refused. So the
-Access area shows a real allow-vs-deny split out of the box, the sample seeds one
-grant on startup - the `operators` group may `Read` and `RangeRead` the
-`factory-floor` tree, with `alice` as a member - so in **Access > Explain**
-`alice` reading `factory-floor` resolves to *Allowed* (a matched rule) while `bob`
-resolves to *Denied* (the default). The console's own admin areas keep working because the
-signed-in `explorer-admin` is a bootstrap administrator, which bypasses the
-decision engine; the reserved control plane (membership and policy) is always
-governed and only that administrator can manage it. See:
+### Home
 
-- [Running the Explorer](../../docs/lattice.explorer/running-the-explorer.md) -
-  hosting, options, subpath mounting, and the isolated-head deployment note.
-- [Managing access control](../../docs/lattice.explorer/managing-access.md).
-- [Managing schema](../../docs/lattice.explorer/managing-schema.md).
-- [Managing backups](../../docs/lattice.explorer/managing-backups.md).
+The directory spine lists Data, Apps, Access, Schema, Tenancy, Replication,
+Backups and Cluster, and Home has a one-line status for each. Telemetry is the
+one area that stays hidden (see [Telemetry](#telemetry)).
 
-### Group-merge mode (see the merge-mode-aware Access UI)
+### Data
+
+`/t/acme/data` lists acme's trees: `orders` and the task board's app tree
+`a/task-board/tasks`. Open `orders` to browse its five entries. The default
+tenant's `factory-floor` is not listed here, because the console is scoped to
+`acme`; restart with `--sign-in-as alice` to browse it as a caller in the default
+tenant, or see it in Replication and Cluster.
+
+### Apps
+
+`/t/acme/apps`. The **Catalogue** lists the in-image `task-board` app. The
+[task-board walkthrough](Apps/TaskBoard/README.md#walkthrough) covers install,
+consent, role binding and opening it, and [Tenants](Apps/TaskBoard/README.md#tenants)
+explains the install that is already in `acme`.
+
+### Access
+
+`/access`. Deny-by-default authorization, with one seeded grant: the
+`operators` group may `Read` and `RangeRead` `factory-floor`. In **Explain**,
+`alice` reading `factory-floor` is *Allowed* by the matched rule, and `bob` is
+*Denied* by the default. Rules also grant each tenant admin its tenant's
+`orders` tree.
+
+### Schema
+
+`/t/acme/schema`. Schema enforcement and per-value versioning are on, with one
+demo schema (`machine-status`, versions 1 and 2, and a v1 -> v2 upcaster that
+adds `"state": "unknown"`), so the Versions page has a registry to target.
+
+### Tenancy
+
+As the operator, `/tenancy` is the tenant directory: `acme` and `globex`, their
+state, quota use and apps. Open a tenant for its overview and lifecycle, its
+**Grants**, **Admin subjects** and **Regions**:
+
+- **Quota**: `acme` is capped at 500 keys and `globex` at 200, each at ten trees
+  with a 20% burst allowance.
+- **Grants**: `acme` has offered `globex` Read on its `orders` tree. The grant is
+  *Pending* until `globex` approves it.
+- **Regions**: both tenants may use `east` and `west`. Residency is left
+  unconfigured, so the page lists both regions as not resident, which the
+  cluster treats as online in every region. Setting residency starts a region
+  *Provisioning*; only backfill machinery, which this sample does not run, moves
+  it on, and a region where the tenant is not online refuses the tenant's
+  replicated writes.
+
+For the **tenant-scoped view**, restart with `--sign-in-as acme-admin`. The
+console opens at `/t/acme` with only Data, Apps, Tenancy, Replication and
+Backups on the spine (Backups says a backup grant is needed). Tenancy is now
+**My tenant** at `/t/acme/tenancy`: Members, Quota, Regions and Sharing, with no
+other tenant in sight. Restart with `--sign-in-as globex-admin` and approve
+acme's offer under `/t/globex/tenancy/sharing`.
+
+A tenant admin's Data and Apps pages read empty: the console does not yet send
+the active tenant to the cluster, so the cluster answers a tenant admin's data
+reads as the default tenant, where it holds no grant. The operator's view is
+unaffected, because the bootstrap administrator bypasses the tenant gate.
+
+### Replication
+
+`/t/acme/replication` shows the estate from `east`: one peer region, `west`,
+and a link per tree and direction - `factory-floor` both ways,
+`sys-replication-config` (the replicated runtime configuration) and the task
+board's tree - each with its backlog, errors and last contact. **Enrolled
+trees** shows how each is enrolled: `factory-floor` and the app tree at runtime,
+the configuration tree statically.
+
+Press **P** in the console window to pause the link. Replication between the
+regions is refused in both directions (the Explorer's own calls are not), so
+the links age: *Lagging* after about 20 seconds without contact, *Stalled* after
+a minute. Press **P** again to resume; the regions catch up. `--peer-paused`
+starts in the paused state, once the seeded data has reached `west`, for when
+the console window cannot take key presses.
+
+### Backups
+
+`/t/acme/backups`. Capture a backup with **Capture backup...**. Replicating a
+tree needs
+a backup sink every region reads, and the default in-cluster sink is
+per-cluster, so both regions share one in-process sink, `SampleSharedBackupSink`
+- the stand-in for a durable off-cluster store such as the Azure Blob sink. A
+backup captured in one region resolves in the other. Like everything else in
+the sample, it lives only as long as the process.
+
+### Cluster
+
+`/cluster`. The estate (cluster `east`, service `explorer-sample`), its storage,
+and the region picture: `east` and its peer `west`, with the health of the links
+between them. **Trees** administers every tree by name.
+
+### Telemetry
+
+Hidden. The telemetry facade answers queries from a Prometheus-compatible
+metrics backend, and this self-contained sample runs none, so it serves no
+telemetry facade and the area fails closed to hidden.
+
+## Point the console at west
+
+```
+dotnet run --project samples/Explorer/Explorer.csproj -- --explorer-region west
+```
+
+The console is still served on `http://localhost:5080/`, but dials `west`'s
+endpoint, `http://localhost:5198`. Replication then shows `west`'s side of the
+links, and Cluster names `west` as this region. Both regions seed the same
+identities, policy and tenants, and the data seeded in `east` has replicated.
+
+## The single-cluster experience
+
+```
+dotnet run --project samples/Explorer/Explorer.csproj -- --minimal
+```
+
+One region, no tenancy, no peer and the default in-cluster backup sink.
+Every area but Tenancy and Telemetry is shown; Replication and Cluster describe
+a single region with nothing behind it. With no tenants, the console opens in
+the default tenant, at `/t/default`.
+
+## How the sign-in works
+
+- Each region registers membership and authorization (`AddLatticeMembership`,
+  `AddLatticeAuth`) with `explorer-admin` as a bootstrap administrator, which
+  bypasses the decision engine. The data plane is deny-by-default.
+- Every gRPC binding is configured with the `Basic` credential scheme, so the
+  console's `authorization: Basic base64(user:pass)` header is understood.
+  Transport authorization is off because the console carries no client
+  certificate, but the cluster still authorizes every call against the resolved
+  caller. A real deployment leaves transport authorization on.
+- `DemoBasicAuthenticator` decodes that header and returns the user name as the
+  caller subject. A real deployment resolves the subject from a validated JWT or
+  Entra token instead.
+- The console's first-run endpoint and automatic sign-in come from
+  `SampleExplorerEnvironment`, a sample-owned `IExplorerEnvironment`, rather
+  than process environment variables. The web head withholds an environment
+  credential by default, because it signs every anonymous visitor in; the sample
+  opts in with `AllowEnvironmentCredentialSeed = true`, which suits only a
+  single-operator loopback demo. The console's persisted configuration is a
+  sample-owned file cleared on start, so it always connects to the region asked
+  for.
+- Cross-region replication runs over plaintext loopback h2c with no shared
+  secret. That too is for this loopback demo only.
+
+See [Running the Explorer](../../docs/lattice.explorer/running-the-explorer.md),
+[Managing access control](../../docs/lattice.explorer/managing-access.md),
+[Managing schema](../../docs/lattice.explorer/managing-schema.md) and
+[Managing backups](../../docs/lattice.explorer/managing-backups.md).
+
+### Group-merge mode
 
 Whether locally-defined group membership affects authorization depends on the
 cluster's group-merge mode. Set `LATTICE_MEMBERSHIP_MERGE_MODE` to `Union`
-(default), `TokenOnly`, or `DirectoryOnly` before running. Under `TokenOnly`,
-group membership is resolved solely from the identity-provider token, so a
-group's page in **Access > Groups** says so in a notice and turns off adding and
-removing members, while the members stay viewable; **Rules** and **Explain** stay
-live. `Union` and `DirectoryOnly` leave membership editing enabled. For
-example (PowerShell):
+(default), `TokenOnly` or `DirectoryOnly` before running. Under `TokenOnly`,
+membership comes only from the identity provider's token, so **Access > Groups**
+turns off **New group**, and a group's page says so in a notice and turns off
+adding and removing members while the members stay viewable; **Rules** and
+**Explain** stay live. For example (PowerShell):
 
 ```powershell
 $env:LATTICE_MEMBERSHIP_MERGE_MODE = 'TokenOnly'
@@ -180,67 +267,51 @@ dotnet run --project samples/Explorer/Explorer.csproj
 
 ## Identity directory: static (default) and Entra (opt-in)
 
-The Access area's **subject picker** (the type-ahead that finds users and groups)
-and its **validated create form** run against an identity directory. When a
-directory is configured, entering a principal id that the directory does not know
-**fails closed** - the form refuses it ("No principal with the id ... exists in
+The Access area's **subject picker** (the **Search the directory** control that
+finds users and groups) and its **validated forms** run against an identity
+directory. When a directory is configured, entering a principal id that the
+directory does not know **fails closed** - the form refuses it ("No principal with the id ... exists in
 the identity directory.") instead of creating an unvalidated free-text id.
 
-This sample offers two config-gated directory modes and is **fail-closed by
-default**:
+### Static directory (default)
 
-### Static directory (default - one command, no configuration)
+With no configuration, an in-memory roster backs the directory: the users in
+[Sample identities](#sample-identities) and the groups `operators`,
+`task-editors`, `task-viewers`, `visitors` and `acme-editors`. In a create form
+or a rule's subject picker:
 
-With no environment configuration the sample wires an in-memory roster
-(`AddStaticIdentityDirectory`) of a handful of demo principals: users
-`explorer-admin`, `alice`, `bob`, `carol`, and the group `operators`. Open the
-Access area and, in a create form or a rule's subject picker:
+- type `al` and choose **Search the directory** -> the picker finds `alice`;
+- choose **Group** as the kind and search for `operators` -> found;
+- type `nobody` and save -> the form refuses it, because it is not in the roster.
 
-- type `al` -> the picker finds `alice`; select it and save -> allowed.
-- type `operators` with the group toggle -> found; allowed.
-- type `nobody` -> the create form blocks it fail-closed, because it is not in the
-  roster.
+### Entra directory (opt-in, your tenant over Microsoft Graph)
 
-This mode needs no cloud account and no configuration, which is what keeps the
-sample a one-command run.
-
-### Entra directory (opt-in - your real tenant over Microsoft Graph)
-
-Set **all three** of the following environment variables to back the picker and
-the validated create with a live Microsoft Graph search/resolve over your Entra
-tenant (`AddEntraGraphGroupResolver`, app-only). Setting only some of them aborts
-startup with a non-zero exit, so a half-configuration never silently falls back to
-the static roster.
-
-Enablement path:
+Set **all three** of the following to back the picker and the validated create
+with a live Microsoft Graph search over your Entra tenant
+(`AddEntraGraphGroupResolver`, app-only). Setting only some of them stops the
+sample at startup with a non-zero exit, so a half-configuration never silently
+falls back to the static roster.
 
 1. **App registration.** Create or reuse an Entra app registration and note its
-   tenant id and client (application) id. The app-registration basics are in the
+   tenant id and client id; see the
    [Entra ID setup guide](../../docs/lattice.membership.entra/entra-setup.md)
    (Steps 1-2).
-
-2. **Client secret.** The Graph directory authenticates app-only, so add a client
-   secret and record the printed value (shown once):
+2. **Client secret.** Add a client secret and record the value (shown once):
 
    ```powershell
    az ad app credential reset --id <client-id> --display-name lattice-explorer-graph --query password -o tsv
    ```
 
-3. **Graph application permissions.** Grant the app the Microsoft Graph
-   *application* permissions needed to search users and groups, then admin-consent
-   them:
+3. **Graph application permissions.** Grant `User.Read.All` and
+   `Group.Read.All` as application permissions, then admin-consent them:
 
    ```powershell
-   # 00000003-...  = Microsoft Graph
-   # df021288-...  = User.Read.All  (application role)
-   # 5b567255-...  = Group.Read.All (application role)
    az ad app permission add --id <client-id> --api 00000003-0000-0000-c000-000000000000 `
      --api-permissions df021288-bdef-4463-88db-98f22de89214=Role 5b567255-7703-4780-807c-7be8301ae99b=Role
    az ad app permission admin-consent --id <client-id>
    ```
 
-4. **Export the three variables and run.** Switching modes is entirely by these
-   variables - no code change:
+4. **Export the three variables and run.**
 
    ```powershell
    $env:LATTICE_ENTRA_TENANT_ID     = '<tenant-guid>'
@@ -249,25 +320,29 @@ Enablement path:
    dotnet run --project samples/Explorer/Explorer.csproj
    ```
 
-   On startup the console prints `Identity directory: Microsoft Entra (Graph)...`.
-   The Access subject picker now searches your real tenant, and the create form
-   validates entered ids against it (an id absent from the tenant fails closed).
+   The console output then reads `Identity directory: Microsoft Entra (Graph)`.
 
-To switch back to the static roster, unset the three variables.
-
-The console operator still signs in as the local bootstrap administrator
-(`explorer-admin`) over Basic in both modes; the Entra directory backs the Access
-area's *validation and search*, not the console's own sign-in. For the provider
-model, the token-only degradation behaviour, and how to write a custom directory,
-see [Identity directory providers](../../docs/lattice.membership/identity-directory-providers.md).
+The console still signs in over Basic as a sample identity in both modes; the
+Entra directory backs the Access area's validation and search, not the
+console's sign-in. See
+[Identity directory providers](../../docs/lattice.membership/identity-directory-providers.md).
 
 ## What to look at
 
-- `Program.cs` - the silo host wiring (state, auth, schema, tree-admin, backup,
-  replication-status and apps gRPC surfaces and
-  the bootstrap-administrator authorization setup), the identity-directory mode
-  selection (static roster by default, Entra Graph when configured), the console
-  registration (`AddLatticeExplorerWeb` / `MapLatticeExplorer`), and the bootstrap
-  seeding that points the console at the local endpoint and auto-signs it in.
-- `DemoBasicAuthenticator.cs` - the demo trusted-token authenticator that maps the
-  console's Basic sign-in to the `explorer-admin` subject.
+| File | What it shows |
+|------|---------------|
+| `Program.cs` | The entry point: options, start, the console output and the **P** key. |
+| `ExplorerSample.cs` | The estate: both regions, the shared sink, the peer link and the writer. |
+| `SampleRegion.cs` | One region's host: the silo, every facade and gRPC binding, the replication transport and, in `east`, the Explorer console. |
+| `SampleSeeder.cs` | The seeded identities, policy, tenants, data, replication enrolment and the task-board install. |
+| `SampleSharedBackupSink.cs` | The backup sink both regions share. |
+| `PeerLink.cs` | The switch that pauses cross-region replication. |
+| `ReplicationWriter.cs` | The bounded background writer. |
+| `DemoBasicAuthenticator.cs` | The trusted-token authenticator behind the Basic sign-in. |
+| `test/` | `Explorer.Tests`: option parsing and the sample's parts, plus smoke tests that start the sample in-process and check every area is visible to the bootstrap administrator. |
+
+The smoke tests run in the samples CI lane:
+
+```
+dotnet test samples/Explorer/test/Explorer.Tests.csproj
+```

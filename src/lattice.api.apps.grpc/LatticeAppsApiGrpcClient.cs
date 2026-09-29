@@ -2,8 +2,11 @@ using Grpc.Core;
 
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
-/// <summary>Strongly typed app-control client. The supplied invoker owns routing, credentials, TLS, and deadlines.</summary>
-public sealed class LatticeAppsApiGrpcClient : ILatticeAppsControl
+/// <summary>
+/// Strongly typed app-control client, including role re-binding. The supplied invoker owns
+/// routing, credentials, TLS, and deadlines.
+/// </summary>
+public sealed class LatticeAppsApiGrpcClient : ILatticeAppsControl, ILatticeAppRoleBindings
 {
     private static readonly AppsEmptyRequest EmptyRequest = new();
     private static readonly AuthSchemeAdvertisementRequest AdvertisementRequest = new();
@@ -82,6 +85,14 @@ public sealed class LatticeAppsApiGrpcClient : ILatticeAppsControl
     /// <inheritdoc />
     public Task<LatticeAppsCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetCapabilities, EmptyRequest, cancellationToken);
+
+    /// <inheritdoc />
+    /// <remarks>A server whose host does not serve role re-binding answers <see cref="StatusCode.Unimplemented"/>.</remarks>
+    public Task<AppRoleBindingsReport> UpdateRoleBindingsAsync(AppRoleBindingsUpdate request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return UnaryAsync(_methods.UpdateRoleBindings, request, cancellationToken);
+    }
 
     /// <summary>Discovers public sign-in schemes without requiring a credential.</summary>
     public async Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)
