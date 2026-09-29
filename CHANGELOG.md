@@ -48,6 +48,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - Aggregation row transcode.** A row now encodes a short string once instead of sizing it and then encoding it again, gated on a compile-time UTF-8 bound rather than a virtual `Encoding.GetMaxByteCount` call paid per string. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833)) (`Orleans.Lattice`)
 
+- **Performance - Leaf snapshot frame reads.** The frame codec re-validated its 24-byte header on every read helper, inside per-row and per-probe loops. It is now read once and threaded through: a lower-bound seek is 76% faster, hydration admission 22%, and the aggregate walk 64%. ([#3881](https://github.com/NSTA1/Orleans.Lattice/pull/3881)) (`Orleans.Lattice`)
+
 - **Performance - CRDT delta fold enumeration.** Eight delta-fold and shape-registry sites walk a span over the concrete backing array or list instead of the read-only list interface, which boxed an enumerator per call. The coalescing fold is 18% faster and allocates up to 896 fewer bytes. ([#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
 
 - **Performance - CRDT provenance decode.** The or-map state decoder orders distinct keys and emits their events contiguously, from a pooled scratch, instead of sorting every event by key surrogate; the multi-value register sorts its projected result, not a copy; a flag read returns a UTF-8 literal. ([#3833](https://github.com/NSTA1/Orleans.Lattice/pull/3833), [#3850](https://github.com/NSTA1/Orleans.Lattice/pull/3850)) (`Orleans.Lattice`)
