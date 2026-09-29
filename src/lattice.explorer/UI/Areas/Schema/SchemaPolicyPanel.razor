@@ -1,8 +1,7 @@
 @*
     Policy: the tree's enforcement policy - its rules, applied together, and
-    strict ingest - with set (an editor seeded from the current policy) and
-    clear (a destructive confirmation naming the tree). A structured predicate
-    rule is shown and kept as it is; this editor does not write one (#1257).
+    strict ingest - with set (the rule builder, seeded from the current policy)
+    and clear (a destructive confirmation naming the tree).
 *@
 
 @if (Workspace is not null)
@@ -26,7 +25,7 @@
     }
     else if (_editing)
     {
-        @RenderEditor()
+        <SchemaRuleBuilder Policy="@_policy" OnSave="SaveAsync" OnCancel="CancelEditor" SaveError="@_saveError" Busy="@_busy" />
     }
     else if (_policy is null)
     {
@@ -82,63 +81,4 @@
                           OnConfirm="ClearAsync">
         Every value will be accepted from now on, and strict ingest stops diverting values. The rules are not kept.
     </LtConfirmDestructive>
-}
-
-@code {
-    private RenderFragment RenderEditor() => __builder =>
-    {
-        <section class="lt-schema-editor" aria-labelledby="lt-schema-policy-editor-title">
-            <h2 id="lt-schema-policy-editor-title" class="lt-schema-section-title">@(_policy is null ? "Set a policy" : "Edit the policy")</h2>
-            <p class="lt-schema-note">A value must satisfy every rule. Saving replaces the whole policy; new writes are checked against it at once, and values already stored are not changed.</p>
-
-            @if (_draftRules.Count == 0)
-            {
-                <p class="lt-schema-muted">No rules yet. Add the first one below.</p>
-            }
-            else
-            {
-                <ol class="lt-schema-rules" aria-label="Rules in the new policy">
-                    @for (var index = 0; index < _draftRules.Count; index++)
-                    {
-                        var at = index;
-                        var rule = _draftRules[at];
-                        <li class="lt-schema-rules__item">
-                            <span class="lt-schema-rules__text"><strong>@SchemaFormat.RuleKind(rule)</strong> - @SchemaFormat.RuleDetail(rule)</span>
-                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveRule(at)" aria-label="@($"Remove rule {at + 1}")">Remove</LtButton>
-                        </li>
-                    }
-                </ol>
-            }
-
-            <fieldset class="lt-schema-builder">
-                <legend class="lt-schema-builder__legend">Add a rule</legend>
-                <LtSelect Label="Rule" Options="@RuleKinds" Value="@_builder.Kind.ToString()" ValueChanged="OnKindChanged" />
-                @switch (_builder.Kind)
-                {
-                    case SchemaRuleDraftKind.MaxLength:
-                        <LtTextInput Label="Largest size, in bytes" Value="@_builder.MaxLength" ValueChanged="value => _builder.MaxLength = value" inputmode="numeric" />
-                        break;
-                    case SchemaRuleDraftKind.Pattern:
-                        <LtTextInput Label="Pattern (a regular expression)" Mono="true" Value="@_builder.Pattern" ValueChanged="value => _builder.Pattern = value" />
-                        <LtComboBox Label="Member (leave empty for the whole value)" Value="@_builder.MemberPath" ValueChanged="value => _builder.MemberPath = value" Source="@_members" Mode="LtComboBoxMode.Suggest" Noun="member" ExistingMessage="The policy already names this member." />
-                        break;
-                }
-                <LtTextInput Label="Description (optional)" Value="@_builder.Description" ValueChanged="value => _builder.Description = value" Error="@_builderError" />
-                <LtButton OnClick="AddRule">Add rule</LtButton>
-            </fieldset>
-
-            <LtSwitch Label="Strict ingest" Checked="@_draftStrict" CheckedChanged="value => _draftStrict = value"
-                      Hint="@StrictHint" />
-
-            @if (_saveError is not null)
-            {
-                <p class="lt-schema-error" role="alert">@_saveError</p>
-            }
-
-            <div class="lt-toolbar lt-schema-actions">
-                <LtButton OnClick="SaveAsync" Disabled="@_busy">Save policy</LtButton>
-                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelEditor">Cancel</LtButton>
-            </div>
-        </section>
-    };
 }

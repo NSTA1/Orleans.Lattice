@@ -72,11 +72,12 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
         var cut = Open();
         ClickWhenShown(cut, "Edit policy");
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-schema-rules__item"), Has.Count.EqualTo(3), "seeded from the applied policy"));
-        cut.FindAll("button").First(button => button.TextContent.Trim() == "Remove").Click();
-        cut.Find("select").Change(nameof(SchemaRuleDraftKind.Json));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-schema-ruleset__rule"), Has.Count.EqualTo(3), "seeded from the applied policy"));
+        cut.Find("button[aria-label='Remove rule 1']").Click();
+        Button(cut, "Add a rule").Click();
+        cut.FindAll("input[type=radio]").Single(radio => radio.GetAttribute("value") == nameof(SchemaCardKind.Encoding)).Change(nameof(SchemaCardKind.Encoding));
         Button(cut, "Add rule").Click();
-        cut.Find("[role=switch]").Click();
+        cut.FindAll("[role=switch]").Single(control => control.TextContent.Contains("Strict ingest", StringComparison.Ordinal)).Click();
         Button(cut, "Save policy").Click();
 
         cut.WaitUntil(() =>
@@ -85,7 +86,7 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
             Assert.That(saved.Rules.Select(SchemaFormat.RuleKind), Is.EqualTo(new[] { "Size", "Pattern", "JSON" }));
             Assert.That(saved.StrictIngest, Is.True);
             Assert.That(ToastService.Toasts.Single().Message, Is.EqualTo("The policy of orders is saved."));
-            Assert.That(cut.FindAll(".lt-schema-editor"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-schema-rulebuilder"), Is.Empty);
             Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(3));
             Assert.That(cut.Find("dl.lt-dl").TextContent, Does.Contain("On: replicated and restored values are checked too"));
         });
@@ -98,8 +99,10 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
         var cut = Open("scratch");
         ClickWhenShown(cut, "Set a policy");
 
-        cut.Find("select").Change(nameof(SchemaRuleDraftKind.Pattern));
-        cut.FindAll("input").First(input => input.GetAttribute("type") == "text").Input("^[a-z]+$");
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-schema-rulebuilder"), Has.Count.EqualTo(1)));
+        Button(cut, "Add a rule").Click();
+        cut.FindAll("input[type=radio]").Single(radio => radio.GetAttribute("value") == nameof(SchemaCardKind.Pattern)).Change(nameof(SchemaCardKind.Pattern));
+        SchemaRuleBuilderTestBase.Type(cut, "Pattern (a regular expression)", "^[a-z]+$");
         Button(cut, "Save policy").Click();
 
         cut.WaitUntil(() =>
@@ -117,11 +120,11 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
         var cut = Open("scratch");
         ClickWhenShown(cut, "Set a policy");
 
-        Button(cut, "Save policy").Click();
+        ClickWhenShown(cut, "Save policy");
 
         cut.WaitUntil(() =>
         {
-            Assert.That(cut.Find(".lt-schema-error").TextContent, Does.StartWith("A policy needs at least one rule."));
+            Assert.That(cut.Find(".lt-schema-rulebuilder > .lt-schema-error").TextContent, Does.StartWith("A policy needs at least one rule."));
             Assert.That(Schema.CountOf("SetPolicy"), Is.Zero);
         });
     }
@@ -133,17 +136,18 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
         var cut = Open("scratch");
         ClickWhenShown(cut, "Set a policy");
 
-        cut.Find("select").Change(nameof(SchemaRuleDraftKind.MaxLength));
-        cut.FindAll("input").First(input => input.GetAttribute("inputmode") == "numeric").Input("big");
+        ClickWhenShown(cut, "Add a rule");
+        cut.FindAll("input[type=radio]").Single(radio => radio.GetAttribute("value") == nameof(SchemaCardKind.MaxSize)).Change(nameof(SchemaCardKind.MaxSize));
+        SchemaRuleBuilderTestBase.Type(cut, "Largest size, in bytes", "big");
         Button(cut, "Add rule").Click();
 
         cut.WaitUntil(() =>
         {
-            Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("Enter the largest size"));
-            Assert.That(cut.FindAll(".lt-schema-rules__item"), Is.Empty);
+            Assert.That(cut.Find(".lt-schema-composer .lt-schema-error").TextContent, Does.Contain("Enter the largest size, in bytes, as a whole number."));
+            Assert.That(cut.FindAll(".lt-schema-ruleset__rule"), Is.Empty);
         });
 
-        Button(cut, "Cancel").Click();
+        cut.FindAll(".lt-schema-rulebuilder > .lt-schema-actions button").Single(button => button.TextContent.Trim() == "Cancel").Click();
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-empty__title").TextContent, Is.EqualTo("No policy")));
     }
 
@@ -157,13 +161,14 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr")[0].TextContent, Does.Contain("not edited")));
 
         Button(cut, "Edit policy").Click();
-        cut.Find("select").Change(nameof(SchemaRuleDraftKind.Utf8));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-ruleset__rule").TextContent, Does.Contain("kept as it is")));
+        Button(cut, "Add a rule").Click();
+        cut.FindAll("input[type=radio]").Single(radio => radio.GetAttribute("value") == nameof(SchemaCardKind.Encoding)).Change(nameof(SchemaCardKind.Encoding));
         Button(cut, "Add rule").Click();
         Button(cut, "Save policy").Click();
 
         cut.WaitUntil(() => Assert.That(Schema.Policies["orders"].Rules[0], Is.EqualTo(structured)));
     }
-
     [Test]
     public void A_refused_save_is_explained_in_the_editor()
     {

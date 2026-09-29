@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 /// The bUnit context the Schema area is tested under: the Shell registered as a
 /// head registers it, over a fake schema facade and a fake apps facade (so no
 /// probe or read ever dials a transport), a scripted tree catalogue, and the
-/// manual clock.
+/// manual clock, and a scripted data reader for the rule builder's sample.
 /// </summary>
 public abstract class SchemaTestContext : ShellChromeTestContext
 {
@@ -32,6 +32,8 @@ public abstract class SchemaTestContext : ShellChromeTestContext
         Apps = new FakeSchemaAppsControl();
         Services.AddKeyedSingleton<ILatticeSchemaControl>(ShellFacades.Key, Schema);
         Services.AddKeyedSingleton<ILatticeAppsControl>(ShellFacades.Key, Apps);
+        Data = new FakeSchemaDataReader();
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Data.IDataReader>(Data);
 
         // The chrome's test context may clear real areas; this one is under test.
         Services.AddExplorerArea<SchemaArea>();
@@ -41,6 +43,8 @@ public abstract class SchemaTestContext : ShellChromeTestContext
     internal FakeSchemaControl Schema { get; }
 
     internal FakeSchemaAppsControl Apps { get; }
+
+    internal FakeSchemaDataReader Data { get; }
 
     internal FakeAuthSession Auth => (FakeAuthSession)Services.GetRequiredService<IExplorerAuthSession>();
 
