@@ -504,6 +504,11 @@
   border-left: var(--lt-diagram-edge-width) solid var(--lt-diagram-edge);
 }
 
+.lt-schema-shape__item {
+  min-width: 0;
+  margin: 0;
+}
+
 .lt-schema-shape__row {
   display: flex;
   align-items: stretch;
