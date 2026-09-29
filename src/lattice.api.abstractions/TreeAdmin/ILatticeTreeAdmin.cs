@@ -329,13 +329,25 @@ public interface ILatticeTreeAdmin
     /// destruction the caller must pass <paramref name="confirm"/>
     /// <see langword="true"/>; a <see langword="false"/> value is rejected before
     /// any authorization or grain call. Reserved system tree ids are rejected.
+    /// <para>
+    /// Accept-then-poll: the purge is recorded as in progress and its shard walk
+    /// runs in the background, where no request timeout can stop it part-way. The
+    /// call waits a bounded time for it and returns the status: when
+    /// <see cref="TreeDeletionStatus.PurgeInProgress"/> is still
+    /// <see langword="true"/>, the purge was accepted and is running, with
+    /// <see cref="TreeDeletionStatus.PurgedShardCount"/> of
+    /// <see cref="TreeDeletionStatus.PurgeShardCount"/> shards done; poll
+    /// <see cref="GetTreeDeletionStatusAsync"/> rather than treating it as a
+    /// failure. A call while the purge runs, or after it has completed, returns the
+    /// status without error.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree to purge. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="confirm">Must be <see langword="true"/> to acknowledge the irreversible purge; <see langword="false"/> is rejected.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tree's deletion status after the purge.</returns>
+    /// <returns>The tree's deletion status once the purge has completed, or has been accepted and is still running.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="confirm"/> is <see langword="false"/>.</exception>
-    /// <exception cref="InvalidOperationException">The tree is not deleted or was already purged.</exception>
+    /// <exception cref="InvalidOperationException">The tree is not deleted.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
     Task<TreeDeletionStatus> PurgeTreeAsync(
         string treeId, bool confirm, CancellationToken cancellationToken = default);
@@ -573,10 +585,17 @@ public interface ILatticeTreeAdmin
     /// while a resize is still in progress, or while the pre-resize physical tree is
     /// still within its soft-delete recovery window (before purge completes). Reserved
     /// system tree ids are rejected.
+    /// <para>
+    /// Accept-then-poll: the undo is admitted even while a resize phase is in flight,
+    /// and the call waits only a bounded time for the unwind. When the returned
+    /// status carries <see cref="TreeResizeStatus.UndoRequested"/>, the undo was
+    /// accepted and is still unwinding; poll <see cref="GetResizeStatusAsync"/>
+    /// rather than retrying.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree whose last resize to undo. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tree's resize status after the undo.</returns>
+    /// <returns>The tree's resize status after the undo was accepted (and, when it finished within the wait, applied).</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
     /// <exception cref="InvalidOperationException">No in-flight or recoverable completed resize exists to undo, or the pre-resize tree has already been purged.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
@@ -586,7 +605,8 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// Reads the online-resize status of <paramref name="treeId"/> - whether a resize
-    /// is in flight and the tree's current B+ node capacity as observed from its
+    /// is in flight, whether an accepted undo is still unwinding, and the tree's
+    /// current B+ node capacity as observed from its
     /// registry configuration - after authorizing whole-tree
     /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
     /// effects.

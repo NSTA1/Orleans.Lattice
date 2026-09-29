@@ -68,8 +68,34 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     /// <summary>
     /// Processes all remaining shards synchronously in a single call.
     /// Used for testing and manual operations.
+    /// <para>
+    /// The call holds the snapshot's turn until the whole copy is done, so it
+    /// is unbounded in wall clock: on a large or contended tree it outlives the
+    /// caller's response timeout and starves the snapshot's keepalive reminder.
+    /// A coordinator that drives the snapshot from a timer tick must use
+    /// <see cref="RunSnapshotSliceAsync"/> instead (issue 3904).
+    /// </para>
     /// </summary>
     Task RunSnapshotPassAsync();
+
+    /// <summary>
+    /// Advances the snapshot for at most one wall-clock-bounded slice, banks its
+    /// progress, and returns the turn. The slice lasts for
+    /// <see cref="LatticeOptions.BackgroundDrainMaxDuration"/>, capped at ten
+    /// seconds (and ten seconds when that option is zero), so it returns well
+    /// inside the default thirty-second response timeout and leaves the turn free
+    /// for the keepalive reminder between slices. A shard whose copy is still
+    /// running when the slice expires stops at the next leaf and resumes from its
+    /// persisted key on the next slice. An online copy still drains up to
+    /// <see cref="LatticeOptions.MaxConcurrentDrains"/> shards at once
+    /// (issue 3904).
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when no snapshot is in progress any more (the copy
+    /// has completed, or none was running); <see langword="false"/> when work
+    /// remains and the caller should call again.
+    /// </returns>
+    Task<bool> RunSnapshotSliceAsync();
 
     /// <summary>
     /// Returns <c>true</c> when the coordinator is idle - either no snapshot

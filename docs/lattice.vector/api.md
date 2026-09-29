@@ -85,8 +85,9 @@ that must keep a partially-loaded instance across a fault uses
 |---|---|
 | `OpenAsync` | Static. Opens (and, for a full load, restores) an index over a store and a source. |
 | `CreateUnloaded` | Static. Creates an instance without reading durable state, so a caller can retry `LoadOrResumeAsync` on the same instance after a fault. Not usable until a load completes. |
-| `LoadOrResumeAsync` | Runs the durable load, resuming a previous attempt that faulted partway; a no-op once loaded. The two-token overload bounds only the resumable key-map walk with the first token and the whole load with the second. |
+| `LoadOrResumeAsync` | Runs the durable load, resuming a previous attempt that faulted partway; a no-op once loaded. The two-token overload bounds only the resumable key-map walk with the first token and the whole load with the second. A full load throws `VectorIndexRecordUnavailableException` instead of discarding when a record the committed state names was missing from one read of the store but returned by another: the durable index is kept and the same instance is retried after a backoff. |
 | `LoadDiscardReason` | `VectorIndexLoadDiscardReason`: `None` unless a full load completed a discard, otherwise `UnloadableRecord`, `CountMismatch`, or `EmbeddingSpaceChange`. Retained on that instance; an explicit rebuild is not a load discard. Lazy readers refuse invalid state without deleting it and leave this value `None`. Generation differences that normal recovery can adopt are not discards. |
+| `LoadDiscardedManifest` | The committed `VectorIndexManifest` of the state a full load discarded - generation, vector count, and header (partition count) - or `null` when nothing was discarded or the discarded state had no decodable manifest. Use it to report what a discard cost, since a discarded index otherwise reads the same as a first-ever build. |
 | `LoadedKeyCount`, `IsLoaded`, `HasBankedLoadProgress` | Load observability: identifier mappings loaded so far, whether a load has completed, and whether an interrupted load banked progress. |
 | `KeyPrefix`, `Generation`, `LoadMode` | Where the index lives, which partitioning is live, and how it was opened. |
 | `Status`, `Count`, `UpdatesSinceTraining` | The core's status, the live vector count, and the drift signal that tells you when to retrain. |
@@ -133,6 +134,7 @@ partitioning exists - so it stays `false` for that small corpus even though
 | `VectorIndexBuildState`, `VectorIndexManifest`, `VectorIndexPartitionState` | The durable build checkpoint, the commit record, and per-partition commit state. |
 | `VectorIndexStorageKeys`, `VectorIndexPersistenceFormat`, `VectorIndexRecord` | The key layout, the framing constants, and the checksummed record envelope. |
 | `VectorIndexLoadMode` | Full load versus lazy partial load. |
+| `VectorIndexRecordUnavailableException` | Thrown by a full load when a record the committed state names was missing from one read of the store but returned by another. Nothing is discarded; retry `LoadOrResumeAsync` on the same instance after a backoff. |
 | `VectorSearchOutcome` | How many hits a search wrote into the caller's buffer, plus the mode that produced them. |
 | `DurableVectorIndexOptions` | Durable-layer configuration; see [Configuration](configuration.md). |
 

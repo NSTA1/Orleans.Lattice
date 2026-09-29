@@ -79,7 +79,7 @@ After all shards are marked, the `TreeDeletionGrain` persists its own `IsDeleted
 
 ### Phase 3: Purge
 
-When the reminder fires and the soft-delete window has elapsed (`now - DeletedAtUtc >= SoftDeleteDuration`), the purge is recorded as in progress, a one-minute keepalive reminder is registered as its crash-recovery anchor, and a grain timer is started that processes one shard per tick (every 2 seconds) - the same pattern used by [tombstone compaction](tombstone-compaction.md).
+When the reminder fires and the soft-delete window has elapsed (`now - DeletedAtUtc >= SoftDeleteDuration`), the purge is recorded as in progress, a one-minute keepalive reminder is registered as its crash-recovery anchor, and a grain timer is started that processes one shard per tick (every 2 seconds) - the same pattern used by [tombstone compaction](tombstone-compaction.md). An explicit [`PurgeTreeAsync`](#manual-purge) starts the same timer-driven walk without waiting for the window, and walks shards back to back rather than one every 2 seconds.
 
 For each shard, `PurgeAsync()`:
 
@@ -100,8 +100,8 @@ After all shards are purged, the deletion grain records the purge as complete, r
 |---|---|---|
 | During Phase 1 (some shards marked) | Some shards have `IsDeleted = true` | `DeleteTreeAsync` is idempotent - re-calling marks remaining shards |
 | After Phase 2, before Phase 3 | `IsDeleted` persisted, reminder registered | Reminder fires after soft-delete window, starts purge |
-| During Phase 3 (mid-purge) | `PurgeInProgress = true`, `NextShardIndex` persisted | Keepalive reminder (1 min) reactivates grain, resumes from persisted shard index |
-| `PurgeTreeAsync()` interrupted mid-shard | Shard root still routes to nodes whose state was cleared | Typed CRDT write path re-binds the node on demand; `RecoverTreeAsync()` also re-asserts proactively - see [Repairing an unbound node](#repairing-an-unbound-node) |
+| During Phase 3 (mid-purge) | `PurgeInProgress = true`, `NextShardIndex` persisted | Keepalive reminder (1 min) reactivates grain, resumes from persisted shard index - including an explicitly requested purge, at its own cadence |
+| A purge interrupted mid-shard | Shard root still routes to nodes whose state was cleared | Typed CRDT write path re-binds the node on demand; `RecoverTreeAsync()` also re-asserts proactively - see [Repairing an unbound node](#repairing-an-unbound-node) |
 | After Phase 3 | `PurgeComplete = true` | Reminder fires, detects completion, unregisters and deactivates |
 
 ## Idempotency
@@ -109,7 +109,7 @@ After all shards are purged, the deletion grain records the purge as complete, r
 - `DeleteTreeAsync()` is idempotent - calling it on an already-deleted tree is a no-op.
 - `MarkDeletedAsync()` is idempotent per shard.
 - `PurgeAsync()` is safe to call multiple times - `ClearGrainStateAsync()` on an already-cleared grain is harmless, and `ClearStateAsync()` on an already-empty shard root is a no-op. A retry reaches the leaves a failed attempt left behind, even past the chain break that attempt caused, through the routed-leaf sweep in step 3.
-- During the reminder-driven purge of an unaliased tree, a failed shard is retried once before being skipped, and a skipped shard is not revisited: the pass still completes, records the purge as complete, removes the tree from the registry, and unregisters its reminders, so a shard whose purge failed twice keeps its state in storage. A manual `PurgeTreeAsync()` does not skip: the first shard failure propagates to the caller and the tree is not recorded as purged. An aliased tree's deferred purge skips nothing either - see [Deleting an aliased tree](#deleting-an-aliased-tree).
+- During the reminder-driven purge of an unaliased tree, a failed shard is retried once before being skipped, and a skipped shard is not revisited: the pass still completes, records the purge as complete, removes the tree from the registry, and unregisters its reminders, so a shard whose purge failed twice keeps its state in storage. A purge requested with `PurgeTreeAsync()` does not skip while the tree is still inside its soft-delete window: a failing shard is retried every 2 seconds, and the purge keeps reporting in progress at that shard, until it succeeds; once the window has elapsed it follows the reminder-driven rule above, as the deferred purge would. A shard purge that does not answer within the response timeout is never counted as a failure, because the shard keeps walking after the call is abandoned: it is simply retried, and the retry finds the work done.
 
 ## Read Cache Behaviour
 
@@ -154,7 +154,7 @@ byte[]? value = await tree.GetAsync("customer-123");
 | Purge in progress | Throws `InvalidOperationException` - too late to recover safely |
 | Purge complete | Throws `InvalidOperationException` - data is gone |
 
-On an aliased tree these results describe the logical tree: a live resized tree is not deleted, so recovering it throws. On a tree re-created under a purged tree's ID they follow the purged tree's deletion record - see [Reusing a purged tree ID](#reusing-a-purged-tree-id).
+On an aliased tree these results describe the logical tree: a live resized tree is not deleted, so recovering it throws. A tree re-created under a purged tree's ID is live, not purged, and recovers as any live tree does - see [Reusing a purged tree ID](#reusing-a-purged-tree-id).
 
 ### Repairing an unbound node
 
@@ -187,9 +187,11 @@ await tree.DeleteTreeAsync();
 await tree.PurgeTreeAsync();
 ```
 
-`PurgeTreeAsync()` walks every shard synchronously, clearing all leaf and internal node state, then marks the tree as fully purged. This is useful for maintenance scripts, test teardown, or when you know recovery will never be needed.
+`PurgeTreeAsync()` clears all leaf and internal node state on every shard, then marks the tree as fully purged. This is useful for maintenance scripts, test teardown, or when you know recovery will never be needed.
 
-> **Note:** `PurgeTreeAsync()` processes all shards in a single grain call. For very large trees (many shards, deep trees, millions of keys), this call may take a long time and risk hitting Orleans grain call timeouts. In those cases, prefer the default reminder-driven purge, which on an unaliased tree processes one shard per timer tick and is resilient to timeouts and silo restarts; an aliased tree's deferred purge runs as a single call too (see [Deleting an aliased tree](#deleting-an-aliased-tree)).
+`PurgeTreeAsync()` is **accept-then-poll**. It records the purge as in progress and hands the shard walk to the deletion grain's timer - the Phase 3 walk, anchored by the same keepalive reminder, but walking shards back to back - so no caller's response timeout can stop a large purge part-way, and a silo restart resumes it from the last shard it recorded. The call then waits a bounded time, 15 seconds or half the silo's response timeout when that is shorter, and returns once the purge has completed or, for a tree too large to purge in that time, with it still running. That return is not a failure: the tree-admin deletion status (`lattice_treeadmin_tree_deletion_status`) reports `PurgeInProgress` with `PurgedShardCount` of `PurgeShardCount` shards done until it completes. The status read is interleaved and answers from the state as last persisted, so it never queues behind a shard's purge and never reports progress a failed write could roll back. Calling `PurgeTreeAsync()` again while the purge runs, or after it has completed, returns without error.
+
+Before issue [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941) the walk ran inside the `PurgeTreeAsync()` call itself, so on a tree whose shards took longer than the 30-second response timeout the call failed with a `TimeoutException`, the purge stopped after the shard in flight, and the status reported nothing in progress.
 
 **State validation:**
 
@@ -197,8 +199,9 @@ await tree.PurgeTreeAsync();
 |---|---|
 | Not deleted | Throws `InvalidOperationException` - delete first |
 | Soft-deleted (within window) | ✅ Purges immediately |
-| Purge in progress (via reminder) | ✅ Purges every shard again from shard `0` (clearing an already-purged shard is a no-op) |
-| Purge complete | Throws `InvalidOperationException` - already purged |
+| Purge in progress | ✅ Returns once it completes or the bounded wait elapses; the running walk carries on and nothing is restarted |
+| Purge complete | ✅ Returns without error - already purged |
+| Purged, then the ID registered again | Throws `InvalidOperationException` - the new tree is live; see [Reusing a purged tree ID](#reusing-a-purged-tree-id) |
 
 ## Resized, aliased, and re-created trees
 
@@ -217,6 +220,14 @@ A later resize retires the previous resized copy, whose ID is its own, with the 
 
 The alias swap carries the shard map and split allocation mark onto the tree's registry entry, and before a later resize retires the previous copy it records the tree's current shard map and split allocation mark on that copy's own entry, so either retirement walks every shard an [adaptive shard split](shard-splitting.md) had added to the retired copy, and marks it deleted and purges it with the rest.
 
+### Discarding an undone resize's copy
+
+`UndoResizeAsync` discards the copy the resize built, before or after the swap. A discard marks the copy's shards deleted and schedules its purge after `SoftDeleteDuration`, exactly as a retirement does, so a router that cached an alias to the copy keeps being refused rather than reading an empty tree. Unlike a retirement, the discarded copy is never recovered, so the discard also releases its write-ahead-log retention at once: every leaf materialiser pin held against the copy is removed and each WAL partition is trimmed through its head, and the purge trims again before it unregisters the copy. `RecoverTreeAsync` on a discarded copy throws `InvalidOperationException`.
+
+Before issue #3930 the copy was only soft-deleted. The drain writes the copy's leaves and nothing checkpoints them, so their materialiser pins carried no usable offset: the copy's WAL was retained in full for the whole soft-delete window, and the WAL GC kept reactivating its leaves to try to lift a floor no activation could lift. A silo restart does not clear such a pin: it lives in the durable pin store, which only a purge or a discard empties, and the WAL GC reads it for every leaf missing from the restarted silo's in-memory cursor registry.
+
+The WAL GC also checks a tree's deletion state before it touches leaves to heal a stuck retention floor, and it never reactivates a deleted tree's leaves. A discarded copy's remaining pins are retired. A copy a resize retired and that no resize can recover any longer - its tree's resize coordinator no longer names it, which is the state an earlier build left an undone resize's destination in - is discarded by the WAL GC itself, so an estate already holding one heals without an operator, whose per-tree grants may not name the copy's id at all. A floor held by any other deleted tree, which is still recoverable, is logged once, at error level, as retained until the tree is purged or recovered, rather than reported as a floor that is merely behind.
+
 ### Deleting an aliased tree
 
 A resize, a shadow-cutover restore and a schema remediation leave a tree [aliased](tree-registry.md#tree-aliasing) to a physical copy that holds its live data. `DeleteTreeAsync`, `RecoverTreeAsync` and `PurgeTreeAsync` always act on the **logical** tree, so on an aliased tree the logical tree's deletion grain resolves the alias and runs the three phases above against the live copy:
@@ -228,8 +239,8 @@ A resize, a shadow-cutover restore and a schema remediation leave a tree [aliase
 The rules around it:
 
 - **Ambiguous failures keep the intent.** If marking the copy fails part-way, the pinned record is kept rather than rolled back, because some marks may already have landed. Retrying `DeleteTreeAsync` re-drives the marks, and `PurgeTreeAsync` finishes the pinned copy.
-- **Recovery and purge are one-way.** Recovery is refused once a logical purge has started, and repeating a completed purge is refused.
-- **The deferred purge is one pass per reminder tick.** Once the soft-delete window has elapsed, the logical tree's purge reminder purges every shard of the pinned copy in a single call rather than one shard per timer tick, and it skips no shard: a pass that fails is logged and retried on the reminder's next tick, one `SoftDeleteDuration` later (at least one minute). `PurgeTreeAsync` re-drives it at once.
+- **Recovery and purge are one-way.** Recovery is refused once a logical purge has started, and repeating a completed purge returns without doing anything.
+- **The purge runs on the pinned copy's timer.** Once the soft-delete window has elapsed, or at once on `PurgeTreeAsync`, the logical tree records its purge as in progress and starts the pinned copy's timer-driven walk, then polls the copy until its purge has completed - resuming that poll from a one-minute keepalive reminder after a restart - and only then unregisters the logical tree. The logical tree's deletion status reports the copy's progress. A copy whose walk has neither started nor completed is started again on the next poll, and a start that fails is retried on the reminder's next tick.
 - **Deletes and alias changes never overlap.** A delete is refused while a resize (or its undo), a shadow-cutover restore or its revert, or a schema remediation holds the tree's alias reservation, and each of those operations is refused while another one holds it; those operations, and an administrative alias change, are refused while the tree is deleted or a delete is pending. A resize or undo started on a deleted tree is refused. An in-place restore and an administrative alias change take no reservation and are not refused by one.
 - **A failed restore or revert keeps the reservation.** A shadow-cutover restore takes the tree's alias reservation before it writes its restore copy and releases it only as the last step of a successful cutover; a revert takes it before it moves the alias back and releases it only when it finishes. Neither releases it when it fails part-way - including when the alias change it makes is refused, for example by the [ownership guard](tree-registry.md#ownership-bounded-aliasing) - so the tree's delete, resize and its undo, schema remediation, and any other shadow-cutover restore or revert go on being refused with `InvalidOperationException`. The reservation has no time-out. It is released when that same restore, or that same revert, is retried and completes - a retry takes the same reservation again, because the same backup, target tree, scope and mode (or the same explicit operation id, or for a revert the same restore result) yield the same operation id - or, for a restore, when its unfinished restore copy is deleted through the backup package's shadow clean-up ([`ILatticeCoordinatedRestoreEngine`](../lattice.backup/api.md#ilatticecoordinatedrestoreengine)), which a coordinated (cross-cluster) restore runs, best-effort, when it abandons a restore. Nothing else releases a revert's reservation.
 - **A tree another tree aliases cannot be deleted directly.** Deleting a physical tree that some other logical tree's alias targets is refused, so the live data behind another name is never removed.
@@ -237,4 +248,8 @@ The rules around it:
 
 ### Reusing a purged tree ID
 
-A tree's deletion record outlives its purge: the ID stays recorded as deleted and purged after the tree has been unregistered. A later read or write on the same ID registers a new tree with fresh shards, and it reads and writes normally, but its lifecycle calls read that record: `DeleteTreeAsync` returns without deleting anything, and `RecoverTreeAsync` and `PurgeTreeAsync` throw `InvalidOperationException` as for a purged tree. Because the record still reads as deleted, every alias change that involves the ID is refused as it is for a deleted tree: `ResizeAsync` and `UndoResizeAsync` on it throw `InvalidOperationException`, and a shadow-cutover restore into it or its revert, a schema remediation cut-over of it, and an administrative alias that names it as either tree are refused too.
+A tree's deletion record outlives its purge: while the ID stays unregistered it reads as deleted and purged, `RecoverTreeAsync` throws `InvalidOperationException`, `PurgeTreeAsync` returns without error - a retry of the completed purge reports its success - and `DeleteTreeAsync` is a no-op. A later read or write on the same ID registers a new tree with fresh shards. A purge is terminal, so once the ID is registered again the record no longer describes it: `IsDeletedAsync` and the deletion status report the tree live, agreeing with `TreeExistsAsync`, and the first lifecycle call on the ID - `DeleteTreeAsync`, `RecoverTreeAsync`, `PurgeTreeAsync`, the retirement a first resize performs, or the reservation any alias change such as `ResizeAsync` takes - clears the record durably before it acts. The new tree is then deleted, recovered, purged and resized like any other. `RecoverTreeAsync` on it clears the record and returns without error, since there is nothing to restore; a second call is refused as for any tree that is not deleted. `PurgeTreeAsync` on it clears the record and is refused with `InvalidOperationException` as for any tree that is not deleted: the earlier purge's success is reported only while the ID stays unregistered, never against the new tree. A logical purge record left by [deleting an aliased tree](#deleting-an-aliased-tree) is cleared the same way, together with the retirement record of the tree's original copy, and a record an earlier build left on an ID that is registered again heals on its next lifecycle call, with no operator step.
+
+Only a completed purge is treated this way. A soft-deleted tree keeps its registry entry throughout its window, and a purge still running - including one that has recorded its completion but not yet removed the registry entry - is never reported live, so a registration can neither resurrect a soft-deleted tree nor unblock a purge in progress. A purge interrupted after recording its completion but before removing the registry entry leaves that entry behind, and the ID then reads as a live, empty tree that keeps the purged tree's registry settings.
+
+Before issue #3940 the record went on describing the new tree: `DeleteTreeAsync` returned without deleting anything, recovery and purge threw as for a purged tree, and every alias change involving the ID - `ResizeAsync` and `UndoResizeAsync`, a shadow-cutover restore or its revert, a schema remediation cut-over, and an administrative alias - was refused, so a purged tree's ID could never be resized.

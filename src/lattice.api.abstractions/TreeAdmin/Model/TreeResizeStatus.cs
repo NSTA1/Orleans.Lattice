@@ -58,4 +58,18 @@ public sealed record TreeResizeStatus
     /// read or an undo.
     /// </summary>
     [Id(5)] public int? RequestedMaxInternalChildren { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> while an undo of the tree's resize has been accepted
+    /// and is still unwinding. Undo is accept-then-poll: the undo verb returns once
+    /// the intent is persisted (waiting only a bounded time for the unwind), so this
+    /// flag is how a caller tells an accepted, still-unwinding undo apart from a
+    /// resize that is simply running. Read it before <see cref="InProgress"/>:
+    /// this <see langword="true"/> means an undo was requested and is unwinding
+    /// (whatever <see cref="InProgress"/> says - an undo of an already completed
+    /// resize leaves it <see langword="false"/>); otherwise
+    /// <see cref="InProgress"/> <see langword="true"/> means a resize is running and
+    /// <see langword="false"/> means there is none in flight.
+    /// </summary>
+    [Id(6)] public bool UndoRequested { get; init; }
 }

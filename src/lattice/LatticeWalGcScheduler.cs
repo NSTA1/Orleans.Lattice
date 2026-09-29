@@ -900,6 +900,21 @@ internal sealed class LatticeWalGcScheduler(
         new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Trees whose WAL retention is currently held by a deleted physical copy
+    /// and whose hold has already been reported, so the report is made once per
+    /// episode rather than once per pass (issue #3930). Cleared when the tree is
+    /// next found live and pruned alongside <see cref="_cadence"/>.
+    /// </summary>
+    private readonly HashSet<string> _deletedTreeHolds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// How long a physical-retention probe may take before the pass treats the
+    /// tree as live and applies its ordinary remedies, which is what it did
+    /// before the probe existed.
+    /// </summary>
+    private static readonly TimeSpan RetentionProbeBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// One tree's blocked-floor episode: the episode-wide alarm state plus the
     /// rate-limiter state and attempt budget for every consumer the episode has
     /// seen reported as blocking.
@@ -2557,7 +2572,27 @@ internal sealed class LatticeWalGcScheduler(
             // ClassifyPass; only the episode reads the state directly.
             var floorBlocked = report.CursorFloorState == WalGcCursorFloorState.BlockedByUnusablePin;
 
-            if (floorBlocked)
+            // Every remedy below heals a floor by touching leaves - reactivating
+            // them, driving their checkpoints, sweeping their pins. On a deleted
+            // physical tree that is work for a tree nobody can read, and it is
+            // what kept an undone resize's destination replaying and leaking WAL
+            // for the whole soft-delete window (issue #3930). So a tree that is
+            // about to reach one of them is asked first whether it is still live.
+            // The probe is taken only on those passes, never on a healthy tree's.
+            var retention = floorBlocked || overCeiling || stranded || _repairableFloorHolders.ContainsKey(treeId)
+                ? await ProbePhysicalRetentionAsync(treeId, stoppingToken).ConfigureAwait(false)
+                : PhysicalTreeRetention.Live;
+            if (retention == PhysicalTreeRetention.Live)
+            {
+                _deletedTreeHolds.Remove(treeId);
+            }
+
+            if (retention != PhysicalTreeRetention.Live)
+            {
+                WalGcSchedulerPhaseCensus.Enter(WalGcSchedulerPhase.CollectingHealing, treeId, _time);
+                await HoldDeletedTreeAsync(treeId, retention, floorBlocked, stoppingToken).ConfigureAwait(false);
+            }
+            else if (floorBlocked)
             {
                 // Blocked but naming no consumer keeps the episode rather than
                 // ending it. The GC always names the blocker it short-circuited
@@ -3668,6 +3703,7 @@ internal sealed class LatticeWalGcScheduler(
                 _primedTrees.Remove(entry.Key);
                 _terminalBreachRuns.Remove(entry.Key);
                 _blockedConsumers.Remove(entry.Key);
+                _deletedTreeHolds.Remove(entry.Key);
                 snapshotPins?.Forget(entry.Key);
             }
         }
@@ -5500,6 +5536,152 @@ internal sealed class LatticeWalGcScheduler(
     /// </remarks>
     private bool TryResolveLeafGrainId(string treeId, string consumerId, out GrainId leafGrainId) =>
         TryResolveLeafGrainId(treeId, consumerId, out leafGrainId, out _);
+
+    /// <summary>
+    /// Asks a tree's deletion grain whether its physical copy is still live
+    /// (issue #3930). Fails open to <see cref="PhysicalTreeRetention.Live"/> - a
+    /// probe that faults or overruns <see cref="RetentionProbeBudget"/> leaves the
+    /// pass applying its ordinary remedies, which is exactly what it did before
+    /// the probe existed - so the probe can only ever withhold a remedy on
+    /// positive evidence that the tree is deleted.
+    /// </summary>
+    private async Task<PhysicalTreeRetention> ProbePhysicalRetentionAsync(string treeId, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await Bounded(
+                    grainFactory.GetGrain<ITreeDeletionGrain>(treeId).GetPhysicalRetentionAsync(),
+                    RetentionProbeBudget,
+                    stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not read the deletion state of tree {Tree}; treating it as live for this pass.",
+                treeId);
+            return PhysicalTreeRetention.Live;
+        }
+    }
+
+    /// <summary>
+    /// Asks a deleted tree's deletion grain to discard it if it is a resize's
+    /// retired copy no resize can recover (issue #3930). Fails closed: a fault or
+    /// an overrun of <see cref="RetentionProbeBudget"/> discards nothing and
+    /// leaves the copy held.
+    /// </summary>
+    private async Task<bool> TryDiscardAbandonedCopyAsync(string treeId, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await Bounded(
+                    grainFactory.GetGrain<ITreeDeletionGrain>(treeId).DiscardIfAbandonedDerivedCopyAsync(),
+                    RetentionProbeBudget,
+                    stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "WAL GC could not ask deleted tree {Tree} whether it is an abandoned resize copy; its WAL stays held and the next pass asks again.",
+                treeId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Handles a tree whose retention floor is stuck on a deleted physical copy
+    /// instead of applying the leaf-touching remedies (issue #3930).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Nothing that reactivates or drives a leaf is applied: a deleted copy's
+    /// shards reject every read and write, so a replay would rebuild state no
+    /// caller can reach, and on an undone resize's destination it was the
+    /// replays themselves that kept the WAL growing. Any episode state the tree
+    /// accrued while it was live is dropped without crediting a heal, because
+    /// the floor did not heal.
+    /// </para>
+    /// <para>
+    /// A <see cref="PhysicalTreeRetention.Discarded"/> copy can never be
+    /// recovered, so every materialiser pin held against it is retired here too,
+    /// which is what lets the floor advance. That is the self-heal for a pin a
+    /// still-resident leaf re-published after the discard released the rest.
+    /// </para>
+    /// <para>
+    /// A <see cref="PhysicalTreeRetention.Deleted"/> copy is still recoverable,
+    /// so its pins must keep protecting the log its leaves would replay - unless
+    /// it is a resize's retired copy that no resize can recover any longer, which
+    /// is what an undone resize's destination looks like when a build predating
+    /// the discard deleted it. The deletion grain is asked to discard such a copy,
+    /// which is how an estate already holding one heals without an operator; the
+    /// operator could not reach it anyway, because a derived copy's id is not a
+    /// tree the admin grants name. Any other deleted tree's floor is terminally
+    /// blocked until it is recovered or purged, and that is reported once per
+    /// episode at error level, distinctly from a floor that is merely behind: no
+    /// activation can lift it, so a warning that reads as transient would be the
+    /// wrong signal.
+    /// </para>
+    /// </remarks>
+    private async Task HoldDeletedTreeAsync(
+        string treeId, PhysicalTreeRetention retention, bool floorBlocked, CancellationToken stoppingToken)
+    {
+        _blockedConsumers.Remove(treeId);
+        _repairableFloorHolders.Remove(treeId);
+
+        if (retention == PhysicalTreeRetention.Discarded)
+        {
+            if (cursorReporter is null)
+            {
+                return;
+            }
+
+            try
+            {
+                await cursorReporter.UnregisterTreeAsync(treeId, CancellationToken.None).ConfigureAwait(false);
+                if (_deletedTreeHolds.Add(treeId))
+                {
+                    logger.LogInformation(
+                        "WAL GC retired every materialiser pin on tree {Tree}: it is a discarded physical copy (an undone resize's destination) that can never be recovered, so no pin held against it protects anything. Its leaves are not reactivated.",
+                        treeId);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "WAL GC could not retire the materialiser pins of discarded tree {Tree}; they keep holding its WAL until a later pass retires them.",
+                    treeId);
+            }
+
+            return;
+        }
+
+        if (retention == PhysicalTreeRetention.Deleted
+            && await TryDiscardAbandonedCopyAsync(treeId, stoppingToken).ConfigureAwait(false))
+        {
+            // The discard retired the pins and trimmed the log itself; the next
+            // pass finds the floor clear or reports the copy as discarded.
+            return;
+        }
+
+        if (floorBlocked && _deletedTreeHolds.Add(treeId))
+        {
+            logger.LogError(
+                "WAL GC cannot reclaim tree {Tree}: its cursor floor is held by durable materialiser pins of a physical tree that has been deleted. Nothing can checkpoint a deleted tree's leaves, so the floor cannot advance and its WAL is retained until the tree is purged or recovered; its leaves are not reactivated. Purging the tree releases the pins.",
+                treeId);
+        }
+    }
 
     /// <summary>
     /// Retires a materialiser pin whose leaf has been reclaimed or purged, so

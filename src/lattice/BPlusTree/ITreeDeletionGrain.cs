@@ -44,6 +44,45 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>Retires a derived physical copy whose registry entry is disposable.</summary>
     Task DeleteDerivedPhysicalTreeAsync();
 
+    /// <summary>
+    /// Discards a derived physical copy that will never be used again - the
+    /// destination of an undone resize. Marks its shards deleted exactly as
+    /// <see cref="DeleteDerivedPhysicalTreeAsync"/> does, and schedules the same
+    /// purge after <see cref="LatticeOptions.SoftDeleteDuration"/>, so a router
+    /// that cached an alias to the copy keeps being refused rather than reading
+    /// an empty tree. Unlike a deletion it records the copy as discarded, which
+    /// makes it unrecoverable, and releases its write-ahead-log retention
+    /// immediately: every leaf materialiser pin held against it is retired and
+    /// its log is trimmed to its head. Without that, the copy's never-checkpointed
+    /// pins hold its cursor floor for the whole soft-delete window, and the WAL GC
+    /// reactivates its leaves to replay a log nothing will ever read (issue #3930).
+    /// Idempotent; a retry re-applies the shard marks and re-releases the WAL.
+    /// </summary>
+    Task DiscardDerivedPhysicalTreeAsync();
+
+    /// <summary>
+    /// Reports whether the local physical copy is live, soft-deleted but still
+    /// recoverable, or discarded, so the WAL GC can tell a retention floor that
+    /// is merely behind from one held by a tree nobody can read. A pure read of
+    /// in-memory state, interleaved so a probe never queues behind a purge.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<PhysicalTreeRetention> GetPhysicalRetentionAsync();
+
+    /// <summary>
+    /// Discards this physical copy, as <see cref="DiscardDerivedPhysicalTreeAsync"/>
+    /// does, when it is a resize's derived copy that was retired by a build
+    /// predating the discard and that no resize can still recover - its logical
+    /// tree's resize coordinator no longer names it. That is the undone resize
+    /// destination issue #3930 left holding its WAL. Returns <see langword="true"/>
+    /// when the copy is discarded (now or already), and <see langword="false"/>,
+    /// changing nothing, for anything else: a live copy, one deleted by a caller
+    /// who may recover it, a resize's own retired copy an undo can still recover,
+    /// or a purged one. Called by the WAL GC so estates already in that state heal
+    /// without an operator.
+    /// </summary>
+    Task<bool> DiscardIfAbandonedDerivedCopyAsync();
+
     /// <summary>Reports deletion or partially applied delegated deletion of the local physical copy, not the logical alias.</summary>
     Task<bool> IsPhysicalDeletedAsync();
 
@@ -74,7 +113,8 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> while logical deletion is pending or durable
     /// (whether or not the purge has completed). Physical retirement alone
-    /// does not make the logical tree deleted.
+    /// does not make the logical tree deleted, and a purged tree whose id has
+    /// been registered again is a new, live tree, so it reads <c>false</c>.
     /// </summary>
     [Orleans.Concurrency.AlwaysInterleave]
     Task<bool> IsDeletedAsync();
@@ -82,11 +122,17 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// <summary>
     /// Returns a read-only snapshot of the tree's soft-deletion lifecycle state -
     /// whether it is deleted, when, the recovery deadline derived from the
-    /// configured soft-delete duration, and whether a purge is in progress or has
-    /// completed. A pure read with no side effects; unlike the mutating verbs it
+    /// configured soft-delete duration, whether a purge is in progress or has
+    /// completed, and how many shards an in-flight purge has finished out of how
+    /// many. A pure read with no side effects; unlike the mutating verbs it
     /// asserts no internal-origin marker, so a diagnostics facade may call it
-    /// directly.
+    /// directly. A purged tree whose id has been registered again reads as live,
+    /// so the snapshot never disagrees with the registry. Interleaved, and
+    /// answered from the state as last persisted, so it never queues behind a
+    /// purge's shard walk and never reports progress that a failed write could
+    /// still roll back.
     /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<TreeDeletionSnapshot> GetDeletionStatusAsync();
 
     /// <summary>
@@ -98,7 +144,9 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// (data is gone). A retry after a partial failure is safe - the per-shard
     /// unmark and re-seed are idempotent and the deletion record is cleared only
     /// after them - but a call after a successful recovery throws, because the
-    /// tree is no longer deleted.
+    /// tree is no longer deleted. On a purged tree whose id has been registered
+    /// again it clears the stale deletion record and returns: there is nothing
+    /// to restore, and the id already names a live tree.
     /// </summary>
     Task RecoverAsync();
 
@@ -109,6 +157,32 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     /// deactivates each grain.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
     /// deleted, or if the purge has already completed.
+    /// <para>
+    /// The walk runs inside this one call, so it is bounded by the caller's
+    /// response timeout: a tree whose shards take longer than that is left part
+    /// purged when the call times out. The public purge goes through
+    /// <see cref="BeginPurgeAsync"/> instead.
+    /// </para>
     /// </summary>
     Task PurgeNowAsync();
+
+    /// <summary>
+    /// Accepts an immediate purge of a soft-deleted tree, bypassing the
+    /// <see cref="LatticeOptions.SoftDeleteDuration"/> wait, and returns once the
+    /// purge is durably recorded as in progress - without waiting for it. The
+    /// shard walk is driven by a grain timer anchored by a keepalive reminder, so
+    /// it is not bounded by any caller's response timeout and resumes from the
+    /// last recorded shard after a deactivation; poll
+    /// <see cref="GetDeletionStatusAsync"/> for its progress and completion. On an
+    /// aliased tree it starts the pinned live copy's purge and completes the
+    /// logical purge once that copy's has finished (issue #3941).
+    /// Idempotent: a call while the purge is in progress re-arms nothing it does
+    /// not need to, and a call after it completed returns without error while the
+    /// id stays unregistered. On a purged tree whose id has been registered again
+    /// it clears the stale record and throws as for any tree not deleted: the
+    /// earlier purge's success is never reported against the new tree.
+    /// Throws <see cref="InvalidOperationException"/> if the tree has not been
+    /// deleted.
+    /// </summary>
+    Task BeginPurgeAsync();
 }

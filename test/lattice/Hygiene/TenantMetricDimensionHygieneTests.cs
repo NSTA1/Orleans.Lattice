@@ -248,6 +248,12 @@ public sealed class TenantMetricDimensionHygieneTests
         // instead of one instrument splitting its series across both.
         "WalGcPassReach",
         "WalReplayPermitAdaptations",
+        // orleans.lattice.wal.replay.permits_served - the service count of the same
+        // process-wide replay gate (issue #3921). Its rate is the gate's service rate,
+        // a property of the one semaphore every tree's leaves share, so it has a
+        // single value per silo and no tenant; the per-tree cost of a hold is on the
+        // tree-tagged, tenant-labelled orleans.lattice.wal.replay.permit_hold.
+        "WalReplayPermitsServed",
         // wal.gc.scheduler_backoff / wal.gc.scheduler_consecutive_faults - the
         // SCHEDULER-WIDE backoff level and consecutive-fault streak (issue #3064).
         // Deliberately not tree-tagged, and no tenant is derivable: both describe one

@@ -69,6 +69,19 @@ public interface ILatticeTenantRegionAdmin
     /// removed (restoring their prior status at a strictly later stamp) and
     /// leaves the other caller's removal standing, so the operation is refused
     /// as a whole and the tenant keeps at least one resident region.
+    /// <para>
+    /// <b>What happens after this call.</b> A dropped region completes its drain
+    /// on its own (<see cref="TenantRegionLifecycleStatus.Draining"/>, then
+    /// <see cref="TenantRegionLifecycleStatus.Offline"/>, then
+    /// <see cref="TenantRegionLifecycleStatus.Removed"/>) on the silos of that
+    /// region. An added region does <b>not</b> advance on its own: nothing
+    /// backfills the tenant's existing data into it, so it stays
+    /// <see cref="TenantRegionLifecycleStatus.Provisioning"/> until an operator of
+    /// the hosting deployment promotes it one step at a time to
+    /// <see cref="TenantRegionLifecycleStatus.Online"/>. Once a tenant has any
+    /// residency configured it is served only in a region that reports
+    /// <see cref="TenantRegionLifecycleStatus.Online"/>.
+    /// </para>
     /// </remarks>
     /// <param name="tenantId">The tenant id. Must be a valid, non-empty tenant id.</param>
     /// <param name="residencyRegions">The complete desired residency set. Must not be <c>null</c>; each id must be non-empty; must not be empty (a tenant must stay resident somewhere).</param>

@@ -228,6 +228,7 @@ public sealed class LatticeTreeAdminResizeTests
             Assert.That(status.CurrentMaxInternalChildren, Is.EqualTo(100));
             Assert.That(status.RequestedMaxLeafKeys, Is.Null);
             Assert.That(status.RequestedMaxInternalChildren, Is.Null);
+            Assert.That(status.UndoRequested, Is.False);
         });
     }
 
@@ -279,7 +280,46 @@ public sealed class LatticeTreeAdminResizeTests
 
         var status = await facade.GetResizeStatusAsync(Tree);
 
-        Assert.That(status.InProgress, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.InProgress, Is.True);
+            Assert.That(status.UndoRequested, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetResizeStatusAsync_reports_an_accepted_undo_that_is_still_unwinding()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var (lattice, registry) = Wire(factory);
+        lattice.IsResizeCompleteAsync().Returns(false);
+        lattice.IsResizeUndoPendingAsync().Returns(true);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
+        var facade = Create(factory);
+
+        var status = await facade.GetResizeStatusAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.InProgress, Is.True);
+            Assert.That(status.UndoRequested, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task UndoTreeResizeAsync_reports_undo_requested_when_the_unwind_outlasts_the_call()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var (lattice, registry) = Wire(factory);
+        lattice.IsResizeCompleteAsync().Returns(false);
+        lattice.IsResizeUndoPendingAsync().Returns(true);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
+        var facade = Create(factory);
+
+        var status = await facade.UndoTreeResizeAsync(Tree);
+
+        Assert.That(status.UndoRequested, Is.True,
+            "an accepted undo still unwinding must read as accepted, not as a resize that is merely running");
     }
 
     [Test]

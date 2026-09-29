@@ -160,6 +160,22 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Performance - The azure-throughput rig ignored a documented `0`.** The silo now honours `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD=0` (coalescing off) and the TCP producer `BENCH_DURATION_SEC=0` (run forever) instead of running the default, and a gate checks every documented `0`. ([#3854](https://github.com/NSTA1/Orleans.Lattice/issues/3854)) (`repository-wide`)
 
+- **Replication - Same-mode enables from two regions went Ambiguous.** Two regions enabling one tree under the same merge mode now converge on that mode instead of leaving the runtime config Ambiguous and receivers dropping the tree's data. Divergent modes still fail closed. ([#3899](https://github.com/NSTA1/Orleans.Lattice/issues/3899)) (`Orleans.Lattice.Replication`)
+
+- **Tenancy - A dropped region never finished draining.** A region removed from residency now advances from Draining to Removed on its own, and a lifecycle promotion can no longer overwrite a later residency change. Promoting an added region to Online is a documented operator step. ([#3897](https://github.com/NSTA1/Orleans.Lattice/issues/3897)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Mcp`)
+
+- **Replay - Admission refusals logged a stack trace each.** An expected replay-permit refusal no longer logs its exception. Refusals are counted into at most one summary warning a minute per silo, which names the arm that fired and its remedy. ([#3906](https://github.com/NSTA1/Orleans.Lattice/issues/3906)) (`Orleans.Lattice`)
+
+- **Observability - The replay permit gate could not show why it refused.** Replay-permit refusals carry an `arm` tag, permit hold time and service rate are exported, and a no-progress refusal says no permit was released instead of blaming queue depth. ([#3921](https://github.com/NSTA1/Orleans.Lattice/issues/3921)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Vector - A saturated load discarded a healthy index.** A durable index load re-reads a record the manifest names before discarding, and defers when any read returns it. Only a record every read path agrees is absent is rebuilt, and a discard names the generation it destroyed. ([#3905](https://github.com/NSTA1/Orleans.Lattice/issues/3905)) (`Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Core - A busy resize timed out and could not be undone.** The resize snapshot copies in wall-clock-bounded slices, so it no longer outlives the caller's timeout or starves its keepalive. An undo is accepted while a phase runs, unwinds at the next boundary, and shows in resize status. ([#3904](https://github.com/NSTA1/Orleans.Lattice/issues/3904), [#3923](https://github.com/NSTA1/Orleans.Lattice/issues/3923)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
+
+- **WAL - An undone resize leaked its copy's WAL.** Undoing a resize now discards its destination, retiring its materialiser pins and trimming its WAL at once. The WAL GC no longer reactivates a deleted tree's leaves, and it heals copies an earlier undo left behind. ([#3930](https://github.com/NSTA1/Orleans.Lattice/issues/3930)) (`Orleans.Lattice`)
+
+- **Core - A purge stopped part-way and wedged its tree id.** A tree purge is accepted and walked in the background, with shard progress in deletion status, so the response timeout cannot stop it. A tree re-created under a purged id can again be resized, deleted and recovered. ([#3940](https://github.com/NSTA1/Orleans.Lattice/issues/3940), [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.Mcp`)
+
 ### Security
 
 - **Security - A metric allow-list admitted names it was not written for.** Wildcard entries anchored with `$` and matched with `Singleline`, so a caller-supplied name carrying a newline satisfied a deny-all pattern. Entries now anchor with `\z`, reject newlines, and match without backtracking. ([#3929](https://github.com/NSTA1/Orleans.Lattice/pull/3929)) (`Orleans.Lattice.Api.Telemetry`)

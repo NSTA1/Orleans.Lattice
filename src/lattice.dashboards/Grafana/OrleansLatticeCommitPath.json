@@ -1274,6 +1274,42 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree, source) (rate(orleans_lattice_saturation_refusals_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{source}}" }
       ]
+    },
+    {
+      "id": 3921,
+      "title": "WAL replay permit admission refusals by arm (ops/s) - issue #3921",
+      "description": "Rate of orleans.lattice.saturation.refusals carrying an arm tag - which today only the replay_permit_admission source records - split by that tag naming which arm of the replay admission predicate refused - issue #3921. THE ARMS HAVE OPPOSITE REMEDIES, which is why they are split. wait_exceeded: the smoothed wait of recently terminated permit waits reached WalReplayPermitMaxQueueWait, so waits are completing but slowly and too much is queued. no_progress: no permit was released to the queue for WalReplayPermitMaxQueueWait, so the replays holding the permits are slow - a hold-time condition, typically a grain store that serialises its writes - and raising WalMaterialiserMaxConcurrentReplays makes it fire harder, not less. Read no_progress against the hold-time and service-rate panels below. gc_share: a background WAL GC starvation drive found the GC share of replay permits full; it is not a foreground refusal. Before issue #3921 the only way to separate the first two was to parse exception text. ABSENT means no replay admission refusal in the window.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 433 },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (arm) (rate(orleans_lattice_saturation_refusals_total{arm!=\"\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "replay admission refused {{arm}}/s" }
+      ]
+    },
+    {
+      "id": 3922,
+      "title": "WAL replay permit hold (mean ms) by tree - issue #3921 (absent = no hold ended)",
+      "description": "Mean time a replay HELD a permit on the per-silo WAL replay concurrency gate, from acquisition to the end of the replay (orleans.lattice.wal.replay.permit_hold) - issue #3921. Recorded for activation replays and WAL GC starvation drives alike. THIS IS THE MEASUREMENT THAT SEPARATES A CPU-BOUND GATE FROM A STORE-BOUND ONE. The gate's ceiling is derived from CPU, but a replay may wait on a grain store that serialises its writes. CPU-BOUND: raising WalMaterialiserMaxConcurrentReplays leaves this flat and raises the service rate below. STORE-BOUND: raising it leaves the service rate flat and raises this, and the no_progress refusal arm above fires harder. READ THE MEAN, not a quantile, for the exposition reason given on the permit queue wait panel. NOT PRIMED, because a fabricated 0 ms hold would read as 'the store is fast'; ABSENT means no hold ended in the window, which the primed service-rate panel below confirms.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 440 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_wal_replay_permit_hold_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum by (tree) (rate(orleans_lattice_wal_replay_permit_hold_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "mean permit hold {{tree}}" }
+      ]
+    },
+    {
+      "id": 3923,
+      "title": "WAL replay gate service rate (permits/s) by silo - issue #3921",
+      "description": "Rate of orleans.lattice.wal.replay.permits_served - the per-silo WAL replay concurrency gate's SERVICE RATE, one increment per permit hold that ended, whether the permit was then returned or withheld by memory backpressure - issue #3921. By Little's law the mean in-flight replay count is this rate multiplied by the mean hold time above, so the pair says which resource binds: a service rate that rises with WalMaterialiserMaxConcurrentReplays is a CPU-bound gate whose ceiling was the constraint; a service rate that stays flat while hold time grows is a store-bound gate, where the ceiling should come down toward the store's write parallelism. UNTAGGED BY TREE because the gate is one process-wide semaphore. ZERO-PRIMED when the gate is sized, so a flat zero while activations are queued is a MEASURED stall - the regime the no_progress refusal arm reports - and a missing line means the gate was never sized on that silo.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 447 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (instance) (rate(orleans_lattice_wal_replay_permits_served_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "replay permits served {{instance}}/s" }
+      ]
     }
   ]
 }

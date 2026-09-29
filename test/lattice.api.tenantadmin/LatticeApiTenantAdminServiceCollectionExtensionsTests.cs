@@ -63,6 +63,11 @@ public sealed class LatticeApiTenantAdminServiceCollectionExtensionsTests
                 builder.Services.Count(d => d.ServiceType == typeof(TenantRegionResidencyAuthorizer)),
                 Is.EqualTo(1),
                 "Both tenant-tier facades share the one two-tier authorizer.");
+            Assert.That(
+                builder.Services.Count(d => d.ServiceType == typeof(ITenantRegionStatusChangeListener)
+                    && d.ImplementationType == typeof(TenantRegionDrainCompletionListener)),
+                Is.EqualTo(1),
+                "The listener that completes the local region's drain is wired exactly once (issue #3897).");
         });
     }
 

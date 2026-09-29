@@ -206,6 +206,13 @@ The rules it enforces:
 - **Verified load, no middle path.** The manifest, every checksum, every
   partition's chunk set and the declared count must all agree, or the index is
   rebuilt and never partly served.
+- **Absent means absent on every read path.** A record the commit chain names
+  but a read did not return is re-read by point read and by prefix scan before
+  anything is deleted. If either returns it, the store merely could not answer
+  consistently - as under a WAL replay-permit storm - so the load throws
+  `VectorIndexRecordUnavailableException`, keeps the durable index and its banked
+  progress, and is retried. Only a record every path agrees is missing, or one that
+  was returned and cannot be decoded, triggers the rebuild.
 - **A reader must not repair what it cannot maintain.** A lazily loaded handle
   that finds unverifiable state refuses to serve it and leaves the store alone,
   rather than discarding an index a writer elsewhere may be building.

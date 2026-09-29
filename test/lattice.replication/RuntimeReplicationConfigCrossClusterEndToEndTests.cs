@@ -96,6 +96,48 @@ public sealed class RuntimeReplicationConfigCrossClusterEndToEndTests
         });
     }
 
+    [Test]
+    public async Task Same_mode_enables_authored_on_both_sites_converge_resolvable_on_both()
+    {
+        // Issue #3899: each region's operator enables the same tree under the same
+        // mode before either has learned the other's enrolment. The converged
+        // config must resolve that mode on both sites; an Ambiguous projection
+        // makes every receiver drop the tree's replicated data.
+        const string tree = "orders-dual-enable";
+
+        var storeA = new LatticeReplicationConfigStore(_fixture.SiteA.Client);
+        var storeB = new LatticeReplicationConfigStore(_fixture.SiteB.Client);
+
+        await CreateAuthority(storeA, TwoSiteClusterFixture.SiteAClusterId)
+            .EnableReplicationAsync(tree, LatticeMergeMode.OrSet);
+        await CreateAuthority(storeB, TwoSiteClusterFixture.SiteBClusterId)
+            .EnableReplicationAsync(tree, LatticeMergeMode.OrSet);
+
+        // Cross-deliver each site's authored entry to the other's config tree.
+        var authoredA = await storeA.ReadEntryAsync(tree);
+        var authoredB = await storeB.ReadEntryAsync(tree);
+        await storeB.WriteEntryAsync(tree, TwoSiteClusterFixture.SiteAClusterId, authoredA!);
+        await storeA.WriteEntryAsync(tree, TwoSiteClusterFixture.SiteBClusterId, authoredB!);
+
+        foreach (var (site, store) in new[] { ("site-a", storeA), ("site-b", storeB) })
+        {
+            var maintainer = await WarmMaintainerAsync(store);
+            var converged = await store.ReadEntryAsync(tree);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(converged!.Mode.Count, Is.EqualTo(2),
+                    $"{site}: both concurrent enables must survive convergence");
+                Assert.That(maintainer.Current.TryGetTree(tree, out var projection), Is.True, site);
+                Assert.That(projection.Ambiguous, Is.False, site);
+                Assert.That(projection.Enabled, Is.True, site);
+                Assert.That(Resolver(maintainer).Resolve(tree), Is.EqualTo(LatticeMergeMode.OrSet),
+                    $"{site}: the receiver must resolve the agreed mode");
+                Assert.That(Membership(maintainer).IsReplicated(tree), Is.True, site);
+            });
+        }
+    }
+
     private static LatticeReplicationConfigAuthority CreateAuthority(
         ILatticeReplicationConfigStore store, string localReplicaId)
     {

@@ -39,6 +39,14 @@ internal enum RepoContextAnnIndexLoadOutcome
     /// stopped advancing" reading that originally diagnosed it. An operator would
     /// then see a wedge signal on a plane that is converging perfectly well.
     /// </para>
+    /// <para>
+    /// It is also recorded when the restore found a record its committed state
+    /// names missing from one read of the store and present in another
+    /// (<see cref="Orleans.Lattice.Vector.Persistence.VectorIndexRecordUnavailableException"/>,
+    /// issue #3905). The durable index is intact and kept, and the next attempt
+    /// retries the restore, so it is the same "yield and continue" answer rather
+    /// than a fault or a discard.
+    /// </para>
     /// </summary>
     Deferred = 3,
 

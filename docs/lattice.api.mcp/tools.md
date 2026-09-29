@@ -248,19 +248,19 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_tree_resolve_alias` | read | Resolve the physical tree a logical tree maps to. |
 | `lattice_treeadmin_tree_get_config` | read | Read a tree's registry-backed configuration (sizing, alias, per-tree overrides). |
 | `lattice_treeadmin_tree_get_shard_map` | read | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts). |
-| `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status. |
+| `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status - including, while a purge runs, `purgeInProgress` with `purgedShardCount` of `purgeShardCount` shards done. Answers without waiting for a shard's purge. |
 | `lattice_treeadmin_tree_reshard_status` | read | Read the current online-reshard state and shard-map fan-out. |
-| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state and effective B+ node capacities. |
+| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state - running, an accepted undo still unwinding (`undoRequested`), or none - and effective B+ node capacities. |
 | `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree. |
 | `lattice_treeadmin_tree_create` | manage | Explicitly create or register a tree with optional initial sizing. |
 | `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. |
 | `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides - publish-events, projection-digest maintenance, durable-history retention, and the advisory WAL retained-byte ceiling - each written only when its `apply*` flag is set (a null value on an applied dimension clears that override). |
 | `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
 | `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |
-| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. |
+| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree, irreversibly and bypassing the soft-delete window. Requires `confirm = true`; a false or omitted `confirm` is rejected. Accept-then-poll: the shard walk runs in the background, and the call returns within a bounded wait - with `purgeInProgress` still `true` for a tree too large to purge in that time, which is not a failure; poll `lattice_treeadmin_tree_deletion_status`. A call while the purge runs or after it completed returns the status without error. |
 | `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
 | `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
-| `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. |
+| `lattice_treeadmin_tree_resize_undo` | manage | Undo a tree's most recent resize - an in-flight one at any phase, or a completed one while the pre-resize tree is still within its soft-delete window. Accept-then-poll: admitted even while a resize phase runs, it returns within a bounded wait with `undoRequested` set if the unwind is still in progress. |
 | `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot. |
 
 ### Bulk load, restore, and WAL placement
@@ -353,14 +353,14 @@ Authorization is **two-tier and inherited from the facade**, which the tools do 
 
 Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request resolves to deny even under `DefaultEffect = Allow`.
 
-Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. A newly added region reports `Provisioning`, not `Online`, and no shipped component advances it further: the later lifecycle steps are reserved for backfill and drain machinery that no shipped package runs, so an added region stays `Provisioning` and a dropped one `Draining` until the host advances them itself through the tenancy registry (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`, so until the host has advanced one it is served in none.
+Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. A newly added region reports `Provisioning`, not `Online`, and no shipped component advances it further: nothing backfills the tenant's existing data into an added region, so promoting it through `Backfilling` to `Online` is an operator step the host takes on a silo, one lifecycle step at a time with `TenantRecord.TryPromoteRegionStatus`. A dropped region's drain completes on its own, `Draining` -> `Offline` -> `Removed`, on each silo of that region that registers the tenant-admin control API (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`, so until an operator has advanced one it is served in none.
 
 The typical workflow is:
 
 1. An operator calls `lattice_tenant_authorize_regions` to widen the allowed set.
 2. A tenant admin calls `lattice_tenant_region_status` and sees the new region as `isAllowed: true` with status `None`.
 3. The tenant admin calls `lattice_tenant_set_residency` to move into it; it reports `Provisioning`.
-4. The region stays `Provisioning` until the host advances it, one lifecycle step at a time, to `Online`; no shipped component does. Only then does a `region`-targeted call routed there succeed.
+4. The region stays `Provisioning` until an operator of the host advances it, one lifecycle step at a time, to `Online`; no shipped component does. Only then does a `region`-targeted call routed there succeed.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires a region-residency gRPC adapter off the same `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint.
 
