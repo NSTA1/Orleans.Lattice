@@ -60,11 +60,31 @@ run in the required `build-and-test` check, a regression fails the pull request.
 for its roles, names, states and keyboard behaviour, including the compact table
 form and the dialog focus trap, and the navigation chrome is tested the same way.
 
-**Rendered conformance is checked in a browser lane.** An axe sweep runs the
-`wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa` rule sets over the
-console in both themes, at every width band, signed in and signed out, and under
-the high-contrast overlay. Explicit structural assertions cover what axe cannot
-see, such as heading outlines, tab-to-panel relationships and live regions.
+**Rendered conformance is checked in a browser lane.** A Playwright suite drives
+the real web head against a live test cluster:
+
+- **The axe sweep** runs the `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and
+  `wcag22aa` rule sets over every area's primary page, as the cluster's
+  administrator, in all eight appearances (Paper and Board, standard and more
+  contrast, comfortable and compact density), plus the signed-out Home and the
+  sign-in dialog.
+- **Named assertions** cover what axe cannot see. Keyboard tests walk the
+  directory, open and restore the address line, drive the command palette, trap
+  and return focus in the compact directory sheet, and move focus into and out of
+  an app frame. Structure tests check one `h1` and no skipped heading level on every
+  area page and a deeper one, the landmarks and skip links, the polite
+  notification region, valid enumerated ARIA states, reduced motion, and that
+  forced colours keep the current stop and the focus ring visible.
+- **Reflow and target size.** Every area, on its primary page and a deeper one, is
+  loaded at 360, 768 and 1280 pixels wide and must not scroll the page
+  horizontally. On a phone every control must be at least 44 pixels in comfortable
+  density and never below 24 in compact density.
+- **Journeys** exercise first run, sign-in, re-authentication, a restricted
+  identity, tenancy, deep links and address completion the way a person moves
+  through them. The app frame's isolation is checked with hostile bundles in
+  Chromium, Firefox and WebKit.
+
+The criterion each test enforces is listed in the checklist.
 
 Two disciplines make those results mean something:
 
@@ -81,11 +101,6 @@ Two disciplines make those results mean something:
 
 ## Known limitations
 
-- **The browser lane is being rebuilt for the rewritten console.** The rewrite
-  replaced the whole UI, and the browser journeys written for the previous
-  console were retired with it. Until the lane is re-baselined against the new
-  areas, rendered coverage of the areas beyond Home is partial; the browserless
-  and bUnit gates above are the dependable signal.
 - **The browser lane is advisory, not a required check.** It is path-filtered
   to the Explorer, so unrelated pull requests do not provision a browser. Treat a
   failure as blocking by convention; nothing mechanically enforces that.
@@ -96,8 +111,14 @@ Two disciplines make those results mean something:
   whether a heading outline is navigable or whether a change was announced.
   Those are asserted explicitly, but explicit assertions are still written by the
   same people who wrote the code.
-- **Coverage depends on what the test host can reach.** Areas that need a live
-  cluster facade are reached only to the extent the test host serves one.
+- **Coverage depends on what the test cluster serves.** It runs no metrics
+  backend and no tenancy add-on, so Telemetry and Tenancy are hidden from its
+  administrator. Their addresses render the not-found page, which is swept,
+  reflowed and deep-linked like every other page, but the areas' own pages are
+  not swept in the browser.
+- **Most of the lane runs in one engine.** Only the app frame's isolation, AppKit
+  boot and task-board pilot tests run in Firefox and WebKit as well as Chromium; the accessibility
+  sweep, structure, keyboard and reflow tests run in Chromium.
 - **An app's own UI is out of scope.** A Lattice App's UI runs in a sandboxed
   frame and is the app author's responsibility. The kit stylesheet gives it the
   console's tokens, type and focus ring, but the console cannot verify what an
