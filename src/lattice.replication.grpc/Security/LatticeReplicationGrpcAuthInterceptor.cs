@@ -15,6 +15,10 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// the call with <see cref="StatusCode.Unauthenticated"/> when the
 /// header is absent and with <see cref="StatusCode.PermissionDenied"/>
 /// when the header is present but does not match any accepted secret.
+/// When <see cref="LatticeReplicationSecurityOptions.BindCredentialToOriginCluster"/>
+/// is enabled it additionally binds the accepted credential to the origin cluster
+/// the call claims, so that origin becomes an authenticated fact rather than a
+/// caller-chosen string.
 /// </summary>
 /// <remarks>
 /// The interceptor is registered globally via
@@ -136,7 +140,8 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
     }
     private async Task EnforceAuthAsync(ServerCallContext context)
     {
-        if (!_options.CurrentValue.RequireAuthentication)
+        var options = _options.CurrentValue;
+        if (!options.RequireAuthentication)
         {
             return;
         }
@@ -163,6 +168,54 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
                 StatusCode.PermissionDenied,
                 "Replication batch credential did not match any accepted secret on this cluster. "
                 + "Rotate by publishing the next-generation secret in LATTICE_REPLICATION_ACCEPTED_SECRETS on every peer before flipping LATTICE_REPLICATION_SECRET on the sender."));
+        }
+
+        if (options.BindCredentialToOriginCluster)
+        {
+            await EnforceOriginBindingAsync(context, presented).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Binds the authenticated credential to the origin cluster the call claims.
+    /// The accepted-set match above proves only that the caller holds <i>some</i>
+    /// accepted secret - the set carries no peer attribution - so on its own it
+    /// leaves every downstream origin check comparing caller-chosen values. This
+    /// re-resolves the secret this cluster would use to call the claimed origin and
+    /// requires the presented credential to equal it, which makes the origin an
+    /// authenticated fact rather than a self-assertion.
+    /// </summary>
+    /// <remarks>
+    /// A missing origin, an origin with no configured secret, and an origin whose
+    /// secret does not match all produce one indistinguishable refusal, so the
+    /// response cannot be used to enumerate which peers this cluster is configured
+    /// for. The comparison is constant-time for the same reason the accepted-set
+    /// walk is.
+    /// </remarks>
+    private async Task EnforceOriginBindingAsync(ServerCallContext context, string presented)
+    {
+        var origin = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
+        var bound = false;
+
+        if (!string.IsNullOrWhiteSpace(origin))
+        {
+            var expected = await _secrets
+                .GetOutboundSecretAsync(origin, context.CancellationToken).ConfigureAwait(false);
+            bound = !string.IsNullOrEmpty(expected)
+                && LatticeReplicationSharedSecret.FixedTimeEquals(presented, expected);
+        }
+
+        if (!bound)
+        {
+            _logger.LogWarning(
+                "Replication: rejected inbound gRPC call to {Method} - the presented credential is not "
+                + "the one configured for the claimed origin cluster '{Origin}'.",
+                context.Method, origin);
+            throw new RpcException(new Status(
+                StatusCode.PermissionDenied,
+                "The replication credential is not bound to the origin cluster the call claims. "
+                + "With BindCredentialToOriginCluster enabled, a peer must present the secret this cluster "
+                + "is configured to use for that peer, and must stamp its origin cluster id."));
         }
     }
 

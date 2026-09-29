@@ -55,6 +55,12 @@ internal static class TelemetryRateWindow
     /// ladder entry covering <see cref="StepMultiple"/> steps, clamped to the
     /// ladder's ends. A non-positive step yields <see cref="Default"/>.
     /// </summary>
+    /// <remarks>
+    /// A step whose <see cref="StepMultiple"/> multiple would exceed the widest
+    /// entry clamps to it before any multiplication, so a step too large for that
+    /// multiple to be representable (reachable when an entry declares no step
+    /// ceiling) clamps rather than throwing <see cref="OverflowException"/>.
+    /// </remarks>
     /// <param name="step">The resolution step the query is evaluated at.</param>
     /// <returns>PromQL duration text, for example <c>5m</c>.</returns>
     public static string ForStep(TimeSpan step)
@@ -62,6 +68,12 @@ internal static class TelemetryRateWindow
         if (step <= TimeSpan.Zero)
         {
             return Default;
+        }
+
+        var widest = Ladder[^1];
+        if (step.Ticks > widest.Window.Ticks / StepMultiple)
+        {
+            return widest.Text;
         }
 
         var target = step * StepMultiple;
@@ -73,6 +85,6 @@ internal static class TelemetryRateWindow
             }
         }
 
-        return Ladder[^1].Text;
+        return widest.Text;
     }
 }

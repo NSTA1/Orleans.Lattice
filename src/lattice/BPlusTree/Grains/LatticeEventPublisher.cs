@@ -182,6 +182,84 @@ internal static class LatticeEventPublisher
     }
 
     /// <summary>
+    /// Largest number of per-entry publishes <see cref="PublishManyAsync"/>
+    /// keeps in flight at once.
+    /// <para>
+    /// The window exists because this fan-out is bounded by <i>request size</i>,
+    /// not by a routing constant: a caller may hand a single
+    /// <c>SetManyAsync</c> tens of thousands of entries, and an unbounded
+    /// <see cref="Task.WhenAll(IEnumerable{Task})"/> over that would hand the
+    /// stream provider the entire batch at once. A fixed window collapses the
+    /// round trips (which is the point) while keeping the peak in-flight count
+    /// a property of this constant rather than of whatever the caller passed.
+    /// </para>
+    /// </summary>
+    internal const int PublishWindow = 32;
+
+    /// <summary>
+    /// Publishes one <paramref name="kind"/> event per item in
+    /// <paramref name="items"/>, keyed by <paramref name="keySelector"/>, with
+    /// at most <see cref="PublishWindow"/> publishes in flight at a time.
+    /// <para>
+    /// Every publish is independent: the events of one batch carry distinct
+    /// keys, and <see cref="BatchPublisher.PublishAsync"/> returns a task that
+    /// never faults, so a window can be awaited with
+    /// <see cref="Task.WhenAll(IEnumerable{Task})"/> without the "one fault
+    /// strands the rest" hazard that makes a naive concurrent fan-out unsafe.
+    /// </para>
+    /// <para>
+    /// Publication order within a batch is deliberately not preserved. Lattice
+    /// events are documented as not totally ordered, even per key (see
+    /// <c>docs/lattice/events.md</c>): they are published by the tree's front
+    /// end after the write returns rather than by the shard that serialised it,
+    /// and delivery order from there is the stream provider's. The entries of
+    /// one batch were applied together, so there is no per-batch write order
+    /// for this loop to have preserved.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">Batch item type.</typeparam>
+    /// <param name="batch">Batch publisher resolved by <see cref="CreateBatch"/>.</param>
+    /// <param name="kind">Event kind to publish for every item.</param>
+    /// <param name="items">Batch items, one event each.</param>
+    /// <param name="keySelector">Projects an item to the key its event carries.</param>
+    internal static async Task PublishManyAsync<T>(
+        BatchPublisher batch,
+        LatticeTreeEventKind kind,
+        IReadOnlyList<T> items,
+        Func<T, string> keySelector)
+    {
+        var count = items.Count;
+        if (count == 0)
+        {
+            return;
+        }
+
+        if (count == 1)
+        {
+            // The dominant single-entry case keeps its original shape: no
+            // window list is allocated for a batch that cannot benefit.
+            await batch.PublishAsync(kind, keySelector(items[0])).ConfigureAwait(false);
+            return;
+        }
+
+        var window = new List<Task>(Math.Min(PublishWindow, count));
+        for (var i = 0; i < count; i++)
+        {
+            window.Add(batch.PublishAsync(kind, keySelector(items[i])));
+            if (window.Count == PublishWindow)
+            {
+                await Task.WhenAll(window).ConfigureAwait(false);
+                window.Clear();
+            }
+        }
+
+        if (window.Count > 0)
+        {
+            await Task.WhenAll(window).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Batch-scoped view over an already-resolved per-tree event stream. Created
     /// by <see cref="CreateBatch"/>; see that method for why the batch shape
     /// exists. Failures are swallowed exactly as they are for the per-event
