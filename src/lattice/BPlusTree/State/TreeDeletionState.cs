@@ -75,4 +75,14 @@ internal sealed class TreeDeletionState
 
     /// <summary>Pins an ordinary deletion to this grain's physical id before shard effects.</summary>
     [Id(16)] public bool LocalDeleteTargetPinned { get; set; }
+
+    /// <summary>
+    /// Whether this physical copy was discarded by
+    /// <see cref="ITreeDeletionGrain.DiscardDerivedPhysicalTreeAsync"/> - an
+    /// undone resize's destination. A discarded copy has had its WAL retention
+    /// released, so it can never be recovered; its purge also trims its log.
+    /// Legacy persisted state decodes the missing slot to <see langword="false"/>.
+    /// </summary>
+    [Id(17)] public bool Discarded { get; set; }
+
 }

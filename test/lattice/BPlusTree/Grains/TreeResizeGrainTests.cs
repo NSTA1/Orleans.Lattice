@@ -337,9 +337,10 @@ public partial class TreeResizeGrainTests
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.Received(1).RemoveAliasAsync(TreeId);
 
-        // Deleted new tree.
-        await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/op1")
-            .Received(1).DeleteDerivedPhysicalTreeAsync();
+        // Discarded new tree (issue #3930): released, not merely deleted.
+        var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/op1");
+        await newDeletion.Received(1).DiscardDerivedPhysicalTreeAsync();
+        await newDeletion.DidNotReceive().DeleteDerivedPhysicalTreeAsync();
 
         // Restored old config.
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>

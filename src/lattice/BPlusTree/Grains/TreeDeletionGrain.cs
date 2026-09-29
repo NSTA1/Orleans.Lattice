@@ -262,6 +262,14 @@ internal sealed partial class TreeDeletionGrain(
         if (!state.State.IsDeleted && !state.State.Delegated)
             throw new InvalidOperationException("Cannot recover a tree that has not been deleted.");
 
+        // A discarded copy's leaf materialiser pins were retired and its log
+        // trimmed when it was discarded, so its leaves could not replay back to
+        // their state: recovering it would serve a tree missing every write its
+        // leaves had not yet checkpointed.
+        if (state.State.Discarded)
+            throw new InvalidOperationException(
+                "Cannot recover a tree that was discarded by an undone resize; its write-ahead log has been released.");
+
         if (state.State.PurgeComplete)
             throw new InvalidOperationException("Cannot recover a tree whose data has already been purged.");
 
@@ -421,7 +429,12 @@ internal sealed partial class TreeDeletionGrain(
         // returns false. The reminder-driven CompletePurgeAsync path does
         // the same (line 250-254) - keep the synchronous PurgeNowAsync path
         // in lockstep so callers of the public PurgeTreeAsync API observe a
-        // fully purged tree on return.
+        // fully purged tree on return. A discarded copy's log is trimmed
+        // again first, while its registry entry still resolves the partition
+        // count and placement, to release anything the discard itself could
+        // not.
+        if (state.State.Discarded)
+            await TrimDiscardedWalAsync();
         await UnregisterPurgedTreeAsync();
 
         await DeregisterLeafCursorsAsync();
@@ -565,7 +578,10 @@ internal sealed partial class TreeDeletionGrain(
         state.State.ShardRetries = 0;
         await state.WriteStateAsync();
 
-        // Remove the tree from the registry.
+        // Remove the tree from the registry, trimming a discarded copy's log
+        // first for the reason PurgePhysicalAsync gives.
+        if (state.State.Discarded)
+            await TrimDiscardedWalAsync();
         await UnregisterPurgedTreeAsync();
 
         await DeregisterLeafCursorsAsync();
@@ -667,12 +683,12 @@ internal sealed partial class TreeDeletionGrain(
 
     /// <summary>
     /// Bulk-removes every leaf-as-materialiser cursor registered against
-    /// the deleted tree from the silo-scoped
+    /// the tree - at its purge, or when it is discarded - from the silo-scoped
     /// <see cref="ILeafCursorReporter"/> (when present). Resolved
     /// optionally - hosts that have not added the replication package
     /// have no reporter registered and this is a silent no-op.
     /// Failures are logged-and-swallowed: the tree's data is already
-    /// gone, so a residual cursor is harmless under the in-memory
+    /// unreachable, so a residual cursor is harmless under the in-memory
     /// registry and recoverable under a future durable registry via
     /// the next bulk-clear cycle.
     /// </summary>
@@ -690,7 +706,7 @@ internal sealed partial class TreeDeletionGrain(
         {
             logger.LogWarning(
                 ex,
-                "Failed to deregister leaf-materialiser cursors for purged tree {TreeId}; "
+                "Failed to deregister leaf-materialiser cursors for purged or discarded tree {TreeId}; "
                 + "the WAL GC will fall back to its time-based retention until the registry is reconciled.",
                 TreeId);
         }

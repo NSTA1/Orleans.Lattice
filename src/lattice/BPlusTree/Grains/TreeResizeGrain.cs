@@ -389,8 +389,11 @@ internal sealed class TreeResizeGrain(
             }
             await Task.WhenAll(clearTasks);
 
+            // Discarded, not merely deleted: the destination is never
+            // recovered, so its WAL retention is released now rather than
+            // held for the soft-delete window (issue #3930).
             var destDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
-            await destDeletion.DeleteDerivedPhysicalTreeAsync();
+            await destDeletion.DiscardDerivedPhysicalTreeAsync();
 
             // Snapshot every field ResetResizeState clears so a transient
             // WriteStateAsync failure does not leave in-memory state below
@@ -462,9 +465,10 @@ internal sealed class TreeResizeGrain(
         var registry = grainFactory.GetLatticeRegistry();
         await registry.RemoveAliasAsync(TreeId);
 
-        // 4. Delete the snapshot tree.
+        // 4. Discard the snapshot tree, releasing its WAL retention now
+        //    (issue #3930); see the drain-window branch above.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
-        await newDeletion.DeleteDerivedPhysicalTreeAsync();
+        await newDeletion.DiscardDerivedPhysicalTreeAsync();
 
         // 5. Restore the original registry entry (or clear overrides if none existed).
         await registry.UpdateAsync(TreeId, state.State.OldRegistryEntry ?? new TreeRegistryEntry());

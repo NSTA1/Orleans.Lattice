@@ -71,10 +71,12 @@ await tree.UndoResizeAsync();
 
 `UndoResizeAsync` is phase-aware:
 
-- **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, deletes the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination.
-- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree. The old physical tree is recovered from soft-delete only when it was actually soft-deleted: `Cleanup` is the only phase that deletes it, and it does so at the very end, so throughout `Swap` and `Reject` - and in `Cleanup` until the delete lands - the old tree is still live and is simply left alone.
+- **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, discards the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination.
+- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and discards the new snapshot tree. The old physical tree is recovered from soft-delete only when it was actually soft-deleted: `Cleanup` is the only phase that deletes it, and it does so at the very end, so throughout `Swap` and `Reject` - and in `Cleanup` until the delete lands - the old tree is still live and is simply left alone.
 
 Once the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
+
+Either way the destination is discarded rather than merely deleted: its shards are marked deleted and purged after the soft-delete window like any retired copy, but its write-ahead-log retention - every leaf materialiser pin held against it, and its log - is released at once, and it can never be recovered. See [Discarding an undone resize's copy](tree-deletion.md#discarding-an-undone-resizes-copy).
 
 ### Important considerations
 

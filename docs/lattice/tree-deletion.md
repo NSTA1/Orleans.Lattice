@@ -217,6 +217,14 @@ A later resize retires the previous resized copy, whose ID is its own, with the 
 
 The alias swap carries the shard map and split allocation mark onto the tree's registry entry, and before a later resize retires the previous copy it records the tree's current shard map and split allocation mark on that copy's own entry, so either retirement walks every shard an [adaptive shard split](shard-splitting.md) had added to the retired copy, and marks it deleted and purges it with the rest.
 
+### Discarding an undone resize's copy
+
+`UndoResizeAsync` discards the copy the resize built, before or after the swap. A discard marks the copy's shards deleted and schedules its purge after `SoftDeleteDuration`, exactly as a retirement does, so a router that cached an alias to the copy keeps being refused rather than reading an empty tree. Unlike a retirement, the discarded copy is never recovered, so the discard also releases its write-ahead-log retention at once: every leaf materialiser pin held against the copy is removed and each WAL partition is trimmed through its head, and the purge trims again before it unregisters the copy. `RecoverTreeAsync` on a discarded copy throws `InvalidOperationException`.
+
+Before issue #3930 the copy was only soft-deleted. The drain writes the copy's leaves and nothing checkpoints them, so their materialiser pins carried no usable offset: the copy's WAL was retained in full for the whole soft-delete window, and the WAL GC kept reactivating its leaves to try to lift a floor no activation could lift. A silo restart does not clear such a pin: it lives in the durable pin store, which only a purge or a discard empties, and the WAL GC reads it for every leaf missing from the restarted silo's in-memory cursor registry. On a build without the fix, purging the copy's physical tree releases its pins and stops its leaves being reactivated, but does not trim its log.
+
+The WAL GC also checks a tree's deletion state before it touches leaves to heal a stuck retention floor. It never reactivates a deleted tree's leaves: a discarded copy's remaining pins are retired, and a floor held by a deleted but still recoverable tree is logged once, at error level, as retained until the tree is purged or recovered, rather than reported as a floor that is merely behind.
+
 ### Deleting an aliased tree
 
 A resize, a shadow-cutover restore and a schema remediation leave a tree [aliased](tree-registry.md#tree-aliasing) to a physical copy that holds its live data. `DeleteTreeAsync`, `RecoverTreeAsync` and `PurgeTreeAsync` always act on the **logical** tree, so on an aliased tree the logical tree's deletion grain resolves the alias and runs the three phases above against the live copy:
